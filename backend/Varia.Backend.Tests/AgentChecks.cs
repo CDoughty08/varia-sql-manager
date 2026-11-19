@@ -239,9 +239,9 @@ internal static class AgentChecks
         catch (RequestException error) when (error.Code == "BACKEND_ERROR") { unchecked_ = true; }
         check(lost && unchecked_, "a lost connection is thrown for the caller to handle, and a statement that is not one of AgentSql.All never runs (BACKEND_ERROR)");
         var tooLong = false;
-        try { await reader.ReadAsync(null, null, [AgentSql.ErrorLog], (_, parameter) => parameter.Name == "@search1" ? new string('x', 201) : null, CancellationToken.None); }
+        try { await reader.ReadAsync(null, null, [AgentSql.ErrorLog], (_, parameter) => parameter.Name == "@search1" ? new string('x', (int)AgentCatalog.Current.Limit("searchChars") + 1) : null, CancellationToken.None); }
         catch (RequestException error) when (error.Code == "INVALID_PARAMS") { tooLong = true; }
-        var (fits, _) = await reader.ReadAsync(null, null, [AgentSql.ErrorLog], (_, parameter) => parameter.Name == "@search1" ? new string('x', 200) : null, CancellationToken.None);
+        var (fits, _) = await reader.ReadAsync(null, null, [AgentSql.ErrorLog], (_, parameter) => parameter.Name == "@search1" ? new string('x', (int)AgentCatalog.Current.Limit("searchChars")) : null, CancellationToken.None);
         check(tooLong && fits.ContainsKey("errorLog"), "an Agent read refuses a search text longer than its parameter (INVALID_PARAMS) rather than letting SqlClient cut it, and runs one that fits");
         var unknownPrologue = false;
         try { await reader.ReadAsync(null, "SET NOCOUNT ON;\n", [AgentSql.Jobs], Value, CancellationToken.None); }

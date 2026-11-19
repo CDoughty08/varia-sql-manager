@@ -77,6 +77,8 @@ internal static class AgentLiveChecks
             return;
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
+        // A killed earlier run's job, login user or other Agent object goes first, so this suite alone keeps a shared server clean.
+        await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql);
         await RolesAsync(check, connection, reader, scratch, Sql, None);
     }

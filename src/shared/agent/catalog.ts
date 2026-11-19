@@ -378,8 +378,8 @@ export interface MasterReadShape {
   readonly who: string
 }
 /** The master procedures an Agent read may call, each in exactly this positional shape: log type 2 is the Agent log, `NULL`
- *  leaves the time bounds open, and `N'desc'` reads newest first so a cap keeps the newest rows. `sp_readmierrorlog` takes no
- *  sort argument and reads oldest first, so on Managed Instance a capped read keeps the oldest rows (its notice must say so). */
+ *  leaves the time bounds open, and `N'desc'` reads newest first so a cap keeps the newest rows. `sp_readmierrorlog`'s
+ *  documented signature has no sort argument (not run: no Managed Instance) and reads oldest first, so on Managed Instance a capped read keeps the oldest rows (its notice must say so). */
 export const masterReadShapes: readonly MasterReadShape[] = [
   { name: 'xp_enumerrorlogs', shape: 'EXEC master.dbo.xp_enumerrorlogs 2;', who: 'sysadmin' },
   { name: 'xp_readerrorlog', shape: "EXEC master.dbo.xp_readerrorlog @p, 2, @p, @p, NULL, NULL, N'desc';", who: 'sysadmin' },

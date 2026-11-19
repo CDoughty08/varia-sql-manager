@@ -58,11 +58,14 @@ internal static partial class AgentSql
 
     /// <summary>One Agent error log, newest first, filtered by up to two search texts (NULL for none).</summary>
     public static readonly AgentStatement ErrorLog = new("errorLog", "EXEC master.dbo.xp_readerrorlog @log, 2, @search1, @search2, NULL, NULL, N'desc';", ["LogDate", "ErrorLevel", "Text"],
-        [new("@log", SqlDbType.Int), new("@search1", SqlDbType.NVarChar, 200), new("@search2", SqlDbType.NVarChar, 200)], "logRows");
+        [new("@log", SqlDbType.Int), new("@search1", SqlDbType.NVarChar, SearchChars), new("@search2", SqlDbType.NVarChar, SearchChars)], "logRows");
 
     /// <summary>The Agent service's state as the engine sees it (sysadmin): "Running.", "Stopped." and the pending states.</summary>
     public static readonly AgentStatement ServiceState = new("serviceState", "DECLARE @rc int;\nEXEC @rc = master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAgent';",
         ["Current Service State"], [], "listRows");
+
+    /// <summary>The search texts' bound, from the catalogue (agentLimits.searchChars), so zod and the reader agree.</summary>
+    private static int SearchChars => (int)AgentCatalog.Current.Limit("searchChars");
 
     public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState];
 

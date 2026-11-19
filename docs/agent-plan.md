@@ -121,8 +121,8 @@ From Microsoft's documentation (re-checked in AG-0 and AG-1, never assumed):
 Still to verify in AG-0 on the owner's test instance (its Agent may be stopped by checks) and in the Windows CI job:
 which Agent reads raise 15281 with Agent XPs off (expected of `sp_help_job` through `sp_get_composite_job_info`'s
 `xp_sqlagent_*` calls, but AG-0 found it does not; `sp_help_jobactivity` and `sp_help_jobhistory @mode = N'FULL'` contain no `xp_sqlagent` call, and
-the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable; the Log File Viewer's running state comes from `agent.jobs`, which does fail,
-so its banner stays either way, and if a history read also raises 15281 its view ends with `AGENT_DISABLED` and is
+the sysadmin path reads `sysjobhistory` directly, so history is expected to stay readable; the Log File Viewer's running state comes from `agent.jobs`, which AG-0 found does not fail (every job reads Idle),
+so its banner comes from Agent's state (the service probe and `Agent XPs`), and if a history read also raises 15281 its view ends with `AGENT_DISABLED` and is
 restarted by the Log File Viewer's refresh of both handles, below);
 whether `sp_get_sqlagent_properties` returns values to a SQLAgentUserRole login (msdb grants that role EXECUTE and the
 procedure has no sysadmin check, but it reads through `xp_instance_regread`, which may refuse non-sysadmin callers; until
@@ -393,7 +393,8 @@ SQL Server Agent                (agent node: "Stopped" sublabel and chip when st
   of the window's 4 status-only slots indefinitely. Renderer fixtures cover all three service states, a normal end, an
   Agent stop and restart while the service state is unknown with an older `last_run_outcome` (shows outcome unknown),
   and Dismiss, and the mock's `running-status-stopped` scene shows the texts. In the Log File
-  Viewer, while `agent.jobs` reports `AGENT_DISABLED`: with the service Stopped, step rows after the last job outcome row
+  Viewer, while Agent XPs is off (from Agent's state; AG-0 found `agent.jobs` then reads every job Idle rather than
+  reporting `AGENT_DISABLED`): with the service Stopped, step rows after the last job outcome row
   group as Unknown (no job outcome) and the banner is the Agent-stopped one (Start where allowed); with the service
   Running or unknown the running state cannot be read, so those rows show as "In progress or unknown (Agent XPs off)".
   A renderer vitest and the grouping table tests cover both, with history readable, the banner, and recovery on the
@@ -842,8 +843,8 @@ the same `sp_update_alert`, under the alert's identity guard; the page shows 0 p
   `sp_enum_login_for_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`, and `sp_get_sqlagent_properties`, which AG-0 found returns values to SQLAgentUserRole).
   And the master procedures, which take positional arguments, each have a named shape: `EXEC master.dbo.xp_enumerrorlogs
   2;`, `EXEC master.dbo.xp_readerrorlog @p1, 2, @p2, @p3, NULL, NULL, N'desc';` and, on Managed Instance, `EXEC
-  master.dbo.sp_readmierrorlog @p1, 2, @p2, @p3` (with the same sort arguments if it accepts them, which AG-0 checks;
-  otherwise it caps from the oldest and the notice says so) (the only literals allowed are the log type `2`, `NULL` for
+  master.dbo.sp_readmierrorlog @p1, 2, @p2, @p3` (its documented signature has no sort argument; AG-0 had no Managed Instance to run it on, so it caps from the
+  oldest and the notice says so) (the only literals allowed are the log type `2`, `NULL` for
   the time bounds and `N'desc'`; AG-0 confirms on Managed Instance's documentation and,
   if one is available, an instance that log type 2 returns the Agent log there). Lint tests render every allowed shape and reject near misses.
   `sp_enum_proxy_for_subsystem` is not used: sysadmin reads `sysproxies`/`sysproxysubsystem` directly, others call
