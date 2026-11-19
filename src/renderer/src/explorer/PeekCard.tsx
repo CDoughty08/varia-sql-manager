@@ -109,13 +109,20 @@ function propertiesTarget(pane: HTMLElement, crlf: boolean, before?: readonly HT
 /** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
 export function PropertiesPane({ peek }: { peek: OpenPeek }) {
   const { platform } = useWorkbench()
-  // A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened by a press reads
-  // the selection as that press began; a key press (Shift+F10, the menu key) reads it as it is.
+  // A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened while a press is
+  // down (macOS, Linux) reads the selection as that press began. The press ends wherever the pointer is released, and then a
+  // menu (Windows opens it on release; Shift+F10 and the menu key, which KeybindingService takes before the pane sees them)
+  // reads the selection as it is.
   const pressed = useRef<HTMLElement[] | undefined>(undefined)
   const menu = useMenuTarget<HTMLDivElement>(pane => { const before = pressed.current; pressed.current = undefined; return propertiesTarget(pane, platform === 'win32', before) })
   return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"
-    onPointerDownCapture={event => { pressed.current = selectedFacts(event.currentTarget) }}
-    onKeyDownCapture={() => { pressed.current = undefined }}><Properties peek={peek} /></div>
+    onPointerDownCapture={event => {
+      pressed.current = selectedFacts(event.currentTarget)
+      const doc = event.currentTarget.ownerDocument
+      const release = () => { pressed.current = undefined; doc.removeEventListener('pointerup', release, true); doc.removeEventListener('pointercancel', release, true) }
+      doc.addEventListener('pointerup', release, true)
+      doc.addEventListener('pointercancel', release, true)
+    }}><Properties peek={peek} /></div>
 }
 
 /** The kind's groups of facts for the node's subtype, a refused group's words in place of its facts. */

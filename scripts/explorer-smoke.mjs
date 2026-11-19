@@ -720,6 +720,18 @@ try {
   await page.keyboard.press('Shift+F10')
   await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toBe('Row count\t12,345')
+  // A selection dragged with the mouse, then the menu from the keyboard (which KeybindingService takes before the pane sees it).
+  await page.evaluate(() => getSelection().removeAllRanges())
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  const dataSpace = await peekProperties.getByText('Data space', { exact: true }).boundingBox()
+  await page.mouse.move(dataSpace.x + 1, dataSpace.y + dataSpace.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dataSpace.x + dataSpace.width - 1, dataSpace.y + dataSpace.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => page.evaluate(() => getSelection().toString())).not.toBe('')
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toBe('Data space\t2.00 MB')
   // A right-click with nothing selected copies every fact, though macOS selects the word under the pointer as it opens the menu.
   await page.evaluate(() => getSelection().removeAllRanges())
   await peekProperties.getByText('Row count', { exact: true }).click({ button: 'right' })
