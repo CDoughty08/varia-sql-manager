@@ -86,6 +86,8 @@ internal static class ScriptingErrors
             "NOT_FOUND" => o + " no longer exists, or you do not have permission to see it. Refresh Object Explorer and try again.",
             "NOT_SUPPORTED" when detail is not null => o + " cannot be scripted for " + Detail(detail, MaxServerText + 40),
             "NOT_SUPPORTED" => subject.Verb + " scripts are not available for " + subject.Title + " " + o + ". Refresh Object Explorer and try again.",
+            // SqlService.DispatchAsync answers it before scripting runs (Providers); listed so every catalogue code has a message.
+            "UNSUPPORTED_PROVIDER" => subject.Verb + " scripts are not available for this kind of connection.",
             "ENCRYPTED" => o + " is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work.",
             "NO_DEFINITION" when detail == "server" => "The definition of " + o + " is encrypted, or you do not have permission to view it.",
             "NO_DEFINITION" => "You do not have permission to view the definition of " + o + ". VIEW DEFINITION on it is required.",

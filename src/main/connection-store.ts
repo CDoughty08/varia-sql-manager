@@ -4,6 +4,7 @@ import type { ConnectionOptions } from '../shared/contracts'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
 const limit = 2_000_000
+export const connectionLibraryLimit = limit
 /** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped. */
 function prune(library: ConnectionLibrary) {
   const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))

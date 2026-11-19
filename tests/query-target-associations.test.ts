@@ -9,7 +9,7 @@ import { connectionInfo, connectionOptions, workbenchFixture } from './fixtures/
 import { deferred } from './fixtures/documents'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-const proof: ConnectionAuthentication = { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }
+const proof: ConnectionAuthentication = { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }
 const cleanups: (() => void)[] = []
 afterEach(() => cleanups.splice(0).forEach(cleanup => cleanup()))
 function fixture() {

@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import type { ConnectionFailureReason } from '../../../shared/connection-targets'
+import { isSqlServerTarget, type ConnectionFailureReason } from '../../../shared/connection-targets'
 import type { BackendStateService } from './backend'
 import type { ConnectionService } from './connections'
 import { acceptConnectionReceipt } from './connection-receipts'
@@ -32,7 +32,8 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
   let disposed = false, restored = false, started = false
   const whenDocumentsIdle = (signal: AbortSignal) => whenConnectionDocumentsIdle(documents, signal)
   const scheduler = new StartupReconnectService(registry, async (target, pending) => {
-    if (disposed || pending.signal.aborted) return {}
+    // Only SQL Server targets reconnect until the BigQuery lanes; others stay as they are.
+    if (disposed || pending.signal.aborted || !isSqlServerTarget(target)) return {}
     const { autoReconnect: _autoReconnect, ...presentation } = target.details
     const options = { ...target.options, ...presentation }, requestId = crypto.randomUUID()
     const attempt = connections.beginConnect(options, pending.generation, target.id, target.details)

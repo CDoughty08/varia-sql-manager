@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { connectionTargetLimits, connectionTargetOptions, connectionWorkspaceSchema, withExplorerExpansion, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionWorkspace, type PersistedConnectionTarget } from '../src/shared/connection-targets'
 import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
+import type { SqlServerPrincipal } from '../src/shared/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const handle = (value = 50, generation = 1): BackendConnectionHandle => ({ id: id(value), generation })
-const authentication: ConnectionAuthentication = { principal: { provider: 'sqlServer', authentication: 'sql', id: 'alex' } }
+const authentication: ConnectionAuthentication = { principal: { provider: 'sqlserver', authentication: 'sql', id: 'alex' } }
 const record = (value = 1): PersistedConnectionTarget => ({
   id: id(value), options: connectionTargetOptions({ server: 'sql-prod-01', database: 'Sales', authentication: 'sql', username: 'alex', password: 'never-keep', trustServerCertificate: false }),
   details: { displayName: 'Production reporting', environment: 'Production', autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
@@ -174,7 +175,7 @@ describe('durable connection targets', () => {
     expect(service.get(id(1))?.expectedPrincipal).toEqual(authentication.principal)
     service.markLostBefore(2)
     const changed = service.beginConnect(id(1), 2, id(11), 'update-credentials')!
-    const different: ConnectionAuthentication = { principal: { ...authentication.principal, id: 'different-account' } }
+    const different: ConnectionAuthentication = { principal: { ...(authentication.principal as SqlServerPrincipal), id: 'different-account' } }
     expect(service.completeConnect(changed, handle(51, 2), different)).toEqual({ status: 'rejected', reason: 'identity-changed', dispose: handle(51, 2) })
     expect(service.get(id(1))).toMatchObject({ expectedPrincipal: authentication.principal, lifecycle: { state: 'disconnected', reason: 'identity-changed' } })
   })
@@ -205,7 +206,7 @@ describe('durable connection targets', () => {
     expect(service.operation(id(1))).toBe(operation)
     expect(service.get(id(1))?.lifecycle.state).toBe('connecting')
     service.cancelConnect(id(1))
-    expect(service.completeConnect(operation, handle(), { principal: { ...authentication.principal, id: 'other' } })).toEqual({ status: 'stale', dispose: handle() })
+    expect(service.completeConnect(operation, handle(), { principal: { ...(authentication.principal as SqlServerPrincipal), id: 'other' } })).toEqual({ status: 'stale', dispose: handle() })
     expect(service.get(id(1))?.expectedPrincipal).toEqual(authentication.principal)
     const retry = service.beginConnect(id(1), 1, id(11))!
     expect(service.completeConnect(retry, handle(), { ...authentication, accessToken: 'never-keep' } as ConnectionAuthentication)).toEqual({ status: 'rejected', reason: 'unknown', dispose: handle() })
@@ -232,7 +233,7 @@ describe('durable connection targets', () => {
     const service = connected(), reference = { profileId: id(200), revision: id(201) }
     const before = service.getSnapshot()
     expect(service.reconcileAuthentication(handle(50, 2), { ...authentication, credential: reference })).toBe(false)
-    expect(service.reconcileAuthentication(handle(), { principal: { ...authentication.principal, id: 'other' }, credential: reference })).toBe(false)
+    expect(service.reconcileAuthentication(handle(), { principal: { ...(authentication.principal as SqlServerPrincipal), id: 'other' }, credential: reference })).toBe(false)
     expect(service.getSnapshot()).toBe(before)
     expect(service.reconcileAuthentication(handle(), { ...authentication, credential: reference })).toBe(true)
     expect(service.get(id(1))?.credential).toEqual(reference)

@@ -16,7 +16,7 @@ async function pinned(edge: 'top' | 'bottom', overflow = false) {
   workbench.api.push(readyBackend())
   const attempt = workbench.connections.beginConnect(connectionOptions, 1)!
   const info = connectionInfo(crypto.randomUUID())
-  const authentication = { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'sid:fixture' } }
+  const authentication = { principal: { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'sid:fixture' } }
   workbench.connections.accept(info, connectionOptions, attempt.operation.targetId, authentication, attempt)
   const node = workbench.explorer.settle().rows.nodes.find(node => node?.parent === 0)!
   workbench.connect(connectionInfo('another-server'))

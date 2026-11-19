@@ -198,14 +198,14 @@ internal static class ColumnProfiler
 
     /// <summary>What a column's histogram counts: its values (numbers), its instants (date and time types, in ticks), or its
     /// cells' characters (text) or bytes (binary).</summary>
-    private enum Basis { None, Value, Time, Chars, Bytes }
+    internal enum Basis { None, Value, Time, Chars, Bytes }
 
-    private static Basis BasisOf(ResultColumn column, WireKind wire, ViewSorter.Kind kind)
+    internal static Basis BasisOf(ResultColumn column, WireKind wire, ViewSorter.Kind kind)
     {
         if (wire == WireKind.Binary) return Basis.Bytes;
         if (ViewSorter.IsText(column)) return Basis.Chars;
         if (kind is ViewSorter.Kind.Exact or ViewSorter.Kind.Approximate) return Basis.Value;
-        return ViewSorter.TypeName(column) is "date" or "datetime" or "datetime2" or "smalldatetime" or "time" or "datetimeoffset" ? Basis.Time : Basis.None;
+        return ColumnTypes.IsTemporal(column) ? Basis.Time : Basis.None;
     }
 
     private sealed class LengthStats
@@ -276,7 +276,7 @@ internal static class ColumnProfiler
             basis = BasisOf(meta, wire, kind);
             culture = kind == ViewSorter.Kind.Collated ? ViewSorter.Culture(meta.Collation) : null;
             trim = meta.Collation is not null;
-            timeOnly = ViewSorter.TypeName(meta) == "time";
+            timeOnly = meta.SortKind == ColumnTypes.Time;
             if (wire == WireKind.Binary || ViewSorter.IsText(meta))
             {
                 charStats = wire == WireKind.Binary ? null : new LengthStats();

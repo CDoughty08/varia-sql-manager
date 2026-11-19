@@ -1,8 +1,9 @@
-import { commandDescriptor, type CommandId } from '../../../shared/commands/catalog'
+import { commandDescriptor, commandProviders, type CommandId } from '../../../shared/commands/catalog'
+import { providerAllows, providersOf } from '../../../shared/providers'
 import type { IconId } from '../../../shared/icons'
 import { contextRecord, type ContextKeys, type TargetKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type DynamicSubmenu, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
+import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, submenus, trimSeparators, type DynamicSubmenu, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
 import type { ScriptAsTitleKey } from '../../../shared/scripting/catalog.ts'
 import { evaluateWhen } from '../../../shared/commands/when'
 import { commandTitle, type SettingsValues } from '../../../shared/settings/catalog'
@@ -87,7 +88,11 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const model = options.model ?? ((id: MenuId) => catalogueModel(id, platform))
   // A target's stand-in state keys (a Search Objects result's selection keys) win over the workbench's.
   const keys = contextRecord(platform, { ...options.state, ...args?.state, ...options.target })
-  const keep = (entry: MenuEntry) => entry.kind !== 'role' && (entry.kind === 'separator' || !entry.when || evaluateWhen(entry.when, keys))
+  // An Object Explorer node's menu leaves out what its server's engine has no use for (`providers`); every other menu has no
+  // `explorerProvider`, and '' hides nothing.
+  const forEngine = (entry: MenuEntry) => entry.kind === 'command' ? providerAllows(commandProviders(entry.id), keys.explorerProvider)
+    : entry.kind === 'submenu' ? providerAllows(providersOf(submenus[entry.id]), keys.explorerProvider) : true
+  const keep = (entry: MenuEntry) => entry.kind !== 'role' && (entry.kind === 'separator' || ((!entry.when || evaluateWhen(entry.when, keys)) && forEngine(entry)))
   const children = (id: SubmenuId) => model(id)
   let separators = 0
 

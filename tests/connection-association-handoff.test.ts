@@ -8,7 +8,7 @@ import { deferred } from './fixtures/documents'
 import { connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-const principal = { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'reader' }
+const principal = { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'reader' }
 const record = (value: number): PersistedConnectionTarget => ({ id: id(value), options: connectionTargetOptions(connectionOptions), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
   expectedPrincipal: principal, credential: { profileId: id(200), revision: id(201) } })
 

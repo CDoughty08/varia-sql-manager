@@ -9,7 +9,7 @@ function fixture() {
   const targets = new ConnectionTargetService(), handle = { id: id(50), generation: 1 }
   targets.markLostBefore(1)
   targets.add({ id: id(1), options: connectionTargetOptions({ server: 'same-server', database: 'Sales', authentication: 'sql', username: 'alex', trustServerCertificate: false }), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
-  targets.completeConnect(targets.beginConnect(id(1), 1, id(10))!, handle, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'alex' } })
+  targets.completeConnect(targets.beginConnect(id(1), 1, id(10))!, handle, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'alex' } })
   const state = { docs: [
     { id: 'query-1', name: 'dirty.sql', targetId: id(1), connectionId: handle.id, database: 'Sales', revision: 1, dirty: true, query: true, running: false },
     { id: 'query-2', name: 'results.sql', targetId: id(1), connectionId: handle.id, database: 'Accounts', revision: 2, dirty: false, query: true, running: false },

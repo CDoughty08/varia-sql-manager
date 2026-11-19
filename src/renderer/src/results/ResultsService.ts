@@ -12,6 +12,7 @@ import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
 import type { DistinctList, ResultClient, ResultHandle, ResultView } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
+import { sortKindOf } from '../../../shared/results/sort-kind'
 import { completionSentence, formatCount, plural } from './status'
 import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, type ColumnCondition } from './column-filter'
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
@@ -2100,11 +2101,10 @@ export const capStripText = (rows: number, pivot: boolean): string =>
   `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns. Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`
 
 /** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
-const lengthTypes = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'sysname', 'xml', 'json'])
-function lengthSortable(column: ResultColumn): boolean {
+export function lengthSortable(column: ResultColumn): boolean {
   if (column.wire === 'binary' || column.collation !== undefined || column.role === 'xml' || column.role === 'json') return true
-  const cut = column.dataType.indexOf('(')
-  return lengthTypes.has((cut < 0 ? column.dataType : column.dataType.slice(0, cut)).trim().toLowerCase())
+  const kind = sortKindOf(column)
+  return kind === 'text' || kind === 'json'
 }
 
 const columnName = (columns: readonly ResultColumn[], column: number) => columns[column]?.name || noColumnName
