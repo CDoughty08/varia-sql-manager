@@ -8,43 +8,83 @@ describe('Electron launches on a virtual display', () => {
 
   // A script starts the app if it holds Electron's binary, Playwright's launcher (raw or the fixture's), or a packaged build.
   const launcher = /(?:from|require\(|import\()\s*['"]electron['"]|\b_electron\b|\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'|connectOverCDP|\bappImage\b/
-  // A call that can start a process: any .launch( (Playwright's launcher, whatever it is called) or a child_process call,
-  // bare or as a method (cp.spawn).
+  // A call that can start a process: any .launch( (Playwright's launcher, whatever it is called) or a child_process
+  // function by its own name, bare or as a method (cp.spawn). exec (which RegExp shares) and aliases are left to the
+  // import check below.
   const start = /(?:^|[^\w$])((?:[\w$]+\.)?(?:spawn|spawnSync|execFile|execFileSync|fork)|[\w$]+\.launch)\(/g
+  const childProcess = /from\s+['"](?:node:)?child_process['"]|require\(\s*['"](?:node:)?child_process['"]\s*\)/
   const quotes = new Set(['\'', '"', '`'])
 
-  /** A call's whole text from its opening parenthesis, skipping strings, templates and comments; null if it never closes. */
-  function callText(source: string, open: number) {
-    let depth = 0
-    for (let index = open; index < source.length; index++) {
-      const char = source[index]
+  /**
+   * The source with every string, template, comment and regex literal blanked to spaces (same length, newlines kept), so
+   * parentheses and names inside them neither count nor match. A `/` starts a regex where an expression may begin.
+   */
+  function blank(source: string) {
+    const out = [...source]
+    const clear = (from: number, to: number) => { for (let index = from; index < to; index++) if (out[index] !== '\n') out[index] = ' ' }
+    let index = 0
+    while (index < source.length) {
+      const char = source[index], next = source[index + 1]
       if (quotes.has(char)) {
-        for (index++; index < source.length && source[index] !== char; index++) if (source[index] === '\\') index++
-      } else if (char === '/' && source[index + 1] === '/') {
-        const end = source.indexOf('\n', index)
-        index = end === -1 ? source.length : end
-      } else if (char === '/' && source[index + 1] === '*') {
-        const end = source.indexOf('*/', index)
-        index = end === -1 ? source.length : end + 1
-      } else if (char === '(') depth++
-      else if (char === ')' && --depth === 0) return source.slice(open, index + 1)
+        let close = index + 1
+        for (; close < source.length && source[close] !== char; close++) if (source[close] === '\\') close++
+        clear(index + 1, close)
+        index = close + 1
+      } else if (char === '/' && next === '/') {
+        const close = source.indexOf('\n', index)
+        clear(index, close === -1 ? source.length : close)
+        index = close === -1 ? source.length : close
+      } else if (char === '/' && next === '*') {
+        const close = source.indexOf('*/', index + 2)
+        const stop = close === -1 ? source.length : close + 2
+        clear(index, stop)
+        index = stop
+      } else if (char === '/' && /(?:^|[(,=:[!&|?{};]|\breturn)\s*$/.test(source.slice(Math.max(0, index - 12), index))) {
+        let close = index + 1, inClass = false
+        for (; close < source.length && (inClass || source[close] !== '/') && source[close] !== '\n'; close++) {
+          if (source[close] === '\\') close++
+          else if (source[close] === '[') inClass = true
+          else if (source[close] === ']') inClass = false
+        }
+        clear(index + 1, close)
+        index = close + 1
+      } else index++
+    }
+    return out.join('')
+  }
+
+  /** In blanked code, a call's text from its opening parenthesis to the one that closes it; null if it never closes. */
+  function callText(code: string, open: number) {
+    let depth = 0
+    for (let index = open; index < code.length; index++) {
+      if (code[index] === '(') depth++
+      else if (code[index] === ')' && --depth === 0) return code.slice(open, index + 1)
     }
     return null
   }
 
-  /** One script's calls that start the app itself: not through the smoke fixture, and not a named tool (taskkill, ps). */
+  /** One script's calls that start a process itself: not through the smoke fixture, and not a bare tool name (taskkill, ps). */
   function launchCalls(source: string) {
+    const code = blank(source)
     // The fixture's launcher, under whatever name it is imported, adds the switch itself (checked separately).
     const fixtureImport = source.match(/import \{([^}]*)\} from '\.\/(?:fixtures\/)?smoke\.mjs'/)?.[1].match(/\belectron\b(?:\s+as\s+([\w$]+))?/)
     const fixtureLaunch = fixtureImport ? `${fixtureImport[1] ?? 'electron'}.launch` : null
-    return [...source.matchAll(start)].flatMap(match => {
+    return [...code.matchAll(start)].flatMap(match => {
       if (match[1] === fixtureLaunch) return []
-      const text = callText(source, match.index + match[0].length - 1)
-      // A plain string, without interpolation, names a tool rather than the app.
-      if (text && /^\(\s*(?:'[^']*'|"[^"]*"|`[^`$]*`)\s*[,)]/.test(text)) return []
+      const open = match.index + match[0].length - 1
+      const text = callText(code, open)
+      // A string literal of a bare program name (no path, no interpolation) is a tool, not the app.
+      if (text && /^\(\s*(?:'[\w.-]+'|"[\w.-]+"|`[\w.-]+`)\s*[,)]/.test(source.slice(open, open + text.length)) && !/^\(\s*['"`](?:electron|varia)/i.test(source.slice(open))) return []
       return [{ call: match[1], text }]
     })
   }
+  const fromFixture = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/
+  const importsSwitch = /import \{[^}]*\bxvfbArgs\b[^}]*\} from '\.\/(?:fixtures\/)?xvfb\.mjs'/
+  /**
+   * Whether a launcher lacks xvfbArgs where the call scan cannot see every launch: one that starts the app without the
+   * fixture, or one that imports child_process (exec, an alias, promisify(execFile)), must import it.
+   */
+  const missesImport = (source: string) => !importsSwitch.test(source) && (!fromFixture.test(source) || childProcess.test(source))
   const unswitchedCalls = (source: string) => launchCalls(source).filter(({ text }) => !text?.includes('xvfbArgs(')).map(({ call, text }) => call + (text ?? '(… never closes').split('\n')[0])
 
   it('knows xvfb-run by the XAUTHORITY it sets, on Linux only', () => {
@@ -70,7 +110,7 @@ describe('Electron launches on a virtual display', () => {
     expect(fixture).toMatch(/_electron\.launch\(\{ \.\.\.options, env, args: args\.includes\(frameRateSwitch\)/)
     // Scripts that start the app themselves, and why they need no switch.
     const exempt: Record<string, string> = {
-      'scripts/appimage-check.mjs': 'its runs end before a window: the refusal check expects no start, the others only extract or check',
+      'scripts/appimage-check.mjs': 'it expects the app to refuse to start (or only extracts and checks it), so it never needs frames',
       'scripts/portable-smoke.mjs': 'the Windows portable build, never run under xvfb'
     }
     const paths = ['scripts', 'scripts/fixtures'].flatMap(folder => readdirSync(folder).filter(name => /\.[cm]?[jt]s$/.test(name) && name !== 'smoke.mjs').map(name => `${folder}/${name}`))
@@ -81,10 +121,17 @@ describe('Electron launches on a virtual display', () => {
     // The direct launches really are examined, none passing as the fixture's.
     expect([...sources].filter(([, source]) => launchCalls(source).length).map(([path]) => path).sort())
       .toEqual(['scripts/files-smoke.mjs', 'scripts/grid-bench.mjs', 'scripts/ipc-bench.mjs', 'scripts/packaged-smoke.mjs', 'scripts/pivot-bench.mjs', 'scripts/startup-bench.mjs'])
-    // Backstop for a launch form the call scan misses: a launcher that does not launch through the fixture imports xvfbArgs.
-    const fromFixture = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/
-    const importsSwitch = /import \{[^}]*\bxvfbArgs\b[^}]*\} from '\.\/(?:fixtures\/)?xvfb\.mjs'/
-    expect([...sources].filter(([, source]) => !fromFixture.test(source) && !importsSwitch.test(source)).map(([path]) => path)).toEqual([])
+    expect([...sources].filter(([, source]) => missesImport(source)).map(([path]) => path)).toEqual([])
+  })
+
+  it('fails a launcher that imports child_process without xvfbArgs, whatever its calls are named', () => {
+    const fixture = 'import { electron } from \'./fixtures/smoke.mjs\'\n'
+    expect(missesImport(fixture + 'import { execFile } from \'node:child_process\'\nconst run = promisify(execFile)\nawait run(electronPath, [\'.\'])')).toBe(true)
+    expect(missesImport(fixture + 'import { spawn as start } from \'node:child_process\'\nstart(electronPath, [\'.\'])')).toBe(true)
+    expect(missesImport(fixture + 'import { exec } from \'child_process\'\nexec(`"${electronPath}" . ${file}`)')).toBe(true)
+    expect(missesImport('import { _electron as electron } from \'@playwright/test\'\nawait electron.launch({ args: [\'.\'] })')).toBe(true)
+    expect(missesImport(fixture + 'await electron.launch(launchOptions)')).toBe(false)
+    expect(missesImport(fixture + 'import { spawn } from \'node:child_process\'\nimport { xvfbArgs } from \'./fixtures/xvfb.mjs\'')).toBe(false)
   })
 
   it('finds a launch without the switch in the forms it reads, and passes one with it', () => {
@@ -96,11 +143,17 @@ describe('Electron launches on a virtual display', () => {
       'execFile(resolve(executable), [])',
       'const child = spawn(\n  electron,\n  [\'.\'])',
       'spawn(electronPath, [\'.\' // a comment )\n])',
-      'spawn(electronPath, [\'.\''
+      'spawn(electronPath, [\'.\'',
+      'spawn(\'dist/linux-unpacked/varia-sql-manager\', [\'.\'])',
+      'spawn(\'electron\', [\'.\'])',
+      'spawn(electronPath, [\'.\'] /* not xvfbArgs(): it is in a comment */)',
+      'spawn(electronPath, [\'.\', \'xvfbArgs(\'])'
     ]
     for (const source of unswitched) expect(unswitchedCalls(source), source).not.toEqual([])
     // A parenthesis in a string does not let one call borrow the next one's switch.
     expect(unswitchedCalls('spawn(electronPath, [\'.\', \'--x=(\'])\nspawn(electronPath, xvfbArgs([\'.\']))')).toHaveLength(1)
+    // Nor does one in a regex literal.
+    expect(unswitchedCalls('step(async () => {\n  spawn(electronPath, [name.replace(/\\(/g, \'\')])\n  spawn(electronPath, xvfbArgs([\'.\']))\n})')).toHaveLength(1)
     const switched = [
       'cp.spawn(electronPath, xvfbArgs([\'.\']))',
       'await electron.launch({ args: xvfbArgs([\'.\']), env })',
