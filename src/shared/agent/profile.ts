@@ -7,7 +7,7 @@ import { agentPlatforms, type AgentPlatform } from './catalog.ts'
 
 export interface AgentProfileRequest { readonly connectionId: string; readonly requestId: string }
 
-/** One login's Agent facts on one server. A fact the login cannot read is false (or null for a server option), never a guess. */
+/** One login's Agent facts on one server. A fact the login cannot read is false (or absent for a server option), never a guess. */
 export interface AgentProfile {
   /** Where the server runs, from its engine edition and path separator (`agentPlatform`). */
   readonly platform: AgentPlatform
