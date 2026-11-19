@@ -14,6 +14,7 @@ import { localDescriptor, LocalSource, sortOrder, type LocalSortKey } from './lo
 import { beginCopy, latestCopy } from './copy-generation'
 import { scrollbarSize } from './scrollbar'
 import { copyPlan } from './selection'
+import { remapSelection } from './swap'
 import { cycleSortKeys, sortKeysBy } from './sort-keys'
 
 /**
@@ -34,8 +35,11 @@ export interface LocalGridProps {
   readonly suggestedName?: string
   /** False for a table whose order is its meaning (a report's rows): no header sort, no Sort items. */
   readonly sortable?: boolean
-  /** A card's tallest height in rows (12 by default). */
+  /** A card's tallest height in rows (12 by default), and a fitted page's. */
   readonly maxRows?: number
+  /** A page as tall as its rows up to `maxRows`, as a card is, with room for its strip and a wide grid's scroll bar: a
+   *  list among other content in a scrolling column (an SSIS properties list), where there is no area to fill. Keeps Save. */
+  readonly fit?: boolean
   /** Scroll, widths and selection, kept by the owner across remounts; the grid keeps its own otherwise. */
   readonly state?: GridViewState
 }
@@ -63,7 +67,7 @@ const columnsOf = (table: LocalTableData) => table.columns.map(column => `${colu
  * work as in a results grid; Copy and Save write the same text through the TypeScript twin of ResultTextWriter (copy
  * here, a save in main). The menu reaches it as a grid with its own source (OutputTarget view `live`, LiveOutput).
  */
-function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, state }: LocalGridProps) {
+function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = true, maxRows = cardRows, fit = false, state }: LocalGridProps) {
   const { commands, platform } = useWorkbench()
   const bound = useMemo(() => boundTable(table), [table])
   const columnsKey = useMemo(() => columnsOf(bound), [bound])
@@ -90,6 +94,9 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   /** The keys the current source was sorted by. */
   const sourceKeys = useRef(keys)
   const mount = (create: (spec: GridSpec) => GridView) => {
+    // A kept state can come back over a table with fewer rows or columns (an owner's Refresh): its selection is held to
+    // them, or Copy would copy rows that are gone and keys would move from there.
+    if (own.selection) own.selection = remapSelection(own.selection, row => row, rows, columns)
     const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells, bound.cut)
     sourceKeys.current = keys
     // The card keeps the last view's width until this one reports its own on its first frame (GridView always does), so a
@@ -183,9 +190,9 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
   // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
   // than it and for its strip.
-  const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
+  const height = preset === 'card' || fit ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
   return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
-    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
+    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': '' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.

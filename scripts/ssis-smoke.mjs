@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
-import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, gridCell, gridPart, localGrid, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, gridCell, gridPart, localGrid, localGridFrame, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
@@ -71,8 +71,14 @@ const drawn = title => frame(title).evaluate(element => ({ rows: element.querySe
 /** A list's row as its cells show it. */
 const rowText = async (grid, row, columns) => { const cells = []; for (let column = 0; column < columns; column++) cells.push(await gridCell(grid, row, column).textContent()); return cells }
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
-/** A list's grid frame in a document (its strip, its box). */
-const listFrame = (title, name) => frame(title).locator(part.localGrid).filter({ has: page.getByRole('grid', { name: new RegExp(`^${name}, `) }) })
+/** A list's grid frame (its strip, its box): one list of the name is open where this is used. */
+const listFrame = name => localGridFrame(page, name)
+/** Whether a list's row is wholly inside the part of its scroller that shows, above any scroll bar or strip. */
+const rowShown = async (grid, name, row) => {
+  const box = await gridCell(grid, row, 0).boundingBox()
+  const view = await listFrame(name).locator(gridPart.scroller).evaluate(element => ({ top: element.getBoundingClientRect().top, height: element.clientHeight }))
+  return !!box && box.y >= view.top - 0.5 && box.y + box.height <= view.top + view.height + 0.5
+}
 /** Runs a Query output menu item on a list's cell. */
 const listMenu = async (grid, item) => {
   await gridCell(grid, 0, 0).click({ button: 'right' })
@@ -153,9 +159,10 @@ try {
   await expect(gridCell(parameters, 2, 3)).toHaveText('Environment variable')
   expect(await rowText(localGrid(loads, 'References'), 0, 4)).toEqual(['Test', '.', 'Relative', 'Not validated'])
   // A short list is as tall as its rows: its last row is inside its frame, with no band of empty rows under it.
-  const bottomOf = locator => locator.evaluate(element => element.getBoundingClientRect().bottom)
-  expect(await bottomOf(gridCell(parameters, 2, 0))).toBeLessThanOrEqual(await bottomOf(listFrame('Loads', 'Parameters')) + 0.5)
-  expect(await listFrame('Loads', 'Parameters').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(160)
+  expect(await rowShown(parameters, 'Parameters', 2)).toBe(true)
+  expect(await listFrame('Parameters').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(160)
+  // A list narrower than its section has no room kept for a horizontal scroll bar: its header, two rows and its border.
+  expect(await listFrame('Packages').evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(22 + 2 * 20 + 4)
   // Copy writes what the cell shows: the stars, never a value. Copy with Headers of every row does too.
   await gridCell(parameters, 1, 2).click()
   await page.keyboard.press('Control+C')
@@ -167,7 +174,9 @@ try {
   // Save Results As (Ctrl+S) writes the same text through main's dialog, named for the project and the list.
   await application.evaluate((_, value) => { globalThis.variaSave.paths.push(value) }, join(saveDir, 'parameters.csv'))
   await page.keyboard.press('Control+S')
-  await expect(listFrame('Loads', 'Parameters').locator(gridPart.strip)).toHaveText('Saved 3 rows to parameters.csv.')
+  await expect(listFrame('Parameters').locator(gridPart.strip)).toHaveText('Saved 3 rows to parameters.csv.')
+  // The list grows to make room for its strip: every row still shows.
+  await expect.poll(() => rowShown(parameters, 'Parameters', 2)).toBe(true)
   expect(await application.evaluate(() => globalThis.variaSave.dialogs.at(-1))).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Loads-Parameters\.csv$/) })
   const saved = await readFile(join(saveDir, 'parameters.csv'), 'utf8')
   // An empty value is an empty string (""), as a result's is; an empty field would be NULL.
@@ -318,7 +327,7 @@ try {
   await page.keyboard.press('Control+End')
   const last = gridCell(references, 2047, 0)
   await expect(last).toHaveText('Environment 2048')
-  expect(await bottomOf(last)).toBeLessThanOrEqual(await bottomOf(listFrame('Loads', 'References')) + 0.5)
+  expect(await rowShown(references, 'References', 2047)).toBe(true)
   await sectionColumn(frame('Loads'), 'Loads').evaluate(column => { column.scrollTop = column.scrollHeight })
   await expect(last).toBeInViewport()
   await bounded()
@@ -330,6 +339,10 @@ try {
   await rm(join(control, 'ssis', 'many'))
   await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
   await expect(references).toHaveAttribute('aria-label', 'References, 1 row, 4 columns')
+  // The selection Ctrl+End left on row 2,048 is held to the one row left: Copy copies it, not rows that are gone.
+  await references.focus()
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('Not validated')
   console.log('SSIS checks: lists at the 2,048-row cap draw only the rows near the view, after a tab switch too, and reach their last row.')
 
   // 9. Light theme, and still no page-wide horizontal scroll.

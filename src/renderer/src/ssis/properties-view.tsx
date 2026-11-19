@@ -9,9 +9,7 @@ import type { StatusTone } from '../../../shared/theme/tones'
 import { formatCount } from '../results/status'
 import type { GridViewState } from '../results/ResultsService'
 import type { Crumb, Fact, FrameSection } from '../kit/DocumentFrame'
-import { gridLimits as g } from '../grid/constants'
 import { LocalGrid } from '../grid/LocalGrid'
-import { scrollbarSize } from '../grid/scrollbar'
 import type { SsisPropertiesModel, SsisPropertiesState } from './SsisPropertiesService'
 
 /** What General says to a screen reader for an empty value, where the page draws a dash. */
@@ -113,12 +111,8 @@ export function listTable<T>(rows: readonly T[], columns: readonly ListColumn<T>
   return { columns: columns.map(column => ({ name: column.title })), rows: rows.map(row => columns.map(column => displayText(column.value(row)))) }
 }
 
-/** The most rows a list shows before it scrolls inside its section (and never more than 60% of the window's height). */
+/** The most rows a list shows before it scrolls inside its section. */
 export const listRows = 20
-/** An empty list's room under its header for the grid's note that says so. */
-const emptyHeight = 48
-/** A list's height in px: its header and rows up to listRows, room for a horizontal scroll bar, and the frame's border. */
-export const listHeight = (rows: number, scrollbar: number): number => g.headerHeight + (rows === 0 ? emptyHeight : Math.min(rows, listRows) * g.rowHeight + scrollbar) + 2
 
 export interface SsisListProps {
   readonly label: string
@@ -128,18 +122,18 @@ export interface SsisListProps {
   /** Scroll, widths, selection and sort, kept per document so a tab switched back to shows the list as it was left. */
   readonly state: GridViewState
 }
-/** A read-only list of at most ssisLimits.rows rows in the results grid (LocalGrid, page preset), or what an empty one says. */
+/**
+ * A read-only list of at most ssisLimits.rows rows in the results grid (LocalGrid): a page, with Save, as tall as its rows
+ * up to listRows (the section column scrolls, so there is no area to fill), or what an empty one says.
+ */
 export function SsisList({ label, table, empty, suggestedName, state }: SsisListProps) {
-  return <div className="ssis-properties-grid" style={{ height: `min(${listHeight(table.rows.length, scrollbarSize())}px, 60vh)` }}>
-    <LocalGrid table={table} label={label} preset="page" empty={empty} suggestedName={suggestedName} state={state} />
+  return <div className="ssis-properties-grid">
+    <LocalGrid table={table} label={label} preset="page" fit maxRows={listRows} empty={empty} suggestedName={suggestedName} state={state} />
   </div>
 }
 
-/** Each document's list states, by list, keyed by its target (which lives as long as its tab): a Refresh keeps them. */
-const listStates = new WeakMap<object, Map<string, GridViewState>>()
-function listState(owner: object, list: string): GridViewState {
-  let states = listStates.get(owner)
-  if (!states) listStates.set(owner, states = new Map())
+/** A document's view of one list, made on first use. */
+function listState(states: Map<string, GridViewState>, list: string): GridViewState {
   let state = states.get(list)
   if (!state) states.set(list, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
   return state
@@ -161,17 +155,17 @@ type SectionContent = Readonly<Record<string, { readonly content: ReactNode; rea
  * read), and the same elements let React skip lists of up to ssisLimits.rows rows each. Models are immutable snapshots.
  */
 const contents = new WeakMap<SsisPropertiesModel, SectionContent>()
-function sectionContent(model: SsisPropertiesModel, owner: object): SectionContent {
+function sectionContent(model: SsisPropertiesModel, lists: Map<string, GridViewState>): SectionContent {
   let content = contents.get(model)
-  if (!content) contents.set(model, content = buildContent(model, owner))
+  if (!content) contents.set(model, content = buildContent(model, lists))
   return content
 }
 /** The general rows and the lists of a model, by section id. */
-function buildContent(model: SsisPropertiesModel, owner: object): SectionContent {
+function buildContent(model: SsisPropertiesModel, lists: Map<string, GridViewState>): SectionContent {
   // A list's file is named for the object and the list ("Loads-Parameters"), as a result's is for its query.
   const list = <T,>(label: string, rows: readonly T[], columns: readonly ListColumn<T>[], empty: string) => ({
     count: rows.length,
-    content: <SsisList label={label} table={listTable(rows, columns)} empty={empty} suggestedName={`${displayText(model.name)}-${label}`} state={listState(owner, label)} />
+    content: <SsisList label={label} table={listTable(rows, columns)} empty={empty} suggestedName={`${displayText(model.name)}-${label}`} state={listState(lists, label)} />
   })
   switch (model.view) {
     case 'folder': return {
@@ -217,7 +211,7 @@ const countNouns: Readonly<Record<string, readonly [one: string, many: string]>>
 /** The document's sections, with a count after each list's title; none before the first model arrives. */
 export function ssisSectionViews(state: SsisPropertiesState): FrameSection[] {
   if (!state.model) return []
-  const content = sectionContent(state.model, state.target)
+  const content = sectionContent(state.model, state.lists)
   return ssisDocumentSpecs[state.kind].sections.map(section => {
     const item = content[section.id], nouns = countNouns[section.id]
     const count = item?.count === undefined || !nouns ? undefined : { text: formatCount(item.count), label: `${formatCount(item.count)} ${item.count === 1 ? nouns[0] : nouns[1]}` }

@@ -9,10 +9,9 @@ import { ssisDefaultVerb, ssisDocumentSpecs, ssisVerbs, ssisVerbSpecs } from '..
 import type { SsisDescribeRequest, SsisDescribeResult, SsisEnvironmentModel, SsisFolderModel, SsisPackageModel, SsisProjectModel } from '../src/shared/ssis/schema'
 import { isCustomKind, isTextDocument, kindInfo } from '../src/renderer/src/documents'
 
-import { listHeight, listRows, noneLabel, parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, truncatedNote, validationLabel, type SsisListProps } from '../src/renderer/src/ssis/properties-view'
+import { listRows, noneLabel, parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, SsisList, truncatedNote, validationLabel, type SsisListProps } from '../src/renderer/src/ssis/properties-view'
 import type { SsisPropertiesState } from '../src/renderer/src/ssis/SsisPropertiesService'
 import { SsisNotice } from '../src/renderer/src/ssis/SsisProperties'
-import { gridLimits } from '../src/renderer/src/grid/constants'
 import { ssisFocuser, type SsisFocusHost } from '../src/renderer/src/ssis/focus'
 import { initialFrameState, toggleSection } from '../src/renderer/src/kit/document-frame'
 import { deferred } from './fixtures/documents'
@@ -102,7 +101,7 @@ function catalogTree(params: ExplorerChildrenParams): ExplorerChildrenResult {
 }
 const viewState = (model: SsisPropertiesState['model'], extra: Partial<SsisPropertiesState> = {}): SsisPropertiesState => {
   const kind = (model ? `ssis${model.view[0].toUpperCase()}${model.view.slice(1)}` : 'ssisProject') as SsisPropertiesState['kind']
-  return { id: 'd1', kind, target: targets[kind], connectionId: 'c1', server: 'sql01', serverLabel: 'Production SQL', loading: false, gone: false, disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections), ...model ? { model, loadedAt: 1000 } : {}, ...extra }
+  return { id: 'd1', kind, target: targets[kind], connectionId: 'c1', server: 'sql01', serverLabel: 'Production SQL', loading: false, gone: false, disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections), lists: new Map(), ...model ? { model, loadedAt: 1000 } : {}, ...extra }
 }
 
 describe('SSIS properties documents', () => {
@@ -220,6 +219,22 @@ describe('SSIS properties documents', () => {
     expect(state(id).model).toBeUndefined()
     expect(ssisHeaderState(state(id))).toMatchObject({ tone: 'critical', label: 'Not found' })
     expect(ssisHeaderState({ ...state(id), error: { code: 'CATALOG_MISSING', message: 'x', retryable: false } })).toMatchObject({ label: 'Catalog missing' })
+  })
+  it('gives each document its own lists\' views, so a tab closed and opened again for the same node starts afresh', async () => {
+    const { documents, ssisProperties, run } = ssis()
+    await run('ssis.projectProperties', 'ssisProject')
+    await settled()
+    const first = documents.getSnapshot().activeId, lists = ssisProperties.get(first)!.lists
+    lists.set('Parameters', { topRow: 40, virtualTop: 0, scrollLeft: 0, sized: true })
+    await ssisProperties.refresh(first)
+    await settled()
+    expect(ssisProperties.get(first)!.lists).toBe(lists)
+    await documents.close(first)
+    await run('ssis.projectProperties', 'ssisProject')
+    await settled()
+    const again = ssisProperties.get(documents.getSnapshot().activeId)!
+    expect(again.id).not.toBe(first)
+    expect(again.lists.size).toBe(0)
   })
   it('cancels a read in flight when its tab closes, and ignores its late answer', async () => {
     const { documents, api, ssisProperties, run } = ssis()
@@ -421,15 +436,14 @@ describe('SSIS properties view', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
     const parameters = list(ssisSectionViews(viewState(many))[2])
     expect(parameters.table.rows).toHaveLength(2048)
-    // A short list is as tall as its rows; a long one stops at listRows and scrolls inside its section.
-    expect(listHeight(3, 0)).toBe(gridLimits.headerHeight + 3 * gridLimits.rowHeight + 2)
-    expect(listHeight(2048, 10)).toBe(listHeight(listRows, 10))
-    // An empty list has room for its note under the header, and no scroll bar.
-    expect(listHeight(0, 10)).toBe(listHeight(0, 0))
-    // The list's view state follows the document across Refresh's new models, and is the document's own.
-    expect(list(ssisSectionViews(viewState({ ...many }))[2]).state).toBe(parameters.state)
-    expect(list(ssisSectionViews(viewState({ ...many }, { target: { ...targets.ssisProject } }))[2]).state).not.toBe(parameters.state)
-    expect(list(ssisSectionViews(viewState(many))[1]).state).not.toBe(parameters.state)
+    // A page as tall as its rows up to listRows (the section column scrolls), as LocalGrid's fitted page draws it.
+    const grid = (SsisList(parameters) as ReactElement<{ children: ReactElement<{ preset: string; fit: boolean; maxRows: number }> }>).props.children
+    expect(grid.props).toMatchObject({ preset: 'page', fit: true, maxRows: listRows })
+    // The list's view state is the document's (its lists): kept across Refresh's new models, never another document's.
+    const lists = new Map(), mine = list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state
+    expect(list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state).toBe(mine)
+    expect(list(ssisSectionViews(viewState({ ...many }, { lists }))[1]).state).not.toBe(mine)
+    expect(list(ssisSectionViews(viewState({ ...many }, { id: 'd2' }))[2]).state).not.toBe(mine)
   })
   it('builds a model\'s sections once, so choosing a section does not rebuild lists of thousands of rows', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
