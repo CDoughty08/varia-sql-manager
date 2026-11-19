@@ -1308,23 +1308,23 @@
         },
         "resultsGrid.diffAddedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A faint wash over the cells of a row a comparison adds (+), and the kind bar of its row number. Translucent: the row stripe, a highlight, a search match and the selection show with it. Default $green/12 (Dark #6fbf8a1f, Light #2e7d4f1f).",
-          "markdownDescription": "(Varia) A faint wash over the cells of a row a comparison adds (+), and the kind bar of its row number. Translucent: the row stripe, a highlight, a search match and the selection show with it. Default `$green/12` (Dark `#6fbf8a1f`, Light `#2e7d4f1f`)."
+          "description": "(Varia) A faint wash over the cells and row number of a row a comparison adds (+), in place of the row stripe. Translucent: a highlight, a search match and the selection lie over it. Default $green/12 (Dark #6fbf8a1f, Light #2e7d4f1f).",
+          "markdownDescription": "(Varia) A faint wash over the cells and row number of a row a comparison adds (+), in place of the row stripe. Translucent: a highlight, a search match and the selection lie over it. Default `$green/12` (Dark `#6fbf8a1f`, Light `#2e7d4f1f`)."
         },
         "resultsGrid.diffRemovedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A faint wash over the cells of a row a comparison removes (−), and the kind bar of its row number. Translucent, as the added wash is. Default $red/12 (Dark #e667671f, Light #c42b3c1f).",
-          "markdownDescription": "(Varia) A faint wash over the cells of a row a comparison removes (−), and the kind bar of its row number. Translucent, as the added wash is. Default `$red/12` (Dark `#e667671f`, Light `#c42b3c1f`)."
+          "description": "(Varia) A faint wash over the cells and row number of a row a comparison removes (−), in place of the row stripe. Translucent, as the added wash is. Default $red/12 (Dark #e667671f, Light #c42b3c1f).",
+          "markdownDescription": "(Varia) A faint wash over the cells and row number of a row a comparison removes (−), in place of the row stripe. Translucent, as the added wash is. Default `$red/12` (Dark `#e667671f`, Light `#c42b3c1f`)."
         },
         "resultsGrid.diffChangedAddedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar of an added row's number. Default $green/20 (Dark #6fbf8a33, Light #2e7d4f33).",
-          "markdownDescription": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar of an added row's number. Default `$green/20` (Dark `#6fbf8a33`, Light `#2e7d4f33`)."
+          "description": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar on the row number of an added row and of a changed row's new half. Default $green/20 (Dark #6fbf8a33, Light #2e7d4f33).",
+          "markdownDescription": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar on the row number of an added row and of a changed row's new half. Default `$green/20` (Dark `#6fbf8a33`, Light `#2e7d4f33`)."
         },
         "resultsGrid.diffChangedRemovedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar of a removed row's number. Default $red/20 (Dark #e6676733, Light #c42b3c33).",
-          "markdownDescription": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar of a removed row's number. Default `$red/20` (Dark `#e6676733`, Light `#c42b3c33`)."
+          "description": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar on the row number of a removed row and of a changed row's old half. Default $red/20 (Dark #e6676733, Light #c42b3c33).",
+          "markdownDescription": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar on the row number of a removed row and of a changed row's old half. Default `$red/20` (Dark `#e6676733`, Light `#c42b3c33`)."
         },
         "resultsGrid.diffChangedBackground": {
           "$ref": "#/definitions/value",

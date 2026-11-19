@@ -180,6 +180,15 @@ describe('result diffs', () => {
     expect(layers(value('.rg-c:is(.is-sel, .is-hit), .rg-row.hl .rg-c', 'background-image'))).toEqual(['--rg-sel', '--rg-hit', '--rg-hl'])
     // The ellipsis of a truncated value is opaque, so it repeats every layer over the grid, the diff's colour lowest.
     expect(layers(value('.rg-c.is-trunc::after', 'background-image'))).toEqual(['--rg-sel', '--rg-hit', '--rg-hl', '--rg-tint'])
+    // Over a layer or a diff colour the ellipsis takes the cell's text colour, which the contrast pairs check on those
+    // stacks; the truncation colour is checked only on the grid, the stripe and the unfocused selection.
+    expect(value('.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after', 'color')).toBe('inherit')
+    // NULL and links, too faint on a match, take the grid's text colour there (no contrast pair checks theirs on it).
+    expect(value('.rg-c.is-hit:is(.is-null, .is-link)', 'color')).toBe('var(--varia-resultsGrid-foreground)')
+    // The old half's strikethrough sets only the line, keeping a link's or read error's underline beside it.
+    expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration')).toBeUndefined()
+    expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration-line')).toBe('line-through')
+    expect(value('.rg-row.tone-changedOld .rg-c.is-chg:is(.is-err, .is-link)', 'text-decoration-line')).toBe('underline line-through')
     // The diff's colour is the cell's own background colour, under every image.
     for (const selector of ['.rg-row.tone-added .rg-c', '.rg-row.tone-removed .rg-c', '.rg-row.tone-changedNew .rg-c.is-chg', '.rg-row.tone-changedOld .rg-c.is-chg']) {
       expect(value(selector, 'background-color'), selector).toBe('var(--rg-tint)')

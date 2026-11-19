@@ -104,7 +104,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   // too); NULL takes the grid's foreground there (styles.css), as its tint is too faint on that fill.
   ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground', 'resultsGrid.truncationForeground'],
     ['panel.background', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.inactiveSelectionOverlay']),
-  // A search match is a layer too, under the selection; a NULL takes the grid's foreground on it (styles.css).
+  // A search match is a layer too, under the selection; a NULL and a link take the grid's foreground on it (styles.css).
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.hitOverlay']),
   ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),

@@ -1195,7 +1195,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row.tone-added .rg-c { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); background-color: var(--rg-tint); }
 .rg-row.tone-removed .rg-c { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); background-color: var(--rg-tint); }
 .rg-row.tone-changedNew .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedAddedBackground); background-color: var(--rg-tint); font-weight: 600; }
-.rg-row.tone-changedOld .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedRemovedBackground); background-color: var(--rg-tint); text-decoration: line-through; }
+.rg-row.tone-changedOld .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedRemovedBackground); background-color: var(--rg-tint); text-decoration-line: line-through; }
+/* A link's and a read error's underline (and the error's wavy style) stay under the strikethrough. */
+.rg-row.tone-changedOld .rg-c.is-chg:is(.is-err, .is-link) { text-decoration-line: underline line-through; }
 .rg-row.tone-changedNew .rg-c.is-chg.is-null, .rg-row.tone-changedOld .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
 .rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
 /* A comparison's gutter (GridView.paintGutter): a 3 px kind bar on the left, kept when the row is selected, the mark, then
@@ -1269,6 +1271,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The ellipsis hides the text under it, so it is opaque: the grid's colour under the cell's own layers. */
 .rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; color: var(--varia-resultsGrid-truncationForeground); background-color: var(--varia-resultsGrid-background);
   background-image: linear-gradient(var(--rg-sel, transparent), var(--rg-sel, transparent)), linear-gradient(var(--rg-hit, transparent), var(--rg-hit, transparent)), linear-gradient(var(--rg-hl, transparent), var(--rg-hl, transparent)), linear-gradient(var(--rg-tint, transparent), var(--rg-tint, transparent)); }
+/* Over any layer or diff colour the ellipsis takes the cell's own text colour, which is checked against those stacks. */
+.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after { color: inherit; }
 /* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
 .rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
@@ -1279,8 +1283,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Search in results (GridView's marks): matches tinted, the active one outlined, and columns a column-name search leaves out
    faded. A selected match shows both layers, with the outline when it is the active one. */
 .rg-c.is-hit { --rg-hit: var(--varia-resultsGrid-hitOverlay); }
-/* NULL's tint is too faint on a match; it takes the grid's text colour there, as on the unfocused selection. */
-.rg-c.is-hit.is-null { color: var(--varia-resultsGrid-foreground); }
+/* NULL's and a link's colours are too faint on a match; they take the grid's text colour there (a link keeps its underline). */
+.rg-c.is-hit:is(.is-null, .is-link) { color: var(--varia-resultsGrid-foreground); }
 /* A cell's layers (docs/results-tools.md § Comparisons): its own colour (a diff's tint, NULL's) is background-color; over
    it, bottom first, the row's highlight, a search match and the selection, each a translucent image, so every one shows
    through those above it. The active cell is an outline. */
