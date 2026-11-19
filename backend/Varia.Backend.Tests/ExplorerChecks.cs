@@ -806,7 +806,11 @@ internal static class ExplorerChecks
         {
             ("the open", new FakeHost { Opening = (_, token) => Task.Delay(TimeSpan.FromSeconds(5), token) }, null),
             ("xp_enumerrorlogs", new FakeHost { Opening = (_, _) => Task.CompletedTask },
-                new Varia.Backend.Agent.AgentReader { TestRun = async (_, _, _) => { await Task.Delay(600); throw ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded."); } })
+                new Varia.Backend.Agent.AgentReader { TestRunUntil = async (_, token) =>
+                {
+                    try { await Task.Delay(TimeSpan.FromSeconds(5), token); } catch (OperationCanceledException) { }
+                    throw ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.");
+                } })
         })
         {
             using var slow = new ExplorerService(logsHost, new ExplorerOptions { Budget = TimeSpan.FromMilliseconds(200), AgentReader = reader });

@@ -82,7 +82,7 @@ internal sealed class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
-    /// <summary>SQL Server Agent's release gate: shut, an index build reads nothing from msdb (checks open it per service).</summary>
+    /// <summary>SQL Server Agent's release gate: shut, an index build reads no Agent objects (jobs, alerts, operators; checks open it per service).</summary>
     public bool AgentEnabled { get; set; } = Varia.Backend.Agent.AgentGate.Enabled;
     /// <summary>The memory every connection's index holds (the checks read it).</summary>
     public long MemoryUsed => budget.Used;
@@ -411,12 +411,12 @@ internal sealed class ObjectSearchService : IDisposable
         finally { total.Release(); }
     }
 
-    /// <summary>Reads SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>) in msdb into the index's Agent slot. The reason
-    /// it could not, reported as msdb, as a value: only Agent kinds are then left out.</summary>
     /// <summary>Why SQL Server Agent's objects were left out: reported against msdb, where they are read, and flagged as Agent's so
     /// the index line does not count msdb itself as skipped.</summary>
     internal static ObjectIndexSkip AgentSkip(string code, string message) => new("msdb", code, message, Agent: true);
 
+    /// <summary>Reads SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>) in msdb into the index's Agent slot. The reason
+    /// it could not, reported as msdb, as a value: only Agent kinds are then left out.</summary>
     private async Task<ObjectIndexSkip?> ReadAgentAsync(string connectionId, State state, bool alerts, CancellationToken token)
     {
         const string Msdb = "msdb";

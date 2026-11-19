@@ -206,7 +206,7 @@ login in none of the roles gets PERMISSION_DENIED naming them; with Agent stoppe
 says why (AGENT_DISABLED). The node's chips say the Agent service's state when it is not running and the jobs running, and its
 sublabel says Agent XPs disabled while that option is 0 (Live status). Where xp_enumerrorlogs returns no list (SQL Server on
 Linux), Error Logs lists Current alone. Search Objects finds the jobs the login may read, operators and, where the Alerts folder
-is served, alerts; Ctrl+Q reveals them below the node, and with the gate off the index reads nothing from msdb. Copy Name copies
+is served, alerts; Ctrl+Q reveals them below the node, and with the gate off the index reads no Agent objects. Copy Name copies
 a job, alert, operator or proxy name unquoted, as the msdb procedures take it. The platform gates come from the Agent catalogue:
 
 | Node | Id | Served on |
