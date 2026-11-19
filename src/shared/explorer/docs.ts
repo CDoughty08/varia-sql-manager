@@ -73,6 +73,9 @@ function folderRows(owner: 'server' | 'database', parent?: FolderId, path = ''):
     return [[name, code(spec.id), since(spec.since), folderServed(spec.id, { band: maxBand, engine: 'cloud', edition: 5, linux: false }) ? 'Yes' : 'No', lists(spec.id), filters], ...folderRows(owner, spec.id, name + ' › ')]
   })
 }
+/** A folder below a gated node is served only where both its own gate and its owner's are (Jobs has none of its own). */
+const served = (gate: readonly string[] | undefined, owner: readonly string[] | undefined) =>
+  gate && owner ? gate.filter(platform => owner.includes(platform)) : gate ?? owner
 /** Where a `platforms` gate serves: every server, or the SQL Server Agent platforms it lists. */
 const platforms = (gate: readonly string[] | undefined) => gate ? `SQL Server Agent platforms ${codes(gate)}` : 'every server'
 const folderTable = (owner: 'server' | 'database') => table(['Folder', 'Id', 'Since', 'Cloud editions', 'Lists (query)', 'Filters'], folderRows(owner))
@@ -180,7 +183,7 @@ export function renderExplorerDocs(): string {
     '',
     table(['Node', 'Id', 'Served on'], [
       ...nodeKinds.filter(kind => singletonOwners(kind).length).map(kind => [kindSpecs[kind].title, `${code(kind)} node`, platforms(kindSpecs[kind].platforms)]),
-      ...folderIds.filter(id => folderOwnerKinds(id).includes('agent')).map(id => [folderSpecs[id].label, code(id), platforms(folderGates(id).platforms)])
+      ...folderIds.filter(id => folderOwnerKinds(id).includes('agent')).map(id => [folderSpecs[id].label, code(id), platforms(served(folderGates(id).platforms, kindSpecs.agent.platforms))])
     ]),
     '',
     `## Node kinds (${nodeKinds.length})`,

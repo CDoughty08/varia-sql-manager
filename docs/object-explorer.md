@@ -213,9 +213,9 @@ a job, alert, operator or proxy name unquoted, as the msdb procedures take it. T
 | --- | --- | --- |
 | SQL Server Agent | `agent` node | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
 | Job Activity Monitor | `agentJobActivity` node | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
-| Jobs | `agentJobs` | every server |
+| Jobs | `agentJobs` | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
 | Alerts | `agentAlerts` | SQL Server Agent platforms `windows` |
-| Operators | `agentOperators` | every server |
+| Operators | `agentOperators` | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
 | Proxies | `agentProxies` | SQL Server Agent platforms `windows`, `linux` |
 | Unassigned Proxies | `agentUnassignedProxies` | SQL Server Agent platforms `windows`, `linux` |
 | Error Logs | `agentErrorLogs` | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
