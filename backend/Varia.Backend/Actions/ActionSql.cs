@@ -774,10 +774,10 @@ internal static partial class ActionSql
     {
         var problems = new List<string>();
         var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal).Replace(MasterVersion, "", StringComparison.Ordinal);
-        foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(stripped, CatalogSql.Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
-        if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
-        if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
+        if (CatalogSql.Uses(stripped, ["DB_NAME(", "OBJECT_ID("]).Any()) problems.Add("uses a metadata function");
+        if (database && CatalogSql.Uses(text, ["HAS_DBACCESS("]).Any()) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
         foreach (Match literal in LiteralPattern().Matches(stripped))
             if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);

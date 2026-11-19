@@ -137,8 +137,9 @@ internal static partial class SsisSql
     public static List<string> Lint(string text, bool list)
     {
         var problems = new List<string>();
-        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(text, Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
+        problems.AddRange(CatalogSql.GluedNumbers(text));
         if (DateTimeCast().IsMatch(text)) problems.Add("converts a datetimeoffset to datetime, which drops its offset");
         if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase) || text.Contains("EXEC (", StringComparison.OrdinalIgnoreCase)
             || text.Contains("EXEC(", StringComparison.OrdinalIgnoreCase) || text.Contains("EXEC @", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
@@ -163,8 +164,9 @@ internal static partial class SsisSql
     public static List<string> LintWrite(string text, IReadOnlyList<string> procedures)
     {
         var problems = new List<string>();
-        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(text, Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
+        problems.AddRange(CatalogSql.GluedNumbers(text));
         if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
         if (text.Contains("SYNCHRONIZED", StringComparison.OrdinalIgnoreCase)) problems.Add("names SYNCHRONIZED");
         foreach (Match literal in LiteralPattern().Matches(text)) problems.Add("has the literal " + literal.Value);

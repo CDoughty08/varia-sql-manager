@@ -122,14 +122,65 @@ internal static partial class CatalogSql
     /// naming it (COUNT(*) aside). Every lint calls it, besides its Contains loop over <see cref="Builtins"/>.</summary>
     public static IEnumerable<string> SecretUses(string text)
     {
-        if (LoginFunction().IsMatch(text)) yield return "uses LOGINPROPERTY";
-        foreach (var token in new[] { "password_hash", "PasswordHash" }) if (text.Contains(token, StringComparison.OrdinalIgnoreCase)) yield return "uses " + token;
-        if (text.Contains("sql_logins", StringComparison.OrdinalIgnoreCase) && Star().IsMatch(text)) yield return "reads sys.sql_logins through *";
+        // The text as written and with its names unwrapped (Names), so neither a bracket nor a comment hides a name.
+        var both = text + "\n" + Names(text);
+        if (LoginFunction().IsMatch(both)) yield return "uses LOGINPROPERTY";
+        foreach (var token in new[] { "password_hash", "PasswordHash" }) if (both.Contains(token, StringComparison.OrdinalIgnoreCase)) yield return "uses " + token;
+        if (both.Contains("sql_logins", StringComparison.OrdinalIgnoreCase) && Star().IsMatch(both)) yield return "reads sys.sql_logins through *";
+        if (Unprintable().IsMatch(Rewrite(text, unwrap: true, literals: false))) yield return "has a character outside printable ASCII in its code or names";
     }
     [GeneratedRegex(@"\bLOGINPROPERTY\s*\(", RegexOptions.IgnoreCase)]
     private static partial Regex LoginFunction();
     [GeneratedRegex(@"(?<!\(\s*)\*")]
     private static partial Regex Star();
+
+    /// <summary>Comments, literals, and bracketed or quoted identifiers, as T-SQL reads them.</summary>
+    [GeneratedRegex(@"--[^\r\n]*|/\*[\s\S]*?\*/|N?'(?:[^']|'')*'|\[(?:[^\]]|\]\])*\]|""(?:[^""]|"""")*""", RegexOptions.CultureInvariant)]
+    private static partial Regex Token();
+    /// <summary>Code outside printable ASCII, tab and line breaks. SQL Server resolves a full-width name in brackets
+    /// (l.[ｐａｓｓｗｏｒｄ_ｈａｓｈ], sys.[ｓｑｌ_ｌｏｇｉｎｓ]) as its ASCII twin, and reads some characters .NET's <c>\s</c> does not as whitespace.</summary>
+    [GeneratedRegex(@"[^\x20-\x7E\t\r\n]", RegexOptions.CultureInvariant)]
+    private static partial Regex Unprintable();
+    /// <summary>A number and whatever is glued to it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1
+    /// and the keyword DELETE, which a word boundary reads as one word (as it does <c>1e1EXEC</c>, <c>$1EXEC</c>, <c>0x1INSERT</c>).</summary>
+    [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
+    private static partial Regex Number();
+    [GeneratedRegex(@"^(?:[0-9]+(?:\.[0-9]*)?|0[xX][0-9A-Fa-f]*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainNumber();
+
+    private static string Rewrite(string text, bool unwrap, bool literals) => Token().Replace(text, token => token.Value[0] switch
+    {
+        '-' or '/' => " ",
+        '[' => unwrap ? token.Value[1..^1].Replace("]]", "]", StringComparison.Ordinal) : "[x]",
+        '"' => unwrap ? token.Value[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal) : "[x]",
+        _ => literals ? token.Value : "''"
+    });
+
+    /// <summary>The text a lint reads names in: a bracketed or quoted identifier is the name it holds (l.[password_hash],
+    /// sys.[sysprocesses]), and a comment is a space (OBJECT_ID/**/(…)). Literals stay as written.</summary>
+    internal static string Names(string text) => Rewrite(text, unwrap: true, literals: true);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> TokenPatterns = new(StringComparer.Ordinal);
+    /// <summary>The tokens of <paramref name="tokens"/> that <paramref name="text"/> uses: written as they are, or in its
+    /// <see cref="Names"/> with any whitespace before a function's parenthesis (OBJECT_ID (…)) or around a dot (sys . sysprocesses).</summary>
+    internal static IEnumerable<string> Uses(string text, IEnumerable<string> tokens)
+    {
+        var names = Names(text);
+        foreach (var token in tokens)
+        {
+            var pattern = TokenPatterns.GetOrAdd(token, key => new Regex(Regex.Escape(key.TrimEnd('(')).Replace(@"\.", @"\s*\.\s*", StringComparison.Ordinal) + (key.EndsWith('(') ? @"\s*\(" : ""),
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+            if (text.Contains(token, StringComparison.OrdinalIgnoreCase) || pattern.IsMatch(names)) yield return token;
+        }
+    }
+
+    /// <summary>For the lints with a word list of writes: each number with a word glued to it, outside literals, comments and
+    /// bracketed names. Only a hex literal may hold letters.</summary>
+    internal static IEnumerable<string> GluedNumbers(string text)
+    {
+        foreach (Match number in Number().Matches(Rewrite(text, unwrap: false, literals: false)))
+            if (!PlainNumber().IsMatch(number.Value)) yield return "glues a word to the number " + number.Value;
+    }
     /// <summary>Catalog columns and views that appear only from a version band (B6).</summary>
     public static readonly (string Token, int Since)[] Gates =
     [
@@ -158,9 +209,9 @@ internal static partial class CatalogSql
     public static List<string> Lint(string text, SqlRender render, bool list, bool mayCheckAccess, IReadOnlySet<string>? literals = null)
     {
         var problems = new List<string>();
-        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in Uses(text, Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(SecretUses(text));
-        if (!mayCheckAccess && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS outside the database listings");
+        if (!mayCheckAccess && Uses(text, ["HAS_DBACCESS("]).Any()) problems.Add("uses HAS_DBACCESS outside the database listings");
         if (list && (!text.Contains("SELECT TOP (@take) ", StringComparison.Ordinal) || !text.Contains(" ORDER BY ", StringComparison.Ordinal))) problems.Add("is not a TOP (@take) keyset listing");
         foreach (var (token, since) in Gates) if (render.Band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
         if (!render.VectorDimensions && text.Contains("vector_dimensions", StringComparison.Ordinal)) problems.Add("uses vector_dimensions without the probe flag");

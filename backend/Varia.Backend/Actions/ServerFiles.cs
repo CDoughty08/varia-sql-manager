@@ -290,8 +290,9 @@ internal static partial class ServerFiles
     public static List<string> Lint(string text)
     {
         var problems = new List<string>();
-        foreach (var builtin in CatalogSql.Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
-        if (text.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase) || text.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
+        foreach (var builtin in CatalogSql.Uses(text, CatalogSql.Builtins)) problems.Add("uses " + builtin);
+        problems.AddRange(CatalogSql.SecretUses(text));
+        if (CatalogSql.Uses(text, ["OBJECT_ID(", "DB_NAME("]).Any()) problems.Add("uses a metadata function");
         if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase) || text.Contains("EXEC (", StringComparison.Ordinal) || text.Contains("EXEC(", StringComparison.Ordinal)) problems.Add("runs dynamic SQL");
         foreach (Match literal in LiteralPattern().Matches(text)) if (!Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
         var parameters = new HashSet<string>(["@path", "@take", "@files", "@all", "@e1", "@e2", "@d", "@e", "@t"], StringComparer.Ordinal);

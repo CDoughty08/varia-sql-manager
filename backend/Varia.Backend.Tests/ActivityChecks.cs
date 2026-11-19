@@ -135,6 +135,12 @@ internal static class ActivityChecks
             ("the locks DMV", With(sessions, "sys.dm_resource_governor_workload_groups", "sys.dm_tran_locks"), render),
             ("EXEC", sessions with { Text = sessions.Text + "\nEXEC (N'x');" }, render),
             ("DDL", sessions with { Text = "DROP TABLE t;\n" + sessions.Text }, render),
+            // T-SQL reads 1DELETE as the number 1 and DELETE, which the keyword list's word boundary does not.
+            ("a glued DELETE", sessions with { Text = "SELECT $1DELETE FROM t;\n" + sessions.Text }, render),
+            ("a glued EXEC", sessions with { Text = "SELECT 1e1EXEC sp_who;\n" + sessions.Text }, render),
+            ("a bracketed sysprocesses", With(sessions, "sys.dm_resource_governor_workload_groups", "sys.[sysprocesses]"), render),
+            ("a spaced sysprocesses", With(sessions, "sys.dm_resource_governor_workload_groups", "sys . sysprocesses"), render),
+            ("a full-width locks DMV", With(sessions, "sys.dm_resource_governor_workload_groups", "sys.[\uFF44\uFF4D_tran_locks]"), render),
             ("WAITFOR", sessions with { Text = "WAITFOR DELAY '00:00:01';\n" + sessions.Text }, render),
             ("SELECT *", With(sessions, "SELECT x.session_id,", "SELECT *, x.session_id,"), render),
             // The windows' ORDER BYs that remain order no TOP.
@@ -158,6 +164,10 @@ internal static class ActivityChecks
         check(missed.Count == 0 && ActivitySql.Lint(sessions, render).Count == 0, "the Activity Monitor lint catches every mutation: " + string.Join(", ", missed));
         var unflagged = ActivitySql.ForbiddenTokens.Where(token => !ActivitySql.Lint(With(sessions, "d.name AS database_name", token + "1) AS database_name"), render).Contains("uses " + token)).ToList();
         check(ActivitySql.ForbiddenTokens.Count >= 25 && unflagged.Count == 0, "the lint refuses each forbidden built-in, view and token on its own: " + string.Join(", ", unflagged));
+        // The same token hidden: a comment and a space before a built-in's parenthesis, a view's name in brackets, any other in quotes.
+        static string Hidden(string token) => token.EndsWith('(') ? token[..^1] + "/**/ (" : token.Contains('.') ? token.Replace(".", " . [", StringComparison.Ordinal) + "]" : "\"" + token + "\"";
+        var hiddenTokens = ActivitySql.ForbiddenTokens.Where(token => !ActivitySql.Lint(With(sessions, "d.name AS database_name", Hidden(token) + "1) AS database_name"), render).Contains("uses " + token)).ToList();
+        check(hiddenTokens.Count == 0, "the lint refuses each forbidden token spaced, commented, bracketed or quoted: " + string.Join(", ", hiddenTokens));
     }
 
     private static void Sizes(Action<bool, string> check)

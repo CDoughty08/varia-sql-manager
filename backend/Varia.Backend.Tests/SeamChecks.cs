@@ -220,6 +220,25 @@ internal static class SeamChecks
         var unseen = lints.SelectMany(lint => hidden.Where(mutation => !Names(lint.Lint(mutation.Item2), mutation.Item3)).Select(mutation => lint.Name + " (" + mutation.Item1 + ")"))
             .Concat(lints.Where(lint => Names(lint.Lint(counted), "sql_logins through")).Select(lint => lint.Name + " (COUNT(*))")).ToList();
         check(unseen.Count == 0, "every catalog lint refuses a star over sys.sql_logins (COUNT(*) aside) and LOGINPROPERTY however it is spaced: " + string.Join(", ", unseen));
+        // A name in brackets or quotes is still that name, SQL Server resolves a full-width one in brackets as its ASCII twin, and
+        // a space or comment before a built-in's parenthesis still calls it. (The live probes' lint has its own names text.)
+        static string Wide(string ascii) => new([.. ascii.Select(c => c is >= '!' and <= '~' && c != '_' ? (char)(c + 0xFEE0) : c)]);
+        List<(string Name, Func<string, List<string>> Lint)> named = [.. lints.Where(lint => lint.Name != "the live probes' lint"),
+            ("the restore catalog lint", RestoreSql.LintCatalog), ("the server files lint", ServerFiles.Lint)];
+        string Select(string columns) => good.Replace("SELECT TOP (@take) l.name", "SELECT TOP (@take) " + columns, StringComparison.Ordinal);
+        var unwrapped = new[]
+        {
+            ("l.[password_hash]", Select("l.[password_hash]"), "password_hash"),
+            ("l.\"password_hash\"", Select("l.\"password_hash\""), "password_hash"),
+            ("a full-width hash column", Select("l.[" + Wide("password") + "_" + Wide("hash") + "]"), "outside printable ASCII"),
+            ("a full-width sys.sql_logins", Select("l.*").Replace("sys.sql_logins", "sys.[" + Wide("sql") + "_" + Wide("logins") + "]", StringComparison.Ordinal), "outside printable ASCII"),
+            ("OBJECT_NAME (", Select("OBJECT_NAME (l.principal_id)"), "uses OBJECT_NAME("),
+            ("OBJECT_NAME/**/(", Select("OBJECT_NAME/**/(l.principal_id)"), "uses OBJECT_NAME("),
+            ("OBJECTPROPERTY in brackets", Select("[OBJECTPROPERTY]"), "uses OBJECTPROPERTY")
+        };
+        var hiddenNames = named.SelectMany(lint => unwrapped.Where(mutation => !Names(lint.Lint(mutation.Item2), mutation.Item3)).Select(mutation => lint.Name + " (" + mutation.Item1 + ")"))
+            .Concat(named.Where(lint => Names(lint.Lint(good), "ASCII") || Names(lint.Lint(good), "OBJECT_NAME")).Select(lint => lint.Name + " (good)")).ToList();
+        check(hiddenNames.Count == 0, "every catalog lint reads names unwrapped, refuses full-width names, and refuses a built-in however its parenthesis is spaced: " + string.Join(", ", hiddenNames));
         var executable = ActionSql.Executable(ActionTemplate.DropUser);
         var declared = executable.Replace("DECLARE @stmt", "DECLARE @password_hash int;\nDECLARE @stmt", StringComparison.Ordinal);
         var alter = DatabaseAlter.Executable(ActionsCatalog.Current, new(AlterTemplate.Owner, "db", "owner", Name: "x"));
