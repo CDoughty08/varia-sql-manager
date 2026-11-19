@@ -7,11 +7,11 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
-import { toneColumnOf } from '../grid/GridView'
 import { cellKey, type GridMarks } from '../grid/marks'
 import { ResultError, type ResultHandle } from './ResultClient'
 import { setKey, type EntryKey, type ResultsService, type TabResults } from './ResultsService'
 import { formatCount } from './status'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 export type { GridMarks }
 
@@ -270,11 +270,11 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       tab.names = new Map()
       tab.columnCount = 0
       for (const set of results?.sets ?? []) {
-        // A live table's or diff's tone column is hidden: never matched, nor counted among the columns.
-        const hits: number[] = [], tone = toneColumnOf(set.descriptor)
-        set.descriptor.columns.forEach((column, index) => { if (index !== tone && fold(column.name).includes(query)) hits.push(index) })
+        // Hidden columns (a tone, a diff's marker and row numbers) are never matched, nor counted among the columns.
+        const hits: number[] = []
+        set.descriptor.columns.forEach((column, index) => { if (!isHiddenColumn(column) && fold(column.name).includes(query)) hits.push(index) })
         tab.names.set(set.key, hits)
-        tab.columnCount += set.descriptor.columns.length - (tone >= 0 ? 1 : 0)
+        tab.columnCount += set.descriptor.columns.filter(column => !isHiddenColumn(column)).length
       }
       tab.status = 'done'
       const total = this.total(tab)

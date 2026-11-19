@@ -6,10 +6,11 @@ import { sqlTypeLabel } from '../grid/measure'
 import { selectedColumns } from '../grid/selection'
 import Icon from '../Icon'
 import { ResultError, type OperationProgressListener, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
-import { entryOf, filtersIdentity, resultTitle, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
+import { entryOf, entryTitle, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, profileList, profileStrip, rowSizeText } from './profile-format'
 import { measureCards, playCardMoves, revealCard, type CardPlace } from './profile-motion'
 import { formatCount, plural } from './status'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 interface Profiled { readonly profile: ColumnProfile; readonly rows: number }
 
@@ -109,7 +110,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   // chunk's new figures arrive, rather than going back to "Profiling…".
   const latest = useRef(profiles)
   latest.current = profiles
-  const columns = entry ? entry.descriptor.columns.flatMap((column, at) => column.role === 'tone' ? [] : [at]) : []
+  const columns = entry ? entry.descriptor.columns.flatMap((column, at) => isHiddenColumn(column) ? [] : [at]) : []
   const columnKey = columns.join(',')
   const held = snapshot && snapshot.state !== 'released' && snapshot.state !== 'lost'
   const { filters, settled } = profiledRows(snapshot, view)
@@ -139,7 +140,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     const wanted = columnKey ? columnKey.split(',').map(Number) : []
     // The toolbar's strip and the grid's bar show it; their Cancel (or Escape in the grid) stops it, keeping the cards it has.
     let cancelled = false, outcome: 'done' | 'dropped' = 'dropped'
-    const ticket = results.operations.begin(tabId, { kind: 'profile', target: resultTitle(entry!), entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
+    const ticket = results.operations.begin(tabId, { kind: 'profile', target: entryTitle(entry!), entry: entry!.key, cancel: () => { cancelled = true; abort.abort() } })
     const parts = wanted.length ? chunked(wanted, wire.profile.maxColumns) : [[]]
     void (async () => {
       try {
@@ -175,7 +176,10 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     return () => { abort.abort(); done() }
   }, [results, tabId, base, held, filters, settled, columnKey, retry])
   const shown = profiles && profiles.base === base && profiles.of.filters === filters ? profiles : undefined
-  const name = entry ? resultTitle(entry) : ''
+  const name = entry ? entryTitle(entry) : ''
+  // A comparison's name is long and is what the panel is about: it stands on its own line under the title ("Column
+  // profile", then "Differences: Result 1 → Result 3"), and the facts beside the title keep only the rows.
+  const subject = entry?.descriptor.kind === 'diff' ? name : undefined
   const facts = shown?.rows === undefined ? '' : `${formatCount(shown.rows)} ${plural(shown.rows, 'row')}${shown.complete ? '' : ' so far'}`
   const sizes = rowSizeText(shown?.rowBytes)
 
@@ -264,16 +268,17 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
   const hint = useId()
   const peekWords = gestures.phrase('output.profilePeekHover')
   const toggleTitle = peekWords === 'off' ? 'Selected Columns Only' : `Selected Columns Only (${peekWords} the panel to peek)`
-  return <aside className="profile-panel" aria-label="Column profile" aria-busy={shown?.loading || undefined}
+  return <aside className="profile-panel" aria-label="Column profile" {...subject ? { 'aria-description': subject } : {}} aria-busy={shown?.loading || undefined}
     onPointerMove={event => profilePeek.pointer(tabId, gestures.matches('output.profilePeekHover', event))} onPointerLeave={() => profilePeek.pointer(undefined)}>
-    <div className="profile-head">
+    <div className={'profile-head' + (subject ? ' with-subject' : '')}>
       <span className="profile-title">Column profile</span>
-      <span className="profile-facts">{[name, facts].filter(Boolean).join(' · ')}</span>
+      <span className="profile-facts">{[subject ? '' : name, facts].filter(Boolean).join(' · ')}</span>
       <button type="button" className="icon-button" aria-label="Selected Columns Only" title={toggleTitle} aria-pressed={selectedOnly}
         onClick={() => void commands.execute('output.toggleProfileSelectedColumns', undefined, 'toolbar')}><Icon name="filter" /></button>
       <button type="button" className="icon-button" aria-label="Close Column Profile" title="Close Column Profile"
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="close" /></button>
     </div>
+    {subject && <div className="profile-subject" title={subject}>{subject}</div>}
     {strip && <div className={'profile-strip' + (peeking ? ' peek' : '')}>
       {peeking && <Icon name="eye" />}<span>{strip}</span>
       {!peeking && <button type="button" className="profile-strip-action" onClick={() => void commands.execute('output.toggleProfileSelectedColumns', undefined, 'toolbar')}>Show all</button>}

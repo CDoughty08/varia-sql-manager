@@ -1256,11 +1256,20 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   type and collation. Collation-equal but not identical text is a soft difference (row unchanged, counted in `soft`);
   `exact` compares character for character. `approximate`: a truncated prefix was compared.
 - **The unified result** (`kind: 'diff'`, stamped with the generation and owned by main) is in the later result's order,
-  each removed row after the row it followed, a changed row as old (−) then new (+). Columns: `Change` (" ", "−", "+"),
-  `R1`, `R2` (row numbers, NULL where absent), the shared columns with `right`'s names and types, and a hidden
-  `nvarchar(500)` tone column: `added`, `removed` or `same` (soft only), then differing column numbers, soft ones `~`,
-  runs as `first-last` (`removed 4-9 ~11`), ending `…` when too long. `context` unchanged rows show each side of a
-  change (default 1, at most 100, -1 for all). Cells keep their source lengths for `results.rowBytes`. It is a derived set
+  each removed row after the row it followed, a changed row as old (−) then new (+). Columns: the shared columns with
+  `right`'s names and types (the data columns, in pair order), then a hidden suffix: `Change` (role `mark`: " ", "−",
+  "+"), `Old row` and `New row` (roles `leftRow`, `rightRow`: bigint, the 1-based row in each input, NULL where the entry
+  has none; both halves of a changed entry carry both), and an `nvarchar(500)` tone (role `tone`): `added`, `removed` or
+  `same` (soft only), then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs
+  as `first-last` (`removed 0-5 ~7`), ending `…` when too long. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
+  `tone`; a previous value's `of` names its pair) are not data: `results.view` sort keys and filters, `duplicates`
+  columns, `results.distinct`, `results.profile` and `results.identify`'s `column` refuse them (`INVALID_PARAMS`), search
+  and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only (a transposed
+  Save of a diff is `INVALID_PARAMS`). `results.identify` on a diff refuses `by: 'column'`; `auto` and `row` answer
+  column -1 with one identity per entry, a hash of its (input result id, row) pairs ordered by input id, so both halves
+  share it, `unique` counts entries, and it survives a swap of the same inputs. `context` unchanged rows show each side
+  of a change (default 1, at most 100, -1 for all). Data cells keep their source lengths for `results.rowBytes`; the
+  suffix is not measured, so a row's bytes are its shown values'. It is a derived set
   (`ResultStore.Open(derived: true)`) charged to the query's budget and stored whole or not at all (`TOO_LARGE`, "There is
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
   released with the query's results or at once when its answer is not delivered. A source released meanwhile:
@@ -1269,7 +1278,10 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
-  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`).
+  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`) and draws each row's gutter
+  from the suffix it reads with every row tile (`GridData`'s suffix tiles): a kind bar, the mark and the row's number in
+  its own input (the old input's on a − row), named for screen readers and in the tooltip ("Removed; row 3 in Result
+  1").
 
 ## Pivots
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { maxQueryPlanDocuments } from '../../../shared/plans'
 import { limits } from '../../../shared/ipc/wire/protocol'
-import { resultTitle, type ResultSetEntry } from '../results/ResultsService'
+import { entryTitle, type ResultSetEntry } from '../results/ResultsService'
 import PlanViewer from './PlanViewer'
 import { orderPlanEntries, type PlanSource } from './sources'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -13,7 +13,7 @@ const maxXmlSources = limits.maxResultSets.max + maxQueryPlanDocuments
 /** A plan document's name in the viewer's source list: a captured plan by its number, a plan a query returned by its
  *  result's title ("Result 2, plan 1", "Plans, Result 2, plan 1" when the query named it). */
 export const planSourceLabel = (entry: Pick<ResultSetEntry, 'capturedPlan' | 'number' | 'descriptor'>, row: number, batchLabel?: string): string =>
-  entry.capturedPlan ? `Plan ${entry.number}${batchLabel ? ` · ${batchLabel}` : ''}` : `${resultTitle(entry)}, plan ${row + 1}`
+  entry.capturedPlan ? `Plan ${entry.number}${batchLabel ? ` · ${batchLabel}` : ''}` : `${entryTitle(entry)}, plan ${row + 1}`
 
 export default function ResultPlans({ queryId, tabId, plans, order, live, visible }: { queryId: string; tabId: string; plans: readonly ResultSetEntry[]; order?: readonly number[]; live?: QueryPlanState; visible: boolean }) {
   const { commands, documents, planPreparation } = useWorkbench()

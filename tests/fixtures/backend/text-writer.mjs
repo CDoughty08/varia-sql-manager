@@ -358,6 +358,16 @@ export async function writeColumns(writer, pageAt, turned, afterLine = async () 
   }
 }
 
+/** Columns that are not data (ResultTextWriter.Hidden): a tone, and a diff's previous values, marker and row numbers. */
+const hiddenRoles = new Set(['old', 'mark', 'leftRow', 'rightRow', 'tone'])
+export const isHidden = column => hiddenRoles.has(column?.role)
+/** The columns Save writes (ResultJobs.SavedColumns): the visible ones, a diff's marker and row numbers first. */
+export function savedColumns(columns, kind) {
+  const visible = columns.flatMap((column, at) => isHidden(column) ? [] : [at])
+  if (kind !== 'diff') return visible
+  return [...['mark', 'leftRow', 'rightRow'].map(role => columns.findIndex(column => column.role === role)), ...visible]
+}
+
 /** A header column names a transposed job's fields, so only such a job has one, and it is a column of the result. */
 export function validTurn(transposed, headerColumn, columnCount) {
   if (transposed !== undefined && typeof transposed !== 'boolean') return false
@@ -367,7 +377,7 @@ export function validTurn(transposed, headerColumn, columnCount) {
 /** Copy's text for parts of a result (all of it at once; the fake backend checks its size against the limit).
  *  `transposed` writes each part as a transposed grid draws it. */
 export async function copyText({ columns, pageAt, available, parts, headers, crlf, transposed = false, headerColumn }) {
-  const plans = parts.map(part => resolvePart(part, columns.length, available))
+  const plans = parts.map(part => resolvePart(part, columns.length, available)).map(plan => plan && { ...plan, columns: plan.columns.filter(column => !isHidden(columns[column])) })
   if (plans.some(plan => plan === undefined) || !validTurn(transposed, headerColumn, columns.length)) throw new RangeError('The copy request is invalid.')
   const writer = new TextWriter(copyOptions(headers, crlf), columns)
   let rows = 0
@@ -389,9 +399,9 @@ export async function copyText({ columns, pageAt, available, parts, headers, crl
 
 /** A whole result as Save Results As writes it; `transposed`, as a transposed grid draws it (the writer's `rows` are then
  *  the source rows written and its `capped` those left out). */
-export async function exportText({ columns, pageAt, rows, format, headers, nullText, transposed = false, headerColumn }, afterPage) {
+export async function exportText({ columns, kind, pageAt, rows, format, headers, nullText, transposed = false, headerColumn }, afterPage) {
   const writer = new TextWriter(exportOptions(format, headers, nullText), columns)
-  const all = columns.map((_, i) => i)
+  const all = savedColumns(columns, kind)
   const after = afterPage && (() => afterPage(writer))
   writer.begin()
   if (transposed) {

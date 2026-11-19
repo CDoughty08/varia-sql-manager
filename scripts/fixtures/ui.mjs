@@ -299,6 +299,8 @@ export const gridPart = {
   rowHeader: '[role="rowheader"]',
   /** The drawn row numbers (screen readers read each row's own header instead). */
   rowNumber: '.rg-rn',
+  /** A comparison's gutter mark (− or +) before its row number, drawn only (the row's header names its kind and rows). */
+  diffMark: '.rg-dm',
   cell: '[role="gridcell"]',
   selectedCell: '[role="gridcell"][aria-selected="true"]',
   loadingCell: '.rg-c.is-load',
@@ -716,12 +718,13 @@ export const messageLines = page => messages(page).locator('pre')
 export const errorMessages = page => messages(page).locator(part.errorMessage)
 /**
  * CSS for the results grid of the result numbered so ("Result 2"): the grid whose accessible name starts with it
- * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator; a result Varia made (a pivot, a
- * diff) is numbered like the others by its grid's name, after the query's own.
+ * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator. A result Varia made (a pivot, a
+ * diff) is numbered after the query's own; its grid is named for itself ("Differences: Result 1 → Result 2, …"), so it is
+ * found by the number it keeps in `data-result-number`.
  */
 export const resultGridSelector = (name = 'Result 1', view) => {
   if (!/^Result \d+$/.test(name)) throw new Error(`"${name}" is not a result's number; find its grid with resultGrid.`)
-  if (view === undefined) return `${gridPart.root}[aria-label^="${name} of "]`
+  if (view === undefined) return `${gridPart.root}:is([aria-label^="${name} of "], [data-result-number="${name.slice('Result '.length)}"])`
   if (!resultViews.includes(view)) throw new Error(`"${view}" is not a view of a result; use one of ${resultViews.join(', ')}.`)
   return `${gridPart.root}[data-result-group="${name.slice('Result '.length)}"][data-result-view="${view}"]`
 }

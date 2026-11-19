@@ -130,6 +130,7 @@ describe('catalogue providers', () => {
     expect(commands.isEnabled('activity.open', { target: { kind: 'explorer', node: server } })).toBe(true)
     // Connect and clearing the Entra token cache stay available whatever document is active.
     expect(commandProviderKey('connection.connect')).toBeUndefined()
+    expect(commandProviderKey('help.clearEntraTokenCache')).toBeUndefined()
     // A command that finds its own object (a Peek card, a search hit) is checked by neither key.
     commands.register('search.copyName', { run: () => {} })
     expect(commandProviderKey('search.copyName')).toBeUndefined()

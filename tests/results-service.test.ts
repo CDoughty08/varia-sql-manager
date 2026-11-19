@@ -1337,6 +1337,8 @@ describe('results service sorting', () => {
     expect(transposedView({ orientation: 'transposed', headerColumn: 1 }, columns([undefined, undefined]))).toEqual({ headerColumn: 1 })
     for (const headerColumn of [2, -1, 0.5]) expect(transposedView({ orientation: 'transposed', headerColumn }, columns([undefined, undefined]))).toEqual({})
     expect(transposedView({ orientation: 'transposed', headerColumn: 0 }, columns([undefined, 'tone']))).toBeUndefined()
+    expect(transposedView({ orientation: 'transposed' }, columns([undefined, 'mark', 'leftRow', 'rightRow', 'tone']))).toBeUndefined()
+    expect(transposedView({ orientation: 'transposed' }, columns([undefined, 'xml']))).toEqual({})
   })
   it('opens a sorted grid\'s value from its view\'s row', async () => {
     const f = fixture()
@@ -1483,17 +1485,19 @@ describe('results service filters', () => {
     expect(service.canFilterSelection('t1', key, 'in')).toBe(true)
   })
 
-  it('leaves a comparison\'s hidden tone column out of a selection filter across columns', async () => {
-    const columns = [{ name: 'id', dataType: 'int', wire: 'text' }, { name: 'name', dataType: 'nvarchar', wire: 'text' }, { name: 'tone', dataType: 'tinyint', wire: 'text', role: 'tone' }]
+  it('leaves a comparison\'s hidden suffix out of a selection filter across columns', async () => {
+    const columns = [{ name: 'id', dataType: 'int', wire: 'text' }, { name: 'name', dataType: 'nvarchar', wire: 'text' }, { name: 'Change', dataType: 'nvarchar', wire: 'text', role: 'mark' }, { name: 'tone', dataType: 'tinyint', wire: 'text', role: 'tone' }]
     const { service, handle, select } = filtered(10, columns as ResultColumn[])
     const key = keyAt(service, 't1', 0)
     handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
-    select([{ top: 0, bottom: 2, left: 0, right: 2 }])
+    select([{ top: 0, bottom: 2, left: 0, right: 3 }])
     expect(service.filterSelection('t1', key, 'in')).toBe(true)
     expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'in', column: 0, cells: { ranges: [[0, 3]] } }, { op: 'in', column: 1, cells: { ranges: [[0, 3]] } }])
-    // The tone column alone filters nothing.
-    select([{ top: 0, bottom: 2, left: 2, right: 2 }])
+    // The marker and tone columns alone filter nothing, nor do their funnels open.
+    select([{ top: 0, bottom: 2, left: 2, right: 3 }])
     expect(service.canFilterSelection('t1', key, 'in')).toBe(false)
+    expect(service.canFilterColumn('t1', key, 2)).toBe(false)
+    expect(service.canFitColumn('t1', key, 2)).toBe(false)
   })
 
   it('refuses a selection across more columns than a grid takes filters, and says so when the filters would not fit', async () => {
@@ -1544,9 +1548,10 @@ describe('results service filters', () => {
     expect(tab().jobNotice).toBe('Could not filter the results: Select at most 4,096 different values to filter by.')
   })
 
-  it('leaves the hidden tone column of a diff out of duplicate rows', () => {
+  it('leaves a diff\'s hidden suffix out of duplicate rows', () => {
     const f = fixture()
-    const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'tone', dataType: 'tinyint', wire: 'text', nullable: false, role: 'tone' }]
+    const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'Old row', dataType: 'bigint', wire: 'text', nullable: true, role: 'leftRow' },
+      { name: 'New row', dataType: 'bigint', wire: 'text', nullable: true, role: 'rightRow' }, { name: 'tone', dataType: 'tinyint', wire: 'text', nullable: false, role: 'tone' }]
     f.service.begin('t1', 'q1')
     f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { columns, rowsAvailable: 4 })]) })
     const handle = f.client.handle(1)!

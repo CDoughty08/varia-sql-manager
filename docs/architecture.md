@@ -236,7 +236,15 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
   highlights from sorted positions by binary search per painted row, theme colours only. Diffs (`Results/ResultDiff.cs`,
-  `results.diff`) store the unified diff as a derived result of the same query, marked from its hidden tone column.
+  `results.diff`) store the unified diff as a derived result of the same query: its data columns, then a hidden suffix
+  (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
+  in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`
+  (`grid/hidden-columns.ts`) and `ResultTextWriter.Hidden`: never drawn, copied, searched, sorted, filtered or profiled,
+  and the backend's sort keys, filters, distinct values, profiles, pivots and identify's column refuse them
+  (`INVALID_PARAMS`), while search and Copy skip them and window reads serve them (the gutter reads them so); only Save
+  of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
+  to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
+  pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
@@ -268,8 +276,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     widths are per view in `GridViewState`; the option is fixed for a view's life. `ResultsService.setOrientation` is
     the only writer (`contributions/transpose.ts` calls it); `ResultGrid` reads `orientation()`, its `turned` store feeds
     `resultsGridTransposed` and the toolbar, and a grid's menu reads orientation from its target (`argsFor`), so Peek
-    cards toggle too. Fit Column fits the target's row (`fitDrawn`). A result with a tone column (comparison, live table)
-    is never transposed (`transposedView` in `ResultsService.ts`, the one rule for grid, `orientation()`, Copy and Save).
+    cards toggle too. Fit Column fits the target's row (`fitDrawn`). A result with hidden columns (comparison, toned live
+    table) is never transposed (`transposedView` in `ResultsService.ts`, the one rule for grid, `orientation()`, Copy and
+    Save), and only `turnableKinds` (by descriptor kind) offer it; the backend refuses a transposed Save of a diff.
     `results.transpose` answers `METHOD_NOT_FOUND` (`tests/results-transpose.test.ts`). `tests/grid-orientation.test.ts`,
     `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
   - A transposed grid copies and saves as drawn, storing nothing: the request says `transposed` (and the header column),

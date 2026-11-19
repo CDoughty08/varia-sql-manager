@@ -48,10 +48,12 @@ internal sealed record SessionArgs(string SessionId, string? Transaction = null)
 internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
-/// (xml, json, plan), CLR UDTs and vectors. SortKind is how its values compare (Results.ColumnTypes), set from DataType
-/// whoever builds the column; a provider with another type system sets it when it does.</summary>
+/// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
+/// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.
+/// SortKind is how its values compare (Results.ColumnTypes), set from DataType whoever builds the column; a provider with
+/// another type system sets it when it does.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true,
-    ResultCollation? Collation = null)
+    ResultCollation? Collation = null, int? Of = null)
 {
     public string SortKind { get; init; } = Results.ColumnTypes.SortKindOf(DataType);
 }
