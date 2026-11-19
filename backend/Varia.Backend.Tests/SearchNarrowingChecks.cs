@@ -272,13 +272,14 @@ internal static class SearchNarrowingChecks
         for (var r = 0; r < 5_000; r++) AddRandom(set, random);
         set.Complete();
         var before = store.UsedBytes;
-        ResultSearcher.Search(set, set.SealedSnapshot(), null, "e", 0, false, 10, CancellationToken.None);
+        ResultSearcher.Search(set, set.SealedSnapshot(), null, "s", 0, false, 10, CancellationToken.None);
         var memo = set.SearchMemo;
         var first = store.UsedBytes;
-        ResultSearcher.Search(set, set.SealedSnapshot(), null, "es", 0, false, 10, CancellationToken.None);
+        ResultSearcher.Search(set, set.SealedSnapshot(), null, "st", 0, false, 10, CancellationToken.None);
         var narrowed = ResultSearcher.LastNarrowing;
+        var skipped = ResultSearcher.LastSkipped;
         var second = store.UsedBytes;
-        check(memo is { Text: "e", Rows: 5_000 } && first - before == memo.Bytes && memo.Bytes == SearchMemo.BytesFor(5_000, Columns.Length, 1) && narrowed == false
+        check(memo is { Text: "s", Rows: 5_000 } && first - before == memo.Bytes && memo.Bytes == 16 * ((5_000 + 63) / 64) + Columns.Length * 9L + 2L * memo.Folds.Sum(fold => (long)(fold?.Length ?? 0)) + 2 + 256 && narrowed == false && skipped > 0
             && second - before == set.SearchMemo!.Bytes,
             "a search's memo (two bits a row) is charged to the result's budget and the next search's replaces it: " + before + " " + first + " " + second);
         var view = store.AddView(set, [.. Enumerable.Range(0, 5_000)], [], false, true, 0, null, 5_000);
@@ -343,6 +344,48 @@ internal static class SearchNarrowingChecks
         }
         check(cutDifferences.Count == 0, "a truncated binary cell stops making the search approximate when the text stops being hex: " + string.Join(" | ", cutDifferences));
         store.Release(cut.ResultId);
+
+        // A truncated text cell ruled out by the first text keeps every later narrowed answer approximate, two narrowed
+        // steps on: the memo carries it, as the rows holding it are never read again.
+        var kept = Open(store, "kept truncation");
+        var only = new string?[Columns.Length - 1];
+        only[2] = "zzz";
+        Add(kept, only, truncated: true, binary: null);
+        kept.Complete();
+        var keptDifferences = new List<string>();
+        foreach (var typed in new[] { "st", "stu", "stuv" })
+        {
+            var narrowedKept = Shown(ResultSearcher.Search(kept, kept.SealedSnapshot(), null, typed, 0, false, 10, CancellationToken.None));
+            if (typed != "st" && (ResultSearcher.LastNarrowing != false || ResultSearcher.LastSkipped == 0)) keptDifferences.Add(typed + " did not narrow");
+            var fullKept = Shown(ResultSearcher.Search(kept, kept.SealedSnapshot(), null, typed, 0, false, 10, CancellationToken.None, narrow: false));
+            if (narrowedKept != fullKept) keptDifferences.Add(typed + ": " + narrowedKept + " against " + fullKept);
+        }
+        check(keptDifferences.Count == 0, "a truncated cell that did not match stays approximate through every narrowed key: " + string.Join(" | ", keptDifferences));
+        store.Release(kept.ResultId);
+
+        // Narrowed on several threads: runs skip and mark positions that share words, and the answer is the full search's.
+        var wide = Open(store, "workers");
+        var seeded = new Random(11);
+        for (var r = 0; r < 6_000; r++) AddRandom(wide, seeded, sparse: r % 2 == 0);
+        wide.Complete();
+        // A shuffled view is far from the pages' order, so a packed result is read page by page (ScanPages).
+        var shuffled = store.AddView(wide, [.. Enumerable.Range(0, 6_000).OrderBy(_ => seeded.Next())], [], false, true, 0, null, 6_000);
+        foreach (var order in new ResultView?[] { null, shuffled })
+        {
+            var wideDifferences = new List<string>();
+            long wideSkipped = 0;
+            foreach (var word in new[] { "strasse", "cafe", "chata", "aabenraa" })
+                for (var length = 1; length <= word.Length; length++)
+                {
+                    var typed = word[..length];
+                    var narrowedWide = Shown(ResultSearcher.Search(wide, wide.SealedSnapshot(), order, typed, 0, false, 40, CancellationToken.None, workers: 4));
+                    wideSkipped += ResultSearcher.LastSkipped;
+                    var fullWide = Shown(ResultSearcher.Search(wide, wide.SealedSnapshot(), order, typed, 0, false, 40, CancellationToken.None, workers: 1, narrow: false));
+                    if (narrowedWide != fullWide) wideDifferences.Add(typed + ": " + narrowedWide + " against " + fullWide);
+                }
+            check(wideDifferences.Count == 0 && wideSkipped > 0, "typing narrowed on four threads " + (order is null ? "in base order" : "through a shuffled view") + " finds what one full pass does, and skips rows: " + wideSkipped + " " + string.Join(" | ", wideDifferences.Take(2)));
+        }
+        store.Release(wide.ResultId);
     }
 
     private static ResultSetBuffer Open(ResultStore store, string name) =>

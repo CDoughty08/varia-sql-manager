@@ -117,8 +117,9 @@ internal sealed class SearchMemo(string text, uint viewId, long rows, SearchNarr
     public bool Elsewhere { get; } = elsewhere;
     public long Bytes { get; } = bytes;
 
-    /// <summary>What a memo of <paramref name="rows"/> positions costs: two bits a position and its bookkeeping.</summary>
-    public static long BytesFor(long rows, int columns, int textLength) => 16 * ((rows + 63) / 64) + columns * (9 + 2L * textLength) + 2L * textLength + 256;
+    /// <summary>What a memo of <paramref name="rows"/> positions costs: two bits a position, its text, its columns' folds
+    /// (<paramref name="foldLength"/> characters in all: a fold can be longer than its text) and its bookkeeping.</summary>
+    public static long BytesFor(long rows, int columns, int textLength, long foldLength) => 16 * ((rows + 63) / 64) + columns * 9L + 2L * foldLength + 2L * textLength + 256;
 }
 
 /// <summary>One search's use of the result's last search (<see cref="SearchMemo"/>): which positions it may pass over
@@ -202,12 +203,20 @@ internal sealed class Narrowing
             if (memo.Text == text && memo.Kinds.AsSpan().SequenceEqual(kinds)) { from = memo; repeated = true; }
             else if (SearchNarrowing.Extends(memo.Text, memo.Kinds, memo.Needs, memo.Folds, text, kinds, folds, memo.Elsewhere)) from = memo;
         }
-        var bytes = SearchMemo.BytesFor(rows, matchers.Length, text.Length);
+        long foldLength = 0;
+        foreach (var fold in folds) foldLength += fold?.Length ?? 0;
+        var bytes = SearchMemo.BytesFor(rows, matchers.Length, text.Length, foldLength);
         var reserved = rows > 0 && set.TryReserveSpare(bytes) ? bytes : 0;
         if (from is null && reserved == 0) return null;
         // Narrowing, most rows read pass the pre-check: it keeps running, as its answer is what rules rows out.
         if (from is not null) foreach (var matcher in matchers) if (matcher is ResultSearcher.CultureMatcher culture) culture.KeepPrechecking = true;
-        return new Narrowing(text, viewId, rows, kinds, folds, matchers, from, repeated, reserved);
+        try { return new Narrowing(text, viewId, rows, kinds, folds, matchers, from, repeated, reserved); }
+        catch
+        {
+            // The plan never reached the search's finally, so its room goes back here.
+            if (reserved > 0) set.ReturnWork(reserved);
+            throw;
+        }
     }
 
     /// <summary>How many positions from <paramref name="position"/> on the search may pass over (0 when it must read it):
@@ -218,9 +227,13 @@ internal sealed class Narrowing
         var index = (int)(position >> 6);
         var word = (matched[index] | (recheck?[index] ?? 0)) >> (int)(position & 63);
         if ((word & 1) != 0) return 0;
-        var skip = word == 0 ? 64 - (position & 63) : BitOperations.TrailingZeroCount(word);
-        return Math.Min(skip, covered - position);
+        var skip = Math.Min(word == 0 ? 64 - (position & 63) : BitOperations.TrailingZeroCount(word), covered - position);
+        return skip;
     }
+
+    /// <summary>How many positions the search passed over, summed from its runs once they end (the checks: narrowing
+    /// did skip rows); a run counts its own, so the hot loop shares nothing.</summary>
+    public long Skipped { get; set; }
 
     /// <summary>Records a position this search read: matched, or holding a cell a narrowed search must look at again.</summary>
     public void Mark(long position, bool match, bool recheckRow)

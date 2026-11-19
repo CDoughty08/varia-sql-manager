@@ -48,6 +48,8 @@ internal static class ResultSearcher
         public long Total, Before;
         /// <summary>Elsewhere: a truncated cell did not match in a row that neither matched nor needs a recheck.</summary>
         public bool Approximate, Stopped, Elsewhere;
+        /// <summary>Positions a narrowed search passed over in this run.</summary>
+        public long Skipped;
         public readonly List<long> Rows = [];
         public readonly List<int> Columns = [];
         /// <summary>Where each kept row's matches begin (backward only), from <see cref="Head"/>.</summary>
@@ -55,14 +57,17 @@ internal static class ResultSearcher
         public int Head, Start;
     }
 
+    /// <summary>How the calling thread's last search used the one before it (<see cref="Narrowing.Repeated"/>), for the checks.</summary>
+    [ThreadStatic] internal static bool? LastNarrowing;
+
+    /// <summary>How many positions the calling thread's last search was offered to pass over, for the checks.</summary>
+    [ThreadStatic] internal static long LastSkipped;
+
     /// <summary>The positions are read in runs on several threads (one per <see cref="MinSlice"/> positions, up to the
     /// sort's threads, or <paramref name="workers"/>), each keeping what the outcome may take of it, joined in order: the
     /// outcome is the one a single pass gives.</summary>
     /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
-    /// <summary>How the calling thread's last search used the one before it (<see cref="Narrowing.Repeated"/>), for the checks.</summary>
-    [ThreadStatic] internal static bool? LastNarrowing;
-
     /// <param name="narrow">Whether the search may read only the rows the result's last search kept (<see cref="SearchMemo"/>)
     /// and keep what it finds for the next; false searches every row and keeps nothing (the checks' reference).</param>
     public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool narrow = true)
@@ -75,15 +80,20 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
-        var plan = narrow ? Narrowing.Plan(set, view, text, matchers, rows) : null;
-        LastNarrowing = plan?.Repeated;
+        Narrowing? plan = null;
         try
         {
+            plan = narrow ? Narrowing.Plan(set, view, text, matchers, rows) : null;
+            LastNarrowing = plan?.Repeated;
             var found = Search(set, pages, view, matchers, baseRows, rows, text, fromRow, backward, maxMatches, token, stopped, workers, gate, plan);
             if (found is not null && plan is not null) found = plan.Finish(set, found);
             return found;
         }
-        finally { plan?.Dispose(set); }
+        finally
+        {
+            LastSkipped = plan?.Skipped ?? 0;
+            plan?.Dispose(set);
+        }
     }
 
     private static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, Matcher?[] matchers, long baseRows, long rows, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, int? workers, ViewSorter.WorkerGate? gate, Narrowing? plan)
@@ -122,7 +132,7 @@ internal static class ResultSearcher
         {
             if (part.Stopped) return null;
             approximate |= part.Approximate;
-            if (plan is not null) plan.Elsewhere |= part.Elsewhere;
+            if (plan is not null) { plan.Elsewhere |= part.Elsewhere; plan.Skipped += part.Skipped; }
             before += part.Before;
             if (!backward)
             {
@@ -173,6 +183,7 @@ internal static class ResultSearcher
             if (plan is not null && plan.Skip(position) is var skip and > 0)
             {
                 work--;
+                part.Skipped += skip;
                 position += skip - 1;
                 continue;
             }
@@ -262,7 +273,7 @@ internal static class ResultSearcher
                 total += part.Total;
                 before += part.Before;
                 approximate |= part.Approximate;
-                if (plan is not null) plan.Elsewhere |= part.Elsewhere;
+                if (plan is not null) { plan.Elsewhere |= part.Elsewhere; plan.Skipped += part.Skipped; }
                 rows.AddRange(part.Rows);
             }
             rows.Sort((a, b) => a.Position.CompareTo(b.Position));
@@ -290,6 +301,7 @@ internal static class ResultSearcher
     {
         public long Total, Before;
         public bool Approximate, Stopped, Elsewhere;
+        public long Skipped;
         public bool Backward => backward;
         private readonly PriorityQueue<(long Position, int[] Columns), long> heap = new();
         private int count;
@@ -330,7 +342,8 @@ internal static class ResultSearcher
             work -= 1;
             var position = at[row];
             // A row the last search ruled out is not read: a page holding none of the rest is never unpacked.
-            if (position < 0 || (plan is not null && plan.Skip(position) > 0)) continue;
+            if (position < 0) continue;
+            if (plan is not null && plan.Skip(position) > 0) { part.Skipped++; continue; }
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
