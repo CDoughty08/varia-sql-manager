@@ -112,21 +112,45 @@ internal static class AgentChecks
                 "agent.profile whose msdb refuses the login after the connection opened (916) runs the server-scope batch at server scope next, and with that failing too answers a profile with msdb access off and no role: "
                 + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope.Database ?? "server")));
         }
-        // The server-scope read shares the one budget: past it, the no-role profile the 916 settled, within the budget, never a TIMEOUT.
+        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 1 s of a 1.5 s budget, so
+        // the whole call ends near 1.5 s (a reset budget would run to 2.5 s or more), with the no-role profile the 916 settled.
         using (var service = new ExplorerService(refusing, new ExplorerOptions
         {
-            AgentProfileBudget = TimeSpan.FromMilliseconds(200),
+            AgentProfileBudget = TimeSpan.FromMilliseconds(1500),
             TestStatementFailure = async (database, _, token) =>
             {
-                if (database != "msdb") await Task.Delay(TimeSpan.FromSeconds(5), token);
+                await Task.Delay(database == "msdb" ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(10), token);
                 return NoMsdb();
             }
         }))
         {
             var slowWatch = System.Diagnostics.Stopwatch.StartNew();
             var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
-            check(result is { Error: null, Profile.MsdbAccess: false } && slowWatch.ElapsedMilliseconds < 4000 && service.RunningCount == 0,
-                "agent.profile whose server-scope read outlasts the one budget answers the no-role profile, not a TIMEOUT: " + result.Error?.Code + " in " + slowWatch.ElapsedMilliseconds + " ms");
+            check(result is { Error: null, Profile.MsdbAccess: false } && slowWatch.ElapsedMilliseconds < 2100 && service.RunningCount == 0,
+                "agent.profile whose server-scope read outlasts what is left of the one budget answers the no-role profile, not a TIMEOUT, without restarting the budget: "
+                + result.Error?.Code + " in " + slowWatch.ElapsedMilliseconds + " ms");
+        }
+        // A disconnect during the server-scope read cancels the request (CANCELLED), never a profile for a connection that is gone.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            TestStatementFailure = async (database, _, token) =>
+            {
+                if (database == "msdb") return NoMsdb();
+                reached.TrySetResult();
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                return NoMsdb();
+            }
+        }))
+        {
+            var args = Args();
+            var call = service.AgentProfileAsync(args, CancellationToken.None);
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            service.Forget(args.ConnectionId);
+            string? code = null;
+            try { await call; } catch (RequestException error) { code = error.Code; }
+            check(code == "CANCELLED" && service.RunningCount == 0,
+                "agent.profile whose connection is disconnected during the server-scope read is CANCELLED, not a no-role profile: " + (code ?? "answered"));
         }
         // A server-scope read whose connection the server refuses to open (18456) is that error, not "no role".
         var opens = 0;

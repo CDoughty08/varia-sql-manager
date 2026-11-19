@@ -381,6 +381,6 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `serviceWaitMs` | 60,000 | How long a Start or Stop waits for the service's new state, in ms |
 | `serviceReadMs` | 10,000 | One service state read, in ms |
 | `agentUpWaitMs` | 120,000 | How long the live checks wait for Agent after the server is up, in ms |
-| `profileMs` | 10,000 | The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it) |
+| `profileMs` | 10,000 | The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role) |
 
 A job save makes at most 140 calls at these caps, below the 255 a THROW state can number.
