@@ -1,0 +1,1 @@
+{"kind":"bigquery#projectList","etag":"example","projects":[{"kind":"bigquery#project","id":"bigquery-public-data","numericId":"100000000004","projectReference":{"projectId":"bigquery-public-data"}}],"totalItems":4}

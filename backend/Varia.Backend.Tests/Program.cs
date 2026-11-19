@@ -80,6 +80,18 @@ void Check(bool condition, string name)
     Interlocked.Increment(ref passed);
 }
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
+// The BigQuery engine against the offline fake, reporting every failing check rather than the first (docs/bigquery.md).
+if (args is ["--bigquery-checks"])
+{
+    var failed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    void Collect(bool condition, string name) { if (condition) Interlocked.Increment(ref passed); else failed.Enqueue(name); }
+    BigQueryCredentialChecks.Run(Collect);
+    await BigQueryChecks.RunAsync(Collect);
+    foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
+    Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
+    Environment.ExitCode = failed.IsEmpty ? 0 : 1;
+    return;
+}
 if (args is ["--lsp-transport-checks"])
 {
     await LspTransportChecks.RunAsync(Check);
@@ -102,6 +114,13 @@ if (args is ["--result-name-checks"])
 {
     await ResultNameChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " result name checks.");
+    return;
+}
+// BigQuery against the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (CI: live group 1, docs/ci.md); never a real project.
+if (args is ["--bigquery-emulator-live"])
+{
+    await BigQueryEmulatorLiveChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery emulator checks.");
     return;
 }
 if (args is ["--sql-language-live"])
@@ -412,6 +431,8 @@ if (liveGroup is null)
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("SortKind", Sync(() => SortKindChecks.Run(Check))),
         ("Provider", () => ProviderChecks.RunAsync(Check)),
+        ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
+        ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),

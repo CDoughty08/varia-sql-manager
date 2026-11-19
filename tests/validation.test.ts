@@ -355,12 +355,19 @@ describe('IPC validation', () => {
     const parameters = /internal static readonly string\[\] ParameterMethods = \[([^\]]*)\];/.exec(source)
     if (!both || !parameters) throw new Error('Providers.BothMethods or ParameterMethods not found')
     const names = (list: string) => [...list.matchAll(/"([^"]+)"/g)].map(item => item[1]).sort()
-    const main = Object.keys(methodPolicies).filter(method => methodProviders(method as keyof typeof methodPolicies).includes('bigquery'))
+    const bigQueryOnly = /internal static readonly string\[\] BigQueryMethods = \[([^\]]*)\];/.exec(source)
+    if (!bigQueryOnly) throw new Error('Providers.BigQueryMethods not found')
+    const methods = Object.keys(methodPolicies) as (keyof typeof methodPolicies)[]
+    const main = methods.filter(method => methodProviders(method).join() === 'sqlserver,bigquery')
     expect(names(both[1])).toEqual(main.sort())
+    // BigQuery's own methods (Providers.BigQueryMethods), and no other combination.
+    expect(names(bigQueryOnly[1])).toEqual(methods.filter(method => methodProviders(method).join() === 'bigquery').sort())
+    expect(methods.filter(method => !['sqlserver', 'sqlserver,bigquery', 'bigquery'].includes(methodProviders(method).join()))).toEqual([])
     expect(names(parameters[1])).toEqual([...providerParamMethods].sort())
-    // No method serves BigQuery alone yet, and none that names a connection serves both.
-    for (const method of Object.keys(methodPolicies) as (keyof typeof methodPolicies)[]) expect(methodProviders(method)[0], method).toBe('sqlserver')
-    expect(main).not.toContain('connections.connect')
+    // Connect and disconnect serve both (connect by its options' provider); the pre-connect methods are BigQuery's alone.
+    expect(main).toEqual(expect.arrayContaining(['connections.connect', 'connections.disconnect']))
+    expect(methodProviders('bigquery.account')).toEqual(['bigquery'])
+    expect(methodProviders('connections.preview')).toEqual(['sqlserver'])
     expect(main).not.toContain('query.execute')
     expect(main).toEqual(expect.arrayContaining(['system.health', 'query.cancel', 'query.session.close', 'query.session.state', 'results.read', 'results.close', 'results.copy', 'results.export']))
   })
@@ -374,16 +381,25 @@ describe('IPC validation', () => {
     expect(requestProvider('language.complete', { text: '', context: { providerId: 'sqlserver', connectionId: 'bq-handle' } }, lookup)).toBe('bigquery')
     expect(methodAllows('language.complete', 'bigquery')).toBe(false)
     expect(requestProvider('results.close', { resultIds: [1] }, lookup)).toBeUndefined()
-    expect(methodAllows('connections.connect', 'bigquery')).toBe(false)
+    expect(methodAllows('connections.connect', 'bigquery')).toBe(true)
+    expect(methodAllows('connections.preview', 'bigquery')).toBe(false)
+    expect(methodAllows('bigquery.projects', 'sqlserver')).toBe(false)
+    expect(requestProvider('bigquery.account', { authentication: 'gcloud' }, lookup)).toBeUndefined()
     expect(methodAllows('databases.list', 'bigquery')).toBe(false)
     expect(methodAllows('databases.list', 'sqlserver')).toBe(true)
     expect(methodAllows('results.close', 'bigquery')).toBe(true)
     // Main cannot tell: C# checks.
     expect(methodAllows('explorer.children', undefined)).toBe(true)
-    // Main's zod refuses BigQuery options for connect before the supervisor sees them; SQL Server's spelled out pass.
+    // Connect takes either engine's options (main adds BigQuery's credential); the other connection methods stay SQL Server's.
     const options = { server: 'sql.example', database: '', authentication: 'windows', trustServerCertificate: false }
+    const bigQuery = { provider: 'bigquery', project: 'my-project-1', authentication: 'gcloud' }
     expect(() => validateRequest('connections.connect', { ...options, provider: 'sqlserver' })).not.toThrow()
-    expect(() => validateRequest('connections.connect', { provider: 'bigquery', project: 'my-project-1', authentication: 'gcloud' })).toThrow()
+    expect(() => validateRequest('connections.connect', bigQuery)).not.toThrow()
+    // The renderer can never supply credential material, a key file path, or SQL Server's fields on BigQuery's branch.
+    expect(() => validateRequest('connections.connect', { ...bigQuery, credential: { source: 'adc', json: '{}' } })).toThrow()
+    expect(() => validateRequest('connections.connect', { ...bigQuery, authentication: 'serviceAccountKey', keyFile: 'C:/keys/sa.json' })).toThrow()
+    expect(() => validateRequest('connections.connect', { ...bigQuery, server: 'sql.example' })).toThrow()
+    for (const method of ['connections.databases', 'connections.preview'] as const) expect(() => validateRequest(method, bigQuery), method).toThrow()
   })
   it('takes the Connect dialog\'s context, with the request id Stop uses, only for connect and Load databases', () => {
     const requestId = crypto.randomUUID()

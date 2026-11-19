@@ -318,20 +318,23 @@ describe('BackendSupervisor restarts', () => {
 describe('BackendSupervisor providers', () => {
   it('refuses a method for another engine before sending it or starting a backend, and forgets a handle\'s engine on disconnect', async () => {
     const { value, backends } = simulated()
-    const refused = await failure(value.request('connections.connect', { ...options, provider: 'bigquery' } as never))
+    const refused = await failure(value.request('connections.preview', { ...options, provider: 'bigquery' } as never))
     expect(refused).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedProvider })
     expect(backends).toEqual([])
     const connection = await value.request('connections.connect', { ...options, provider: 'sqlserver' })
     await expect(value.request('databases.list', { connectionId: connection.id })).resolves.toEqual({ method: 'databases.list' })
-    // A stub BigQuery handle: main's record of what each connect opened.
+    // Main's record of what each connect opened, from the connect's options: a BigQuery connect opens a BigQuery handle.
     const providers = (value as unknown as { providers: Map<string, string> }).providers
     expect(providers.get(connection.id)).toBe('sqlserver')
-    providers.set('bq-handle', 'bigquery')
-    expect(await failure(value.request('databases.list', { connectionId: 'bq-handle' }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
-    expect(await failure(value.request('explorer.children', { connectionId: 'bq-handle', requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    const bigQuery = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    expect(providers.get(bigQuery.id)).toBe('bigquery')
+    expect(await failure(value.request('databases.list', { connectionId: bigQuery.id }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    expect(await failure(value.request('explorer.children', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
     // A method declared for both engines that names no connection is C#'s to check.
     await expect(value.request('results.close', { resultIds: [1] })).resolves.toEqual({ method: 'results.close' })
-    expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect', 'databases.list', 'results.close'])
+    expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect', 'databases.list', 'connections.connect', 'results.close'])
+    await value.request('connections.disconnect', { connectionId: bigQuery.id })
+    expect(providers.has(bigQuery.id)).toBe(false)
     await value.request('connections.disconnect', { connectionId: connection.id })
     expect(providers.has(connection.id)).toBe(false)
   })
