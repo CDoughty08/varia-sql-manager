@@ -1,8 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
-import { usesPassword } from '../shared/auth'
 import type { SecretStorageState } from '../shared/connections'
-import type { ConnectionWorkspace, PersistedConnectionTarget } from '../shared/connection-targets'
+import { targetUsesPassword, type ConnectionWorkspace, type PersistedConnectionTarget } from '../shared/connection-targets'
 import type { SecretCipher } from './secret-cipher'
 
 const keyBytes = 32
@@ -27,12 +26,19 @@ export interface WorkspaceSealOptions {
  * account check can refuse it. A target that uses a remembered password is already safe: its ciphertext is bound to the
  * server and TLS settings (saved-passwords.ts).
  */
-const silent = (target: PersistedConnectionTarget) => !!target.expectedPrincipal && !usesPassword(target.options.authentication)
+const silent = (target: PersistedConnectionTarget) => !!target.expectedPrincipal && !targetUsesPassword(target.options)
 /** The whole target: destination, account, Explorer membership, resume intent and labels, so tampering cannot undo a
  *  Disconnect or relabel one sealed server as another. Both sides are the same strict schema's parse, so keys agree. */
 const message = (targets: readonly PersistedConnectionTarget[]) => JSON.stringify(targets.filter(silent)
   .map(target => [target.id, target]).sort(([left], [right]) => String(left).localeCompare(String(right))))
 const mac = (key: Buffer, workspace: ConnectionWorkspace) => createHmac('sha256', key).update(message(workspace.targets)).digest('hex')
+/**
+ * The same targets as 0.9.0 spelled them (`provider: 'sqlServer'` in the expected principal), which its seals cover. The
+ * migrated session keeps 0.9.0's seal while reading the principal as `sqlserver`, so verifying only today's spelling would
+ * drop every silent target's account at the first 0.10.0 start. It is the same content re-spelled, so it proves nothing more.
+ */
+const legacyMac = (key: Buffer, workspace: ConnectionWorkspace) => createHmac('sha256', key).update(message(workspace.targets.map(target =>
+  target.expectedPrincipal?.provider === 'sqlserver' ? { ...target, expectedPrincipal: { ...target.expectedPrincipal, provider: 'sqlServer' } } as unknown as PersistedConnectionTarget : target))).digest('hex')
 const within = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => new Promise(resolve => {
   const timer = setTimeout(() => resolve(fallback), ms)
   promise.then(value => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); resolve(fallback) })
@@ -84,8 +90,9 @@ export class ConnectionWorkspaceSealer {
       if (reEncrypt || !text.startsWith(keyPrefix)) return false
       const key = Buffer.from(text.slice(keyPrefix.length), 'base64')
       if (key.length !== keyBytes) return false
-      const expected = Buffer.from(mac(key, workspace)), actual = Buffer.from(seal.mac)
-      return expected.length === actual.length && timingSafeEqual(expected, actual)
+      const actual = Buffer.from(seal.mac)
+      const matches = (expected: Buffer) => expected.length === actual.length && timingSafeEqual(expected, actual)
+      return matches(Buffer.from(mac(key, workspace))) || matches(Buffer.from(legacyMac(key, workspace)))
     } catch { return false }
   }
 }

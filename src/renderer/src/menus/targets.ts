@@ -6,6 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { PaneId } from '../../../shared/layouts'
+import { explorerNodeProvider } from '../../../shared/providers'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { gridAnchor, gridTarget } from '../grid/anchor'
@@ -176,6 +177,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
+    explorerProvider: target?.kind === 'explorer' ? explorerNodeProvider(target.node) : '',
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,

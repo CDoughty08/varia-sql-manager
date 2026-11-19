@@ -2,6 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
+import type { ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
@@ -39,6 +40,7 @@ export interface ListingFreshness { readonly label: string; readonly updatedAt: 
  */
 export interface ExplorerContextState extends ScriptContextValues, ActionContextValues, SsisVerbContextValues {
   readonly explorerHasSelection: boolean
+  readonly explorerSelectionProvider: ProviderContext
   readonly explorerSelectionKind: '' | 'folder' | NodeKind
   readonly explorerSelectionFolder: '' | FolderId
   readonly explorerSelectionFilterable: boolean
@@ -54,7 +56,7 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerGroupBySchema: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
-  explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
+  explorerHasSelection: false, explorerSelectionProvider: '', explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
   explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
   explorerLoading: false, explorerGroupBySchema: false
 }
@@ -69,6 +71,8 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
   const folder = target?.folder ? folderSpecs[target.folder] : undefined
   return {
     explorerHasSelection: !!target,
+    // Every Object Explorer server is SQL Server's until BigQuery's Explorer (docs/bigquery-plan.md, BQ-5).
+    explorerSelectionProvider: target ? 'sqlserver' : '',
     explorerSelectionKind: target?.kind ?? '',
     explorerSelectionFolder: target?.folder ?? '',
     explorerSelectionFilterable: !!target && !!folder?.filter?.length,

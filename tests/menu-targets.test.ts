@@ -19,13 +19,13 @@ describe('menu targets', () => {
       { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x', selected: false }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none])
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
     const lost = { id: 1, lost: true, kind: 'server', connectionId: 'c', label: 'c', ref: { type: 'object', object: { kind: 'server' } } } as const
-    expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerNode: 'server', explorerServerLost: true })
+    expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'server', explorerServerLost: true })
     // Peek's menu item follows the Peek catalogue: a login peeks, a user does not.
     const principal = (kind: 'login' | 'user') => ({ id: 4, lost: false, kind, connectionId: 'c', label: 'p', ref: { type: 'object', object: kind === 'login' ? { kind, name: 'p' } : { kind, database: 'd', name: 'p' } } } as const)
     expect(targetKeys({ kind: 'explorer', node: principal('login') }).explorerNodePeekable).toBe(true)
@@ -37,12 +37,12 @@ describe('menu targets', () => {
     // Folders Filter Settings can narrow, with or without a filter; folders that list nothing to filter.
     const folder = (id: 'tables' | 'programmability', filtered?: boolean) => ({ id: 2, lost: false, kind: 'folder', folder: id, connectionId: 'c', label: id, ref: { type: 'folder', owner: { kind: 'database', name: 'd' }, folder: id }, ...(filtered ? { filtered } : {}) } as const)
     // explorerFolder names the folder, so only Tables offers New › Table….
-    expect(targetKeys({ kind: 'explorer', node: folder('tables') })).toEqual({ ...none, explorerNode: 'folder', explorerFolder: 'tables', explorerFolderFilterable: true })
-    expect(targetKeys({ kind: 'explorer', node: folder('tables', true) })).toEqual({ ...none, explorerNode: 'folder', explorerFolder: 'tables', explorerFolderFilterable: true, explorerFolderFiltered: true })
-    expect(targetKeys({ kind: 'explorer', node: folder('programmability') })).toEqual({ ...none, explorerNode: 'folder', explorerFolder: 'programmability' })
+    expect(targetKeys({ kind: 'explorer', node: folder('tables') })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'tables', explorerFolderFilterable: true })
+    expect(targetKeys({ kind: 'explorer', node: folder('tables', true) })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'tables', explorerFolderFilterable: true, explorerFolderFiltered: true })
+    expect(targetKeys({ kind: 'explorer', node: folder('programmability') })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'programmability' })
     // A fully loaded Columns folder has names to copy.
     const columns = { id: 3, lost: false, kind: 'folder', folder: 'columns', connectionId: 'c', label: 'Columns', ref: { type: 'folder', owner: { kind: 'table', database: 'd', schema: 's', name: 'n' }, folder: 'columns' }, insertable: true } as const
-    expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerNode: 'folder', explorerFolder: 'columns', explorerFolderInsertable: true })
+    expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'columns', explorerFolderInsertable: true })
     // File commands act on the tab the menu is for.
     expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't4', 't2', 't3', undefined, undefined, 't5', undefined, 't6', undefined])
     // The results toolbar's ⋯ runs its items as the toolbar's buttons do: the query, and no target to read a grid from.

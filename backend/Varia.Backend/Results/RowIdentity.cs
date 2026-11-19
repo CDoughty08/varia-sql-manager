@@ -276,9 +276,8 @@ internal static class RowIdentity
         {
             var column = columns[c];
             if (wires[c] == WireKind.Binary || ResultTextWriter.Hidden(column) || column.Role is not null) continue;
-            var type = ViewSorter.TypeName(column);
-            var keyType = type is "tinyint" or "smallint" or "int" or "bigint" or "uniqueidentifier" or "decimal" or "numeric";
-            var other = type is "char" or "varchar" or "nchar" or "nvarchar" or "sysname" or "date" or "datetime" or "datetime2" or "smalldatetime" or "datetimeoffset" or "time"
+            var keyType = column.SortKind == ColumnTypes.Integer || ColumnTypes.IsGuid(column) || (column.SortKind == ColumnTypes.Decimal && !ColumnTypes.IsMoney(column));
+            var other = ((column.SortKind == ColumnTypes.Text && !ColumnTypes.IsLargeText(column)) || ColumnTypes.IsTemporal(column))
                 && (column.MaxLength is null or > 0 and <= 900);
             if (!keyType && !other) continue;
             var name = column.Name.Trim();
@@ -296,7 +295,7 @@ internal static class RowIdentity
 /// read hash alike. 64-bit FNV-1a, then a SplitMix64 finish; collisions are possible but vanishingly rare.</summary>
 internal sealed class CellHasher
 {
-    private enum Kind { Bytes, Collated, Trimmed, Exact, Guid, Ticks }
+    internal enum Kind { Bytes, Collated, Trimmed, Exact, Guid, Ticks }
 
     private readonly Kind[] kinds;
     private readonly (CompareInfo Info, CompareOptions Options)?[] cultures;
@@ -328,24 +327,20 @@ internal sealed class CellHasher
             var column = columns[c];
             hidden[c] = ResultTextWriter.Hidden(column);
             if (wires[c] == WireKind.Binary) { kinds[c] = Kind.Bytes; continue; }
-            var type = ViewSorter.TypeName(column);
-            if (column.Collation is not null && type is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext" or "sysname")
+            if (column.Collation is not null && column.SortKind == ColumnTypes.Text)
             {
                 cultures[c] = ViewSorter.Culture(column.Collation);
                 kinds[c] = cultures[c] is null ? Kind.Trimmed : Kind.Collated;
                 continue;
             }
-            kinds[c] = type switch
-            {
-                "bit" or "tinyint" or "smallint" or "int" or "bigint" or "decimal" or "numeric" or "money" or "smallmoney" => Kind.Exact,
-                "uniqueidentifier" => Kind.Guid,
-                "datetimeoffset" => Kind.Ticks,
-                _ => Kind.Bytes
-            };
+            kinds[c] = ColumnTypes.IsExact(column) ? Kind.Exact : ColumnTypes.IsGuid(column) ? Kind.Guid : column.SortKind == ColumnTypes.Timestamp ? Kind.Ticks : Kind.Bytes;
         }
     }
 
     public int Count { get; }
+
+    /// <summary>How a column's cells hash.</summary>
+    internal Kind KindOf(int column) => kinds[column];
 
     /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
     public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;

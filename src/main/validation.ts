@@ -3,6 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
+import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
@@ -75,7 +76,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.connect': z.object({
     id: z.uuid(), server: z.string().max(256), database: z.string().max(128), serverVersion: z.string().max(256), generation: z.number().int().min(0),
     displayName: z.string().max(128).optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), commandTimeout: z.number().int().min(0).max(86400).optional(),
-    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.literal('sqlserver').optional(),
+    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.enum(providerIds).optional(),
     principalId: connectionPrincipalIdSchema.optional(), bindingRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
   }).strict(),
   'language.status': languageStatusSchema,

@@ -5,9 +5,10 @@ import { adoptConnection, executePendingQuery, finishConnectionDetails, needsDet
 import { ConnectionService, type ConnectionAttempt, type TargetConnectionInfo } from '../src/renderer/src/services/connections'
 import { ConnectionTargetService, type ConnectionCompletion } from '../src/renderer/src/services/connection-targets'
 import { connectionOptions, workbenchFixture } from './fixtures/workbench'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const uuid = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-const authentication: ConnectionAuthentication = { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }
+const authentication: ConnectionAuthentication = { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }
 const current: ConnectionDetails = { displayName: 'Reporting', color: '#123456', environment: 'Test', autoReconnect: 'inherit' }
 const selected: ConnectionDetails = { displayName: 'Production reporting', color: '#abcdef', environment: 'Production', autoReconnect: 'off' }
 const options: ConnectionOptions = { ...connectionOptions, displayName: current.displayName, color: current.color, environment: current.environment }
@@ -261,7 +262,7 @@ describe('selected connection details confirmation', () => {
     const execute = vi.spyOn(queries, 'execute').mockResolvedValue()
     expect(review.bindingRevision).toBe(0)
     connections.bindingsChanged({ generation: 1, changes: [{ targetId: opened.targetId!, handle: { id: opened.id, generation: opened.generation }, revision: 1,
-      options: connectionTargets.get(opened.targetId!)!.options, authentication }] })
+      options: connectionTargets.get(opened.targetId!)!.options as SqlServerTargetOptions, authentication }] })
     expect(finishConnectionDetails(connections, review, 'selected')).toBeUndefined()
     expect(finishConnectionDetails(connections, review, 'current')).toBeUndefined()
     await executePendingQuery({ ...workbench, tabId: query.id, opened })

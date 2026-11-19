@@ -1798,7 +1798,7 @@ describe('ExplorerService: selection, targets and context', () => {
     f.explorer.select(databases)
     expect(listener).toHaveBeenCalledTimes(1)
     expect(f.explorer.context.getSnapshot()).toEqual({
-      explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
+      explorerHasSelection: true, explorerSelectionProvider: 'sqlserver', explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
       explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false,
       ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false, explorerGroupBySchema: false,
       // The Databases folder's own actions (Attach D1d, Restore Database D1f, Restore Files and Filegroups D1g), on a SQL Server box edition.

@@ -57,7 +57,8 @@ by OS file access controls, not encrypted. Remembered passwords use the OS-prote
 only opaque revision references. Unremembered passwords and Entra tokens are never kept. Turning restore off does not
 remove the connection workspace; disconnect/remove actions and reconnect preferences govern it.
 
-`<userData>/Session/session.json` (`src/main/session-store.ts`): 0700 folder and 0600 file on POSIX, atomic writes, strict
+`<userData>/WorkbenchSession/session.json` (`src/main/session-store.ts`; 0.9.0's `Session/` is copied there once and
+left as it was, docs/architecture.md): 0700 folder and 0600 file on POSIX, atomic writes, strict
 zod schemas on request and file, invalid files quarantined.
 
 - **Housekeeping.** Each start deletes quarantined files older than Keep AutoRecover information for, and every

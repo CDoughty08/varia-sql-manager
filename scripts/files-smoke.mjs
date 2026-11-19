@@ -491,7 +491,7 @@ try {
   // 15. AutoRecover: a copy of a query with unsaved changes (saved now, not in five minutes) survives a renderer crash,
   // whose prompt says so, and the reloaded workbench offers it; Recover Selected opens it with its text, unsaved. Saved
   // again and then killed, the app offers it at the next start, and Discard Selected deletes every copy.
-  const recoveryFolder = join(profile, 'AutoRecover')
+  const recoveryFolder = join(profile, 'WorkbenchAutoRecover')
   const recoverDialog = () => page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
   /** Runs script in the page through main: Playwright's page for a crashed renderer cannot be used after its reload. */
   const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)

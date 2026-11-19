@@ -46,7 +46,7 @@ function opened(database: string | undefined = 'Sales', options: Options = {}, c
   if (canonical) {
     fixture.api.push(readyBackend())
     const attempt = fixture.connections.beginConnect(connectionOptions, 1, targetId)!
-    fixture.connections.accept(connectionInfo(conn), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt)
+    fixture.connections.accept(connectionInfo(conn), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:reader' } }, attempt)
   } else fixture.connect(connectionInfo(conn))
   fixture.api.describeObject.mockImplementation(async params => {
     const source = params.restore

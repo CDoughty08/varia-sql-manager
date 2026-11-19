@@ -40,7 +40,7 @@ describe('the AutoRecover store', () => {
     expect(await next.list(1)).toEqual([entry])
     // The record names its owner and holds the text; it is the only file there.
     const stored = JSON.parse(await readFile(join(folder, kept.id + '.json'), 'utf8'))
-    expect(stored).toMatchObject({ version: 1, id: kept.id, owner: { instance: store.instance, generation: 1 }, text: 'SELECT secret FROM dbo.T', eol: 'crlf' })
+    expect(stored).toMatchObject({ version: 2, id: kept.id, owner: { instance: store.instance, generation: 1 }, text: 'SELECT secret FROM dbo.T', eol: 'crlf' })
     expect(await records()).toEqual([kept.id + '.json'])
     // Taken, it is the taker's: no longer offered to it, and it may write and discard it.
     expect(await next.take(kept.id, 1)).toMatchObject({ text: 'SELECT secret FROM dbo.T', name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', path: 'C:\\Queries\\orders.sql' })

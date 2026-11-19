@@ -521,7 +521,7 @@ describe('SQL language editor integration', () => {
     const f = await fixture()
     const xml = f.documents.openText({ name: 'value.xml', text: '<xml/>', kind: 'xml' })
     const large = f.documents.create('large.sql', 'x'.repeat(languageLimits.documentCharacters + 1), 'master')
-    f.addConnection('postgres', 'postgresql')
+    f.addConnection('postgres', 'bigquery')
     const unsupported = f.documents.create('postgres.sql', 'SELECT 1', 'postgres', 'postgres')
     for (const id of [xml.id, large.id, unsupported.id]) {
       expect((await f.complete(id)).suggestions).toEqual([])

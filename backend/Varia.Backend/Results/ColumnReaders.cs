@@ -83,11 +83,11 @@ internal sealed class ColumnPlan
     /// <summary>Each column's byte rule (CellLengths.cs), from its type and, for char, varchar and text, its collation.</summary>
     public IReadOnlyList<ColumnLength> Lengths { get; }
     /// <summary>An upper bound on this set's descriptor in the query.execute summary and its resultSet events (MessagePack):
-    /// its names and types, plus 96 bytes of keys and values per column (160 with a collation) and 512 per set.</summary>
+    /// its names and types, plus 120 bytes of keys and values per column (184 with a collation) and 512 per set.</summary>
     public long DescriptorBytes { get; }
 
     public static long DescriptorBytesOf(IEnumerable<ResultColumn> columns) =>
-        512 + columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + (column.Collation is null ? 96L : 160L));
+        512 + columns.Sum(column => Encoding.UTF8.GetByteCount(column.Name) + Encoding.UTF8.GetByteCount(column.DataType) + (column.Collation is null ? 120L : 184L));
 
     /// <summary>"xml" or "json" when the set is FOR XML or FOR JSON output, which <see cref="ForXmlCollector"/> joins into
     /// one value; otherwise null.</summary>

@@ -7,6 +7,7 @@ import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { loginSubtypes } from '../actions/logins.ts'
 import { peekCatalogBlock } from './peek.ts'
 import { dependencyLimits } from './dependencies.ts'
+import type { ProviderId } from '../providers.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -185,6 +186,8 @@ export interface LaterFolder {
 export type InsertStyle = 'none' | 'onePart' | 'twoPart' | 'raw'
 export interface KindSpec {
   readonly kind: NodeKind
+  /** The engines whose Object Explorer has this kind; absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  readonly providers?: readonly ProviderId[]
   /** Singular, as in tooltips: 'Table'. */
   readonly title: string
   readonly scope: KindScope

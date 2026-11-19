@@ -162,7 +162,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'connections.connect': {
         const principalId = params.authentication.startsWith('entra') ? 'entra:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222' : 'sid:01020304'
         const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1,
-          targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } }
+          targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlserver', authentication: params.authentication, id: principalId } } }
         stub.connections[info.id] = info
         return ok(info)
       }
