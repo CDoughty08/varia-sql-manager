@@ -446,7 +446,8 @@ internal static partial class ActivitySql
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
-    /// <summary>Metadata built-ins ignore the isolation level and LOCK_TIMEOUT; the others read or change state no sample may.</summary>
+    /// <summary>Metadata built-ins ignore the isolation level (behind uncommitted DDL they wait out LOCK_TIMEOUT and fail with 1222;
+    /// <see cref="CatalogSql.Builtins"/>); the others read or change state no sample may.</summary>
     internal static IReadOnlyList<string> ForbiddenTokens => Forbidden;
     private static readonly string[] Forbidden =
     [

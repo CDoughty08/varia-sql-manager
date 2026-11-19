@@ -111,7 +111,9 @@ internal static partial class CatalogSql
     /// it did not.</summary>
     public static string Found(string variable) => "SELECT CONVERT(bit, CASE WHEN " + variable + " IS NULL THEN 0 ELSE 1 END);\nIF " + variable + " IS NULL RETURN;\n";
 
-    // Metadata functions ignore the isolation level and LOCK_TIMEOUT, so the catalog is read through joins only. LOGINPROPERTY
+    // Metadata functions ignore the isolation level: behind another session's uncommitted DDL they wait out LOCK_TIMEOUT and
+    // fail with 1222 where a join under READ UNCOMMITTED returns at once (HAS_PERMS_BY_NAME waits too, then answers 0 with no
+    // error), so the catalog is read through joins only. LOGINPROPERTY
     // waits on a login another session alters even under READ UNCOMMITTED (D4 P8; its one exception is ActionSql.LoginLock,
     // D4d, whose own lint lifts it for allowlisted properties only), and a password hash never leaves the server: no Varia SQL reads sys.sql_logins.password_hash or LOGINPROPERTY's
     // PasswordHash and PasswordHashAlgorithm (critic A15; "PasswordHash" covers both). Every lint built on this list refuses them.

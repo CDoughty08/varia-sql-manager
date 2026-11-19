@@ -221,9 +221,9 @@ internal static class SeamChecks
             .Concat(lints.Where(lint => Names(lint.Lint(counted), "sql_logins through")).Select(lint => lint.Name + " (COUNT(*))")).ToList();
         check(unseen.Count == 0, "every catalog lint refuses a star over sys.sql_logins (COUNT(*) aside) and LOGINPROPERTY however it is spaced: " + string.Join(", ", unseen));
         // A name in brackets or quotes is still that name, SQL Server resolves a full-width one in brackets as its ASCII twin, and
-        // a space or comment before a built-in's parenthesis still calls it. (The live probes' lint has its own names text.)
+        // a space or comment before a built-in's parenthesis still calls it.
         static string Wide(string ascii) => new([.. ascii.Select(c => c is >= '!' and <= '~' && c != '_' ? (char)(c + 0xFEE0) : c)]);
-        List<(string Name, Func<string, List<string>> Lint)> named = [.. lints.Where(lint => lint.Name != "the live probes' lint"),
+        List<(string Name, Func<string, List<string>> Lint)> named = [.. lints,
             ("the restore catalog lint", RestoreSql.LintCatalog), ("the server files lint", ServerFiles.Lint)];
         string Select(string columns) => good.Replace("SELECT TOP (@take) l.name", "SELECT TOP (@take) " + columns, StringComparison.Ordinal);
         var unwrapped = new[]
@@ -232,8 +232,8 @@ internal static class SeamChecks
             ("l.\"password_hash\"", Select("l.\"password_hash\""), "password_hash"),
             ("a full-width hash column", Select("l.[" + Wide("password") + "_" + Wide("hash") + "]"), "outside printable ASCII"),
             ("a full-width sys.sql_logins", Select("l.*").Replace("sys.sql_logins", "sys.[" + Wide("sql") + "_" + Wide("logins") + "]", StringComparison.Ordinal), "outside printable ASCII"),
-            ("OBJECT_NAME (", Select("OBJECT_NAME (l.principal_id)"), "uses OBJECT_NAME("),
-            ("OBJECT_NAME/**/(", Select("OBJECT_NAME/**/(l.principal_id)"), "uses OBJECT_NAME("),
+            ("OBJECT_NAME (", Select("OBJECT_NAME (l.principal_id)"), "uses OBJECT_NAME"),
+            ("OBJECT_NAME/**/(", Select("OBJECT_NAME/**/(l.principal_id)"), "uses OBJECT_NAME"),
             ("OBJECTPROPERTY in brackets", Select("[OBJECTPROPERTY]"), "uses OBJECTPROPERTY")
         };
         var hiddenNames = named.SelectMany(lint => unwrapped.Where(mutation => !Names(lint.Lint(mutation.Item2), mutation.Item3)).Select(mutation => lint.Name + " (" + mutation.Item1 + ")"))

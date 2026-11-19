@@ -67,7 +67,7 @@ internal sealed record LiveQuery(string Probe, int Band, string Body, string[] C
 
 /// <summary>The SQL of every one-batch live probe that reads SQL Server (docs/live.md; the Activity Monitor's probes run several
 /// statements each, from Activity/ActivitySql.cs, which this lint also checks): constant text per probe and band, values only
-/// as parameters, no metadata built-ins (they ignore LOCK_TIMEOUT and the isolation level), no temporary tables, writes,
+/// as parameters, no metadata built-ins (they ignore the isolation level and wait out LOCK_TIMEOUT behind uncommitted DDL), no temporary tables, writes,
 /// transactions, waits or dynamic SQL. Every command starts with its scope's prologue, since a pooled connection can carry
 /// another command's SET state. Lint renders every variant; the checks run it offline. Every read checks the columns it got
 /// against the declaration (LiveQuery.Returns), and the live checks run every query at the server's band to compare them.</summary>
