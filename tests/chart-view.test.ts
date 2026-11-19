@@ -4,7 +4,7 @@ import { liveUnits, type LiveProbeId } from '../src/shared/live/catalog'
 import { chartSeriesColors } from '../src/shared/theme/charts'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpan, niceCeiling } from '../src/renderer/src/live/chart-format'
-import { ChartLink, ChartView, chartColor, chartLimits, chartTable, forcedColorsDashes, probeCurrent, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
+import { ChartLink, ChartView, chartColor, chartColumnsWiden, chartLimits, chartTable, forcedColorsDashes, probeCurrent, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
 import type { LiveSnapshot, PageVisibility } from '../src/renderer/src/live/LiveService'
 import { MetricRing, ringGap } from '../src/renderer/src/live/ring'
 import { FakeCanvas, FakeChartEnvironment, fakeOwner, type FakeElement } from './fixtures/fake-canvas'
@@ -456,6 +456,26 @@ describe('ChartView', () => {
     // A row is as wide as the columns, whatever the sample gave: a value it lacks is NULL, never a shifted column.
     expect(table.rows).toEqual([['now (after a gap)', '5 %', '2/s'], ['0:01 ago', '4 %', null]])
     expect(chartTable([], []).columns).toEqual([{ name: 'Time' }])
+  })
+  it('has the chart table\'s columns sized again only when a value outgrows every one before it', () => {
+    const series: ChartSeries[] = [{ index: 1, label: 'Rate', color: 'charts.blue' }]
+    const table = (value: string) => chartTable(series, [{ time: 'now', values: [value], gapBefore: false }])
+    // The first table sets the lengths; it is what the grid sized its columns from.
+    const first = chartColumnsWiden([], table('0/s'))
+    expect(first).toEqual({ widest: [4, 4], grew: false })
+    expect(chartColumnsWiden(first.widest, table('9/s')).grew).toBe(false)
+    const wider = chartColumnsWiden(first.widest, table('12,345/s'))
+    expect(wider).toEqual({ widest: [4, 8], grew: true })
+    // A shorter value later keeps the widest, and asks for nothing.
+    expect(chartColumnsWiden(wider.widest, table('1/s'))).toEqual({ widest: [4, 8], grew: false })
+    // A re-fit sizes every column from the table it happens on, narrowing one whose long value has gone: from then on that
+    // column outgrows its width at its new length, not at its longest ever.
+    const row = (time: string, value: string) => chartTable(series, [{ time, values: [value], gapBefore: time.startsWith('0:40') }])
+    const gap = chartColumnsWiden([], row('0:40 ago', '0/s'))
+    expect(gap.widest).toEqual([22, 4])
+    const refit = chartColumnsWiden(gap.widest, row('now', '12,345/s'))
+    expect(refit).toEqual({ widest: [4, 8], grew: true })
+    expect(chartColumnsWiden(refit.widest, chartTable(series, [{ time: 'now', values: ['1/s'], gapBefore: true }])).grew).toBe(true)
   })
   it('labels expanded charts with values and times', () => {
     const ring = ringOf(30, 1, index => index)

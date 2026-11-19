@@ -52,6 +52,8 @@ export function metricAverage(runs: readonly StatisticsRun[], value: (sample: Cl
   return values.length ? values.reduce((sum, n) => sum + n / values.length, 0) : undefined
 }
 
+/** A run's status as the pane and the Previous column's name say it. */
+export const statisticsStatusWords: Record<StatisticsRun['status'], string> = { completed: 'completed', completedWithErrors: 'completed with errors', failed: 'failed', cancelled: 'cancelled', timedOut: 'timed out', running: 'running', unavailable: 'unavailable' }
 const number = (value: number | undefined) => value === undefined ? 'Unavailable' : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
 /** The report's rows, in the provider's order, then the backend's wall time. */
 const measurements: readonly { readonly label: string; readonly definition: string; readonly value: (sample: ClientStatisticsSample) => number | undefined }[] = [
@@ -63,14 +65,16 @@ export const previousRun = (runs: readonly StatisticsRun[], selected: Statistics
   runs.filter(run => run.scope === selected.scope && run.sequence < selected.sequence && run.status !== 'running').at(-1)
 /**
  * The selected run against the previous attempt in its context and its peers' mean, as the Client Statistics grid shows,
- * copies and saves it (display text: "Unavailable" where a measurement is missing). Its rows are an ordered report.
+ * copies and saves it (display text: "Unavailable" where a measurement is missing). Its rows are an ordered report. The
+ * figures are text columns: they are formatted in the user's locale (1.500 in German), which a JSON save must not read as
+ * numbers (1.5), and a column of them also holds Unavailable and signed changes.
  */
 export function statisticsTable(runs: readonly StatisticsRun[], selected: StatisticsRun): LocalTableData {
   const peers = statisticsPeers(runs, selected), previous = previousRun(runs, selected)
   return {
     columns: [
-      { name: 'Measurement' }, { name: `Run ${selected.sequence}`, kind: 'number' }, { name: previous ? `Previous (run ${previous.sequence})` : 'Previous', kind: 'number' },
-      { name: 'Change', kind: 'number' }, { name: `Average (${peers.length} runs)`, kind: 'number' }, { name: 'Definition' }
+      { name: 'Measurement' }, { name: `Run ${selected.sequence}` }, { name: previous ? `Previous (run ${previous.sequence}${previous.status === 'completed' ? '' : `, ${statisticsStatusWords[previous.status]}`})` : 'Previous' },
+      { name: 'Change' }, { name: `Average (${peers.length} runs)` }, { name: 'Definition' }
     ],
     rows: measurements.map(row => {
       const current = selected.sample && row.value(selected.sample), before = previous?.sample && row.value(previous.sample)

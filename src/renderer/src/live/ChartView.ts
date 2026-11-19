@@ -113,6 +113,16 @@ export function chartTable(series: readonly ChartSeries[], rows: readonly ChartT
     rows: rows.map(row => [row.gapBefore ? `${row.time} (after a gap)` : row.time, ...series.map((_, column) => row.values[column] ?? null)])
   }
 }
+/**
+ * Whether a chart's table has a column holding longer text than the columns were last sized for (`widest`, empty before the
+ * first table), and the lengths they are sized for after `table`: the grid sizes its columns once, so when one has outgrown
+ * its width all are sized again from this table (LiveChart), which may narrow the others, so the lengths become this table's.
+ */
+export function chartColumnsWiden(widest: readonly number[], table: LocalTableData): { readonly widest: number[]; readonly grew: boolean } {
+  const next = table.columns.map((column, at) => table.rows.reduce((most, row) => Math.max(most, row[at]?.length ?? 4), column.name.length))
+  const grew = widest.length > 0 && next.some((length, at) => length > (widest[at] ?? 0))
+  return { widest: grew || widest.length === 0 ? next : next.map((length, at) => Math.max(length, widest[at] ?? 0)), grew }
+}
 export interface ChartStats { frames: number; draws: number }
 
 export function browserChartEnvironment(): ChartEnvironment {

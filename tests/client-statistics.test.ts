@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { QueryResult } from '../src/shared/contracts'
 import { clientStatisticsSchema, providerMetricDefinitions } from '../src/shared/client-statistics'
+import { localExportBytes } from '../src/shared/results/local-table'
 import { validateRequest } from '../src/main/validation'
 import { ClientStatisticsService, metricAverage, statisticsPeers, statisticsTable } from '../src/renderer/src/statistics/ClientStatisticsService'
 
@@ -56,6 +57,7 @@ describe('client statistics history', () => {
     service.begin('a', '1', 'c', 'master', false); service.finish('a', '1', { status: 'completed', clientStatistics: { counters: {} } } as QueryResult)
     expect(metricAverage(service.getSnapshot().a, sample => sample.counters.BytesSent)).toBe(0)
   })
+})
 
 describe('statistics wire boundaries', () => {
   it('accepts partial counter sets and refuses unknown, unsafe, negative and nonnumeric metrics', () => {
@@ -70,12 +72,27 @@ describe('statistics wire boundaries', () => {
     expect(() => validateRequest('query.execute', { ...args, includeClientStatistics: 'true' })).toThrow()
   })
 })
+describe('client statistics report', () => {
+  it('saves its figures as text, never as numbers read from a locale\'s grouping', async () => {
+    const service = new ClientStatisticsService()
+    for (const [id, bytes] of [['1', 1000], ['2', 1500]] as const) { service.begin('a', id, 'connection', 'master', false); service.finish('a', id, summary(bytes)) }
+    const runs = service.getSnapshot().a
+    // German groups thousands with a dot: 1.500, which a number column would write to JSON as 1.5.
+    const toLocale = Number.prototype.toLocaleString
+    const spy = vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (this: number, _locales?: Intl.LocalesArgument, options?: Intl.NumberFormatOptions) { return toLocale.call(this, 'de-DE', options) })
+    let table
+    try { table = statisticsTable(runs, runs[1]) } finally { spy.mockRestore() }
+    expect(table.rows[0].slice(1, 3)).toEqual(['1.500', '1.000'])
+    const saved = await localExportBytes(table, { format: 'json', headers: true, nullText: 'NULL' })
+    const rows = JSON.parse(new TextDecoder().decode(saved.data).replace(/^﻿/, '')) as Record<string, unknown>[]
+    expect(rows[0]).toMatchObject({ Measurement: 'Bytes sent', 'Run 2': '1.500', 'Previous (run 1)': '1.000', Change: '+500', 'Average (2 runs)': '1.250' })
+    for (const row of rows) for (const value of Object.values(row)) expect(typeof value).toBe('string')
+  })
   it('builds the grid\'s ordered report: the selected run, the previous in its context, the change and the mean', () => {
     const service = new ClientStatisticsService()
     for (const [id, bytes] of [['1', 1000], ['2', 1500]] as const) { service.begin('a', id, 'connection', 'master', false); service.finish('a', id, summary(bytes)) }
     const runs = service.getSnapshot().a, table = statisticsTable(runs, runs[1])
     expect(table.columns.map(column => column.name)).toEqual(['Measurement', 'Run 2', 'Previous (run 1)', 'Change', 'Average (2 runs)', 'Definition'])
-    expect(table.columns.slice(1, 5).every(column => column.kind === 'number')).toBe(true)
     // The provider's order, then the backend's wall time: a report, which the grid shows unsorted.
     expect(table.rows.map(row => row[0])).toEqual([...providerMetricDefinitions.map(([, label]) => label), 'Collection wall time (ms)'])
     const bytes = table.rows[0]
@@ -87,5 +104,10 @@ describe('statistics wire boundaries', () => {
     const first = statisticsTable(runs, runs[0])
     expect(first.columns[2].name).toBe('Previous')
     expect(first.rows[0].slice(2, 4)).toEqual(['Unavailable', 'Unavailable'])
+    // A previous run that did not complete says so in the column's name, which Copy with Headers keeps.
+    service.begin('a', '3', 'connection', 'master', false); service.finish('a', '3', summary(10, 'cancelled'))
+    service.begin('a', '4', 'connection', 'master', false); service.finish('a', '4', summary(20))
+    const later = service.getSnapshot().a
+    expect(statisticsTable(later, later[3]).columns[2].name).toBe('Previous (run 3, cancelled)')
   })
 })

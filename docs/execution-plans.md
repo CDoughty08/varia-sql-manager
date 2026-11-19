@@ -308,7 +308,7 @@ persisted.
 - **Differences** shows the selected pair's estimates, counters, properties and diagnostics in the **Operator
   differences** grid, and, under **Statement estimates, parameters, memory grants and warnings**, the paired statements'
   in the **Statement differences** grid. Each row says what changed in its Delta / change column. Both are results grids:
-  select cells or Ctrl+A, copy with Ctrl+C or Ctrl+Shift+C (with headers), sort by a header, or save through **Save
+  select cells or Ctrl+A, copy with Ctrl+C or Ctrl+Shift+C with headers (⌘C, ⇧⌘C on macOS), sort by a header, or save through **Save
   Results As**. Each viewer's Properties pane remains available.
 - **Link selection, zoom and pan** is on by default: selecting an operator selects its counterpart (or clears the other
   side), selecting a statement pair moves both outlines, and both canvases share camera coordinates. Turn it off for
@@ -333,7 +333,7 @@ belongs to the query tab. Execute normally, then open **Client Statistics** besi
 **Window → Client Statistics**.
 
 - The comparison is a results grid in the report's order (it does not sort): select cells or press Ctrl+A, then Ctrl+C
-  or Ctrl+Shift+C to copy with headers, ready to paste into a spreadsheet, or **Save Results As** to write CSV, TSV or
+  or Ctrl+Shift+C to copy with headers (⇧⌘C on macOS), ready to paste into a spreadsheet, or **Save Results As** to write CSV, TSV or
   JSON. Each measurement's definition is its last column.
 - Each included execution is one sample, with all GO batches and repetitions combined. Choosing an execution compares it
   with the previous included attempt in the same context; Change is selected minus previous. Average uses only

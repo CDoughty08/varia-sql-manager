@@ -1,18 +1,25 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { clientStatisticsHistoryLimit } from '../../../shared/client-statistics'
+import type { LocalTableData } from '../../../shared/results/local-table'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { LocalGrid } from '../grid/LocalGrid'
-import { statisticsTable, type StatisticsRun } from './ClientStatisticsService'
-
-const statusWords: Record<StatisticsRun['status'], string> = { completed: 'completed', completedWithErrors: 'completed with errors', failed: 'failed', cancelled: 'cancelled', timedOut: 'timed out', running: 'running', unavailable: 'unavailable' }
+import { statisticsStatusWords as statusWords, statisticsTable } from './ClientStatisticsService'
 
 export default function ClientStatisticsPane({ tabId }: { tabId: string }) {
   const { queries, commands } = useWorkbench(), service = queries.statistics
   const runs = useServiceSnapshot(service)[tabId] ?? []
   const [chosen, choose] = useState('')
   const selected = runs.find(run => run.queryId === chosen) ?? runs.at(-1)
-  // One table object per sample shown: a new one is a new grid (LocalGrid), so it is built only when the runs change.
-  const table = useMemo(() => selected && selected.status !== 'running' ? statisticsTable(runs, selected) : undefined, [runs, selected])
+  // One table object per report shown: a new one is a new grid (LocalGrid), so the last object stays while its text is the same
+  // (another run starting while an older one is chosen leaves the report as it was, and its selection and scroll with it).
+  const shown = useRef<{ table: LocalTableData; text: string }>(undefined)
+  const table = useMemo(() => {
+    const built = selected && selected.status !== 'running' ? statisticsTable(runs, selected) : undefined
+    if (!built) return undefined
+    const text = JSON.stringify(built)
+    if (shown.current?.text !== text) shown.current = { table: built, text }
+    return shown.current.table
+  }, [runs, selected])
   return <div className="client-statistics">
     <div className="client-statistics-tools">
       <label>Execution <select aria-label="Statistics execution" value={selected?.queryId ?? ''} disabled={!runs.length} onChange={event => choose(event.target.value)}>

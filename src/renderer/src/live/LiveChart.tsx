@@ -14,7 +14,7 @@ import { gridLimits } from '../grid/constants'
 import { LocalGrid } from '../grid/LocalGrid'
 import { scrollbarSize } from '../grid/scrollbar'
 import type { GridViewState } from '../results/ResultsService'
-import { bindChart, ChartView, chartLimits, forcedColorsDashes, probeCurrent, type ChartLabels, type ChartLink, type ChartScale, type ChartSeries, type ChartSource, type ChartWindow, chartTable } from './ChartView'
+import { bindChart, ChartView, chartLimits, forcedColorsDashes, probeCurrent, type ChartLabels, type ChartLink, type ChartScale, type ChartSeries, type ChartSource, type ChartWindow, chartColumnsWiden, chartTable } from './ChartView'
 
 export interface LiveChartProps {
   readonly handle: ChartSource
@@ -105,8 +105,21 @@ export function LiveChart(props: LiveChartProps) {
     const ticks = handle.onTick(refresh), stale = view.subscribe(refresh)
     return () => { ticks.dispose(); stale.dispose() }
   }, [tableShown, view, handle, limit, seriesKey, windowKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Scroll, widths, sort and selection last while the table shows with the same series, tick after tick.
+  // Scroll, widths and the selection (where it is on screen) last while the table shows with the same series: each tick swaps
+  // its table into the same view. Not sortable: its rows run newest first, and its values carry units, which sort as text.
   const gridState = useMemo<GridViewState>(() => ({ topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }), [tableShown, seriesKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The grid sizes its columns from its first table; a value longer than any before (0/s becoming 12,345/s) has the columns the
+  // user has not sized measured again. This runs after the grid's own effect has swapped the table in, before its next frame.
+  // While a measure is pending (sized is false: not yet drawn, hidden, or asked for here), the grid will size from the latest
+  // table, so the lengths follow it until the grid has sized.
+  const widest = useRef<{ state?: GridViewState; lengths: number[] }>({ lengths: [] })
+  useEffect(() => {
+    if (widest.current.state !== gridState) widest.current = { state: gridState, lengths: [] }
+    if (!table.data.rows.length) return
+    const next = chartColumnsWiden(gridState.sized ? widest.current.lengths : [], table.data)
+    widest.current.lengths = next.widest
+    if (next.grew) gridState.sized = false
+  }, [table, gridState])
   // As many rows as the plot's place holds under the header (and a scroll bar, should the columns be wider).
   const [room, setRoom] = useState<HTMLDivElement | null>(null)
   const [roomHeight, setRoomHeight] = useState<number>()
@@ -137,7 +150,7 @@ export function LiveChart(props: LiveChartProps) {
     {tableOn && <div className="live-chart-table-wrap">
       <p className="live-chart-table-caption">{table.total === 0 ? `${title}: no samples yet` : `${title}: ${table.shown < table.total ? `${table.shown} of ${table.total}` : table.total} samples, newest first`}</p>
       <div ref={setRoom} className="live-chart-table-room">
-        {(roomHeight !== undefined || typeof ResizeObserver !== 'function') && <LocalGrid table={table.data} label={`${title} table`} preset="card" maxRows={maxRows} state={gridState} empty="No samples yet." />}
+        {(roomHeight !== undefined || typeof ResizeObserver !== 'function') && <LocalGrid table={table.data} label={`${title} table`} preset="card" sortable={false} maxRows={maxRows} state={gridState} empty="No samples yet." />}
       </div>
     </div>}
     {chart && tableToggle && <button type="button" className="live-chart-toggle" aria-pressed={tableShown} onClick={toggleTable}>View as table</button>}

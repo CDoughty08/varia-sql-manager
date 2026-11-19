@@ -76,10 +76,12 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const keys = sortable && sorted.columns === columnsKey ? sorted.keys : unsorted
   const setKeys = useCallback((next: (current: readonly LocalSortKey[]) => readonly LocalSortKey[]) => setSorted(current => ({ columns: columnsKey, keys: next(current.columns === columnsKey ? current.keys : unsorted) })), [columnsKey])
   useEffect(() => { if (state) keptSorts.set(state, sorted) }, [state, sorted])
-  // A copy's or save's notice belongs to the table it was for: a new table shows its own strip (its truncation) again.
-  const [noticed, setNoticed] = useState<{ readonly bound: typeof bound; readonly text: string; readonly error?: boolean }>()
-  const notice = noticed?.bound === bound ? noticed : undefined
-  const setNotice = useCallback((next?: { readonly text: string; readonly error?: boolean }) => setNoticed(next && { ...next, bound }), [bound])
+  // A copy's or save's notice belongs to the grid it was for: a new table shows its own strip (its truncation) again, except
+  // under an owner-kept state, where a table with the same columns is the same grid's next sample.
+  const noticeOwner: unknown = state ? columnsKey : bound
+  const [noticed, setNoticed] = useState<{ readonly owner: unknown; readonly text: string; readonly error?: boolean }>()
+  const notice = noticed?.owner === noticeOwner ? noticed : undefined
+  const setNotice = useCallback((next?: { readonly text: string; readonly error?: boolean }) => setNoticed(next && { ...next, owner: noticeOwner }), [noticeOwner])
   const [wide, setWide] = useState(false)
   const apiRef = useRef<GridShellApi | undefined>(undefined)
   const sourceRef = useRef<LocalSource | undefined>(undefined)
@@ -105,16 +107,18 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
     // GridShell leaves the view to its owner: disposed here, or its listeners and subscriptions outlive it.
     return () => { view.dispose(); sourceRef.current = undefined }
   }
-  // A new sort swaps a source in the new order into the view, so the selection follows its rows.
+  // A new sort swaps a source in the new order into the view, so the selection follows its rows. Under an owner-kept state a
+  // new table with the same columns (a live chart's next sample) swaps in too, its selection where it was on screen: the view
+  // and a drag, column resize or double-click under way survive it.
   useEffect(() => {
     const view = apiRef.current?.view(), old = sourceRef.current
-    if (!view || !old || sourceKeys.current === keys) return
-    const order = sortOrder(bound, keys)
+    if (!view || !old || (sourceKeys.current === keys && old.table === bound)) return
+    const order = sortOrder(bound, keys), sameTable = old.table === bound
     sourceKeys.current = keys
     const next = new LocalSource(bound, order, bound.cutCells, bound.cut), place = new Int32Array(rows)
     for (let row = 0; row < rows; row++) place[next.rowOf(row)] = row
     sourceRef.current = next
-    view.swap(next, localDescriptor(bound, bound.cutCells), row => row >= 0 && row < rows ? place[old.rowOf(row)] : -1)
+    view.swap(next, localDescriptor(bound, bound.cutCells), row => row < 0 || row >= rows ? -1 : sameTable ? place[old.rowOf(row)] : row)
   }, [bound, keys, rows])
   const sortBy = useCallback((column: number | undefined, descending = false, add = false) =>
     setKeys(current => column === undefined ? unsorted : sortKeysBy(current, column, descending ? 'descending' : 'ascending', add, maxSortKeys, desc => ({ column, descending: desc }))), [setKeys])
@@ -184,7 +188,7 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
   // than it and for its strip.
   const height = preset === 'card' ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
-  return <GridShell mountKey={`local|${instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
+  return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}

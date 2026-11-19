@@ -196,6 +196,9 @@ try {
   // Ctrl+A before the ticks: the selection lasts through the tables each tick swaps in.
   await gridCell(table, 0, 0).click()
   await page.keyboard.press('Control+A')
+  // A tick swaps its table into the same view rather than building another, so a drag or column resize under way goes on:
+  // the view's drawn cells stay in the page.
+  const keptCell = await gridCell(table, 0, 1).elementHandle()
   // The grid takes the plot's place in the fixed box, as many rows tall as fit, and stays filled tick after tick.
   const boxBounds = await box.boundingBox()
   const values = new Set()
@@ -217,9 +220,11 @@ try {
   }
   // The newest value follows the ticks (the synthetic wave moves on each sample).
   if (values.size < 2) await expect.poll(() => table.locator(gridCellSelector(0, 1)).textContent(), { timeout: 10_000 }).not.toBe([...values][0])
+  expect(await keptCell.evaluate(element => element.isConnected), 'the same view after the ticks').toBe(true)
   // The caption takes one line across the plot's width.
   expect(await caption.evaluate(element => element.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(element).lineHeight))).toBeLessThan(1.5)
   // Ctrl+Shift+C copies the kept selection of the latest table, with headers, as a results grid copies.
+  await app.evaluate(({ clipboard }) => clipboard.writeText(''))
   await page.keyboard.press('Control+Shift+C')
   const eol = process.platform === 'win32' ? '\r\n' : '\n'
   await expect.poll(async () => (await clipboard()).split(eol).slice(0, 2).join('|')).toMatch(/^Time\tWave\|now\t\d/)

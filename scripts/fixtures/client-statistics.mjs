@@ -41,6 +41,7 @@ export async function checkClientStatistics(page, expect, run, live, app) {
   // Query Output's menu without sorting (the report keeps its order), and Save Results As for this page.
   await gridCell(table, 1, 1).click({ button: 'right' })
   const menu = page.getByRole('menu', { name: 'Query output', exact: true })
+  await expect(menu).toBeVisible()
   const items = await menuItemNames(menu)
   for (const item of ['Copy', 'Copy with Headers', 'Select All', 'Save Results As…']) expect(items).toContain(item)
   for (const item of ['Sort Ascending', 'Sort Descending', 'Clear Sort']) expect(items).not.toContain(item)
@@ -53,6 +54,17 @@ export async function checkClientStatistics(page, expect, run, live, app) {
   copied = await report(2)
   expect(copied.header.slice(1, 5)).toEqual(['Run 2', 'Previous (run 1)', 'Change', `Average (${live ? 2 : 0} runs)`])
   if (live) expect(copied.row('Server round trips')[2]).toBe('0')
+  if (!live) {
+    // An older run's report stays the same grid while another run comes and goes: its selection and drawn cells stay.
+    await page.getByLabel('Statistics execution').selectOption({ index: 0 })
+    await expect(header('Run 1')).toBeVisible()
+    await gridCell(table, 2, 1).click()
+    const kept = await gridCell(table, 2, 1).elementHandle()
+    await run(sql); await show()
+    await expect(page.getByLabel('Statistics execution').getByRole('option')).toHaveCount(3)
+    await expect(header('Run 1')).toBeVisible()
+    expect(await kept.evaluate(element => element.isConnected), 'the same grid after another run').toBe(true)
+  }
   await page.screenshot({ path: `artifacts/client-statistics-${live ? 'live' : 'fallback'}.png` })
   if (live) {
     await run("SELECT 1; RAISERROR('statistics test',16,1);")

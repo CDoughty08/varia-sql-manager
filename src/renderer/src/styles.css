@@ -2163,6 +2163,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-table-wrap { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .live-chart-table-caption { flex: none; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
 .live-chart-table-room { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+/* Never taller than the room: a strip (a failed copy) takes a row from the grid rather than going out of sight. */
+.live-chart-table-room > .local-grid { max-height: 100%; }
 @media (forced-colors: active) {
   .live-chart-swatch line { stroke: CanvasText; }
   /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */
