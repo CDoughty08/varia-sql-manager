@@ -442,7 +442,16 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
   `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
-  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators`
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. `LiveSql.Lint` also allows,
+  after the prologue, only the statement kinds SELECT, WITH, DECLARE and IF/ELSE/BEGIN … END, and no number holding a
+  letter but a hex literal (T-SQL reads `1DELETE` as 1 and DELETE, where a regex word boundary sees one word). It
+  refuses a code or name character outside printable ASCII (SQL Server reads U+200B as whitespace, which .NET's `\s`
+  does not), a four-part (linked-server) name, a locking or isolation table hint, MAXRECURSION, QUERYTRACEON and
+  MIN_GRANT_PERCENT, functions that read the server's files, log or every page (`fn_xe_file_target_read_file`,
+  `fn_dump_dblog`, `dm_db_index_physical_stats` and kin; a file path can be a UNC share on another host), and system
+  functions that do a refused thing inside (`dm_exec_describe_first_result_set` compiles SQL from a literal,
+  `fn_my_permissions` resolves names, `CERTPRIVATEKEY` reads a secret). Its name checks read bracketed and quoted names
+  unwrapped (`l.[password_hash]` is still `password_hash`). Live Plan's `query.plan.operators`
   probe (source `query.plan`, run by `Plans/LivePlanSampler.cs` on the server pool) takes its SQL from
   `Plans/LivePlanSql.cs`: one text per permission scope (Azure SQL Database, SQL Server 2022 and later, older versions and
   Managed Instance), each with `LiveSql.UncommittedPrologue` and its permission check in the same batch, held to `LiveSql`'s
