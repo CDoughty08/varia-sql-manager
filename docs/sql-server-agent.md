@@ -1,8 +1,9 @@
 # SQL Server Agent
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Nothing of it is visible yet: the foundations below are in the code, and
-the Agent node, Job Activity Monitor and the job documents arrive in later lanes, behind the release gate until 0.11.0.
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node and Search Objects
+finds jobs, alerts and operators; Job Activity Monitor and the job documents arrive in later lanes, behind the same gate until
+0.11.0.
 
 ## How it works
 
@@ -19,7 +20,7 @@ the Agent node, Job Activity Monitor and the job documents arrive in later lanes
 - **Times** are the server's local time, as msdb stores them; nothing converts them to this computer's time zone.
 - **Release gate.** Agent's surfaces show only when Varia was started with `VARIA_AGENT_PREVIEW=1`: main reads the
   variable once and passes the window an argument, which becomes the static context key `agentEnabled`. Without it Object
-  Explorer keeps its planned SQL Server Agent folder and no Agent command, menu item or document is offered.
+  Explorer shows no SQL Server Agent node and no Agent command, menu item or document is offered.
 - **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool on its own slot per connection,
   reads the login's sysadmin membership and Agent roles (`IS_ROLEMEMBER`, so nested membership counts), EXECUTE on
   `sp_purge_jobhistory` and `sysmail_help_profile_sp`, the server-state permissions `sys.dm_server_services` and Agent's

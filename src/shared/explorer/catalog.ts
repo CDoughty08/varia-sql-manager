@@ -146,7 +146,7 @@ export const bandOf = (major: number): number => major < 13 ? minBand : Math.min
 export const engineOf = (edition: number): Engine => (cloudEngineEditions as readonly number[]).includes(edition) ? 'cloud' : 'box'
 /**
  * What a server can browse. `edition` (EngineEdition) and `linux` choose the SQL Server Agent platform a folder's or kind's
- * `platforms` gate reads (src/shared/agent/catalog.ts agentPlatform); C# mirrors them (ExplorerProfile.Edition, Linux).
+ * `platforms` gate reads (src/shared/agent/catalog.ts agentPlatform); C# keeps the platform they choose (ExplorerProfile.Linux, Agent).
  */
 export interface ExplorerProfile { readonly band: number; readonly engine: Engine; readonly edition: number; readonly linux: boolean }
 /**

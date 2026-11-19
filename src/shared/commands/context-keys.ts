@@ -43,7 +43,7 @@ export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
   isWindows: { type: 'boolean', scope: 'static', description: 'The app runs on Windows.' },
   isLinux: { type: 'boolean', scope: 'static', description: 'The app runs on Linux or another platform treated like it.' },
-  agentEnabled: { type: 'boolean', scope: 'static', description: "SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out." },
+  agentEnabled: { type: 'boolean', scope: 'static', description: "SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer shows no SQL Server Agent node and every Agent command, menu item and document is left out." },
   editorFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the query editor, including its find widget.' },
   editorTextFocus: { type: 'boolean', scope: 'focus', description: "The query editor's text has focus." },
   inputFocus: { type: 'boolean', scope: 'focus', description: 'Focus is on an input, text area, select, or editable element other than the editor text. The find widget\'s inputs count.' },

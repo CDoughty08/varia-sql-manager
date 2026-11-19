@@ -92,8 +92,16 @@ internal static class AgentListings
         return ExplorerQueries.Node(context, new ObjectRefDto("agentErrorLog", Name: archive.ToString(CultureInfo.InvariantCulture)), label, hasChildren: false);
     }
 
-    /// <summary>An Agent read's failure as the node's error value.</summary>
-    public static ExplorerError From(AgentReadError error) => new(error.Code, ExplorerLabels.Clip(error.Message, ExplorerErrors.MaxMessage), error.Code is not ("NOT_SUPPORTED" or "NOT_FOUND"));
+    /// <summary>An Agent read's failure as the node's error value; a code Object Explorer does not declare (an unexpected result
+    /// shape's BACKEND_ERROR) is a SQL_ERROR with its message.</summary>
+    public static ExplorerError From(AgentReadError error) => new(Declared.Contains(error.Code) ? error.Code : "SQL_ERROR",
+        ExplorerLabels.Clip(error.Message, ExplorerErrors.MaxMessage), error.Code is not ("NOT_SUPPORTED" or "NOT_FOUND"));
+
+    /// <summary>The codes an Agent read reports that Object Explorer's contract declares (src/shared/contracts.ts explorerErrorCodes).</summary>
+    private static readonly HashSet<string> Declared = new(StringComparer.Ordinal)
+    {
+        "PERMISSION_DENIED", "NO_DB_ACCESS", "DATABASE_UNAVAILABLE", "NOT_FOUND", "BLOCKED", "TIMEOUT", "CONNECTION_LOST", "SQL_ERROR", "NOT_SUPPORTED", "AGENT_DISABLED"
+    };
 }
 
 internal sealed partial class ExplorerService

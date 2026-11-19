@@ -1065,7 +1065,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `isMac` | boolean | static | The app runs on macOS. |
 | `isWindows` | boolean | static | The app runs on Windows. |
 | `isLinux` | boolean | static | The app runs on Linux or another platform treated like it. |
-| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out. |
+| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer shows no SQL Server Agent node and every Agent command, menu item and document is left out. |
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |

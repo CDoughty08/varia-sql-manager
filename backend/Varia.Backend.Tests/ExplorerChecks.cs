@@ -819,6 +819,22 @@ internal static class ExplorerChecks
             check(logs is { Nodes.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } } && logsWatch.ElapsedMilliseconds < 4000,
                 "Error Logs with " + where + " past the explorer budget answers a retryable TIMEOUT value: " + logs.Error?.Code + " in " + logsWatch.ElapsedMilliseconds + " ms");
         }
+        // An unexpected xp_enumerrorlogs shape (the reader's BACKEND_ERROR) is a SQL_ERROR value: Object Explorer declares no BACKEND_ERROR.
+        var shapeless = new Varia.Backend.Agent.AgentReader { TestRun = (_, _, _) => throw new Varia.Backend.Agent.AgentShapeException("BACKEND_ERROR", "xp_enumerrorlogs returned no column named Archive #.") };
+        using (var shapeLogs = new ExplorerService(new FakeHost { Opening = (_, _) => Task.CompletedTask }, new ExplorerOptions { AgentReader = shapeless }))
+        {
+            var logs = await shapeLogs.ChildrenAsync(Args(Folder(new ObjectRefDto("agent"), "agentErrorLogs")), CancellationToken.None);
+            check(logs is { Nodes.Count: 0, Error: { Code: "SQL_ERROR", Message: "xp_enumerrorlogs returned no column named Archive #." } },
+                "Error Logs answers an unexpected xp_enumerrorlogs shape as a SQL_ERROR value with the reader's message: " + logs.Error?.Code + " " + logs.Error?.Message);
+        }
+        // explorer.agentService's permission guards follow SQL Server 2022's split, as agent.profile reads it.
+        var below = Varia.Backend.Live.LiveSql.AgentServiceAt(15);
+        var split = Varia.Backend.Live.LiveSql.AgentServiceAt(17);
+        check(below.Contains("N'VIEW SERVER STATE'", StringComparison.Ordinal) && !below.Contains("PERFORMANCE STATE", StringComparison.Ordinal)
+            && !split.Contains("N'VIEW SERVER STATE'", StringComparison.Ordinal)
+            && split.Contains("IF ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER SECURITY STATE'), 0) = 1 OR ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER PERFORMANCE STATE'), 0) = 1\n", StringComparison.Ordinal)
+            && split.Contains("IF @state IS NULL AND ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER PERFORMANCE STATE'), 0) = 1\n", StringComparison.Ordinal),
+            "explorer.agentService reads the Agent service DMV under VIEW SERVER STATE below SQL Server 2022 and under VIEW SERVER SECURITY or PERFORMANCE STATE from it, and counts Agent's sessions only where the login sees them");
         var listless = new FakeHost { Opening = (_, _) => Task.CompletedTask };
         var unlisted = new Varia.Backend.Agent.AgentReader { TestRun = (_, _, _) => throw new Varia.Backend.Agent.AgentShapeException("NOT_SUPPORTED", "no list") };
         using (var linuxLogs = new ExplorerService(listless, new ExplorerOptions { AgentReader = unlisted }))
