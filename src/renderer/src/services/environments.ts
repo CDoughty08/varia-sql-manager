@@ -1,5 +1,5 @@
 import { connectionKey, type ConnectionEnvironmentInput, type ConnectionLibraryView, type ConnectionProfile } from '../../../shared/connections'
-import type { ApiResult, ConnectionOptions } from '../../../shared/contracts'
+import type { ApiResult, ConnectionOptions, ProviderConnectionOptions } from '../../../shared/contracts'
 import { environmentPreset, environmentSchema } from '../../../shared/environments'
 import type { ConnectionService } from './connections'
 
@@ -20,7 +20,7 @@ export function parseEnvironment(value: string | undefined): EnvironmentOutcome 
 }
 
 /** The key of the entry a form or connection names; undefined while the options are incomplete or invalid. */
-export function entryKey(options: ConnectionOptions): string | undefined { try { return connectionKey(options) } catch { return undefined } }
+export function entryKey(options: ProviderConnectionOptions): string | undefined { try { return connectionKey(options) } catch { return undefined } }
 
 /**
  * The saved entry the Connect dialog's options name (the same server in any case, database, login and settings), whose
@@ -53,6 +53,8 @@ export async function applyEnvironment(deps: EnvironmentDeps, connectionId: stri
   const parsed = parseEnvironment(value)
   if (!parsed.ok) return parsed
   if (connection.lifecycle) { deps.connections.relabel(connectionId, parsed.environment); return parsed }
+  // Only SQL Server's legacy connections (opened before main's receipts) lack a lifecycle.
+  if (connection.options.provider === 'bigquery') return { ok: false, error: 'This server is no longer connected.' }
   const { environment: _previous, ...options } = connection.options
   try {
     const result = await deps.setEnvironment({ options, ...parsed.environment ? { environment: parsed.environment } : {} })

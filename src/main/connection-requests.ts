@@ -1,12 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { canRememberPassword, connectionKey, connectContextSchema, credentialBinding, type ConnectContext, type ConnectionLibrary } from '../shared/connections'
-import { connectionAuthenticationSchema, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
-import type { ConnectionInfo, ConnectionOptions } from '../shared/contracts'
+import { connectionAuthenticationSchema, samePrincipal, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
+import type { BigQueryConnectionOptions, ConnectionInfo, ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
 import { BackendError } from './backend/errors'
-import type { ConnectionStore } from './connection-store'
+import type { ConnectionHistory } from './connection-history'
 import type { SavedPasswordStore } from './saved-passwords'
 import type { ConnectionAuthenticationGuard } from './connection-authentication'
-import { verifiedConnectionAuthentication } from './connection-principal'
+import { verifiedBigQueryAuthentication, verifiedConnectionAuthentication } from './connection-principal'
 
 /** The requests that may use a remembered password: they open a connection with the dialog's options. */
 const connectMethods = new Set(['connections.connect', 'connections.databases'])
@@ -14,7 +14,7 @@ const maxPassword = 1024
 export interface ConnectionRequestDeps {
   authentication: ConnectionAuthenticationGuard
   savedPasswords: Pick<SavedPasswordStore, 'get' | 'set' | 'forget' | 'forgetCredentials' | 'reconcile' | 'reference' | 'getReferenced' | 'forgetRejected' | 'storageAvailable'>
-  connections: Pick<ConnectionStore, 'rememberEntry' | 'setAutoReconnect' | 'load'>
+  connections: ConnectionHistory
   disconnect?: (connectionId: string) => Promise<unknown>
 }
 /**
@@ -166,11 +166,12 @@ export async function prepare(method: string, validated: unknown, value: unknown
   requireNotCancelled(signal)
   let context = connectContext(method, value)
   if (connectMethods.has(method)) {
-    try { context = deps.authentication.prepare(validated as ConnectionOptions, context) }
+    try { context = deps.authentication.prepare(validated as ProviderConnectionOptions, context) }
     catch (error) { throw new ConnectionPreparationError('identity-changed', error instanceof Error ? error.message : 'The connection identity changed.') }
   }
   const prepared: PreparedRequest = { method, validated, params: validated, ...(context ? { context } : {}), injected: false }
   if (!connectMethods.has(method)) return prepared
+  if ((validated as ProviderConnectionOptions).provider === 'bigquery') return prepareBigQuery(prepared, validated as BigQueryConnectionOptions, deps, signal)
   const options = validated as ConnectionOptions, background = context?.mode === 'background'
   if (context?.expectedPrincipal && (context.expectedPrincipal.provider !== 'sqlserver' || context.expectedPrincipal.authentication !== options.authentication)) throw new ConnectionPreparationError('identity-changed', 'The expected account uses another authentication mode.')
   if (background && (!context?.expectedPrincipal || options.password)) throw new ConnectionPreparationError('credentials-required', 'Reconnect requires the previous account and matching saved credentials.')
@@ -228,6 +229,67 @@ export async function prepare(method: string, validated: unknown, value: unknown
 }
 
 /**
+ * BigQuery's preparation: no password to fill in (main adds the credential material when it sends), but the same target
+ * and binding leases as SQL Server's, so a connect and its pin are one owned operation. A background reconnect needs the
+ * pinned account, and BigQuery has no remembered credential to name.
+ */
+async function prepareBigQuery(prepared: PreparedRequest, options: BigQueryConnectionOptions, deps: Pick<ConnectionRequestDeps, 'savedPasswords' | 'authentication'>, signal?: AbortSignal): Promise<PreparedRequest> {
+  let context = prepared.context
+  const background = context?.mode === 'background'
+  if (context?.expectedPrincipal && (context.expectedPrincipal.provider !== 'bigquery' || context.expectedPrincipal.project !== options.project)) throw new ConnectionPreparationError('identity-changed', 'The expected account belongs to another project or engine.')
+  if (background && !context?.expectedPrincipal) throw new ConnectionPreparationError('credentials-required', 'Reconnect requires the previous account.')
+  if (context?.credential || context?.credentialPolicy === 'remember' || context?.remember) throw new ConnectionPreparationError('credentials-required', 'BigQuery connections keep no remembered password.')
+  if (background) prepared.params = { ...options, nonInteractive: true }
+  const count = attempts.get(deps.savedPasswords) ?? 0
+  if (count >= 8) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending connection attempts.')
+  attempts.set(deps.savedPasswords, count + 1)
+  const leases: (() => void)[] = []
+  let released = false
+  prepared.release = () => {
+    if (released) return
+    released = true
+    for (const release of leases.splice(0).reverse()) release()
+    attempts.set(deps.savedPasswords, (attempts.get(deps.savedPasswords) ?? 1) - 1)
+  }
+  try {
+    leases.push(await acquire(deps.savedPasswords, `target:${context!.targetId}`, signal))
+    leases.push(await acquire(deps.savedPasswords, `binding:${credentialBinding(options, { keyPath: options.keyFile })}`, signal))
+    requireNotCancelled(signal)
+    context = deps.authentication.prepare(options, context)
+    prepared.context = context
+    return prepared
+  } catch (error) { prepared.release(); throw error }
+}
+
+/**
+ * BigQuery's settlement: the account Google verified becomes the target's pin (or must equal it), and a foreground
+ * connect enters BigQuery's history. No password is remembered or forgotten: BigQuery keeps none.
+ */
+async function settleBigQuery(prepared: PreparedRequest, outcome: Settled, deps: ConnectionRequestDeps): Promise<Settled> {
+  if (!outcome.ok || prepared.method !== 'connections.connect') return outcome
+  const info = outcome.value as ConnectionInfo, validated = prepared.validated as BigQueryConnectionOptions
+  const refuse = async (error: unknown): Promise<Settled> => { await deps.disconnect?.(info.id).catch(() => {}); return { ok: false, error } }
+  let context = prepared.context
+  try { context = deps.authentication.prepare(validated, context) }
+  catch (error) { return refuse(error) }
+  const verified = verifiedBigQueryAuthentication(info, validated)
+  if (!verified) return refuse(new BackendError('AUTH_IDENTITY', 'The authenticated Google account could not be verified. Connect again.'))
+  if (context?.expectedPrincipal && !samePrincipal(verified.principal, context.expectedPrincipal)) return refuse(new BackendError('AUTH_IDENTITY', 'The connected Google account differs from the remembered account. Choose a connection explicitly.'))
+  info.authentication = verified
+  if (context?.targetId) {
+    try { deps.authentication.remember(context.targetId, validated, verified, context.credentialIntent) }
+    catch (error) { return refuse(error) }
+    info.targetId = context.targetId
+  }
+  if (context?.mode === 'background') return outcome
+  try {
+    const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment, context?.autoReconnect, context?.selectedProfileId)
+    if (entry.environment && !validated.environment) info.environment = entry.environment
+  } catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.' }
+  return outcome
+}
+
+/**
  * After the backend answered. A connection enters history, and its password is remembered under that entry when the
  * dialog asked for it (or forgotten when it did not). Unless the dialog says the user set its Environment, a connect
  * without one keeps the entry's label, and the answer carries it so the connection shows it. A remembered password SQL
@@ -243,6 +305,7 @@ export async function settle(prepared: PreparedRequest, outcome: Settled, deps: 
 }
 async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: ConnectionRequestDeps): Promise<Settled> {
   if (!connectMethods.has(prepared.method)) return outcome
+  if ((prepared.validated as ProviderConnectionOptions).provider === 'bigquery') return settleBigQuery(prepared, outcome, deps)
   const params = prepared.params as ConnectionOptions
   let context = prepared.context
   if (!outcome.ok) {
@@ -350,7 +413,9 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
       } catch { info.historyWarning ??= 'Connected successfully, but the reconnect preference could not be saved.' }
     }
     const policy = context?.mode === 'background' ? 'preserve' : context?.credentialPolicy ?? (context?.remember === undefined ? 'preserve' : context.remember ? 'remember' : 'forget')
-    if (policy === 'preserve' || !canRememberPassword(params.authentication)) return { ok: true, value: info }
+    // BigQuery keeps no password: a reused BigQuery connection only records its reconnect preference.
+    if (policy === 'preserve' || (params as ProviderConnectionOptions).provider === 'bigquery' || !canRememberPassword(params.authentication)) return { ok: true, value: info }
+
     if (!await deps.savedPasswords.storageAvailable()) {
       info.historyWarning = policy === 'forget' ? 'Connected successfully, but saved credentials could not be removed while secret storage is unavailable.' : 'Connected successfully, but the password could not be saved.'
       return { ok: true, value: info }

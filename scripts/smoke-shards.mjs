@@ -25,7 +25,7 @@ export const suiteSeconds = {
     'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 47,
     'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 14, 'scripts/popout-smoke.mjs': 7,
-    'scripts/connections-smoke.mjs': 54, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
+    'scripts/connections-smoke.mjs': 56, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
     'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
     'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 76,
     'scripts/explorer-smoke.mjs': 60, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,

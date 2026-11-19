@@ -1,8 +1,9 @@
-import type { ConnectionOptions } from '../../../shared/contracts'
+import type { ProviderConnectionOptions } from '../../../shared/contracts'
 import { changedConnectionDetails, type ConnectionDetailField, type ConnectionDetails } from '../../../shared/connection-targets'
 import { detailsOf, type ConnectionAssociationHandoff, type ConnectionAttempt, type ConnectionService, type LiveConnection, type TargetConnectionInfo } from './connections'
 import type { ConnectionCompletion } from './connection-targets'
 import { isQueryDocument } from '../documents'
+import { isBigQueryConnection } from './connection-availability'
 import type { DocumentService } from './documents'
 import type { TargetService } from './targets'
 import type { QueryService } from './queries'
@@ -38,7 +39,7 @@ export async function whenConnectionDocumentsIdle(documents: Pick<DocumentServic
 }
 
 /** A successful main receipt is the sole equivalence evidence. Never compare profile keys or submitted settings here. */
-export function adoptConnection(connections: ConnectionService, info: TargetConnectionInfo, options: ConnectionOptions, selected = detailsOf(options), attempt?: ConnectionAttempt, rejected?: (completion: ConnectionCompletion) => void): OpenedConnection | undefined {
+export function adoptConnection(connections: ConnectionService, info: TargetConnectionInfo, options: ProviderConnectionOptions, selected = detailsOf(options), attempt?: ConnectionAttempt, rejected?: (completion: ConnectionCompletion) => void): OpenedConnection | undefined {
   if (!info.targetId || !info.authentication) return undefined
   const authoritativeTarget = info.targetId
   const previous = connections.get(authoritativeTarget)
@@ -100,5 +101,7 @@ export async function executePendingQuery({ tabId, opened, connections, document
   if (attached?.connectionId === opened.id && attached.targetId === opened.targetId && attached.attachWanted
     && connection?.id === opened.id && connection.generation === opened.generation && connections.isLive(opened.id)
     && connections.bindingRevision(connection) === opened.bindingRevision
+    // The tab follows a BigQuery connection, but BigQuery's queries do not run yet (BQ-3): it is left to edit.
+    && !isBigQueryConnection(connection)
     && !documents.getSnapshot().busy && !queries.isRunning(tabId)) void queries.execute(tabId)
 }

@@ -46,7 +46,8 @@ internal sealed record QueryArgs(string ConnectionId, string SessionId, string D
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
 internal sealed record CancelArgs(string QueryId);
-internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
+/// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
+internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
 /// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.

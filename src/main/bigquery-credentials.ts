@@ -17,16 +17,18 @@ const maxKeyFiles = 256
 export class BigQueryKeyFiles {
   private readonly paths = new Map<string, string>()
 
-  /** A new reference for an absolute path; the oldest is forgotten past 256. */
+  /** The reference for an absolute path: the one it already has, so picking the same file again names the same saved
+   *  connection, else a new one; the oldest is forgotten past 256. */
   register(path: string): string {
     if (!isAbsolute(path)) throw new Error('A key file path must be absolute.')
+    for (const [token, known] of this.paths) if (known === path) { this.paths.delete(token); this.paths.set(token, path); return token }
     const token = randomUUID()
     this.paths.set(token, path)
     if (this.paths.size > maxKeyFiles) this.paths.delete(this.paths.keys().next().value!)
     return token
   }
 
-  /** Keeps `path` under a saved profile's id (its reference from then on). */
+  /** Keeps `path` under a saved entry's reference (the pick token it was saved with), after a restart. */
   remember(reference: string, path: string): void {
     if (!isAbsolute(path)) throw new Error('A key file path must be absolute.')
     this.paths.delete(reference)
@@ -84,6 +86,31 @@ export interface BigQueryCredentialEnvironment {
   readonly home: string
   /** Emulator mode (VARIA_TEST_BIGQUERY_ENDPOINT in an unpackaged build): anonymous credentials, no Google token. */
   readonly emulator: boolean
+  /** Whether the user confirmed a federation configuration's file source in the Connect dialog (decision 49). Without
+   *  it every file source is refused. */
+  readonly sourceConfirmed?: (keyPath: string, source: string) => Promise<boolean>
+  /** Reads the saved connections, which maps saved key file references back to their paths (a reconnect at startup
+   *  may come before anything else has read them). */
+  readonly restoreKeyFiles?: () => Promise<unknown>
+}
+
+/**
+ * A federation configuration's `credential_source.file` as written, or undefined when the file is not a configuration with
+ * a file source. Main never resolves or opens it: a link, mount or network path in untrusted content would reach another
+ * host before anyone confirmed it; the backend judges the canonical path under its own rules when it reads. Decision 49 shows this path in the dialog
+ * and asks before the file's content first goes to Google's STS. A file source main cannot show as one full path (not
+ * a string, relative, too long or with a control character) is refused rather than passed on unconfirmed.
+ */
+export async function federationSource(json: string): Promise<string | undefined> {
+  let credentialSource: unknown
+  try { credentialSource = (JSON.parse(json) as { credential_source?: unknown } | null)?.credential_source }
+  catch { return undefined }
+  if (typeof credentialSource !== 'object' || credentialSource === null || !('file' in credentialSource)) return undefined
+  const source = (credentialSource as { file: unknown }).file
+  // A UNC share or device path (two leading slashes) is refused here too: the dialog shows only a full local path.
+  if (typeof source !== 'string' || !source || source.length > 4096 || !isAbsolute(source) || /[\u0000-\u001f\u007f]/.test(source) || /^[\\/]{2}/.test(source))
+    throw new BackendError('AUTH_KEY_FILE', "The federation configuration's token file is not a full local path.")
+  return source
 }
 
 /**
@@ -116,9 +143,19 @@ export class BigQueryCredentials {
     if (this.environment.emulator) return { source: 'anonymous' }
     if (usesKeyFile(params.authentication)) {
       const what = params.authentication === 'serviceAccountKey' ? 'The key file' : 'The federation configuration file'
-      const path = params.keyFile === undefined ? undefined : this.keyFiles.path(params.keyFile)
+      let path = params.keyFile === undefined ? undefined : this.keyFiles.path(params.keyFile)
+      if (path === undefined && params.keyFile !== undefined && this.environment.restoreKeyFiles) {
+        await this.environment.restoreKeyFiles()
+        path = this.keyFiles.path(params.keyFile)
+      }
       if (path === undefined) throw new BackendError('AUTH_KEY_FILE', `${what} is no longer available. Choose it again.`)
-      return { source: 'file', json: await readCredentialFile(path, { json: true, what }) }
+      const json = await readCredentialFile(path, { json: true, what })
+      if (params.authentication === 'externalAccount') {
+        const source = await federationSource(json)
+        if (source !== undefined && !await this.environment.sourceConfirmed?.(path, source))
+          throw new BackendError('AUTH_KEY_FILE', 'This configuration reads a token file that has not been confirmed. Choose the configuration file again in Connect to review it.')
+      }
+      return { source: 'file', json }
     }
     const adc = adcFile(this.environment)
     // No gcloud file: ADC's last step is the metadata server, which the backend asks. A file the variable names but

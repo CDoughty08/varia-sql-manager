@@ -114,7 +114,7 @@ internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false)
 /// connect (credential, identity pin, the probe), disconnect, and the pre-connect methods. SqlService routes a handle here
 /// by its provider after the provider check.
 /// </summary>
-internal sealed class BigQueryService(BigQueryEnvironment environment) : IDisposable
+internal sealed partial class BigQueryService(BigQueryEnvironment environment) : IDisposable
 {
     public const string ApplicationName = "VariaSqlManager";
     /// <summary>The connect probe (docs/bigquery-plan.md, SQL the backend runs): a free dry run that proves bigquery.jobs.create.</summary>

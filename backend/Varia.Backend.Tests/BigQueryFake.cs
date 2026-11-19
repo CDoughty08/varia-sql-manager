@@ -65,6 +65,7 @@ internal sealed class BigQueryFake
     public const string TokenInfo = @"https://oauth2\.googleapis\.com/tokeninfo";
     public const string Jobs = @"https://bigquery\.googleapis\.com/bigquery/v2/projects/[^/]+/jobs";
     public const string Datasets = @"https://bigquery\.googleapis\.com/bigquery/v2/projects/[^/]+/datasets/[^/]+";
+    public const string DatasetList = @"https://bigquery\.googleapis\.com/bigquery/v2/projects/[^/]+/datasets";
     public const string Projects = @"https://bigquery\.googleapis\.com/bigquery/v2/projects";
     public const string Sts = @"https://sts\.googleapis\.com/v1/token";
     public const string StsOAuth = @"https://sts\.googleapis\.com/v1/oauthtoken";
@@ -87,6 +88,7 @@ internal sealed class BigQueryFake
             .On("POST", TokenInfo, Fixture("tokeninfo-user"))
             .On("POST", Jobs, Fixture("dry-run"))
             .On("GET", Datasets, Fixture("dataset"))
+            .On("GET", DatasetList, request => Fixture(request.Uri.Query.Contains("pageToken=page-2", StringComparison.Ordinal) ? "datasets-page-2" : "datasets"))
             .On("GET", Projects, request => Fixture(request.Uri.Query.Contains("pageToken=page-2", StringComparison.Ordinal) ? "projects-page-2" : "projects"))
             .On("POST", Sts, Fixture("sts-token"))
             .On("POST", StsOAuth, Fixture("sts-oauthtoken"))

@@ -20,7 +20,8 @@ the Measurements below with the new baseline.
     first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container, Kerberos, and BigQuery
     against its emulator (`--bigquery-emulator-live`, the image pinned by digest: about 2 s of checks after the pull on a
     developer machine). The other groups stay Node-free.
-  - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server) and three on Windows
+  - The smoke suites in three shards on Linux (sandboxed, under xvfb, with SQL Server, and the same pinned BigQuery
+    emulator started in each shard for the connections suite's Connect dialog phase: about 2 s of that suite) and three on Windows
     (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times in its `suiteSeconds`). macOS skips
     the smoke tests until they cover its window chrome.
   - The Linux benchmarks (floors enforced).
