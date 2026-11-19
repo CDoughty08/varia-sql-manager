@@ -110,12 +110,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   // Selected Table Designer rows; selected grid cells are a translucent layer over the grid and the striped row.
   ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
-  // Selected cells keep their text color while the grid is not focused (links, read errors and the truncation marker
-  // too); NULL takes the grid's foreground there (styles.css), as its tint is too faint on that fill.
-  ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground', 'resultsGrid.truncationForeground'],
+  // Selected cells keep their text color while the grid is not focused (links and read errors too); NULL takes the grid's
+  // foreground there and the truncation marker the cell's colour (styles.css).
+  ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground'],
     ['panel.background', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.inactiveSelectionOverlay']),
   // On the focused selection a link takes the grid's foreground too (styles.css).
-  ...text(['foreground', 'resultsGrid.foreground', 'errorForeground', 'resultsGrid.truncationForeground'], ['panel.background', 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.selectionOverlay']),
+  ...text(['foreground', 'resultsGrid.foreground', 'errorForeground'], ['panel.background', 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.selectionOverlay']),
   // A search match is a layer too, under the selection; a NULL and a link take the grid's foreground on it (styles.css).
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.hitOverlay']),
   ...text(['resultsGrid.foreground'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
