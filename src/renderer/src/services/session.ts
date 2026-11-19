@@ -54,12 +54,14 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
     const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
     const targetId = kind === 'sql' && document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
     if (kind === 'sql' && document.targetId && !targetId) throw new Error('A query connection target could not be kept. Try again after the connection workspace is ready.')
+    // A BigQuery query keeps its engine, and its dataset at BigQuery's length; SQL Server is the absence of one.
+    const bigQuery = kind === 'sql' && document.provider === 'bigquery'
     const entry: SessionDocumentWrite = {
       name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
       eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
       ...document.pinned ? { pinned: true } : {},
-      ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, sessionLimits.databaseChars) } : {},
-      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {},
+      ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, bigQuery ? sessionLimits.datasetChars : sessionLimits.databaseChars) } : {},
+      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {}, ...bigQuery ? { provider: 'bigquery' as const } : {},
       ...!document.file || document.dirty ? { text: model.getValue() } : {}
     }
     const size = bytes(entry) + (document.file ? bytes(document.file.path) : 0) + 2

@@ -178,6 +178,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
     timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
     `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+- **Query languages.** A query document's `provider` (absent for SQL Server) picks its Monaco language (`queryLanguages`:
+  Monaco's `sql`, or Varia's `googlesql` from `languages/googlesql.ts`); the document kind stays `sql`, so
+  `isQueryDocument` is unchanged. `DocumentService` sets it from the connection a query opens on or moves to, switches
+  the model's language (`switchModelLanguage` clears every marker owner first) and keeps it on disconnect, in Reopen
+  Closed Query, hot exit and AutoRecover. Nothing runs or is sent on a switch or restore. SQL Server's language services
+  serve only `sql` models; GoogleSQL's tokens use the `.sql` colour scopes, and its signature help reads the generated
+  catalogue (`src/shared/googlesql/catalog.ts`) through `shared/googlesql/lexer.ts`. docs/googlesql.md has the behaviour.
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
@@ -666,7 +673,7 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 
 After changing a catalogue, regenerate with the command in CLAUDE.md's Generated files table: commands
 (`docs/commands.md`), Monaco keys, gestures (`docs/gestures.md`), live (`docs/live.md`, `Live/live-catalog.json`),
-explorer, scripting, actions, designer, activity, SSIS, settings (`docs/settings.md`), metrics
+explorer, scripting, actions, designer, activity, SSIS, GoogleSQL (`docs/googlesql.md`), settings (`docs/settings.md`), metrics
 (`docs/themes/metrics.md`) and icons (`docs/icons.md`). Backend catalogues embed their generated JSON.
 
 ## Product direction (agreed with the owner)

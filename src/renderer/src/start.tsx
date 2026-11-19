@@ -18,12 +18,15 @@ import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js'
 import 'monaco-editor/editor/contrib/gotoError/browser/gotoError.js'
 // Completion providers need the suggestion controller in this deliberately small Monaco bundle.
 import 'monaco-editor/editor/contrib/suggest/browser/suggestController.js'
+// Signature help (GoogleSQL's, from its function catalogue) needs the parameter hints controller.
+import 'monaco-editor/editor/contrib/parameterHints/browser/parameterHints.js'
 // The codicon font face: Monaco generates the glyph rules but loads the font only with this stylesheet.
 import 'monaco-editor/features/codicon/register.js'
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 import App from './App'
 import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
+import { registerGoogleSql } from './languages/googlesql'
 import { WorkbenchProvider } from './core/WorkbenchContext'
 import { ShortcutsService } from './core/ShortcutsService'
 import { toPlatform } from '../../shared/commands/keybindings'
@@ -46,6 +49,7 @@ export async function start(root: Root): Promise<void> {
   // Bundle Monaco locally; the editor never downloads scripts from a CDN.
   self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
   registerJson(monaco)
+  registerGoogleSql(monaco)
   // React renders only after a theme is applied, so the first frame already has its colors, with settings, so the
   // editor's first frame has its font and options, and with the user's shortcuts, so the first key and label follow
   // them; none waits for main longer than its timeout.
