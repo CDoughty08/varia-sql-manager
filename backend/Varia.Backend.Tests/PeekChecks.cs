@@ -259,7 +259,6 @@ internal static partial class PeekChecks
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
     }
 
-    /// <summary>A text read as the renderer reads it: SUBSTRING's page of <paramref name="size"/> from each offset, trimmed as the backend trims it.</summary>
     /// <summary>A Columns or Parameters row from the parts its statement reads: every shown field, and the declaration as T-SQL.</summary>
     private static void ColumnAndParameterRows(Action<bool, string> check)
     {
@@ -349,6 +348,7 @@ internal static partial class PeekChecks
         check(notNull is [.., "1", "@p int NOT NULL = 1"] && table is [.., "@t [dbo].[Rows] READONLY"], "a native module's NOT NULL parameter is declared so: " + Show(notNull) + " " + Show(table));
     }
 
+    /// <summary>A text read as the renderer reads it: SUBSTRING's page of <paramref name="size"/> from each offset, trimmed as the backend trims it.</summary>
     private static List<string> Pages(string text, int size)
     {
         var pages = new List<string>();

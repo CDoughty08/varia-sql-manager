@@ -13,6 +13,7 @@ import Icon from '../Icon'
 import { useKeybindingsRevision } from '../core/useCommand'
 import type { LocalGridPreset } from '../grid/LocalGrid'
 import { useMenuTarget } from '../menus/useMenuTarget'
+import type { PeekPropertiesTarget } from '../menus/targets'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
@@ -90,39 +91,49 @@ export function nextStop(stops: readonly HTMLElement[], at: Element | null, back
   return back ? [...stops].reverse().find(stop => !after(stop)) ?? stops[stops.length - 1] : stops.find(after) ?? stops[0]
 }
 
-/**
- * What Copy in the Properties menu writes: the facts whose text is selected in the pane, else every fact it shows, as
- * Name<TAB>Value lines with the platform's line breaks (as a grid copies). None while the facts load or failed.
- */
 function selectedFacts(pane: HTMLElement): HTMLElement[] {
   const selection = pane.ownerDocument.getSelection()
-  return selection && !selection.isCollapsed ? [...pane.querySelectorAll<HTMLElement>('.peek-fact')].filter(fact => selection.containsNode(fact, true)) : []
+  if (!selection || selection.isCollapsed) return []
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index))
+  return [...pane.querySelectorAll<HTMLElement>('.peek-fact')].filter(fact => ranges.some(range => range.intersectsNode(fact)))
 }
-function propertiesTarget(pane: HTMLElement, crlf: boolean, before?: readonly HTMLElement[]) {
-  const facts = [...pane.querySelectorAll<HTMLElement>('.peek-fact')]
-  if (!facts.length) return null
-  const picked = (before ?? selectedFacts(pane)).filter(fact => facts.includes(fact))
-  const lines = (picked.length ? picked : facts).map(fact => [fact.querySelector('dt')?.textContent ?? '', fact.querySelector('dd')?.textContent ?? ''] as const)
-  return { kind: 'peekProperties' as const, text: peekPropertiesText(lines, crlf), selected: picked.length > 0 }
+
+/**
+ * The Properties menu's target: Copy writes the facts whose text is selected in the pane, else every fact it shows, as
+ * Name<TAB>Value lines with the platform's line breaks (as a grid copies); none while the facts load or failed.
+ * A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened while a press is
+ * down (macOS, Linux) reads the selection as that press began (`press`). The press ends wherever the pointer is released,
+ * and then a menu (Windows opens it on release; Shift+F10 and the menu key, which KeybindingService takes before the pane
+ * sees them) reads the selection as it is.
+ */
+export function propertiesMenu(crlf: boolean) {
+  let pressed: HTMLElement[] | undefined
+  return {
+    press(pane: HTMLElement) {
+      pressed = selectedFacts(pane)
+      const doc = pane.ownerDocument
+      const release = () => { pressed = undefined; doc.removeEventListener('pointerup', release, true); doc.removeEventListener('pointercancel', release, true) }
+      doc.addEventListener('pointerup', release, true)
+      doc.addEventListener('pointercancel', release, true)
+    },
+    target(pane: HTMLElement): PeekPropertiesTarget | null {
+      const facts = [...pane.querySelectorAll<HTMLElement>('.peek-fact')]
+      if (!facts.length) return null
+      const picked = (pressed ?? selectedFacts(pane)).filter(fact => facts.includes(fact))
+      pressed = undefined
+      const lines = (picked.length ? picked : facts).map(fact => [fact.querySelector('dt')?.textContent ?? '', fact.querySelector('dd')?.textContent ?? ''] as const)
+      return { kind: 'peekProperties', text: peekPropertiesText(lines, crlf) }
+    }
+  }
 }
 
 /** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
 export function PropertiesPane({ peek }: { peek: OpenPeek }) {
   const { platform } = useWorkbench()
-  // A right-click (or Ctrl+click) on macOS selects the word under it before the menu opens, so a menu opened while a press is
-  // down (macOS, Linux) reads the selection as that press began. The press ends wherever the pointer is released, and then a
-  // menu (Windows opens it on release; Shift+F10 and the menu key, which KeybindingService takes before the pane sees them)
-  // reads the selection as it is.
-  const pressed = useRef<HTMLElement[] | undefined>(undefined)
-  const menu = useMenuTarget<HTMLDivElement>(pane => { const before = pressed.current; pressed.current = undefined; return propertiesTarget(pane, platform === 'win32', before) })
+  const [copy] = useState(() => propertiesMenu(platform === 'win32'))
+  const menu = useMenuTarget<HTMLDivElement>(pane => copy.target(pane))
   return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"
-    onPointerDownCapture={event => {
-      pressed.current = selectedFacts(event.currentTarget)
-      const doc = event.currentTarget.ownerDocument
-      const release = () => { pressed.current = undefined; doc.removeEventListener('pointerup', release, true); doc.removeEventListener('pointercancel', release, true) }
-      doc.addEventListener('pointerup', release, true)
-      doc.addEventListener('pointercancel', release, true)
-    }}><Properties peek={peek} /></div>
+    onPointerDownCapture={event => copy.press(event.currentTarget)}><Properties peek={peek} /></div>
 }
 
 /** The kind's groups of facts for the node's subtype, a refused group's words in place of its facts. */

@@ -50,7 +50,7 @@ export interface InputTarget {
  * Peek's Properties pane when its menu opened: the facts to copy as `Name<TAB>Value` lines, those whose text was selected in the
  * pane or else every shown fact, read then so Copy writes what the menu was opened on.
  */
-export interface PeekPropertiesTarget { readonly kind: 'peekProperties'; readonly text: string; readonly selected: boolean }
+export interface PeekPropertiesTarget { readonly kind: 'peekProperties'; readonly text: string }
 export type OutputView = 'grid' | 'messages' | 'live'
 /**
  * A Query Output view: the query's results grid for one result set (its cell selection lives in the grid's view state,
