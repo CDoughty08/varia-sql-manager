@@ -192,8 +192,6 @@ async function startProfile(application) {
  */
 export const electron = {
   async launch({ motion = false, ...options } = {}) {
-    // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
-    // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
     // Hot exit (Restore open queries on startup) would close without the save prompts many suites answer, and reopen their
     // queries in the next launch on the same profile; only a suite that sets VARIA_TEST_HOT_EXIT=1 gets it.
     const env = { ...(options.env ?? process.env) }
@@ -202,6 +200,8 @@ export const electron = {
     if (!motion) env.VARIA_TEST_FOLLOW_SYSTEM_MOTION ??= '1'
     // Under xvfb, with --disable-gpu (xvfb.mjs).
     const args = xvfbArgs(options.args ?? [], env)
+    // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
+    // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
     refreshMotionOnEmulate(application)

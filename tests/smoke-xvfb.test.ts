@@ -5,6 +5,8 @@ import { underXvfb, xvfbArgs } from '../scripts/fixtures/xvfb.mjs'
 // Why launches under xvfb take --disable-gpu: scripts/fixtures/xvfb.mjs.
 describe('Electron launches on a virtual display', () => {
   const xvfb = { XAUTHORITY: '/tmp/xvfb-run.A5KxQZ/Xauthority' }
+  // A call that can start a process: Playwright's Electron launcher or a child_process spawn, however it is named or wrapped.
+  const start = /(?:^|[^\w.$])(_?electron\.launch|spawn|spawnSync|execFile|execFileSync|fork)\(/g
 
   it('knows xvfb-run by the XAUTHORITY it sets, on Linux only', () => {
     expect(underXvfb(xvfb, 'linux')).toBe(true)
@@ -22,21 +24,46 @@ describe('Electron launches on a virtual display', () => {
     expect(xvfbArgs(['.'], xvfb, 'win32')).toEqual(['.'])
   })
 
-  // files-smoke's second instance and the packaged smoke started Electron themselves, without the switch.
+  // files-smoke's second instance, the packaged smoke and the benchmarks started Electron themselves, without the switch.
   it('all take their arguments from xvfbArgs, whether through the smoke fixture or launched directly', () => {
     const fixture = readFileSync('scripts/fixtures/smoke.mjs', 'utf8')
     expect(fixture).toContain('const args = xvfbArgs(options.args ?? [], env)')
     expect(fixture).toMatch(/_electron\.launch\(\{ \.\.\.options, env, args: args\.includes\(frameRateSwitch\)/)
-    // Every other place that starts the app: Playwright's raw launcher, or a spawn of Electron or the packaged executable.
-    const raw = /\belectron\.launch\(/, spawned = /\bspawn\(\s*(?:electronPath|executable)\b/
-    const launches = ['scripts', 'scripts/fixtures'].flatMap(folder => readdirSync(folder).filter(name => name.endsWith('.mjs') && name !== 'smoke.mjs').map(name => `${folder}/${name}`))
-      .flatMap(path => {
-        const source = readFileSync(path, 'utf8')
-        // electron.launch from the smoke fixture goes through it, checked above; a spawn never does.
-        const fixtureLaunch = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/.test(source)
-        return source.split('\n').filter(line => spawned.test(line) || (!fixtureLaunch && raw.test(line))).map(line => ({ path, line: line.trim() }))
+    // Scripts that start the app themselves, and why they need no switch.
+    const exempt: Record<string, string> = {
+      'scripts/appimage-check.mjs': 'its runs end before a window: the refusal check expects no start, the others only extract or check',
+      'scripts/portable-smoke.mjs': 'the Windows portable build, never run under xvfb'
+    }
+    // A script starts the app if it holds Electron's binary, Playwright's launcher (raw or the fixture's), or a packaged build.
+    const launcher = /from 'electron'|\b_electron\b|\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'|connectOverCDP|\bappImage\b/
+    const fromFixture = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/
+    // A call's whole text, across lines, up to its closing parenthesis.
+    const callText = (source: string, open: number) => {
+      let depth = 0
+      for (let index = open; index < source.length; index++) {
+        if (source[index] === '(') depth++
+        else if (source[index] === ')' && --depth === 0) return source.slice(open, index + 1)
+      }
+      return source.slice(open)
+    }
+    const paths = ['scripts', 'scripts/fixtures'].flatMap(folder => readdirSync(folder).filter(name => name.endsWith('.mjs') && name !== 'smoke.mjs').map(name => `${folder}/${name}`))
+    const launchers = paths.filter(path => launcher.test(readFileSync(path, 'utf8')))
+    expect(launchers).toEqual(expect.arrayContaining([...Object.keys(exempt), 'scripts/files-smoke.mjs', 'scripts/packaged-smoke.mjs', 'scripts/startup-bench.mjs', 'scripts/fixtures/dialog-lifecycle.mjs']))
+    const unswitched = launchers.filter(path => !(path in exempt)).flatMap(path => {
+      const source = readFileSync(path, 'utf8')
+      return [...source.matchAll(start)].flatMap(match => {
+        const text = callText(source, match.index + match[0].length - 1)
+        // The fixture's electron.launch adds the switch itself (checked above); a named tool (taskkill, ps) is not the app.
+        if ((match[1] === 'electron.launch' && fromFixture.test(source)) || /^\(\s*['"`]/.test(text)) return []
+        return text.includes('xvfbArgs(') ? [] : [`${path}: ${match[1]}${text.split('\n')[0]}`]
       })
-    expect(launches.map(({ path }) => path).sort()).toEqual(expect.arrayContaining(['scripts/files-smoke.mjs', 'scripts/packaged-smoke.mjs', 'scripts/startup-bench.mjs']))
-    expect(launches.filter(({ line }) => !line.includes('xvfbArgs('))).toEqual([])
+    })
+    expect(unswitched).toEqual([])
+  })
+
+  it('catches a launch however it is written', () => {
+    const calls = (source: string) => [...source.matchAll(start)].map(match => match[1])
+    expect(calls("_electron.launch({ args: ['.'] })\nspawnSync(electronPath, ['.'])\nexecFile(resolve(executable), [])\nconst c = spawn(\n  electron, ['.'])")).toEqual(['_electron.launch', 'spawnSync', 'execFile', 'spawn'])
+    expect(calls('child.spawnargs; respawn(x); app.electron.launch(y)')).toEqual([])
   })
 })
