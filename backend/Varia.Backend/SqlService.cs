@@ -428,12 +428,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal Func<string, JsonElement, string?>? RequestProvider { get; set; }
 
     /// <summary>The engine a request is for: the options' <c>provider</c> for a method that opens a connection, the handle's
-    /// for one that names a <c>connectionId</c>, and otherwise the engine that owns the query, session or result it names.</summary>
+    /// for one that names a <c>connectionId</c> (a language request's, in its context), and otherwise the engine that owns the query, session or result it names.</summary>
     internal string ProviderOf(string method, JsonElement parameters)
     {
         if (Array.IndexOf(Providers.ParameterMethods, method) >= 0) return Providers.OfOptions(parameters);
         if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("connectionId", out var id) && id.ValueKind == JsonValueKind.String)
             return ConnectionProvider(id.GetString()!) ?? Providers.SqlServer;
+        // A language request names its connection in its context.
+        if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty("connectionId", out var contextId) && contextId.ValueKind == JsonValueKind.String)
+            return ConnectionProvider(contextId.GetString()!) ?? Providers.SqlServer;
         return RequestProvider?.Invoke(method, parameters) ?? Providers.SqlServer;
     }
 

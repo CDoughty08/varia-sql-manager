@@ -32,6 +32,8 @@ internal static class ProviderChecks
         service.ConnectionProvider = id => id == connectionId ? Providers.BigQuery : Providers.SqlServer;
         var bigQueryHandle = await Code(() => service.DispatchAsync("databases.list", byHandle, wire));
         var bigQueryExplorer = await Code(() => service.DispatchAsync("explorer.children", Parse($$"""{"connectionId":"{{connectionId}}","requestId":"{{Guid.NewGuid()}}","nodeId":"server"}"""), wire));
+        var bigQueryLanguage = await Code(() => service.DispatchAsync("language.complete", Parse($$"""{"text":"","context":{"providerId":"sqlserver","connectionId":"{{connectionId}}"},"position":{"line":1,"column":1} }"""), wire));
+        check(bigQueryLanguage == "UNSUPPORTED_PROVIDER", $"a language request for a stub BigQuery connection, named in its context, is refused with UNSUPPORTED_PROVIDER: {bigQueryLanguage}");
         check(sqlServerHandle != "UNSUPPORTED_PROVIDER" && bigQueryHandle == "UNSUPPORTED_PROVIDER" && bigQueryExplorer == "UNSUPPORTED_PROVIDER",
             $"a SQL Server-only method for a stub BigQuery connection handle is refused with UNSUPPORTED_PROVIDER, and the same handle as SQL Server's is not: {sqlServerHandle} {bigQueryHandle} {bigQueryExplorer}");
 

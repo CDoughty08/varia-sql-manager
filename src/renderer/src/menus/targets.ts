@@ -6,6 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { PaneId } from '../../../shared/layouts'
+import { explorerNodeProvider } from '../../../shared/providers'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { gridAnchor, gridTarget } from '../grid/anchor'
@@ -166,8 +167,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
-    // Every Object Explorer server is SQL Server's until BigQuery's Explorer (docs/bigquery-plan.md, BQ-5).
-    explorerProvider: target?.kind === 'explorer' && target.node ? 'sqlserver' : '',
+    explorerProvider: target?.kind === 'explorer' ? explorerNodeProvider(target.node) : '',
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,
@@ -191,9 +191,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  // An Object Explorer node's engine stands in for the selection's: its row buttons and jump menu act on a node that is not selected.
-  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed }
-    : target.kind === 'explorer' && target.node ? { explorerSelectionProvider: targetKeys(target).explorerProvider } : undefined
+  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined

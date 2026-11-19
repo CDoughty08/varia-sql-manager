@@ -371,6 +371,8 @@ describe('IPC validation', () => {
     expect(requestProvider('connections.preview', { provider: 'bigquery' }, lookup)).toBe('bigquery')
     expect(requestProvider('databases.list', { connectionId: 'bq-handle' }, lookup)).toBe('bigquery')
     expect(requestProvider('databases.list', { connectionId: 'unknown' }, lookup)).toBeUndefined()
+    expect(requestProvider('language.complete', { text: '', context: { providerId: 'sqlserver', connectionId: 'bq-handle' } }, lookup)).toBe('bigquery')
+    expect(methodAllows('language.complete', 'bigquery')).toBe(false)
     expect(requestProvider('results.close', { resultIds: [1] }, lookup)).toBeUndefined()
     expect(methodAllows('connections.connect', 'bigquery')).toBe(false)
     expect(methodAllows('databases.list', 'bigquery')).toBe(false)

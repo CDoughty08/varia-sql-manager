@@ -89,9 +89,9 @@ export interface CommandDescriptor {
   /** The backend methods it runs, for the providers lint: an entry that declares `bigquery` runs only methods that serve it. */
   readonly methods?: readonly BackendMethod[]
   /**
-   * `own`: its handler acts on an object it finds itself (a Peek card, a Search Objects tab or hit), not the active document
-   * or the Explorer selection, so no context key names its engine; only a menu opened on an object checks it, and the method
-   * gate refuses another engine's request.
+   * `own`: its handler acts on an object it finds itself (a Peek card, a Search Objects tab or hit) or on none of an engine's
+   * (the Connect dialog, the Entra token cache), not the active document or the Explorer selection, so no context key names
+   * its engine; only a menu opened on an object checks it, and the method gate refuses another engine's request.
    */
   readonly providerContext?: 'own'
 }
@@ -344,6 +344,7 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+p' }], menus: [{ menu: 'view', group: '0_palette', order: 2, mnemonic: 'g' }]
   },
   'connection.connect': {
+    providerContext: 'own',
     title: 'Connect to Server…', category: 'Connection', icon: 'plug', keywords: ['login', 'server'], precondition: 'backendReady',
     unavailableHint: 'The backend is still starting.',
     menus: [
@@ -956,6 +957,7 @@ export const commandCatalog = {
   'help.reportIssue': { title: 'Report an Issue', category: 'Help', icon: 'link-external', keywords: ['bug', 'support', 'problem', 'feedback'], providers: both },
   // SSMS 22's Help › Clear Entra ID Token Cache: main asks first, then the backend forgets every Microsoft Entra token.
   'help.clearEntraTokenCache': {
+    providerContext: 'own',
     title: 'Clear Entra ID Token Cache', category: 'Help', icon: 'discard', keywords: ['entra', 'azure', 'token', 'signin', 'login', 'mfa'], methods: ['entra.cache.clear'],
     menus: [{ menu: 'help', group: '1_entra', order: 1, mnemonic: 'e' }]
   },

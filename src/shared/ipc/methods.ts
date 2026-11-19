@@ -191,7 +191,10 @@ export const providerParamMethods = ['connections.connect', 'connections.databas
 export function requestProvider(method: BackendMethod, params: unknown, providerOfConnection: (id: string) => ProviderId | undefined): ProviderId | undefined {
   const record = params !== null && typeof params === 'object' ? params as Record<string, unknown> : {}
   if ((providerParamMethods as readonly string[]).includes(method)) return record.provider === 'bigquery' ? 'bigquery' : 'sqlserver'
-  return typeof record.connectionId === 'string' ? providerOfConnection(record.connectionId) : undefined
+  // A language request names its connection in its context.
+  const context = record.context !== null && typeof record.context === 'object' ? record.context as Record<string, unknown> : {}
+  const connectionId = typeof record.connectionId === 'string' ? record.connectionId : typeof context.connectionId === 'string' ? context.connectionId : undefined
+  return connectionId === undefined ? undefined : providerOfConnection(connectionId)
 }
 /** Whether `method` may be sent for a request of `provider` (undefined: main cannot tell, and C# checks). */
 export function methodAllows(method: BackendMethod, provider: ProviderId | undefined): boolean { return provider === undefined || methodProviders(method).includes(provider) }

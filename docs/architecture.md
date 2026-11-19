@@ -556,7 +556,7 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 
 - **Provider gating.** Commands, submenus, Explorer kinds, object actions, live sources, settings pages and Script As
   kinds have `providers`, SQL Server only when absent. Commands (object and server actions' commands take their spec's)
-  and submenus are gated at run time: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
+  are gated at run time, and submenus in Object Explorer's menu: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
   `explorerSelectionProvider` for an Object Explorer command or one run on an Object Explorer node or search result (whose
   arguments stand the object's engine in), and not at all for one that finds its own object (`providerContext`;
   `commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The

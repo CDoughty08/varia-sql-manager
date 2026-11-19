@@ -126,6 +126,10 @@ describe('catalogue providers', () => {
     expect(commands.isEnabled('activity.open', argsFor({ kind: 'explorer', node: server }))).toBe(true)
     expect(commands.isEnabled('activity.open')).toBe(false)
     expect(commands.isEnabled('activity.open', argsFor({ kind: 'explorer' }))).toBe(false)
+    // A node's toolbar or row button passes the bare node, with no stand-in state: its own engine still counts.
+    expect(commands.isEnabled('activity.open', { target: { kind: 'explorer', node: server } })).toBe(true)
+    // Connect and clearing the Entra token cache stay available whatever document is active.
+    expect(commandProviderKey('connection.connect')).toBeUndefined()
     // A command that finds its own object (a Peek card, a search hit) is checked by neither key.
     commands.register('search.copyName', { run: () => {} })
     expect(commandProviderKey('search.copyName')).toBeUndefined()

@@ -112,8 +112,9 @@ describe('0.9.0 profile migration', () => {
     const names = await readdir(directory)
     for (const name of [profileFiles.connections.current, profileFiles.savedPasswords.current, profileFiles.session.current, profileFiles.autoRecover.current]) expect(names).not.toContain(name)
     expect(names.some(name => name.includes('.migrating-'))).toBe(false)
-    // Nothing that names a path or content reaches the log.
-    expect(String(vi.mocked(console.error).mock.calls)).not.toContain(directory)
+    // Nothing that names a path or content reaches the log: no folder, file name, server, query text or ciphertext.
+    const logged = String(vi.mocked(console.error).mock.calls)
+    for (const secret of [directory, recordId, 'sql-prod-01', 'select 1', 'select 2', 'Orders.sql', passwords.entries[0].cipher]) expect(logged).not.toContain(secret)
     expect(await migrateProfile(directory)).toEqual({ connections: 'migrated', savedPasswords: 'migrated', session: 'migrated', autoRecover: 'migrated' })
   })
 
@@ -264,6 +265,14 @@ describe('0.9.0 profile migration', () => {
     expect(await mode(join(profileFiles.session.current, 'session.json'))).toBe(0o600)
     expect(await mode(join(profileFiles.autoRecover.current, recordId + '.json'))).toBe(0o600)
     expect(await mode(profileFiles.savedPasswords.current)).toBe(0o600)
+    // A record offered for a 0.9.0 tab, into an AutoRecover folder this migration makes, likewise.
+    await rm(join(directory, profileFiles.autoRecover.current), { recursive: true })
+    await writeFile(join(directory, migrationMarker), JSON.stringify({ version: 1, done: ['connections', 'savedPasswords', 'autoRecover'] }))
+    await rm(join(directory, profileFiles.session.current, 'session.json'))
+    expect((await migrateProfile(directory)).session).toBe('migrated')
+    const [offered] = await readdir(join(directory, profileFiles.autoRecover.current))
+    expect(await mode(profileFiles.autoRecover.current)).toBe(0o700)
+    expect(await mode(join(profileFiles.autoRecover.current, offered))).toBe(0o600)
   })
 
   it('copies saved passwords as they are when there is no library to key them to', async () => {
