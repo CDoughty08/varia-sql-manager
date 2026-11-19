@@ -1122,6 +1122,7 @@ app.whenReady().then(async () => {
   // clipboard or chooses the file, and only the file's name goes back.
   handle('varia:results-copy', value => jobs.copy(value))
   handle('varia:results-save', value => jobs.save(value))
+  handle('varia:results-save-local', value => jobs.saveLocal(value))
   handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.
@@ -1273,7 +1274,7 @@ app.whenReady().then(async () => {
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
   // a full results grid copy.
-  handle('varia:clipboard-write', value => clipboard.writeText(z.string().max(maxClipboardText).parse(value)))
+  handle('varia:clipboard-write', value => { const text = z.string().max(maxClipboardText).parse(value); jobs.supersedeCopy(); return clipboard.writeText(text) })
   // Raises one of the page's own popouts, named as it opened it, without activating it.
   handle('varia:popout-raise', value => {
     const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow

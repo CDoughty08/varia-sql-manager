@@ -17,6 +17,8 @@ const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']
 // The connect methods only: main refuses a context with any other method.
 const connectRequest = <M extends 'connections.connect' | 'connections.databases'>(method: M, params: RpcMethods[M]['params'], context?: ConnectContext): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params, context)
 
+// Counted here, where every write from the page passes, so a copy still formatting can tell another text was written.
+let clipboardWrites = 0
 const api: VariaApi = {
   languageStatus: () => request('language.status', {}),
   languageComplete: params => request('language.complete', params),
@@ -137,6 +139,7 @@ const api: VariaApi = {
   openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
   copyResults: request => ipcRenderer.invoke('varia:results-copy', request),
   saveResults: request => ipcRenderer.invoke('varia:results-save', request),
+  saveLocalResults: request => ipcRenderer.invoke('varia:results-save-local', request),
   cancelResultsJob: jobId => ipcRenderer.invoke('varia:results-job-cancel', jobId),
   onResultsJob: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ResultsJobProgress) => callback(progress)
@@ -173,7 +176,8 @@ const api: VariaApi = {
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
-  writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
+  writeClipboardText: text => { clipboardWrites++; return ipcRenderer.invoke('varia:clipboard-write', text) },
+  clipboardWrites: () => clipboardWrites,
   raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),

@@ -15,7 +15,7 @@ SSMS display formats, and benchmarks. The code is the reference implementation; 
 | Generations and restarts | `src/main/backend/supervisor.ts` | — |
 | Results port | `src/main/backend/results-port.ts`, `src/shared/ipc/port-messages.ts` | — |
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
-| Copy and Save Results As | `src/main/results-jobs.ts`; fake backend `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
+| Copy and Save Results As | `src/main/results-jobs.ts`; TypeScript twin `src/shared/results/text-writer.ts` (local tables, fake backend) | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
 | Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; `LiveService` in `src/renderer/src/live/` | `Live/` (`LiveService.cs` registry and scheduler, `LiveCatalog.cs`, `SqlSampler.cs`, `LiveSql.cs`, `LiveSqlReader.cs`, `LiveTables.cs`, `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs`), `Activity/ActivityReader.cs`, `ActivityRows.cs` |
 
@@ -1524,7 +1524,16 @@ and checks the token every 1,024 cells (`TransposedTextChecks.cs`).
   so the dialog's overwrite confirmation stays valid), ownership is checked again, and only the file name
   returns (`EXPORT_FAILED` tokens become sentences naming only it). `varia:results-job-cancel` sends CANCEL reason 1; a
   reload or closed window, reason 3. Dialogs are shown one at a time (`src/main/dialog-queue.ts`). Paths come only from
-  the dialog and reach only the backend.
+  the dialog and never reach the renderer.
+- **Local saves (`ResultsJobHost.saveLocal`).** `varia:results-save-local { suggestedName ≤ 128, columns, rows }` saves a
+  table the renderer holds (a local grid's): `trusted()`, strictly validated (1 – 64 columns, names ≤ 128, ≤ 10,000
+  rectangular rows, cells NULL or ≤ 4,000 characters, ≤ 4 Mi characters in all), refused `TOO_LARGE` when its file in the
+  format chosen could pass 64 MiB (`localSaveBytes`, an upper bound per format; before the dialog when no format fits,
+  and always before the file is built), and sharing `JOB_BUSY` with results saves. Main formats it with
+  the TypeScript writer a page at a time, yielding between pages, and writes a temporary file renamed over the target
+  (`writeLocalSave`): a deleted folder is never recreated (`NOT_FOUND`), and a replaced file keeps its Unix permission
+  bits; on Windows it keeps no attributes or ACLs (Node has no `File.Replace`). Failures use the results save's tokens;
+  a Windows rename refused over a held file is `IN_USE`, over a read-only one `ACCESS`, over a folder `IS_DIRECTORY`.
 
 ## Live subscriptions
 
@@ -2377,10 +2386,10 @@ docs/testing.md has the environment variables and rules; the protocol-specific p
   `fail-commit`, `silent-<generation>`). Each session counts its scripts' BEGIN TRAN, COMMIT and ROLLBACK and notes SET
   NOEXEC, PARSEONLY, FMTONLY and SHOWPLAN_*, so `query.session.state` answers as SQL Server would. A script whose first line is
   `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92 hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`;
-  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page
+  `@rate` is rows a second, `M1*n` is n one-row sets); `results.copy` and `results.export` use `src/shared/results/text-writer.ts`, and `hold/results.export` pauses an export after each page
   (or line of a transposed one) so a test can cancel it mid-save.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets with the exact Copy, CSV,
-  TSV and JSON bytes; the C# writer (through the real jobs) and the JavaScript twin are both checked against them.
+  TSV and JSON bytes; the C# writer (through the real jobs) and the TypeScript twin are both checked against them.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`: malformed frames,
   stdout purity and, with test hooks, synthetic results, streams, cancellation, the budget, and live subscriptions whose
   every frame must pass main's schemas.
