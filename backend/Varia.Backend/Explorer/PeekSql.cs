@@ -218,23 +218,75 @@ internal static class PeekSql
     private const string CloudFiles = "SELECT CONVERT(sysname, NULL) AS [name], CONVERT(nvarchar(60), NULL) AS [type], CONVERT(bigint, NULL) AS [size], CONVERT(int, NULL) AS [growth], "
         + "CONVERT(nvarchar(260), NULL) AS [path], CONVERT(bit, NULL) AS [percentGrowth], CONVERT(int, NULL) AS [maxSize] WHERE @object_id IS NULL;\n";
 
-    /// <summary>The lists' statements, each at most @take rows in a fixed order, with their column aliases: the list's shown
-    /// columns in catalogue order, then the helpers their words need.</summary>
-    private static readonly Dictionary<string, (Func<string, string> Text, string[] Columns)> Lists = new(StringComparer.Ordinal)
+    /// <summary>The lists whose columns <see cref="ListRow"/> composes from parts (a Definition, a Key, a default) rather than reads
+    /// as the catalogue's ids, first and in order, as the other lists do.</summary>
+    internal static readonly HashSet<string> Composed = new(StringComparer.Ordinal) { "columns", "parameters" };
+    /// <summary>The Columns and Parameters lists' column aliases, declared before <see cref="Lists"/>, which reads them as it starts.</summary>
+    private static readonly string[] ColumnParts = ["name", "quotedName", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "baseType", "maxLength", "precision", "scale",
+        "nullable", "identity", "seed", "increment", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden",
+        "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "vectorDimensions", "primaryKey", "foreignKey"];
+    private static readonly string[] ParameterParts = ["name", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "tableType", "typeSchema", "baseType", "maxLength",
+        "precision", "scale", "output", "readOnly", "hasDefault", "defaultValue", "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "cursor", "moduleType"];
+
+    /// <summary>The lists' statements for a kind and band, each at most @take rows in a fixed order, with their column aliases:
+    /// the parts <see cref="ListRow"/> makes the list's columns from.</summary>
+    private static readonly Dictionary<string, (Func<string, SqlRender, string> Text, string[] Columns)> Lists = new(StringComparer.Ordinal)
     {
-        ["indexColumns"] = (_ => "SELECT TOP (@take) c.name AS [name], ic.is_included_column AS [included], ic.is_descending_key AS [descending], ty.name AS [type], "
+        ["columns"] = (ColumnsList, ColumnParts),
+        ["parameters"] = ((_, _) => ParametersList, ParameterParts),
+        ["indexColumns"] = ((_, _) =>"SELECT TOP (@take) c.name AS [name], ic.is_included_column AS [included], ic.is_descending_key AS [descending], ty.name AS [type], "
             + "c.max_length AS [maxLength], c.precision AS [precision], c.scale AS [scale], ty.is_user_defined AS [userDefined] FROM sys.index_columns AS ic "
             + "JOIN sys.all_columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id "
             + "WHERE ic.object_id = @object_id AND ic.index_id = @index_id ORDER BY ic.is_included_column, CASE WHEN ic.key_ordinal = 0 THEN ic.index_column_id ELSE ic.key_ordinal END, ic.index_column_id;\n",
             ["name", "included", "descending", "type", "maxLength", "precision", "scale", "userDefined"]),
-        ["events"] = (kind => "SELECT TOP (@take) te.type_desc AS [event], te.is_first AS [first], te.is_last AS [last] FROM "
+        ["events"] = ((kind, _) =>"SELECT TOP (@take) te.type_desc AS [event], te.is_first AS [first], te.is_last AS [last] FROM "
             + (kind == "serverTrigger" ? "sys.server_trigger_events" : "sys.trigger_events") + " AS te WHERE te.object_id = @object_id ORDER BY te.type;\n", ["event", "first", "last"]),
-        ["files"] = (_ => "SELECT TOP (@take) mf.name AS [name], mf.type_desc AS [type], CONVERT(bigint, mf.size) * 8 AS [size], mf.growth AS [growth], mf.physical_name AS [path], "
+        ["files"] = ((_, _) =>"SELECT TOP (@take) mf.name AS [name], mf.type_desc AS [type], CONVERT(bigint, mf.size) * 8 AS [size], mf.growth AS [growth], mf.physical_name AS [path], "
             + "mf.is_percent_growth AS [percentGrowth], mf.max_size AS [maxSize] FROM sys.master_files AS mf WHERE mf.database_id = @object_id ORDER BY mf.file_id;\n",
             ["name", "type", "size", "growth", "path", "percentGrowth", "maxSize"]),
-        ["serverRoles"] = (_ => "SELECT TOP (@take) r.name AS [role], r.is_fixed_role AS [fixed] FROM sys.server_role_members AS rm "
+        ["serverRoles"] = ((_, _) =>"SELECT TOP (@take) r.name AS [role], r.is_fixed_role AS [fixed] FROM sys.server_role_members AS rm "
             + "JOIN sys.server_principals AS r ON r.principal_id = rm.role_principal_id WHERE rm.member_principal_id = @object_id ORDER BY r.name;\n", ["role", "fixed"])
     };
+
+    /// <summary>A table's, view's or table type's columns as the Columns folder lists them (<see cref="ExplorerQueries.ColumnVisibility"/>),
+    /// in column order, with what a column's declaration needs: its name and its type's names through QUOTENAME, the type's
+    /// sizes, its identity's seed and increment, its computed expression, its default (without the constraint's name), and its
+    /// collation only where it is not the database's. A table type's lookup leaves its user_type_id in @object_id, so its
+    /// columns are its table object's. Expressions are read one past a local grid's 4,000 characters a cell, which then says
+    /// it cut them.</summary>
+    private static string ColumnsList(string kind, SqlRender r) => "SELECT TOP (@take) c.name AS [name], QUOTENAME(c.name) AS [quotedName], ty.name AS [type], "
+        + "QUOTENAME(ty.name) AS [quotedType], QUOTENAME(tys.name) AS [quotedTypeSchema], ty.is_user_defined AS [userDefined], ty.is_assembly_type AS [assemblyType], "
+        + "bt.name AS [baseType], c.max_length AS [maxLength], c.precision AS [precision], c.scale AS [scale], c.is_nullable AS [nullable], c.is_identity AS [identity], "
+        + "idc.seed_value AS [seed], idc.increment_value AS [increment], c.is_computed AS [computed], LEFT(cc.definition, 4001) AS [computedText], cc.is_persisted AS [persisted], "
+        + "LEFT(dc.definition, 4001) AS [defaultText], CASE WHEN c.collation_name <> d.collation_name THEN c.collation_name END AS [collation], c.is_sparse AS [sparse], "
+        + "c.is_column_set AS [columnSet], c.is_rowguidcol AS [rowGuid], " + r.Col(13, "c.generated_always_type", "CONVERT(tinyint, 0)") + " AS [generated], "
+        + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " AS [hidden], c.is_xml_document AS [xmlDocument], QUOTENAME(xss.name) AS [quotedXmlSchema], "
+        + "QUOTENAME(xs.name) AS [quotedXmlCollection], xss.name AS [xmlSchema], xs.name AS [xmlCollection], " + (r.VectorDimensions ? "c.vector_dimensions" : "CONVERT(int, NULL)")
+        + " AS [vectorDimensions], CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.indexes AS i JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id "
+        + "WHERE i.object_id = c.object_id AND i.is_primary_key = 1 AND ic.column_id = c.column_id) THEN 1 ELSE 0 END) AS [primaryKey], "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.foreign_key_columns AS f WHERE f.parent_object_id = c.object_id AND f.parent_column_id = c.column_id) THEN 1 ELSE 0 END) AS [foreignKey] "
+        + "FROM sys.all_columns AS c JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id JOIN sys.schemas AS tys ON tys.schema_id = ty.schema_id "
+        + "LEFT JOIN sys.types AS bt ON ty.is_user_defined = 1 AND ty.is_assembly_type = 0 AND ty.is_table_type = 0 AND bt.user_type_id = ty.system_type_id "
+        + "LEFT JOIN sys.xml_schema_collections AS xs ON c.xml_collection_id <> 0 AND xs.xml_collection_id = c.xml_collection_id LEFT JOIN sys.schemas AS xss ON xss.schema_id = xs.schema_id "
+        + "LEFT JOIN sys.identity_columns AS idc ON idc.object_id = c.object_id AND idc.column_id = c.column_id "
+        + "LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id LEFT JOIN sys.default_constraints AS dc ON dc.object_id = c.default_object_id "
+        + "LEFT JOIN sys.databases AS d ON d.database_id = DB_ID() WHERE c.object_id = "
+        + (kind == "tableType" ? "(SELECT tt.type_table_object_id FROM sys.table_types AS tt WHERE tt.user_type_id = @object_id)" : "@object_id")
+        + " AND " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.column_id;\n";
+
+    /// <summary>A procedure's or function's parameters as the Parameters folder lists them (not the return value), in order, with
+    /// what a declaration needs: the type's names through QUOTENAME, its sizes, and a CLR module's default (a T-SQL module's
+    /// comes from its header, <see cref="ModuleHeader.ParameterDefaultTexts"/>).</summary>
+    private const string ParametersList = "SELECT TOP (@take) p.name AS [name], ty.name AS [type], QUOTENAME(ty.name) AS [quotedType], QUOTENAME(tys.name) AS [quotedTypeSchema], "
+        + "ty.is_user_defined AS [userDefined], ty.is_assembly_type AS [assemblyType], ty.is_table_type AS [tableType], tys.name AS [typeSchema], bt.name AS [baseType], "
+        + "p.max_length AS [maxLength], p.precision AS [precision], p.scale AS [scale], p.is_output AS [output], p.is_readonly AS [readOnly], p.has_default_value AS [hasDefault], "
+        + "p.default_value AS [defaultValue], p.is_xml_document AS [xmlDocument], QUOTENAME(xss.name) AS [quotedXmlSchema], QUOTENAME(xs.name) AS [quotedXmlCollection], "
+        + "xss.name AS [xmlSchema], xs.name AS [xmlCollection], p.is_cursor_ref AS [cursor], o.type AS [moduleType] "
+        + "FROM sys.all_parameters AS p JOIN sys.all_objects AS o ON o.object_id = p.object_id JOIN sys.types AS ty ON ty.user_type_id = p.user_type_id "
+        + "JOIN sys.schemas AS tys ON tys.schema_id = ty.schema_id "
+        + "LEFT JOIN sys.types AS bt ON ty.is_user_defined = 1 AND ty.is_assembly_type = 0 AND ty.is_table_type = 0 AND bt.user_type_id = ty.system_type_id "
+        + "LEFT JOIN sys.xml_schema_collections AS xs ON p.xml_collection_id <> 0 AND xs.xml_collection_id = p.xml_collection_id LEFT JOIN sys.schemas AS xss ON xss.schema_id = xs.schema_id "
+        + "WHERE p.object_id = @object_id AND p.parameter_id > 0 ORDER BY p.parameter_id;\n";
 
     /// <summary>User mapping's databases, in place of its list: those online that the login may enter, in name order, each with
     /// how many there are in all (so those past @take are counted unread). Only the login's batch calls HAS_DBACCESS, as the
@@ -450,7 +502,7 @@ internal static class PeekSql
         {
             if (list.Id == "userMapping") { text.Append(MappingDatabases); mapping = true; continue; }
             if (!Lists.TryGetValue(list.Id, out var statement)) throw new InvalidOperationException("Peek has no statement for the list " + list.Id + ".");
-            text.Append(cloud && list.Id == "files" ? CloudFiles : statement.Text(spec.Kind));
+            text.Append(cloud && list.Id == "files" ? CloudFiles : statement.Text(spec.Kind, render));
             lists.Add(new(list.Id, statement.Columns));
         }
         IReadOnlyList<string> optional = [];
@@ -487,6 +539,8 @@ internal static class PeekSql
             }
         }
         Dictionary<string, PeekList>? lists = spec.ListSpecs.Count > 0 ? new(StringComparer.Ordinal) : null;
+        // A T-SQL module's parameter defaults are only in its header, which the text's first page holds.
+        var defaults = batch.Lists.Any(list => list.Id == "parameters") ? ModuleHeader.ParameterDefaultTexts(definition) : null;
         foreach (var list in batch.Lists)
         {
             if (!await reader.NextResultAsync(token)) throw new InvalidOperationException("Peek's batch ended before its list " + list.Id + ".");
@@ -495,7 +549,7 @@ internal static class PeekSql
             while (await reader.ReadAsync(token))
             {
                 if (rows.Count == limits.ListRows) { more = true; break; }
-                rows.Add(ListRow(list.Id, Raw(reader, list.Columns)));
+                rows.Add(ListRow(list.Id, Raw(reader, list.Columns), defaults));
             }
             lists![list.Id] = new(rows, more ? true : null);
         }
@@ -534,10 +588,13 @@ internal static class PeekSql
         return raw;
     }
 
-    /// <summary>A list's row as the catalogue's columns, in order: an index column's type as the tree writes it, a file's
-    /// autogrowth in SSMS's words.</summary>
-    internal static object?[] ListRow(string list, Dictionary<string, object?> raw) => list switch
+    /// <summary>A list's row as the catalogue's columns, in order: a column's or parameter's facts and its declaration, an index
+    /// column's type as the tree writes it, a file's autogrowth in SSMS's words. <paramref name="defaults"/>: a T-SQL module's
+    /// parameter defaults, from its header.</summary>
+    internal static object?[] ListRow(string list, Dictionary<string, object?> raw, IReadOnlyDictionary<string, string>? defaults = null) => list switch
     {
+        "columns" => ColumnRow(raw),
+        "parameters" => ParameterRow(raw, defaults),
         "indexColumns" => [raw["name"], Bool(raw["included"]), Bool(raw["descending"]), raw["type"] is string type
             ? ExplorerLabels.TypeText(new SqlTypeInfo(type, Int(raw["maxLength"]), Int(raw["precision"]), Int(raw["scale"]), IsUserDefined: Bool(raw["userDefined"]) == true)) : null],
         "events" => [raw["event"], Bool(raw["first"]), Bool(raw["last"])],
@@ -545,6 +602,105 @@ internal static class PeekSql
             Growth(Int(raw["growth"]), Bool(raw["percentGrowth"]) == true, Int(raw["maxSize"])), raw["path"]],
         "serverRoles" => [raw["role"], Bool(raw["fixed"])],
         _ => throw new InvalidOperationException("Peek reads no list " + list + ".")
+    };
+
+    /// <summary>A column's Name, Type (as the tree writes it), Nullable, Key, Identity (seed and increment), Computed (its
+    /// expression), Default (its expression) and Definition, its declaration (<see cref="ColumnDefinition"/>).</summary>
+    private static object?[] ColumnRow(Dictionary<string, object?> raw)
+    {
+        bool primaryKey = Bool(raw["primaryKey"]) == true, foreignKey = Bool(raw["foreignKey"]) == true, identity = Bool(raw["identity"]) == true;
+        var key = primaryKey && foreignKey ? "PK, FK" : primaryKey ? "PK" : foreignKey ? "FK" : null;
+        string? seed = identity ? Literal(raw["seed"]) : null, increment = identity ? Literal(raw["increment"]) : null;
+        var computed = Bool(raw["computed"]) == true ? raw["computedText"] as string : null;
+        var defaultText = raw["defaultText"] as string;
+        return [raw["name"], ExplorerLabels.TypeText(TypeOf(raw, tableType: false)), Bool(raw["nullable"]), key, seed is null || increment is null ? null : seed + ", " + increment,
+            computed, defaultText, ColumnDefinition(raw, seed, increment, computed, defaultText)];
+    }
+
+    /// <summary>A column's declaration as CREATE TABLE writes it, <c>[OrderDate] datetime2(3) NOT NULL DEFAULT (sysutcdatetime())</c>:
+    /// the name through QUOTENAME, the type as Script As writes it (sizes, max, user types schema-qualified, an XML column's schema
+    /// collection), COLLATE only where it is not the database's, SPARSE, IDENTITY(seed,increment), a period column's GENERATED
+    /// ALWAYS and HIDDEN, ROWGUIDCOL, NULL or NOT NULL, and the default without its constraint's name; a computed column as
+    /// <c>AS (expression)</c> with PERSISTED; a column set as XML COLUMN_SET FOR ALL_SPARSE_COLUMNS. Constraints over columns
+    /// (keys, checks) are left to Script As.</summary>
+    internal static string ColumnDefinition(Dictionary<string, object?> raw, string? seed, string? increment, string? computed, string? defaultText)
+    {
+        var text = new StringBuilder(raw["quotedName"] as string ?? Bracket((string)raw["name"]!));
+        var nullable = Bool(raw["nullable"]) != false;
+        if (computed is not null)
+        {
+            text.Append(" AS ").Append(computed);
+            // Only a persisted computed column can be NOT NULL; sys.columns reports the others nullable.
+            if (Bool(raw["persisted"]) == true) text.Append(nullable ? " PERSISTED" : " PERSISTED NOT NULL");
+            return text.ToString();
+        }
+        text.Append(' ').Append(TypeSql(raw, cursor: false));
+        if (Bool(raw["columnSet"]) == true) return text.Append(" COLUMN_SET FOR ALL_SPARSE_COLUMNS").ToString();
+        if (raw["collation"] is string collation) text.Append(" COLLATE ").Append(collation);
+        if (Bool(raw["sparse"]) == true) text.Append(" SPARSE");
+        if (seed is not null && increment is not null) text.Append(" IDENTITY(").Append(seed).Append(',').Append(increment).Append(')');
+        var generated = Int(raw["generated"]);
+        if (generated is 1 or 2) text.Append(generated == 1 ? " GENERATED ALWAYS AS ROW START" : " GENERATED ALWAYS AS ROW END").Append(Bool(raw["hidden"]) == true ? " HIDDEN" : "");
+        if (Bool(raw["rowGuid"]) == true) text.Append(" ROWGUIDCOL");
+        text.Append(nullable ? " NULL" : " NOT NULL");
+        if (defaultText is not null) text.Append(" DEFAULT ").Append(defaultText);
+        return text.ToString();
+    }
+
+    private static readonly string[] ClrModules = ["PC", "FS", "FT", "AF"];
+
+    /// <summary>A parameter's Name, Type (as the tree writes it), Direction (in the tree's words), Default (as written) and
+    /// Definition, <c>@OrderId int = 0 OUTPUT</c> (a table-valued one READONLY, a cursor CURSOR VARYING OUTPUT). A T-SQL module's
+    /// defaults come from its header (<paramref name="defaults"/>, none when its text is encrypted or unreadable), a CLR module's
+    /// from sys.parameters.</summary>
+    private static object?[] ParameterRow(Dictionary<string, object?> raw, IReadOnlyDictionary<string, string>? defaults)
+    {
+        var name = (string)raw["name"]!;
+        bool cursor = Bool(raw["cursor"]) == true, output = Bool(raw["output"]) == true;
+        var clr = raw["moduleType"] is string type && ClrModules.Contains(type.TrimEnd());
+        var defaultText = clr ? (Bool(raw["hasDefault"]) == true ? Literal(raw["defaultValue"]) ?? "NULL" : null) : defaults?.GetValueOrDefault(name);
+        var definition = new StringBuilder(name).Append(' ').Append(TypeSql(raw, cursor));
+        if (defaultText is not null) definition.Append(" = ").Append(defaultText);
+        if (output) definition.Append(" OUTPUT");
+        if (Bool(raw["readOnly"]) == true) definition.Append(" READONLY");
+        return [name, cursor ? "cursor" : ExplorerLabels.TypeText(TypeOf(raw, tableType: Bool(raw.GetValueOrDefault("tableType")) == true)), output ? "Input/Output" : "Input", defaultText,
+            definition.ToString()];
+    }
+
+    /// <summary>The type as the tree's labels read it, from a list row's parts.</summary>
+    private static SqlTypeInfo TypeOf(Dictionary<string, object?> raw, bool tableType) => new((string)raw["type"]!, Int(raw["maxLength"]), Int(raw["precision"]), Int(raw["scale"]),
+        Bool(raw["userDefined"]) == true, Bool(raw["assemblyType"]) == true, tableType, raw["baseType"] as string, Bool(raw["xmlDocument"]) == true, raw["xmlSchema"] as string,
+        raw["xmlCollection"] as string, raw.GetValueOrDefault("vectorDimensions") is null ? null : Int(raw["vectorDimensions"]), raw.GetValueOrDefault("typeSchema") as string);
+
+    /// <summary>The type as a declaration writes it (Script As's text): a user type by its quoted schema and name, a system type by
+    /// its name and sizes, an XML column's or parameter's schema collection with CONTENT or DOCUMENT, a cursor CURSOR VARYING.</summary>
+    internal static string TypeSql(Dictionary<string, object?> raw, bool cursor)
+    {
+        if (cursor) return "CURSOR VARYING";
+        var name = (string)raw["type"]!;
+        if (Bool(raw["userDefined"]) == true) return (raw["quotedTypeSchema"] as string ?? "[dbo]") + "." + (raw["quotedType"] as string ?? Bracket(name));
+        if (name == "xml" && raw["quotedXmlCollection"] is string collection)
+            return "xml(" + (Bool(raw["xmlDocument"]) == true ? "DOCUMENT " : "CONTENT ") + (raw["quotedXmlSchema"] as string ?? "[dbo]") + "." + collection + ")";
+        return ExplorerLabels.TypeText(new SqlTypeInfo(name, Int(raw["maxLength"]), Int(raw["precision"]), Int(raw["scale"]),
+            VectorDimensions: raw.GetValueOrDefault("vectorDimensions") is null ? null : Int(raw["vectorDimensions"])));
+    }
+
+    /// <summary>A name in brackets as QUOTENAME writes it, only for one QUOTENAME did not take (never a sysname).</summary>
+    private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
+
+    /// <summary>A catalog value (an identity's seed, a CLR parameter's default) as a T-SQL literal: numbers in invariant digits,
+    /// text as N'…' with its quotes doubled, a date as ISO text, binary as 0x…; null for NULL.</summary>
+    internal static string? Literal(object? value) => value switch
+    {
+        null or DBNull => null,
+        string text => "N'" + text.Replace("'", "''", StringComparison.Ordinal) + "'",
+        bool flag => flag ? "1" : "0",
+        byte[] bytes => "0x" + Convert.ToHexString(bytes),
+        DateTime date => "'" + date.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture) + "'",
+        DateTimeOffset date => "'" + date.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture) + "'",
+        Guid guid => "'" + guid.ToString("D") + "'",
+        IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+        _ => "N'" + (value.ToString() ?? "").Replace("'", "''", StringComparison.Ordinal) + "'"
     };
 
     private static int Int(object? value) => value is null ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);

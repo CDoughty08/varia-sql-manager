@@ -27,16 +27,28 @@ export interface PeekFact { readonly id: string; readonly label: string; readonl
  */
 export interface PeekGroup { readonly id: string; readonly title: string; readonly facts: readonly PeekFact[]; readonly subtypes?: readonly NodeSubtype[]; readonly refused?: string }
 /**
- * Lists a peek reads with its facts, in the same batch, each on a tab of its own: an index's key and included columns, a
- * trigger's events, a database's files, a login's server roles, and its user mapping (one statement in each database it can
- * read, after the batch). Each keeps at most `peekLimits.listRows` rows, in the order the backend reads them.
+ * Lists a peek reads with its facts, in the same batch, each on a tab of its own: a table's, view's or table type's columns, a
+ * procedure's or function's parameters, an index's key and included columns, a trigger's events, a database's files, a login's
+ * server roles, and its user mapping (one statement in each database it can read, after the batch). Each keeps at most
+ * `peekLimits.listRows` rows, in the order the backend reads them, and shows as a local grid (`PeekListGrid`).
  */
-export const peekListIds = ['indexColumns', 'events', 'files', 'serverRoles', 'userMapping'] as const
+export const peekListIds = ['columns', 'parameters', 'indexColumns', 'events', 'files', 'serverRoles', 'userMapping'] as const
 export type PeekListId = typeof peekListIds[number]
 export interface PeekListColumn { readonly id: string; readonly label: string; readonly format: PeekFormat }
 export interface PeekListSpec { readonly id: PeekListId; readonly title: string; readonly columns: readonly PeekListColumn[]; readonly empty: string }
 const column = (id: string, label: string, format: PeekFormat): PeekListColumn => ({ id, label, format })
 export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
+  // Every field of sys.columns a column's row shows, and its declaration as T-SQL (Definition), which the backend builds from
+  // QUOTENAME'd names, so the Definition column copies as lines ready for a CREATE TABLE.
+  columns: {
+    id: 'columns', title: 'Columns', empty: 'No columns.',
+    columns: [column('name', 'Name', 'text'), column('type', 'Type', 'text'), column('nullable', 'Nullable', 'bool'), column('key', 'Key', 'text'), column('identity', 'Identity', 'text'),
+      column('computed', 'Computed', 'text'), column('default', 'Default', 'text'), column('declaration', 'Definition', 'text')]
+  },
+  parameters: {
+    id: 'parameters', title: 'Parameters', empty: 'No parameters.',
+    columns: [column('name', 'Name', 'text'), column('type', 'Type', 'text'), column('direction', 'Direction', 'text'), column('default', 'Default', 'text'), column('declaration', 'Definition', 'text')]
+  },
   indexColumns: {
     id: 'indexColumns', title: 'Columns', empty: 'No columns.',
     columns: [column('name', 'Column', 'text'), column('included', 'Included', 'bool'), column('descending', 'Descending', 'bool'), column('type', 'Type', 'text')]
@@ -53,25 +65,23 @@ export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
   }
 }
 /**
- * Peek's tabs (the card's and a promoted tab's): `definition` the object's text, `members` its Columns or Parameters folder
- * (explorer.children, as the tree lists it), `dependencies` what the object uses and what uses it (explorer.peekDependencies),
- * `rows` its first rows (Select Top N Rows' script through query.execute, shown in the results grid), and the kind's lists
- * (`peekLists`), which come with the facts. Members, Dependencies and Top rows are read the first time their tab is chosen,
- * never with the facts: Dependencies stays its own request so that a login refused sys.sql_expression_dependencies still sees
- * the properties.
+ * Peek's tabs (the card's and a promoted tab's): `definition` the object's text, `dependencies` what the object uses and what
+ * uses it (explorer.peekDependencies), `rows` its first rows (Select Top N Rows' script through query.execute, shown in the
+ * results grid), and the kind's lists (`peekLists`: Columns or Parameters among them), which come with the facts.
+ * Dependencies and Top rows are read the first time their tab is chosen, never with the facts: Dependencies stays its own
+ * request so that a login refused sys.sql_expression_dependencies still sees the properties.
  */
-export const peekTabs = ['definition', 'members', 'dependencies', 'rows', ...peekListIds] as const
+export const peekTabs = ['definition', 'dependencies', 'rows', ...peekListIds] as const
 export type PeekTab = typeof peekTabs[number]
 /**
  * `module`: the definition is the module's text from sys.sql_modules (sys.server_sql_modules for a server trigger), read with
  * the facts. `script`: the kind has no stored text, so the card asks Script As (scripting.script, CREATE) for it. `tabs`: the
- * card's tabs in order, Definition first. `members`: the folder the Columns or Parameters tab lists, for kinds with that tab.
+ * card's tabs in order, Definition first.
  */
 export interface PeekKindSpec {
   readonly kind: PeekKind
   readonly definition: 'module' | 'script'
   readonly tabs: readonly PeekTab[]
-  readonly members?: 'columns' | 'parameters'
   readonly groups: readonly PeekGroup[]
 }
 
@@ -84,7 +94,7 @@ const triggerOptions = [fact('executeAs', 'Execute as', 'text'), ...sqlOptions]
 
 export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   table: {
-    kind: 'table', definition: 'script', tabs: ['definition', 'members', 'dependencies', 'rows'], members: 'columns', groups: [
+    kind: 'table', definition: 'script', tabs: ['definition', 'columns', 'dependencies', 'rows'], groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('replicated', 'Replicated', 'bool'), fact('lockEscalation', 'Lock escalation', 'code'),
         fact('memoryOptimized', 'Memory optimized', 'bool'), fact('temporal', 'Temporal', 'code', 13), fact('ledger', 'Ledger', 'code', 16)] },
       { id: 'storage', title: 'Storage', facts: [fact('rowCount', 'Row count', 'count'), fact('dataSpace', 'Data space', 'kb'), fact('indexSpace', 'Index space', 'kb'),
@@ -92,19 +102,19 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   view: {
-    kind: 'view', definition: 'module', tabs: ['definition', 'members', 'dependencies', 'rows'], members: 'columns', groups: [
+    kind: 'view', definition: 'module', tabs: ['definition', 'columns', 'dependencies', 'rows'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('schemaBound', 'Schema bound', 'bool'), fact('indexed', 'Indexed', 'bool'), ...sqlOptions] }
     ]
   },
   procedure: {
-    kind: 'procedure', definition: 'module', tabs: ['definition', 'members', 'dependencies'], members: 'parameters', groups: [
+    kind: 'procedure', definition: 'module', tabs: ['definition', 'parameters', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('recompile', 'Recompile', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'), ...sqlOptions] }
     ]
   },
   function: {
-    kind: 'function', definition: 'module', tabs: ['definition', 'members', 'dependencies'], members: 'parameters', groups: [
+    kind: 'function', definition: 'module', tabs: ['definition', 'parameters', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('functionType', 'Function type', 'text')] },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('schemaBound', 'Schema bound', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'),
         fact('nullOnNullInput', 'Returns NULL on NULL input', 'bool'), ...sqlOptions] }
@@ -191,7 +201,7 @@ export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
     ]
   },
   tableType: {
-    kind: 'tableType', definition: 'script', tabs: ['definition', 'members', 'dependencies'], members: 'columns', groups: [
+    kind: 'tableType', definition: 'script', tabs: ['definition', 'columns', 'dependencies'], groups: [
       { id: 'general', title: 'General', facts: [fact('schema', 'Schema', 'text'), ...dated, fact('memoryOptimized', 'Memory optimized', 'bool')] }
     ]
   }
@@ -206,8 +216,8 @@ export const isPeekListTab = (tab: PeekTab): tab is PeekListId => (peekListIds a
 /** The lists a kind reads with its facts, in reply order. */
 export const peekListsOf = (kind: PeekKind): readonly PeekListId[] => peekSpecs[kind].tabs.filter(isPeekListTab)
 /** A tab's title for a kind. */
-export const peekTabTitle = (kind: PeekKind, tab: PeekTab): string =>
-  tab === 'definition' ? 'Definition' : tab === 'members' ? (peekSpecs[kind].members === 'parameters' ? 'Parameters' : 'Columns') : tab === 'dependencies' ? 'Dependencies'
+export const peekTabTitle = (_kind: PeekKind, tab: PeekTab): string =>
+  tab === 'definition' ? 'Definition' : tab === 'dependencies' ? 'Dependencies'
     : tab === 'rows' ? 'Top rows' : peekLists[tab].title
 
 /** A kind's facts in reply-column order. */
@@ -249,8 +259,6 @@ export const peekLimits = {
   scriptCacheMs: 120_000,
   /** Table scripts a replaced card leaves running so they can be cached; one more cancels the oldest. */
   backgroundScripts: 2,
-  /** Rows of the Columns or Parameters folder the tab lists; a folder with more says so. */
-  members: 1024,
   /** Objects listed each way on the Dependencies tab; more are marked `usesTruncated` or `usedByTruncated`. */
   dependencies: 200,
   /** Rows the Top rows tab reads: Select Top N Rows' script with this N, in no order, as SSMS's Select Top rows. */

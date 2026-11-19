@@ -1,26 +1,33 @@
 namespace Varia.Backend.Explorer;
 
-/// <summary>Reads which parameters of a T-SQL procedure or function declare a default, from the module's CREATE or ALTER
-/// header (sys.parameters reports defaults only for CLR modules). Any surprise returns null, and labels then omit the
-/// default token.</summary>
+/// <summary>Reads which parameters of a T-SQL procedure or function declare a default, and each default as written, from
+/// the module's CREATE or ALTER header (sys.parameters reports defaults only for CLR modules). Any surprise returns null,
+/// and labels then omit the default token.</summary>
 internal static class ModuleHeader
 {
     public const int MaxDefinition = 65_536;
     public const int MaxParameters = 2100;
     private enum Kind { Word, Variable, Quoted, String, Number, Symbol, End }
-    private readonly record struct Token(Kind Kind, string Text);
+    /// <summary>A token and where it is in the text, from <c>Start</c> up to (not including) <c>End</c>.</summary>
+    private readonly record struct Token(Kind Kind, string Text, int Start, int End);
 
-    public static IReadOnlySet<string>? ParameterDefaults(string? definition)
+    public static IReadOnlySet<string>? ParameterDefaults(string? definition) =>
+        ParameterDefaultTexts(definition) is { } defaults ? defaults.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+
+    /// <summary>The parameters that declare a default, by name (any case), each with its default as written (<c>0</c>,
+    /// <c>N'x'</c>, <c>-1</c>, <c>NULL</c>); null when the header is not one this reads.</summary>
+    public static IReadOnlyDictionary<string, string>? ParameterDefaultTexts(string? definition)
     {
         if (definition is null) return null;
-        try { return Parse(Tokens(definition.Length > MaxDefinition ? definition[..MaxDefinition] : definition)); }
+        var text = definition.Length > MaxDefinition ? definition[..MaxDefinition] : definition;
+        try { return Parse(Tokens(text), text); }
         catch (FormatException) { return null; }
     }
 
-    private static HashSet<string>? Parse(IEnumerator<Token> tokens)
+    private static Dictionary<string, string>? Parse(IEnumerator<Token> tokens, string text)
     {
         var current = Next();
-        Token Next() => tokens.MoveNext() ? tokens.Current : new Token(Kind.End, "");
+        Token Next() => tokens.MoveNext() ? tokens.Current : new Token(Kind.End, "", text.Length, text.Length);
         bool Is(string word) => current.Kind == Kind.Word && current.Text.Equals(word, StringComparison.OrdinalIgnoreCase);
         bool IsSymbol(string symbol) => current.Kind == Kind.Symbol && current.Text == symbol;
         void Expect(bool condition) { if (!condition) throw new FormatException(); }
@@ -45,7 +52,7 @@ internal static class ModuleHeader
         if (IsSymbol(";")) { current = Next(); Expect(current.Kind == Kind.Number); current = Next(); }
         var parenthesized = IsSymbol("(");
         if (parenthesized) current = Next();
-        var defaults = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var defaults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var count = 0;
         while (current.Kind == Kind.Variable)
         {
@@ -73,10 +80,11 @@ internal static class ModuleHeader
             else if (Is("NULL")) current = Next();
             if (IsSymbol("="))
             {
-                defaults.Add(name);
                 current = Next();
+                var start = current.Start;
                 if (IsSymbol("-") || IsSymbol("+") || IsSymbol("$")) current = Next();
                 Expect(current.Kind is Kind.String or Kind.Number or Kind.Word);
+                defaults[name] = text[start..current.End];
                 current = Next();
             }
             while (Is("OUT") || Is("OUTPUT") || Is("READONLY")) current = Next();
@@ -111,36 +119,36 @@ internal static class ModuleHeader
                 }
                 else break;
             }
-            if (i >= text.Length) { yield return new Token(Kind.End, ""); yield break; }
+            if (i >= text.Length) { yield return new Token(Kind.End, "", i, i); yield break; }
             var start = i;
             var c = text[i];
             if (c is '\'' || (c is 'N' or 'n') && i + 1 < text.Length && text[i + 1] == '\'')
             {
                 i += c == '\'' ? 1 : 2;
                 Close('\'');
-                yield return new Token(Kind.String, "");
+                yield return new Token(Kind.String, "", start, i);
             }
             else if (c is '[' or '"')
             {
                 i++;
                 Close(c == '[' ? ']' : '"');
-                yield return new Token(Kind.Quoted, text[(start + 1)..(i - 1)]);
+                yield return new Token(Kind.Quoted, text[(start + 1)..(i - 1)], start, i);
             }
             else if (char.IsDigit(c) || c == '.' && i + 1 < text.Length && char.IsDigit(text[i + 1]))
             {
                 while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '.' || text[i] is '+' or '-' && text[i - 1] is 'e' or 'E')) i++;
-                yield return new Token(Kind.Number, text[start..i]);
+                yield return new Token(Kind.Number, text[start..i], start, i);
             }
             else if (char.IsLetter(c) || c is '_' or '@' or '#')
             {
                 i++;
                 while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '@' or '#' or '$')) i++;
-                yield return new Token(c == '@' ? Kind.Variable : Kind.Word, text[start..i]);
+                yield return new Token(c == '@' ? Kind.Variable : Kind.Word, text[start..i], start, i);
             }
             else
             {
                 i++;
-                yield return new Token(Kind.Symbol, c.ToString());
+                yield return new Token(Kind.Symbol, c.ToString(), start, i);
             }
         }
 

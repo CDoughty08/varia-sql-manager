@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
+  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -345,9 +345,9 @@ try {
   await expect(loginTabs.getByRole('tab')).toHaveText(['Definition', 'Server roles', 'User mapping'])
   const dependencyCalls = (await stubCalls('explorer.peekDependencies')).length
   await loginTabs.getByRole('tab', { name: 'Server roles', exact: true }).click()
-  await expect(loginCard.getByRole('table', { name: 'Server roles', exact: true }).getByRole('cell', { name: 'sysadmin', exact: true })).toBeVisible()
+  await expect(gridCell(localGrid(loginCard, 'Server roles'), 0, 0)).toHaveText('sysadmin')
   await loginTabs.getByRole('tab', { name: 'User mapping', exact: true }).click()
-  await expect(loginCard.getByRole('table', { name: 'User mapping', exact: true }).getByRole('cell', { name: 'AppData', exact: true })).toBeVisible()
+  await expect(gridCell(localGrid(loginCard, 'User mapping'), 0, 0)).toHaveText('AppData')
   await expect(loginCard.getByRole('tabpanel')).toContainText('1 database could not be read.')
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(dependencyCalls)
   await page.keyboard.press('Escape')
@@ -668,7 +668,10 @@ try {
   const peeked = (await stubCalls('explorer.peek')).at(-1)
   expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
-  // Tab wraps within the card, so Esc keeps reaching it.
+  // Tab wraps within the card, so Esc keeps reaching it: back from the card to the Properties pane (a stop for its Copy
+  // menu), then the definition.
+  await page.keyboard.press('Shift+Tab')
+  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   await expect(peekDefinitionText(peekCard)).toBeFocused()
   await page.keyboard.type('x')
@@ -692,7 +695,9 @@ try {
   expect(await stubCalls('query.execute')).toHaveLength(executes)
   await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   await peekDefinitionText(peekCard).focus()
-  // A read-only editor lets Tab move focus, so the card's loop still wraps.
+  // A read-only editor lets Tab move focus, so the card's loop still wraps, past the Properties pane.
+  await page.keyboard.press('Tab')
+  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
@@ -701,13 +706,44 @@ try {
   await peekRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
   await expect(peekCard).toBeFocused()
-  // The tabs: Columns lists the tree's Columns folder, Dependencies both ways (a dependency in this database peeks in the same
-  // card, and Back returns), and Top rows runs only once chosen, in the results grid. Arrow keys only move focus:
-  // passing Top rows on the way to Dependencies reads nothing.
+  // Properties: Copy in their menu writes every fact as Name<TAB>Value lines, or only those whose text is selected.
+  const eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const peekProperties = peekCard.getByRole('region', { name: 'Properties', exact: true })
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await peekProperties.focus()
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
+  expect((await clipboard()).split(eol)).toContain('Row count\t12,345')
+  await peekProperties.getByText('Row count', { exact: true }).evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range) })
+  await peekProperties.focus()
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toBe('Row count\t12,345')
+  await expect(peekCard).toBeVisible()
+  // The tabs: Columns is a grid of the list that came with the facts (no request of its own), each row with its declaration;
+  // Dependencies both ways (a dependency in this database peeks in the same card, and Back returns), and Top rows runs only
+  // once chosen, in the results grid. Arrow keys only move focus: passing Top rows on the way to Dependencies reads nothing.
   const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
+  const childrenCalls = (await stubCalls('explorer.children')).length
   await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
-  await expect(peekCard.getByRole('tabpanel')).toContainText('CustomerName')
-  await expect(peekCard.getByRole('tabpanel')).toContainText('(PK, int, not null)')
+  const peekColumns = localGrid(peekCard, 'Columns')
+  await expect(peekColumns).toHaveAttribute('aria-label', /^Columns, 2 rows, 8 columns/)
+  await expect(gridCell(peekColumns, 1, 0)).toHaveText('CustomerName')
+  expect(await stubCalls('explorer.children')).toHaveLength(childrenCalls)
+  // Select all and Copy with Headers write the list as a results grid copies it, the Definition column ready to paste.
+  await gridCell(peekColumns, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe([['Name', 'Type', 'Nullable', 'Key', 'Identity', 'Computed', 'Default', 'Definition'],
+    ['Id', 'int', 'False', 'PK', '1, 1', 'NULL', 'NULL', '[Id] int IDENTITY(1,1) NOT NULL'],
+    ['CustomerName', 'nvarchar(50)', 'True', 'NULL', 'NULL', 'NULL', "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]].map(row => row.join('\t')).join(eol))
+  // A card's list has no Save Results As (a Peek tab's does).
+  await gridCell(peekColumns, 0, 0).click({ button: 'right' })
+  expect(await menuItemNames(menu('Query output'), { disabled: true })).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeVisible()
+  await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).focus()
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(0)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
@@ -751,6 +787,13 @@ try {
   await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
   // A table has Table Properties, so its tab offers Properties.
   await expect(peekActions.getByRole('button', { name: /^Properties/ })).toBeEnabled()
+  // A Peek tab's list fills the tab and saves: Save Results As is in its menu.
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Columns', exact: true }).click()
+  await gridCell(localGrid(peekDocument, 'Columns'), 0, 0).click({ button: 'right' })
+  expect(await menuItemNames(menu('Query output'), { disabled: true })).not.toContain('Save Results As…')
+  expect(await menuItemNames(menu('Query output'))).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).click()
   await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await topRowRuns()).length).toBe(4)

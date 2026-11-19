@@ -1,4 +1,4 @@
-import { maxClipboardText, type ApiResult, type ExplorerError, type ExplorerNode, type VariaApi } from '../../../shared/contracts'
+import { maxClipboardText, type ApiResult, type ExplorerError, type VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -26,8 +26,6 @@ export interface PeekDefinition {
   /** The module's whole length, when `text` is only its start: a reader that asked for at most so many characters (`read`). */
   readonly length?: number
 }
-/** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
-export interface PeekMembers { readonly nodes: readonly ExplorerNode[]; readonly more: boolean }
 export interface PeekDependencies {
   readonly uses: readonly PeekDependency[]
   readonly usesTruncated: boolean
@@ -51,11 +49,10 @@ export interface OpenPeek {
   readonly refused?: PeekResult['refused']
   readonly definition: PeekPart<PeekDefinition>
   /**
-   * The tab shown; Columns or Parameters, Dependencies and Top rows are read the first time they are chosen, and again when
-   * chosen after failing. The kind's lists come with the facts.
+   * The tab shown; Dependencies and Top rows are read the first time they are chosen, and again when chosen after failing.
+   * The kind's lists (Columns or Parameters among them) come with the facts.
    */
   readonly tab: PeekTab
-  readonly members?: PeekPart<PeekMembers>
   readonly dependencies?: PeekPart<PeekDependencies>
   readonly rows?: PeekPart<PeekRows>
   /** The cards before this one, oldest first, when a dependency was followed. */
@@ -88,7 +85,7 @@ export interface PeekReader { release(keep: boolean): void }
 export type PeekResults = Pick<ResultsService, 'begin' | 'finish' | 'release'>
 
 export interface PeekServiceOptions {
-  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
+  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
     | 'tableColumns' | 'execute' | 'closeQuerySession'>
   readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
@@ -113,7 +110,6 @@ export const peekMessages = {
   definitionChanged: 'The definition changed while Peek read it. Refresh to read it again.',
   definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters), the most it holds in memory.`,
   noRows: 'It has no rows.',
-  noMembers: 'None.',
   noDependencies: 'None found.',
   noResult: 'The query returned no result set. See Select Top 1000 Rows for its messages.',
   rowsUnavailable: 'The top rows cannot be read here.'
@@ -331,10 +327,10 @@ export class PeekReads {
    * script gives way past the limit).
    */
   release(requests: Requests, keep: boolean): void {
-    const { peek, definition, script, members, dependencies } = requests
-    for (const name of ['peek', 'definition', 'script', 'members', 'dependencies'] as const) requests[name] = undefined
+    const { peek, definition, script, dependencies } = requests
+    for (const name of ['peek', 'definition', 'script', 'dependencies'] as const) requests[name] = undefined
     try {
-      const reads = [peek, definition, members, dependencies].filter((request): request is string => request !== undefined)
+      const reads = [peek, definition, dependencies].filter((request): request is string => request !== undefined)
       if (reads.length) report(this.options.api.explorerCancel(reads))
       if (!script || script.done) return
       if (!keep || script.modified === undefined || this.disposed) { this.cancelScript(script); return }
@@ -560,26 +556,18 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (this.onLost === 'close') { this.close(); return }
     const gone = <T>(part: PeekPart<T> | undefined): PeekPart<T> | undefined => part && part.status === 'loading' ? { status: 'error', message: peekMessages.notConnected } : part
     const rows: PeekPart<PeekRows> | undefined = open.rows && { status: 'error', message: peekMessages.notConnected }
-    this.publish({ open: { ...open, facts: gone(open.facts)!, definition: gone(open.definition)!, members: gone(open.members), dependencies: gone(open.dependencies), rows } })
+    this.publish({ open: { ...open, facts: gone(open.facts)!, definition: gone(open.definition)!, dependencies: gone(open.dependencies), rows } })
   }
 
   /**
-   * Reads the shown tab's part when this view has none or its read failed: the Columns or Parameters folder as the tree lists
-   * it (its first `peekLimits.members` rows), the dependencies (apart from the properties, since a login may read those and
-   * not sys.sql_expression_dependencies), or the top rows.
+   * Reads the shown tab's part when this view has none or its read failed: the dependencies (apart from the properties, since
+   * a login may read those and not sys.sql_expression_dependencies), or the top rows.
    */
   private loadTab(): void {
     const open = this.getSnapshot().open
     if (!open || open.node.ref.type !== 'object' || this.disposed || this.detached || open.tab === 'definition') return
     const connectionId = open.node.connectionId, target = open.node.ref.object
     switch (open.tab) {
-      case 'members': {
-        const folder = peekSpecs[open.kind].members
-        return folder && this.loadPart(open, 'members', requestId => this.reads.api.explorerChildren({ connectionId, requestId,
-          // No subtype: a children request carries one only for an object node (the schema rejects it beside a folder).
-          node: { type: 'folder', owner: target, folder }, pageSize: peekLimits.members }),
-          value => ({ nodes: value.nodes, more: value.cursor !== undefined }))
-      }
       case 'dependencies': return peekHas(open.kind, 'dependencies') ? this.loadPart(open, 'dependencies', requestId => this.reads.api.explorerPeekDependencies({ connectionId, requestId, target }),
         value => ({ uses: value.uses, usesTruncated: !!value.usesTruncated, usedBy: value.usedBy, usedByTruncated: !!value.usedByTruncated })) : undefined
       case 'rows': return peekHas(open.kind, 'rows') ? this.loadRows(open) : undefined
@@ -836,7 +824,7 @@ export class PeekService extends PeekView {
 }
 
 /** The tabs read apart from the properties by one request each, kept on the view under their own names. */
-type TabPart = 'members' | 'dependencies'
+type TabPart = 'dependencies'
 type PartValue<K extends TabPart> = NonNullable<OpenPeek[K]> extends PeekPart<infer V> ? V : never
 const sameObject = (a: ExplorerMenuNode, b: ExplorerMenuNode) => a.ref.type === 'object' && b.ref.type === 'object' && a.kind === b.kind
   && a.ref.object.database === b.ref.object.database && a.ref.object.schema === b.ref.object.schema && a.ref.object.name === b.ref.object.name
