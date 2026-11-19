@@ -1352,8 +1352,8 @@ slow it down:
 
 - **Release gate** (agreed 2026-11-18). Agent lanes merge to main during 0.10.0 but Agent must not appear in 0.10.0. From AG-0b, every Agent
   surface (Explorer node, commands, menus, documents) is behind a context key `agentEnabled`, false unless the
-  `VARIA_AGENT_PREVIEW=1` environment variable is set (smoke and live tests set it); the Explorer keeps today's "SQL
-  Server Agent" later folder while it is false. AG-9 removes the gate for 0.11.0. AG-0a has no user-visible surface.
+  `VARIA_AGENT_PREVIEW=1` environment variable is set (smoke and live tests set it); while it is false the server lists
+  no SQL Server Agent node and the tree is as it was before Agent. AG-9 removes the gate for 0.11.0. AG-0a has no user-visible surface.
 - After each BigQuery lane merges, open Agent branches merge main. Agent sessions note their shared-file changes in the
   shared notes folder (`agent-shared-infrastructure.md`).
 

@@ -104,6 +104,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
     ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],
     ['a SQL Server Agent job', object({ kind: 'agentJob', name: 'Nightly' }, 'Nightly')], ['a SQL Server Agent error log', object({ kind: 'agentErrorLog', name: '0' }, 'Current')],
+    ['an SSIS Catalog folder', object({ kind: 'ssisFolder', name: 'Finance' }, 'Finance')],
     ['a results grid with selected cells', output('grid', 1)], ['a results grid without', output('grid', 0)],
     ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)]
   ]

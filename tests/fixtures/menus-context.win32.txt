@@ -357,6 +357,8 @@ explorer.context, for a SQL Server Agent job
   Re&fresh  F5  -+++
 explorer.context, for a SQL Server Agent error log
   Re&fresh  F5  -+++
+explorer.context, for an SSIS Catalog folder
+  Re&fresh  F5  -+++
 output.context, for a results grid with selected cells
   &Copy  Ctrl+C  ++++
   Copy with &Headers  Ctrl+Shift+C  ++++

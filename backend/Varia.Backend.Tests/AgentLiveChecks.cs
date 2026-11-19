@@ -349,7 +349,7 @@ internal static class AgentLiveChecks
 
     /// <summary>Object Explorer's SQL Server Agent node as sysadmin (AG-1): the server lists it last; it lists Jobs, Job Activity
     /// Monitor, then the platform's other folders; Proxies lists one row per subsystem but TSQL and then Unassigned Proxies; Error
-    /// Logs lists Current (archive 0) first, or says the server offers no list (SQL Server 2022 on Linux); Operators and the
+    /// Logs lists Current (archive 0) first, or Current alone where the server offers no list (SQL Server on Linux); Operators and the
     /// unassigned proxies list without error.</summary>
     private static async Task TreeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, ServerProfile server)
     {
