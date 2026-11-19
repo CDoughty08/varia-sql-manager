@@ -2497,6 +2497,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
+/* A Properties list (PropertiesGrid): a page grid in a box as tall as its rows, as wide as the section. */
+.properties-grid { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+.properties-grid + .field-note { margin-top: var(--varia-space-2); }
 /* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so its scroller is a tab
    stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
    series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
