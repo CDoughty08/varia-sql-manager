@@ -46,7 +46,8 @@ internal static class ResultSearcher
     private sealed class Part
     {
         public long Total, Before;
-        public bool Approximate, Stopped;
+        /// <summary>Elsewhere: a truncated cell did not match in a row that neither matched nor needs a recheck.</summary>
+        public bool Approximate, Stopped, Elsewhere;
         public readonly List<long> Rows = [];
         public readonly List<int> Columns = [];
         /// <summary>Where each kept row's matches begin (backward only), from <see cref="Head"/>.</summary>
@@ -59,7 +60,12 @@ internal static class ResultSearcher
     /// outcome is the one a single pass gives.</summary>
     /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
-    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
+    /// <summary>How the calling thread's last search used the one before it (<see cref="Narrowing.Repeated"/>), for the checks.</summary>
+    [ThreadStatic] internal static bool? LastNarrowing;
+
+    /// <param name="narrow">Whether the search may read only the rows the result's last search kept (<see cref="SearchMemo"/>)
+    /// and keep what it finds for the next; false searches every row and keeps nothing (the checks' reference).</param>
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool narrow = true)
     {
         var columns = set.Wires.Count;
         using var pin = set.Pin();
@@ -69,6 +75,20 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
+        var plan = narrow ? Narrowing.Plan(set, view, text, matchers, rows) : null;
+        LastNarrowing = plan?.Repeated;
+        try
+        {
+            var found = Search(set, pages, view, matchers, baseRows, rows, text, fromRow, backward, maxMatches, token, stopped, workers, gate, plan);
+            if (found is not null && plan is not null) found = plan.Finish(set, found);
+            return found;
+        }
+        finally { plan?.Dispose(set); }
+    }
+
+    private static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, Matcher?[] matchers, long baseRows, long rows, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, int? workers, ViewSorter.WorkerGate? gate, Narrowing? plan)
+    {
+        var columns = matchers.Length;
         // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
         // reads base order or a view near it). Through a view far from its packed pages' order (a sort, not Local) it is read
         // in page order instead, each row placed at its view position (ByPages), so it is never unpacked whole; that reads
@@ -79,7 +99,7 @@ internal static class ResultSearcher
         // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
         using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(read / MinSlice, ViewSorter.Workers)));
         if (byPages)
-            return ByPages(set, pages, view!, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads);
+            return ByPages(set, pages, view!, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads, plan);
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
@@ -90,7 +110,7 @@ internal static class ResultSearcher
         {
             var part = parts[run] = new Part();
             using var source = new Source(pages, columns, slots, rooms);
-            Scan(part, source, view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped);
+            Scan(part, source, view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped, plan);
         }
         threads.For(runs, Read);
         long total = 0, before = 0, first = -1;
@@ -102,6 +122,7 @@ internal static class ResultSearcher
         {
             if (part.Stopped) return null;
             approximate |= part.Approximate;
+            if (plan is not null) plan.Elsewhere |= part.Elsewhere;
             before += part.Before;
             if (!backward)
             {
@@ -133,7 +154,7 @@ internal static class ResultSearcher
         return new SearchOutcome(rows, total, before - kept, keptRows.GetRange(start, kept).ToArray(), keptColumns.GetRange(start, kept).ToArray(), approximate);
     }
 
-    private static void Scan(Part part, Source source, ResultView? view, Matcher?[] matchers, long from, long to, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped)
+    private static void Scan(Part part, Source source, ResultView? view, Matcher?[] matchers, long from, long to, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, Narrowing? plan)
     {
         var columns = matchers.Length;
         var found = new List<int>(16);
@@ -148,21 +169,39 @@ internal static class ResultSearcher
                 if (stopped?.Invoke() == true) { part.Stopped = true; return; }
                 work = CheckEvery;
             }
+            // A narrowed search passes over the rows the last search ruled out, up to a word of them at a time.
+            if (plan is not null && plan.Skip(position) is var skip and > 0)
+            {
+                work--;
+                position += skip - 1;
+                continue;
+            }
             var row = view is null ? position : view.Order[position];
             if (row >= source.Rows) { part.Stopped = true; return; }
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
+            bool recheck = false, missed = false;
             for (var c = 0; c < columns; c++)
             {
                 if (matchers[c] is not { } matcher || page.IsNull(c, local)) continue;
                 var truncated = page.IsTruncated(c, local);
                 var cell = page.Span(c, local);
                 work -= cellWork + cell.Length;
-                if (matcher.Matches(cell, scratch)) found.Add(c);
-                else if (truncated) part.Approximate = true;
+                var cellRecheck = false;
+                if (plan is { Rechecks: true } ? matcher.Matches(cell, scratch, out cellRecheck) : matcher.Matches(cell, scratch)) found.Add(c);
+                else
+                {
+                    if (truncated) part.Approximate = missed = true;
+                    recheck |= cellRecheck;
+                }
             }
-            if (found.Count == 0) continue;
+            plan?.Mark(position, found.Count > 0, recheck);
+            if (found.Count == 0)
+            {
+                if (missed && !recheck) part.Elsewhere = true;
+                continue;
+            }
             part.Total += found.Count;
             if (position < fromRow) part.Before += found.Count;
             if (!backward)
@@ -187,7 +226,7 @@ internal static class ResultSearcher
     /// result's budget while it runs; TOO_LARGE without room). Each run keeps only the rows the outcome may take (the first
     /// from FromRow, or the last before it, in whole rows to MaxMatches, by view position), so the outcome is the one a pass
     /// in view order gives, with each packed page unpacked once a run instead of once a row.</summary>
-    private static SearchOutcome? ByPages(ResultSetBuffer set, StoredPage[] pages, ResultView view, Matcher?[] matchers, long baseRows, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, ViewSorter.WorkerGate.Lease threads)
+    private static SearchOutcome? ByPages(ResultSetBuffer set, StoredPage[] pages, ResultView view, Matcher?[] matchers, long baseRows, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, ViewSorter.WorkerGate.Lease threads, Narrowing? plan)
     {
         var order = view.Order;
         var bytes = 4L * baseRows;
@@ -211,7 +250,7 @@ internal static class ResultSearcher
             {
                 var part = parts[run] = new Kept(backward, maxMatches);
                 using var source = new Source(pages, matchers.Length, PackedSlots, rooms);
-                ScanPages(part, source, at, matchers, From(run), From(run + 1), textLength, fromRow, token, stopped);
+                ScanPages(part, source, at, matchers, From(run), From(run + 1), textLength, fromRow, token, stopped, plan);
             }
             threads.For(runs, Read);
             long total = 0, before = 0;
@@ -223,6 +262,7 @@ internal static class ResultSearcher
                 total += part.Total;
                 before += part.Before;
                 approximate |= part.Approximate;
+                if (plan is not null) plan.Elsewhere |= part.Elsewhere;
                 rows.AddRange(part.Rows);
             }
             rows.Sort((a, b) => a.Position.CompareTo(b.Position));
@@ -249,7 +289,7 @@ internal static class ResultSearcher
     private sealed class Kept(bool backward, int maxMatches)
     {
         public long Total, Before;
-        public bool Approximate, Stopped;
+        public bool Approximate, Stopped, Elsewhere;
         public bool Backward => backward;
         private readonly PriorityQueue<(long Position, int[] Columns), long> heap = new();
         private int count;
@@ -271,7 +311,7 @@ internal static class ResultSearcher
         }
     }
 
-    private static void ScanPages(Kept part, Source source, int[] at, Matcher?[] matchers, long from, long to, int textLength, long fromRow, CancellationToken token, Func<bool>? stopped)
+    private static void ScanPages(Kept part, Source source, int[] at, Matcher?[] matchers, long from, long to, int textLength, long fromRow, CancellationToken token, Func<bool>? stopped, Narrowing? plan)
     {
         var columns = matchers.Length;
         var found = new List<int>(16);
@@ -289,20 +329,32 @@ internal static class ResultSearcher
             // A row the view leaves out (filtered) is not searched.
             work -= 1;
             var position = at[row];
-            if (position < 0) continue;
+            // A row the last search ruled out is not read: a page holding none of the rest is never unpacked.
+            if (position < 0 || (plan is not null && plan.Skip(position) > 0)) continue;
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
+            bool recheck = false, missed = false;
             for (var c = 0; c < columns; c++)
             {
                 if (matchers[c] is not { } matcher || page.IsNull(c, local)) continue;
                 var truncated = page.IsTruncated(c, local);
                 var cell = page.Span(c, local);
                 work -= cellWork + cell.Length;
-                if (matcher.Matches(cell, scratch)) found.Add(c);
-                else if (truncated) part.Approximate = true;
+                var cellRecheck = false;
+                if (plan is { Rechecks: true } ? matcher.Matches(cell, scratch, out cellRecheck) : matcher.Matches(cell, scratch)) found.Add(c);
+                else
+                {
+                    if (truncated) part.Approximate = missed = true;
+                    recheck |= cellRecheck;
+                }
             }
-            if (found.Count == 0) continue;
+            plan?.Mark(position, found.Count > 0, recheck);
+            if (found.Count == 0)
+            {
+                if (missed && !recheck) part.Elsewhere = true;
+                continue;
+            }
             part.Total += found.Count;
             if (position < fromRow) part.Before += found.Count;
             if (part.Backward ? position >= fromRow : position < fromRow) continue;
@@ -372,10 +424,24 @@ internal static class ResultSearcher
     internal abstract class Matcher
     {
         public abstract bool Matches(ReadOnlySpan<byte> cell, Scratch scratch);
+        /// <summary>How it compares, for narrowing (<see cref="SearchNarrowing"/>).</summary>
+        public abstract SearchNarrowing.Kind Kind { get; }
+        /// <summary>Matches, and for a cell it did not match, whether a longer text narrowing from this one must look at the
+        /// cell again (<see cref="SearchNarrowing"/>): never after an ordinal or hex compare.</summary>
+        public virtual bool Matches(ReadOnlySpan<byte> cell, Scratch scratch, out bool recheck)
+        {
+            recheck = false;
+            return Matches(cell, scratch);
+        }
+
+        /// <summary>What a later text must meet to narrow from the cells this matcher ruled out
+        /// (<see cref="SearchNarrowing.Needs"/>): nothing after an ordinal or hex compare.</summary>
+        public virtual SearchNarrowing.Needs Needs => SearchNarrowing.Needs.None;
     }
 
     private sealed class OrdinalMatcher(string text, StringComparison comparison) : Matcher
     {
+        public override SearchNarrowing.Kind Kind => comparison == StringComparison.Ordinal ? SearchNarrowing.Kind.Ordinal : SearchNarrowing.Kind.OrdinalIgnoreCase;
         public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => scratch.Decode(cell).Contains(text, comparison);
     }
 
@@ -402,6 +468,53 @@ internal static class ResultSearcher
             this.options = options;
             folded = fold?.FoldText(text);
             this.fold = folded is null ? null : fold;
+            asciiText = Ascii.IsValid(text);
+        }
+
+        public override SearchNarrowing.Kind Kind => SearchNarrowing.Kind.Culture;
+
+        /// <summary>The text's fold, when the pre-check runs.</summary>
+        public string? Folded => folded;
+
+        /// <summary>Pre-checks every cell, never stopping for the sampling: a narrowed search, whose rows mostly pass, needs
+        /// the pre-check's answer to keep ruling rows out.</summary>
+        internal bool KeepPrechecking { get; set; }
+
+        public override SearchNarrowing.Needs Needs =>
+            (Volatile.Read(ref ruledByFold) ? SearchNarrowing.Needs.Fold : 0) | (Volatile.Read(ref ruledByAscii) ? SearchNarrowing.Needs.Ascii : 0);
+        private bool ruledByFold, ruledByAscii;
+        private bool? narrowsAscii;
+        private readonly bool asciiText;
+
+        /// <summary>A cell it did not match is ruled out for a longer text when its fold lacked this text's fold (the
+        /// pre-check, while it runs: a text whose fold holds this one's is then not in it either), or when the cell and the
+        /// text are pure ASCII and the culture joins no two ASCII characters (<see cref="SearchNarrowing.SafeCulture"/>);
+        /// any other is looked at again. Which rule ruled cells out is kept (<see cref="Needs"/>).</summary>
+        public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch, out bool recheck)
+        {
+            var chars = default(ReadOnlySpan<char>);
+            recheck = false;
+            if (fold is not null && (KeepPrechecking || Volatile.Read(ref mode) != 2))
+            {
+                int length;
+                var vouched = fold.TryFoldAscii(cell, ref scratch.Folded, out length)
+                    || fold.TryFold(chars = scratch.Decode(cell), ref scratch.Folded, out length);
+                var maybe = !vouched || scratch.Folded.AsSpan(0, length).IndexOf(folded.AsSpan(), StringComparison.Ordinal) >= 0;
+                if (!KeepPrechecking && Volatile.Read(ref mode) == 0) Sample(maybe);
+                if (!maybe)
+                {
+                    if (!ruledByFold) Volatile.Write(ref ruledByFold, true);
+                    return false;
+                }
+            }
+            if (info.IndexOf(chars.IsEmpty && cell.Length > 0 ? scratch.Decode(cell) : chars, text, options) >= 0) return true;
+            if (asciiText && Ascii.IsValid(cell) && (narrowsAscii ??= SearchNarrowing.SafeCulture(info, options)))
+            {
+                if (!ruledByAscii) Volatile.Write(ref ruledByAscii, true);
+                return false;
+            }
+            recheck = true;
+            return false;
         }
 
         /// <summary>Whether the pre-check runs: the culture's fold was ready and the text folds.</summary>
@@ -437,6 +550,7 @@ internal static class ResultSearcher
 
     private sealed class HexMatcher(string text) : Matcher
     {
+        public override SearchNarrowing.Kind Kind => SearchNarrowing.Kind.Hex;
         public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => scratch.Hex(cell).Contains(text, StringComparison.OrdinalIgnoreCase);
     }
 

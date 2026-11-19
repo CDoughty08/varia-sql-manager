@@ -18,15 +18,14 @@ it('measures a one-letter object search over a million objects', () => {
 })
 
 // Find's pre-check before a culture compare (backend/Varia.Backend/Results/SearchFold.cs), timed inside the .NET test
-// program (backend/Varia.Backend.Tests/FindBench.cs) over fictional multilingual cells, with and without the pre-check.
-it('measures Find through a culture compare with and without the pre-check', () => {
+// program (backend/Varia.Backend.Tests/FindBench.cs) over fictional multilingual cells, with and without the pre-check, and
+// type-ahead narrowing (Results/SearchNarrowing.cs): a word typed a key at a time, narrowed and searching every row.
+it('measures Find through a culture compare with and without the pre-check, and typed a key at a time', () => {
   const output = execFileSync('dotnet', ['run', '--project', 'backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj', '--configuration', 'Release', '--', '--find-bench'],
     { encoding: 'utf8', timeout: 280_000, maxBuffer: 16 * 1024 * 1024 })
   const measured = new Map(output.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line) as Metric).map(metric => [metric.id, metric]))
-  const time = measured.get('node.find.prechecked'), speedup = measured.get('node.find.precheckSpeedup')
-  expect(time && speedup).toBeTruthy()
-  record(
-    { id: 'node.find.prechecked', value: time!.value, unit: 'ms', detail: time!.detail },
-    { id: 'node.find.precheckSpeedup', value: speedup!.value, unit: 'x', detail: speedup!.detail }
-  )
+  const ids = ['node.find.prechecked', 'node.find.precheckSpeedup', 'node.find.typeAhead', 'node.find.typeAheadSpeedup']
+  const metrics = ids.map(id => measured.get(id))
+  expect(metrics.every(Boolean)).toBe(true)
+  record(...metrics.map(metric => ({ id: metric!.id, value: metric!.value, unit: metric!.unit, detail: metric!.detail })))
 })

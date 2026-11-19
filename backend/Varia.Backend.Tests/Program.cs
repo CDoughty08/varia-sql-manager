@@ -27,6 +27,11 @@ if (args is [SearchBench.Argument])
     return;
 }
 // tests/bench/search.bench.ts: measures only, no checks.
+if (args is [FindBench.MessagesArgument, var messagesServer, ..])
+{
+    FindBench.RunMessages(messagesServer, args.Length > 2 ? args[2] : null);
+    return;
+}
 if (args is [FindBench.Argument])
 {
     FindBench.Run();
@@ -409,6 +414,7 @@ if (liveGroup is null)
         ("Diff", Sync(() => DiffChecks.Run(Check))),
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
+        ("SearchNarrowing", Sync(() => SearchNarrowingChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
@@ -473,7 +479,7 @@ if (liveGroup is null)
     await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
     // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
     // job meets packed pages through the accessor. Alone, after the first pass: the default is process-wide.
-    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "SearchNarrowing", "ParallelResult", "CellLength", "Text", "TransposedText"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
     Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result");

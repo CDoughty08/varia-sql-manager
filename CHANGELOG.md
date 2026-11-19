@@ -24,6 +24,7 @@
 - **More rows fit in result memory:** Compressed results take less memory, so more of them fit before Varia has to make room: a fifth less for a typical query, over a third less for results of numbers and dates. Reading them is as fast as before.
 - **Animations play unless you ask Varia to follow the system:** Menus, dialogs, hover fills, spinners and the live dot now animate even when the operating system asks for reduced motion. To have Varia follow that preference again, turn on Tools › Options › Environment › General › Reduce motion when the system asks; popouts and dialog windows follow it too.
 - **Faster Find in text that is not English:** Find in Results and the column filter's value search look through accented and non-English text in a column with a linguistic (not binary) collation about three times faster, finding exactly what they found before.
+- **Find keeps up as you type:** Each key typed into Find in Results or a column filter's search now looks only through the rows (or values) the text before it could still match, and Find Next and Find Previous look only through the matches, so a large result answers sooner as the text grows: typing a word into SQL Server's own messages in every language takes about half the time, and a third or less in English text. The answers are the same as a full search; text Varia cannot safely rule out (such as Japanese and Chinese punctuation, or a language that reads two letters as one, like Czech ch) is searched again each key.
 
 ### Fixes
 
