@@ -92,6 +92,7 @@ import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
+import { providerSwitchToast } from '../../src/renderer/src/languages/query-language'
 import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
 import { ReleaseNotesService } from '../../src/renderer/src/release-notes/ReleaseNotesService'
 import { HelpService } from '../../src/renderer/src/help/HelpService'
@@ -265,7 +266,9 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  */
 export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
-  const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server })
+  const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
+    provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
+    providerChanged: document => { notifications.notify(providerSwitchToast(document)) } })
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
   const sessionStates = new Map<string, number | 'unchecked'>()
   const bindingListeners = new Set<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>()

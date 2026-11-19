@@ -65,7 +65,7 @@ export const peekCardContextKey = 'variaPeekCard'
  * as with VS Code's peek, Escape closes the card first and clears the selection next.
  */
 export const monacoEscapeContextKeys = ['suggestWidgetVisible', 'findWidgetVisible', 'messageVisible', 'inSnippetMode', 'codeActionMenuVisible', 'referenceSearchVisible',
-  'inReferenceSearchEditor', 'markersNavigationVisible', 'hasSymbols', 'cancellableOperation', 'inQuickInput'] as const
+  'inReferenceSearchEditor', 'markersNavigationVisible', 'hasSymbols', 'cancellableOperation', 'inQuickInput', 'parameterHintsVisible'] as const
 export const peekCardEscapeWhen = [peekCardContextKey, ...monacoEscapeContextKeys.map(key => `!${key}`)].join(' && ')
 export const closePeekCardCommand = 'varia.closePeekCard'
 

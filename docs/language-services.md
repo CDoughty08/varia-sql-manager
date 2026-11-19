@@ -2,7 +2,8 @@
 
 Varia supplies completion, hover and query diagnostics through Microsoft SQL Tools Service. SQL Server is the only
 provider; the editor-facing contract and transport are provider-neutral so another engine can use a different language
-server without changing the Monaco integration.
+server without changing the Monaco integration. BigQuery queries are GoogleSQL, which SQL Tools never sees; its editor is
+described in [googlesql.md](googlesql.md).
 
 Installed applications include the matching self-contained runtime for Windows x64, Linux x64, macOS arm64 or macOS x64.
 IntelliSense needs no separate installation, path setting or first-launch download.

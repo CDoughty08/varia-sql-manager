@@ -54,6 +54,8 @@ export interface RecoveredDocument {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly file?: SqlFile
+  /** The query's engine as kept (absent: SQL Server): it reopens in that engine's language, with no connection. */
+  readonly provider?: ProviderId
 }
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */

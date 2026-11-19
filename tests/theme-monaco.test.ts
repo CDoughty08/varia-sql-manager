@@ -5,6 +5,7 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { parseThemeFile } from '../src/shared/theme/format'
 import { documentTokenScopes, toMonacoTheme } from '../src/shared/theme/monaco'
 import { jsonLanguage } from '../src/renderer/src/languages/json'
+import { googleSqlLanguage } from '../src/renderer/src/languages/googlesql'
 import { colorKeys, sqlScopes } from '../src/shared/theme/registry'
 import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 
@@ -57,6 +58,14 @@ describe('Monaco theme', () => {
       const data = toMonacoTheme(resolveBuiltin(type))
       const tokens = data.rules.map(rule => rule.token)
       for (const token of emitted) expect(tokens.filter(value => value === token), token).toHaveLength(1)
+    }
+  })
+  it('colours GoogleSQL with the SQL scopes alone, so custom syntax colours apply to both query languages', () => {
+    const emitted = tokensOf(googleSqlLanguage as Language)
+    emitted.delete('white.sql')
+    expect([...emitted].filter(token => !sqlScopes.some(scope => scope + '.sql' === token))).toEqual([])
+    for (const scope of ['keyword', 'operator', 'predefined', 'string', 'number', 'comment', 'comment.quote', 'identifier', 'identifier.quote', 'delimiter', 'delimiter.parenthesis', 'delimiter.square']) {
+      expect(emitted, scope).toContain(scope + '.sql')
     }
   })
   it('colours every token of the XML and JSON tokenizers exactly once, as the SQL scope it stands for', async () => {

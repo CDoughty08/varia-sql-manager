@@ -119,5 +119,9 @@ export const monacoKeyRules: readonly MonacoKeyRule[] = [
   { command: 'insertBestCompletion', when: 'atEndOfWord && textInputFocus && !hasOtherSuggestions && !inSnippetMode && !suggestWidgetVisible && config.editor.tabCompletion == \'on\'', keys: { win32: [['tab']], linux: [['tab']], darwin: [['tab']] } },
   { command: 'insertNextSuggestion', when: 'hasOtherSuggestions && textInputFocus && !inSnippetMode && !suggestWidgetVisible && config.editor.tabCompletion == \'on\'', keys: { win32: [['tab']], linux: [['tab']], darwin: [['tab']] } },
   { command: 'insertPrevSuggestion', when: 'hasOtherSuggestions && textInputFocus && !inSnippetMode && !suggestWidgetVisible && config.editor.tabCompletion == \'on\'', keys: { win32: [['shift+tab']], linux: [['shift+tab']], darwin: [['shift+tab']] } },
-  { command: 'suggestWidgetCopy', when: 'suggestWidgetDetailsFocused', keys: { win32: [['ctrl+c'], ['ctrl+insert']], linux: [['ctrl+c']], darwin: [['meta+c']] } }
+  { command: 'suggestWidgetCopy', when: 'suggestWidgetDetailsFocused', keys: { win32: [['ctrl+c'], ['ctrl+insert']], linux: [['ctrl+c']], darwin: [['meta+c']] } },
+  { command: 'editor.action.triggerParameterHints', title: 'Trigger Parameter Hints', when: 'editorHasSignatureHelpProvider && editorTextFocus', keys: { win32: [['ctrl+shift+space']], linux: [['ctrl+shift+space']], darwin: [['shift+meta+space']] } },
+  { command: 'closeParameterHints', when: 'editorFocus && parameterHintsVisible', keys: { win32: [['escape'], ['shift+escape']], linux: [['escape'], ['shift+escape']], darwin: [['escape'], ['shift+escape']] } },
+  { command: 'showPrevParameterHint', when: 'editorFocus && parameterHintsMultipleSignatures && parameterHintsVisible', keys: { win32: [['up'], ['alt+up']], linux: [['up'], ['alt+up']], darwin: [['up'], ['alt+up'], ['ctrl+p']] } },
+  { command: 'showNextParameterHint', when: 'editorFocus && parameterHintsMultipleSignatures && parameterHintsVisible', keys: { win32: [['down'], ['alt+down']], linux: [['down'], ['alt+down']], darwin: [['down'], ['alt+down'], ['ctrl+n']] } }
 ]

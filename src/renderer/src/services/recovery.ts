@@ -120,11 +120,14 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
     const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
+    // A BigQuery query keeps its engine, so it reopens as GoogleSQL; SQL Server is the absence of one.
+    const bigQuery = !document.kind && document.provider === 'bigquery'
     try {
       unwrap(await this.options.api.writeRecovery({
         id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...document.file ? { fileId: document.file.id } : {},
         eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
-        ...server && document.database ? { database: document.database.slice(0, recoveryLimits.databaseChars) } : {}, text: model.getValue()
+        ...server && document.database ? { database: document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) } : {},
+        ...bigQuery ? { provider: 'bigquery' as const } : {}, text: model.getValue()
       }))
       kept.version = version
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
@@ -184,7 +187,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
           let taken
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)
-          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file)
+          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider)
           this.resume(document.id, id)
         }
       } finally { await this.options.files.release(files) }

@@ -11,7 +11,7 @@ import type { Workbench } from '../core/workbench'
 import { focusWhenDrawn } from '../core/modal'
 import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
-import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
+import { documentInfo, documentKind, isCustomKind, isQueryDocument, isTextDocument, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
 import TabShelves from './TabShelves'
@@ -221,7 +221,7 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     return () => node.removeEventListener('pointerdown', own)
   }, [])
   if (!tab) return null
-  const kind = kindInfo[documentKind(tab)], pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
+  const kind = documentInfo(tab), pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
   const rememberedServer = isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
   const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : spid === undefined ? '—' : `SID ${spid}`}</span>
   const metadata = sid || environmentTag(environment)

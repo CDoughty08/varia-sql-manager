@@ -2,7 +2,7 @@ import type { BackendStatus, RecentFile } from '../../../shared/contracts'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
-import { isQueryDocument, isTextDocument } from '../documents'
+import { documentProvider, isQueryDocument, isTextDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { EditorGroupSnapshot } from '../services/editor-groups'
 import type { BookmarkSnapshot } from '../editor/bookmarks'
@@ -170,8 +170,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     resultsColumnProfile: !!inputs.resultsColumnProfile, resultsProfileSelectedOnly: !!inputs.resultsProfileSelectedOnly, resultsRowSize: !!inputs.resultsRowSize, resultsTabs: inputs.resultsLayout === 'tabs', resultsGridTransposed: !!active && !!inputs.resultsTurned?.[active.id],
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
-    // Every document is SQL Server's until query documents carry a provider (docs/bigquery-plan.md, BQ-4).
-    hasActiveDocument: !!active, activeDocumentProvider: active ? 'sqlserver' : '', activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
+    // A query's engine follows its connection; every other document is SQL Server's.
+    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,
     propertiesRefreshable: !!properties?.refreshable, activeDocumentIsTableProperties: active?.kind === 'tableProperties',
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,

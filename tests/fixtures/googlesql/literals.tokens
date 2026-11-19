@@ -1,0 +1,84 @@
+1: SELECT 'single', "double", 'it\'s', "say \"hi\"", '';
+    keyword                SELECT
+    string                 'single'
+    delimiter              ,
+    string                 "double"
+    delimiter              ,
+    string                 'it\'s'
+    delimiter              ,
+    string                 "say \"hi\""
+    delimiter              ,
+    string                 ''
+    delimiter              ;
+2: SELECT r'raw \d+', R"raw", b'bytes', B"bytes", rb'\x00', BR"\n", br'x';
+    keyword                SELECT
+    string                 r'raw \d+'
+    delimiter              ,
+    string                 R"raw"
+    delimiter              ,
+    string                 b'bytes'
+    delimiter              ,
+    string                 B"bytes"
+    delimiter              ,
+    string                 rb'\x00'
+    delimiter              ,
+    string                 BR"\n"
+    delimiter              ,
+    string                 br'x'
+    delimiter              ;
+3: SELECT '''triple
+    keyword                SELECT
+    string                 '''triple
+4: single, with 'quotes' and \''' inside''', """triple
+    string                 single, with 'quotes' and \''' inside'''
+    delimiter              ,
+    string                 """triple
+5: double""";
+    string                 double"""
+    delimiter              ;
+6: SELECT 42, -7, 3.14, .5, 1e10, 2.5E-3, 0x1F, 0XFF;
+    keyword                SELECT
+    number                 42
+    delimiter              ,
+    operator               -
+    number                 7
+    delimiter              ,
+    number                 3.14
+    delimiter              ,
+    number                 .5
+    delimiter              ,
+    number                 1e10
+    delimiter              ,
+    number                 2.5E-3
+    delimiter              ,
+    number                 0x1F
+    delimiter              ,
+    number                 0XFF
+    delimiter              ;
+7: SELECT DATE '2026-11-18', TIMESTAMP '2026-11-18 09:30:00 UTC', NUMERIC '1.5', JSON '{"a": 1}';
+    keyword                SELECT
+    keyword                DATE
+    string                 '2026-11-18'
+    delimiter              ,
+    keyword                TIMESTAMP
+    string                 '2026-11-18 09:30:00 UTC'
+    delimiter              ,
+    keyword                NUMERIC
+    string                 '1.5'
+    delimiter              ,
+    keyword                JSON
+    string                 '{"a": 1}'
+    delimiter              ;
+8: SELECT TRUE, FALSE, NULL, 'unclosed
+    keyword                SELECT
+    keyword                TRUE
+    delimiter              ,
+    keyword                FALSE
+    delimiter              ,
+    keyword                NULL
+    delimiter              ,
+    string                 'unclosed
+9: SELECT 'next line is code again';
+    keyword                SELECT
+    string                 'next line is code again'
+    delimiter              ;
