@@ -1357,7 +1357,7 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   cells in row, column order; `first` counts matches before the run (or before `fromRow` when empty). `complete`: the rows searched were
   every row of a finished set; `approximate`: a truncated prefix did not match. It reserves no budget (at most 1 MiB of page layouts), except one- or two-page rooms to
   read a packed result and, through a view far from a packed result's pages (a sort), the view's inverse, 4 bytes a row of the result (not of the view),
-  as it reads that result in page order instead of unpacking it (`TOO_LARGE`). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
+  as it reads that result in page order instead of unpacking it (`TOO_LARGE`), and the memo it keeps for narrowing (below). CANCEL (a newer search), the result's release (`RESULT_RELEASED`) or the view's
   close (`VIEW_NOT_FOUND`) stop it at the next checkpoint.
 - **Matching.** A cell matches when its grid text contains the text; NULL, unreadable and hidden columns never match.
   Character columns compare as `LIKE '%text%'` under their collation (code points for _BIN/_BIN2); text of only
@@ -1381,6 +1381,34 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
   and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
   filter's value search uses the same matcher.
+- **Narrowing while typing** (`Results/SearchNarrowing.cs`). Each search keeps a memo on its result: its text, view and
+  rows, what each column's ruling out needs, and two bits a position (matched; did not match but must be looked at
+  again). The next search reads only the matched positions when its text is the same (Find Next and Previous), or the
+  matched and recheck positions when its text holds the last one anywhere (typing on, or a key typed in front), with no
+  protocol change; positions sealed since are read in full. "Whatever holds `abcd` held `abc`" is false under a
+  linguistic compare (combining marks, expansions such as ß and ﬁ, jamo, ignorable characters, contractions such as
+  Czech ch), so a culture column's cell that did not match is passed over only when one of two rules ruled it out:
+  - **Pre-check:** its fold lacked the text's fold. The pre-check is sound and folds go character by character, so the
+    cell is ruled out for any later text whose fold holds this text's fold (checked when that text is searched).
+  - **ASCII:** the cell and the text are ASCII and the culture joins no two ASCII characters into one letter, found by
+    asking its collator about every ASCII pair (Czech and Slovak ch, Albanian, Welsh, Serbian Latin, Danish, Norwegian,
+    Hungarian, Croatian; triples found nothing more) or by rule (Thai); a later text must be ASCII too. Used without a
+    fold, or when the pre-check stopped for most cells passing it; a narrowed search keeps pre-checking.
+
+  Any other cell that did not match (one the fold cannot vouch for that is not ASCII) is looked at again. Ordinal and
+  binary columns narrow freely; a column whose compare changes kind (text of only ignorable characters is searched by
+  code point) does not narrow. A truncated cell that did not match in a row passed over still makes the answer
+  `approximate`, so when there was one, a binary column that the new text no longer matches (hex text grown a non-hex
+  letter) means a full search. The memo is spare memory (`TryReserveSpare`: never the budget's last eighth; none without room, and the
+  search still answers), replaced by the next search's, and freed with its result (re-execute, Close Results, tab close,
+  backend loss). Typing a word into all 367,576 of SQL Server's messages takes 1.4 – 1.8 times less time than searching
+  every row each key (2 – 5 times over the English ones, 85 – 100 % saved a key from the third on); Japanese and Chinese
+  messages, whose punctuation and ー the fold does not vouch for, gain nothing. The first key or two cost up to a few
+  milliseconds more (the memo, and pre-checking on). `SearchNarrowingChecks` types random keys (on, in front, backspace,
+  Find Next) into results of eleven collations, in base order, through a sort and a filter, packed and not, dense and
+  one cell a row, and while a result loads, and compares every answer with a search of every row; breaking any rule
+  above fails it. The value search narrows its distinct values the same way from the last search's marks, which its
+  snapshot already charges.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
@@ -2454,7 +2482,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
   Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
   characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits
-  below real multilingual text's.
+  below real multilingual text's. It also types a 14-letter word a key at a time into
+  400,000 cells of the sentences the fold vouches for, narrowed and searching every row each key
+  (`node.find.typeAhead*`, about 3.8 times); `--find-bench-messages <server> [language_id]`, run by hand, does the same
+  over `sys.messages` with one SELECT.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml
