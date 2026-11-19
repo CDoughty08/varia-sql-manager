@@ -64,9 +64,9 @@ internal static class AgentChecks
                 await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"extra\":1}")
             };
             check(codes.SequenceEqual(["NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]) && SqlService.MethodNames.Contains("agent.profile") && sql.Methods.Contains("agent.profile")
-                && sql.LaneOf("agent.profile") == RequestLane.Metadata && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
+                && sql.LaneOf("agent.profile") == RequestLane.Explorer && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
                 && Providers.Of("agent.profile").SequenceEqual([Providers.SqlServer]),
-                "agent.profile is a SQL Server-only read on the metadata lane that checks its ids and members before the connection: " + string.Join(", ", codes));
+                "agent.profile is a SQL Server-only read on the explorer lane that checks its ids and members before the connection: " + string.Join(", ", codes));
         }
 
         AgentProfileArgs Args() => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString());

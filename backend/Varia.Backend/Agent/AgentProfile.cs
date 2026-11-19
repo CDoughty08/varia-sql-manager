@@ -85,7 +85,7 @@ namespace Varia.Backend.Explorer
 
     internal sealed partial class ExplorerService
     {
-        /// <summary>agent.profile: the batch above in msdb on the Object Explorer pool under the tree's gates, within the Agent
+        /// <summary>agent.profile: the batch above in msdb on the Object Explorer pool under its own slot per connection (never the tree's gates, as Peek), within the Agent
         /// catalogue's <c>profileMs</c> from the moment it has its slots (a TIMEOUT value past it). A server with no Agent answers
         /// NOT_SUPPORTED without connecting; msdb refusing the login (NO_DB_ACCESS) is a profile with no role, not a failure.</summary>
         public async Task<AgentProfileResult> AgentProfileAsync(AgentProfileArgs args, CancellationToken token)
@@ -110,7 +110,7 @@ namespace Varia.Backend.Explorer
                         ? new AgentProfileResult(read, 0)
                         : new AgentProfileResult(null, 0, AgentProfileSql.NoRow),
                     error => AgentProfileSql.Failed(error, platform, server.EngineEdition),
-                    source.Token, started: () => source.CancelAfter(budget));
+                    source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget));
                 return result with { ElapsedMs = watch.ElapsedMilliseconds };
             }
             catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)

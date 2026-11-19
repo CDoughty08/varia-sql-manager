@@ -288,7 +288,7 @@ noted where it matters.
 | `ssis.catalogSetup` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock timeout 10 s: `BLOCKED`) |
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
-| `agent.profile` | invoke | unary: one login's SQL Server Agent facts ([SQL Server Agent](sql-server-agent.md)); SQL Server only | metadata, under Object Explorer's gates | 15 s, budget 10 s from when it has the slots (`agentLimits.profileMs`). Main checks the answer (`agentProfileResultSchema`) |
+| `agent.profile` | invoke | unary: one login's SQL Server Agent facts ([SQL Server Agent](sql-server-agent.md)); SQL Server only | explorer, on its own slot per connection (never behind the tree's paging) | 15 s, budget 10 s from when it has the slot (`agentLimits.profileMs`). Main checks the answer (`agentProfileResultSchema`) |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`) | unary | control | 10 s (note 3 below) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; only with `VARIA_BACKEND_TEST_HOOKS=1` |

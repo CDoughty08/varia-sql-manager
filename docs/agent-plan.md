@@ -1107,7 +1107,7 @@ its `MethodNames` entry and C# record; string inputs get max lengths in both zod
 
 | Method | Purpose | Policy notes |
 | --- | --- | --- |
-| `agent.profile` | Capability read (roles, server state, Database Mail access, platform, Agent state) | Metadata slot, short deadline |
+| `agent.profile` | Capability read (roles, server state, Database Mail access, platform, Agent state) | Explorer lane, its own slot per connection, short deadline |
 | `agent.historyMessage` | One history row's full message (`instance_id`) | Metadata slot |
 | `agent.errorLogs` | Error log list (`xp_enumerrorlogs 2`) for the Log File Viewer's sources | Metadata slot |
 | Existing `actions.describe` / `actions.execute` | Job, alert, operator, proxy, credential, schedule, Agent Properties describes and every write, service control included | As other object actions; credential execute is sensitive |

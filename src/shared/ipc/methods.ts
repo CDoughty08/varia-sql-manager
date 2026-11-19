@@ -164,9 +164,9 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.
   'activity.details': { kind: 'unary', lane: 'live', deadlineMs: 15_000 },
   'activity.kill': { kind: 'unary', lane: 'actions', deadlineMs: 30_000 },
-  // SQL Server Agent's capability read: one small batch in msdb under Object Explorer's gates. Its own 10 s budget starts once it
-  // holds the gates' slots and ends as a TIMEOUT value; a wait for busy slots past this deadline is a DEADLINE failure instead. SQL Server only (no `providers`), so a BigQuery handle gets UNSUPPORTED_PROVIDER.
-  'agent.profile': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
+  // SQL Server Agent's capability read: one small batch in msdb on the Object Explorer pool, on its own slot per connection (as
+  // Peek, never queued behind the tree's paging). Its own 10 s budget starts once it holds that slot and ends as a TIMEOUT value. SQL Server only (no `providers`), so a BigQuery handle gets UNSUPPORTED_PROVIDER.
+  'agent.profile': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
