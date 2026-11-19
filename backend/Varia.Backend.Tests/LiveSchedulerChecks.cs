@@ -84,7 +84,20 @@ internal static class LiveSchedulerChecks
         ("writetext", "DECLARE @p varbinary(16); WRITETEXT dbo.t.c @p N'x';"),
         ("next value for", "SELECT NEXT VALUE FOR dbo.s AS n;"),
         ("raiserror with log", "SELECT 1 AS a; RAISERROR (N'x', 10, 1) WITH LOG;"),
-        ("if print", "SELECT 1 AS a; IF 1 = 1 PRINT N'x';")
+        ("if print", "SELECT 1 AS a; IF 1 = 1 PRINT N'x';"),
+        // SQL Server reads U+200B and U+001F as whitespace; .NET's \s does not, so they split a multi-word pattern.
+        ("next value for split by a zero-width space", "SELECT NEXT​VALUE FOR dbo.s AS n;"),
+        ("next value for split by a unit separator", "SELECT NEXT\u001FVALUE\u001FFOR dbo.s AS n;"),
+        ("built-in split by a zero-width space", "SELECT OBJECT_NAME​(3) AS n;"),
+        ("four-part name", "SELECT o.name FROM L.master.sys.objects AS o;"),
+        ("four-part name, bracketed", "SELECT o.name FROM [L].[master].[sys].[objects] AS o;"),
+        ("four-part name, default parts", "SELECT o.name FROM L..sys.objects AS o;"),
+        ("four-part name, spaced", "SELECT o.name FROM L . master . sys . objects AS o;"),
+        ("exclusive lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (TABLOCKX);"),
+        ("update lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (UPDLOCK, HOLDLOCK);"),
+        ("exclusive row lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (XLOCK);"),
+        ("fetch from a cursor", "SELECT 1 AS a; FETCH NEXT FROM c;"),
+        ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")
     ];
 
     private static void SqlChecks(Action<bool, string> check)
@@ -210,7 +223,10 @@ internal static class LiveSchedulerChecks
             "SELECT 1 AS [order -- by];",
             "SELECT 0x AS a, 0x0A AS b, 1.5 AS c, 10 AS d, s.open_transaction_count FROM sys.dm_exec_sessions AS s WHERE s.session_id > 50;",
             "IF 1 = 1 SELECT 1 AS a;\nELSE BEGIN\nSELECT 2 AS a;\nEND;",
-            "SELECT 1 AS [1DELETE], N'SET 1e1EXEC' AS b;"
+            "SELECT 1 AS [1DELETE], N'SET 1e1EXEC' AS b;",
+            "SELECT a.id FROM (SELECT s.session_id AS id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id DESC OFFSET @tail0 ROWS FETCH NEXT 1 ROWS ONLY) AS a;",
+            "SELECT s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id OFFSET 0 ROW FETCH FIRST @take ROW ONLY;",
+            "SELECT 0X0A AS a,N'​ é' AS b, o.name FROM master.sys.objects AS o WITH (NOLOCK) WHERE o.object_id > 0;"
         }.Where(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text).Count != 0).ToList();
         check(missed.Count == 0 && good.Count == 0,
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "

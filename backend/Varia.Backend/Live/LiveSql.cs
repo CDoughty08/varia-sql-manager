@@ -307,18 +307,27 @@ internal static partial class LiveSql
         new Regex(@"\b" + Regex.Escape(builtin.TrimEnd('(')) + (builtin.EndsWith('(') ? @"\s*\(" : ""), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))];
 
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
-    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
     /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
     /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
     [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
     private static partial Regex Number();
-    [GeneratedRegex(@"^(?:[0-9]+(?:\.[0-9]*)?|0x[0-9A-Fa-f]*)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(?:[0-9]+(?:\.[0-9]*)?|0[xX][0-9A-Fa-f]*)$", RegexOptions.CultureInvariant)]
     private static partial Regex PlainNumber();
+    /// <summary>A four-part name (<c>server.database.schema.object</c>, parts optional but the last), which reads through a
+    /// linked server as OPENQUERY would. Bracketed and quoted parts are blanked to <c>[x]</c> before this runs.</summary>
+    [GeneratedRegex(@"(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)", RegexOptions.CultureInvariant)]
+    private static partial Regex FourPartName();
+    /// <summary>Code outside printable ASCII, tab and line breaks. SQL Server reads some characters .NET's <c>\s</c> does not
+    /// (U+200B, U+001C–U+001F) as whitespace, which would split every multi-word pattern here; literals are blanked first.</summary>
+    [GeneratedRegex(@"[^\x20-\x7E\t\r\n]", RegexOptions.CultureInvariant)]
+    private static partial Regex Unprintable();
     /// <summary>Every statement keyword but SELECT, WITH, DECLARE and the control flow IF, ELSE and BEGIN … END (BEGIN only before
     /// one of those, so BEGIN TRAN and BEGIN DIALOG are refused; END CONVERSATION by its second word). Every T-SQL statement opens
-    /// with a keyword, so this is an allow list of statement kinds, where <see cref="Forbidden"/> is a deny list.</summary>
-    [GeneratedRegex(@"(?<![\w@#])(?:ADD|ALTER|BACKUP|BREAK|BULK|CHECKPOINT|CLOSE|COMMIT|CONTINUE|CONVERSATION|CREATE|CURSOR|DBCC|DEALLOCATE|DELETE|DENY|DIALOG|DISABLE|DROP|ENABLE|EXEC|EXECUTE|FETCH|GET|GOTO|GRANT|INSERT|INTO|KILL|MERGE|MOVE|OPEN|PRINT|RAISERROR|READTEXT|RECEIVE|RECONFIGURE|RESTORE|RETURN|REVERT|REVOKE|ROLLBACK|SAVE|SEND|SET|SETUSER|SHUTDOWN|SIGNATURE|THROW|TRUNCATE|UPDATE|UPDATETEXT|USE|WAITFOR|WHILE|WRITETEXT|NEXT\s+VALUE\s+FOR|BEGIN(?!\s+(?:SELECT|WITH|DECLARE|IF)(?![\w$])))(?![\w$])",
+    /// with a keyword, so this is an allow list of statement kinds, where <see cref="Forbidden"/> is a deny list. FETCH passes
+    /// only as ORDER BY's paging clause, <c>OFFSET … ROWS FETCH NEXT n ROWS ONLY</c>.</summary>
+    [GeneratedRegex(@"(?<![\w@#])(?:ADD|ALTER|BACKUP|BREAK|BULK|CHECKPOINT|CLOSE|COMMIT|CONTINUE|CONVERSATION|CREATE|CURSOR|DBCC|DEALLOCATE|DELETE|DENY|DIALOG|DISABLE|DROP|ENABLE|EXEC|EXECUTE|(?<!\bROWS?\s+)FETCH|FETCH(?!\s+(?:NEXT|FIRST)\s+(?:@\w+|[0-9]+)\s+ROWS?\s+ONLY(?![\w$]))|GET|GOTO|GRANT|INSERT|INTO|KILL|MERGE|MOVE|OPEN|PRINT|RAISERROR|READTEXT|RECEIVE|RECONFIGURE|RESTORE|RETURN|REVERT|REVOKE|ROLLBACK|SAVE|SEND|SET|SETUSER|SHUTDOWN|SIGNATURE|THROW|TRUNCATE|UPDATE|UPDATETEXT|USE|WAITFOR|WHILE|WRITETEXT|NEXT\s+VALUE\s+FOR|BEGIN(?!\s+(?:SELECT|WITH|DECLARE|IF)(?![\w$])))(?![\w$])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex StatementKeyword();
     [GeneratedRegex(@"\s+")]
@@ -366,6 +375,8 @@ internal static partial class LiveSql
         foreach (Match number in Number().Matches(statement))
             if (!PlainNumber().IsMatch(number.Value)) problems.Add("glues a word to the number " + number.Value);
         foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
+        if (Unprintable().IsMatch(code)) problems.Add("has a character outside printable ASCII in its code");
+        if (FourPartName().IsMatch(code)) problems.Add("reads a four-part name through a linked server");
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");
         if (code.Contains("@@SPID", StringComparison.OrdinalIgnoreCase) && !text.EndsWith(Session, StringComparison.Ordinal) && !text.EndsWith(SsisSession, StringComparison.Ordinal))
