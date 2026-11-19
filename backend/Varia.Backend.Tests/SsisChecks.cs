@@ -270,7 +270,7 @@ internal static class SsisChecks
         check(Empty(new ExplorerProfile(16, false)) is null && Empty(new ExplorerProfile(16, false, true)) is { Code: "NOT_SUPPORTED", Retryable: false } linux && linux.Message.Contains("Linux", StringComparison.Ordinal)
             && Empty(new ExplorerProfile(16, true)) is { Code: "NOT_SUPPORTED" } cloud && cloud.Message.Contains("SSISDB or master", StringComparison.Ordinal),
             "an empty Integration Services Catalogs folder is empty on Windows, and says why on Linux and Azure SQL Database");
-        check(new ServerProfile(16, null, 3, null, false, false, false, 16, Linux: true).Explorer(catalog) == new ExplorerProfile(16, false, true)
+        check(new ServerProfile(16, null, 3, null, false, false, false, 16, Linux: true).Explorer(catalog) == new ExplorerProfile(16, false, true, Agent: "linux")
             && ServerProfile.ProbeSql.Contains("SERVERPROPERTY('PathSeparator')", StringComparison.Ordinal), "the server profile says whether SQL Server runs on Linux (PathSeparator, 2017 and later)");
         var text = ExplorerQueries.All["ssisPackages"].Render(new SqlRender(17));
         check(text.StartsWith("DECLARE @owner_id bigint;\nSELECT @owner_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE f.name = @ssis_folder AND p.name = @object_name;\n"

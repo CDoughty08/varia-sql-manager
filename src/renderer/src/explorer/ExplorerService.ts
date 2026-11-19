@@ -107,6 +107,9 @@ export interface ExplorerServiceOptions {
   readonly now?: () => number
   /** Whether Group by Schema is on (the `objectExplorer.groupBySchema` setting), and a signal when it may have changed. */
   readonly groupBySchema?: GroupBySchemaSource
+  /** SQL Server Agent's release gate (`agentEnabled`, `VARIA_AGENT_PREVIEW=1`): while off, the server's Agent node is dropped and the
+   *  tree is today's. */
+  readonly agentEnabled?: boolean
   /** The connection workspace: the servers' saved order and expansion (`ConnectionTargetService`). */
   readonly targets?: ExplorerTargets
 }
@@ -289,6 +292,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
   private grouped = false
+  private readonly agentEnabled: boolean
   private readonly targets?: ExplorerTargets
   /** Per server row, what its saved expansion still has to restore as pages arrive. */
   private readonly restoring = new Map<number, Restoring>()
@@ -314,6 +318,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.grouping = options.groupBySchema
+    this.agentEnabled = options.agentEnabled ?? false
     this.targets = options.targets
     this.grouped = !!this.grouping?.get()
     this.unsubscribeGrouping = this.grouping?.subscribe(() => this.guard(() => this.groupingChanged()))
@@ -1241,9 +1246,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const root = this.rootOf(node)
     if (outcome.ok && !outcome.result.error) {
       if (root?.connectionError) { root.connectionError = undefined; root.rev++ }
-      if (running.mode === 'more') this.appendPage(node, outcome.result.nodes, outcome.result.cursor)
-      else if (running.mode === 'reconcile') this.reconcileFirst(node, outcome.result.nodes, outcome.result.cursor, outcome.result.total, running.deep)
-      else this.firstPage(node, outcome.result.nodes, outcome.result.cursor, outcome.result.total)
+      const { nodes, total } = this.gated(outcome.result.nodes, outcome.result.total)
+      if (running.mode === 'more') this.appendPage(node, nodes, outcome.result.cursor)
+      else if (running.mode === 'reconcile') this.reconcileFirst(node, nodes, outcome.result.cursor, total, running.deep)
+      else this.firstPage(node, nodes, outcome.result.cursor, total)
     } else {
       const error: NodeError = outcome.ok ? outcome.result.error! : outcome.error
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
@@ -1260,6 +1266,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
     this.advanceSeek()
     if (this.opened?.chain) this.advanceOpen()
+  }
+  /** A page without the SQL Server Agent node while Agent's release gate is off (the backend serves it wherever Agent runs). */
+  private gated(nodes: readonly WireNode[], total: number | undefined): { readonly nodes: readonly WireNode[]; readonly total: number | undefined } {
+    if (this.agentEnabled) return { nodes, total }
+    const kept = nodes.filter(node => !(node.ref.type === 'object' && node.ref.object.kind === 'agent'))
+    return kept.length === nodes.length ? { nodes, total } : { nodes: kept, total: total === undefined ? undefined : total - (nodes.length - kept.length) }
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
     const truncated = this.replaceChildren(node, wires)

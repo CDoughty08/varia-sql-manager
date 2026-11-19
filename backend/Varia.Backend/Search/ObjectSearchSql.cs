@@ -53,6 +53,19 @@ internal static class ObjectSearchSql
             : "");
 
     /// <summary>
+    /// SQL Server Agent's named objects, run in msdb through <see cref="ModuleCall"/> where Agent runs, apart from the server batch
+    /// so a refusal skips only Agent kinds: the jobs the login may see (sysjobs_view filters by role, and every Agent role may read
+    /// it), then, only where msdb lets the login read them (SQLAgentOperatorRole or sysadmin), the alerts and operators by a
+    /// two-letter code. A login msdb grants neither reads no second result set. Proxies, proxy subsystems and error logs are not
+    /// indexed: subsystems and archives are groupings rather than named objects, and proxies list below each subsystem they serve.
+    /// </summary>
+    public const string Agent = "SELECT j.name, j.date_modified FROM dbo.sysjobs_view AS j;\n"
+        + "IF HAS_PERMS_BY_NAME(N'dbo.sysalerts', N'OBJECT', N'SELECT') = 1 AND HAS_PERMS_BY_NAME(N'dbo.sysoperators', N'OBJECT', N'SELECT') = 1"
+        + " SELECT 'AA', a.name FROM dbo.sysalerts AS a UNION ALL SELECT 'AO', o.name FROM dbo.sysoperators AS o;\n";
+    /// <summary>The Agent batch's literals.</summary>
+    public static readonly IReadOnlySet<string> AgentLiterals = new HashSet<string>(StringComparer.Ordinal) { "N'dbo.sysalerts'", "N'dbo.sysoperators'", "N'OBJECT'", "N'SELECT'" };
+
+    /// <summary>
     /// One database's batch, in its order:
     /// <list type="number">
     /// <item>the objects of <see cref="ObjectTypes"/>, each with its parent's id (a child's table or view), whether it is a system
@@ -148,7 +161,7 @@ internal static class ObjectSearchSql
     public static List<string> Lint()
     {
         var problems = new List<string>();
-        var texts = new List<string> { Databases, ResourceFingerprint, ModuleCall, ResourceObjects(true), Server(true, true) };
+        var texts = new List<string> { Databases, ResourceFingerprint, ModuleCall, ResourceObjects(true), Server(true, true), Agent };
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             var render = new SqlRender(band);
@@ -165,6 +178,7 @@ internal static class ObjectSearchSql
                     problems.AddRange(CatalogSql.Lint(Server(box, definitions), render, list: false, mayCheckAccess: false).Select(problem => "server " + problem));
             }
             problems.AddRange(CatalogSql.Lint(ResourceFingerprint, render, list: false, mayCheckAccess: false).Select(problem => "fingerprint " + problem));
+            problems.AddRange(CatalogSql.Lint(Agent, render, list: false, mayCheckAccess: false, AgentLiterals).Select(problem => "agent " + problem));
         }
         foreach (var text in texts)
         {

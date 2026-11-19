@@ -23,7 +23,9 @@ internal sealed class AgentCatalog
     private sealed record WriteJson(string Name, string Lane, string Database);
     private sealed record GateJson(string Feature, List<string> Platforms);
     private sealed record CatalogJson(int Version, List<int> EngineEditions, List<CodeJson> ExecutionStatuses, List<GateJson> Gates, List<CodeJson> LastRunOutcomes, Dictionary<string, long> Limits,
-        List<ShapeJson> MasterReadShapes, Dictionary<string, List<string>> PlatformSubsystems, List<ReadJson> ReadProcedures, List<CodeJson> RunStatuses, List<WriteJson> WriteProcedures);
+        List<ShapeJson> MasterReadShapes, Dictionary<string, List<string>> PlatformSubsystems, List<ReadJson> ReadProcedures, List<CodeJson> RunStatuses, List<WriteJson> WriteProcedures,
+        List<SubsystemJson>? Subsystems = null);
+    private sealed record SubsystemJson(string Id, string Label);
 
     private readonly Dictionary<string, long> limits;
     private readonly Dictionary<string, HashSet<string>> gates;
@@ -42,6 +44,7 @@ internal sealed class AgentCatalog
         RunStatuses = json.RunStatuses.ToDictionary(row => row.Code, row => row.Label);
         ExecutionStatuses = json.ExecutionStatuses.ToDictionary(row => row.Code, row => row.Label);
         LastRunOutcomes = json.LastRunOutcomes.ToDictionary(row => row.Code, row => row.Label);
+        SubsystemLabels = (json.Subsystems ?? []).ToDictionary(row => row.Id, row => row.Label, StringComparer.Ordinal);
         if (ReadProcedures.Keys.Any(WriteProcedures.ContainsKey)) throw new InvalidOperationException("An Agent procedure is both a read and a write.");
     }
 
@@ -62,6 +65,8 @@ internal sealed class AgentCatalog
     public IReadOnlyDictionary<int, string> RunStatuses { get; }
     public IReadOnlyDictionary<int, string> ExecutionStatuses { get; }
     public IReadOnlyDictionary<int, string> LastRunOutcomes { get; }
+    /// <summary>SSMS's step-type names by syssubsystems.subsystem (Object Explorer labels the Proxies folder's rows with them).</summary>
+    public IReadOnlyDictionary<string, string> SubsystemLabels { get; }
 
     /// <summary>A limit by its catalogue name; an unknown name is a bug.</summary>
     public long Limit(string name) => limits.TryGetValue(name, out var value) ? value : throw new InvalidOperationException("Unknown Agent limit.");

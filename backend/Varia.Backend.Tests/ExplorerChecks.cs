@@ -93,10 +93,10 @@ internal static class ExplorerChecks
     private static void Catalog(Action<bool, string> check)
     {
         var catalog = ExplorerCatalog.Current;
-        check(catalog.FolderIds.Count == 76 && catalog.Kinds.Count() == 56 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
+        check(catalog.FolderIds.Count == 82 && catalog.Kinds.Count() == 64 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
         var lists = Listings(catalog).Select(listing => listing.Query).ToHashSet();
-        var queries = ExplorerQueries.All.Keys.Append("historyTable").ToHashSet();
-        check(queries.SetEquals(catalog.Queries) && lists.All(ExplorerQueries.All.ContainsKey) && ExplorerQueries.All.Keys.All(lists.Contains),
+        var queries = ExplorerQueries.All.Keys.Append("historyTable").Concat(AgentListings.ReaderLists).ToHashSet();
+        check(queries.SetEquals(catalog.Queries) && lists.All(list => ExplorerQueries.All.ContainsKey(list) || AgentListings.ReaderLists.Contains(list)) && ExplorerQueries.All.Keys.All(lists.Contains),
             "every catalogue query is implemented and every implemented query is listed by a folder or a kind");
         check(catalog.Kinds.Any(kind => kind.HistoryLookup.Count > 0), "the history row's query is referenced through historyLookup");
         foreach (var cloud in new[] { false, true })
@@ -138,6 +138,48 @@ internal static class ExplorerChecks
             && catalog.FilterFor(catalog.Folder("tables")!, "schema").SequenceEqual(["name", "owner", "created"]) && catalog.FilterFor(catalog.Folder("tables")!, "database").Count == 4
             && !catalog.HasChildren("schema", null, box16),
             "Group by Schema: a grouped database keeps its database-scoped folders, a schema row has the schema-scoped ones (Programmability split between them), and a schema's folders offer no Schema filter");
+        AgentCatalogChecks(catalog, check);
+    }
+
+    /// <summary>SQL Server Agent's node: served only where Agent runs, its children merged with the Job Activity Monitor singleton
+    /// in SSMS order and gated by platform, each Agent role's share of them, and its error values.</summary>
+    private static void AgentCatalogChecks(ExplorerCatalog catalog, Action<bool, string> check)
+    {
+        string Children(string kind, ExplorerProfile profile, AgentListings.Role role = AgentListings.Role.Sysadmin) =>
+            string.Join(",", catalog.Children(kind, null, profile).Where(child => kind != "agent" || AgentListings.Reads(role, child)).Select(child => child.Folder ?? child.Singleton));
+        var windows = new ServerProfile(17, null, 3, null, false, false, false, 17).Explorer(catalog);
+        var linux = new ServerProfile(17, null, 3, null, false, false, false, 17, Linux: true).Explorer(catalog);
+        var managed = new ServerProfile(12, null, 8, null, false, false, false, 16).Explorer(catalog);
+        var express = new ServerProfile(17, null, 4, null, false, false, false, 17).Explorer(catalog);
+        var azure = new ServerProfile(12, null, 5, null, false, false, false, 16).Explorer(catalog);
+        check(windows.Agent == "windows" && linux.Agent == "linux" && managed.Agent == "managedInstance" && express.Agent is null && azure.Agent is null,
+            "a server's Agent platform comes from the Agent catalogue (none on Express or the cloud editions)");
+        check(Children("server", windows) == "databases,serverSecurity,serverObjects,integrationServicesCatalogs,agent" && Children("server", managed).EndsWith(",agent", StringComparison.Ordinal)
+            && !Children("server", express).Contains("agent") && !Children("server", azure).Contains("agent")
+            && catalog.HasChildren("agent", null, windows) && !catalog.HasChildren("agentJobActivity", null, windows),
+            "the server lists the SQL Server Agent node after its folders, only where Agent runs; Job Activity Monitor is a leaf");
+        check(Children("agent", windows) == "agentJobs,agentJobActivity,agentAlerts,agentOperators,agentProxies,agentErrorLogs"
+            && Children("agent", linux) == "agentJobs,agentJobActivity,agentOperators,agentProxies,agentErrorLogs"
+            && Children("agent", managed) == "agentJobs,agentJobActivity,agentOperators,agentErrorLogs",
+            "the Agent node's children follow SSMS's order and the platform gates (no alerts on Linux, no alerts or proxies on Managed Instance)");
+        check(Children("agent", windows, AgentListings.Role.Operator) == "agentJobs,agentJobActivity,agentAlerts,agentOperators"
+            && Children("agent", windows, AgentListings.Role.Reader) == "agentJobs,agentJobActivity" && Children("agent", windows, AgentListings.Role.User) == "agentJobs,agentJobActivity"
+            && Children("agent", windows, AgentListings.Role.None) == "",
+            "each Agent role sees its folders: sysadmin all, Operator jobs, alerts and operators, Reader and User jobs, no role nothing");
+        check(string.Join(",", catalog.Subfolders("agentProxies", windows)) == "agentUnassignedProxies" && catalog.Folder("agentUnassignedProxies")!.AfterRows
+            && !catalog.Served("agentUnassignedProxies", managed) && catalog.KindServed("agentJob", windows) && !catalog.KindServed("agentJob", express)
+            && !catalog.KindServed("agentAlert", linux) && catalog.KindServed("login", express),
+            "Unassigned Proxies follows the subsystem rows where proxies exist, and Agent kinds are refused where Agent does not run");
+        check(ExplorerErrors.Classify(15281, 16, ErrorPhase.Statement) == "AGENT_DISABLED" && ExplorerErrors.Create("AGENT_DISABLED", "SQL Server Agent", null) is { Retryable: true } disabled
+            && disabled.Message.Contains("sp_configure", StringComparison.Ordinal) && disabled.Message.Contains("mssql-conf", StringComparison.Ordinal)
+            && ExplorerErrors.Create("PERMISSION_DENIED", "Jobs", null).Message == "You do not have permission to view Jobs."
+            && AgentListings.NoRole is { Code: "PERMISSION_DENIED" } none && none.Message.Contains("SQLAgentUserRole", StringComparison.Ordinal)
+            && AgentListings.Disabled.Code == "AGENT_DISABLED",
+            "Agent XPs off (15281) is AGENT_DISABLED naming both ways to turn it on; the Agent node's no-role refusal has its own sentence and Create's permission text is unchanged");
+        var context = new RowContext(catalog, windows, null, new ObjectRefDto("agent"));
+        check(AgentListings.ErrorLog(context, 0, new DateTime(2026, 11, 18, 14, 20, 0)) is { Label: "Current - 2026-11-18 14:20", HasChildren: false } current && current.Ref.Object!.Name == "0"
+            && AgentListings.ErrorLog(context, 3, null).Label == "Archive #3",
+            "error logs are keyed by archive number and labelled Current or Archive #n with their date");
     }
 
     /// <summary>Every node that lists rows: a folder with a query (its filters, gate and owner kinds), or a kind that lists rows
@@ -156,6 +198,8 @@ internal static class ExplorerChecks
         var problems = new List<string>();
         foreach (var listing in Listings(catalog))
         {
+            // The Agent error logs list through AgentReader, whose statements AgentChecks lints.
+            if (AgentListings.ReaderLists.Contains(listing.Query)) continue;
             var query = queries[listing.Query];
             string?[] parents = query.ChildFolder ? [.. listing.Owners] : [null];
             var shapes = new List<FilterShape> { default };
@@ -192,6 +236,7 @@ internal static class ExplorerChecks
             renders++;
         }
         problems.AddRange(CatalogSql.Lint(ExplorerQueries.DatabaseState, new SqlRender(17), list: false, mayCheckAccess: true));
+        problems.AddRange(CatalogSql.Lint(AgentListings.Access, new SqlRender(17), list: false, mayCheckAccess: false, AgentListings.AccessLiterals).Select(problem => "agent access: " + problem));
         check(renders > 5000 && problems.Count == 0, "every query renders for bands 12-17, both probe flags, every filter shape and parent kind, and passes the lint ("
             + renders + " renders" + (problems.Count > 0 ? "; first problem: " + problems[0] : ")"));
         // The wrapper names @db only through QUOTENAME, and the prologue fixes the isolation level and lock timeout.
@@ -526,11 +571,12 @@ internal static class ExplorerChecks
                 required.Contains("parent") ? new ParentRefDto(kind.Parents[0], "s", "p") : null, required.Contains("ssisFolder") ? "f" : null, required.Contains("ssisProject") ? "p" : null);
         }
         var kinds = catalog.Kinds.ToList();
-        // Only an SSIS package's name may pass sysname (nvarchar(260)), and only the SSIS catalog lists rows directly below itself.
-        check(kinds.All(kind => kind.MaxName == (kind.Kind == "ssisPackage" ? 260 : 128) && (kind.List is null) == (kind.Kind != "ssisCatalog") && kind.Rows.Count == (kind.List is null ? 0 : 1))
+        // Only an SSIS package's name may pass sysname (nvarchar(260)), and only the SSIS catalog and an Agent proxy subsystem row
+        // list rows directly below themselves.
+        check(kinds.All(kind => kind.MaxName == (kind.Kind == "ssisPackage" ? 260 : 128) && (kind.List is null) == (kind.Kind is not ("ssisCatalog" or "agentProxySubsystem")) && kind.Rows.Count == (kind.List is null ? 0 : 1))
             && catalog.KindOf("ssisCatalog") is { List: "ssisFolders", Rows: ["ssisFolder"], Folders.Count: 0 } && catalog.Scopes.Count == 11
             && catalog.Scopes["ssisProjectObject"].Required.SequenceEqual(["ssisFolder", "ssisProject", "name"]),
-            "the embedded catalogue has the SSIS scopes; every kind keeps sysname's bound but packages (260), and only the SSIS catalog lists rows of its own");
+            "the embedded catalogue has the SSIS scopes; every kind keeps sysname's bound but packages (260), and only the SSIS catalog and proxy subsystem rows list rows of their own");
         var wrong = kinds.Where(kind => !Valid(catalog, Minimal(catalog, kind))
             || !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && (Valid(catalog, Minimal(catalog, kind) with { SsisFolder = "f" }) || Valid(catalog, Minimal(catalog, kind) with { SsisProject = "p" }))
             || Minimal(catalog, kind).Name is not null && (!Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', kind.MaxName) })
@@ -741,8 +787,26 @@ internal static class ExplorerChecks
         using var service = new ExplorerService(host);
         var server = new ObjectRefDto("server");
         var root = await service.ChildrenAsync(Args(Object(server)), CancellationToken.None);
-        check(root.Nodes.Select(node => node.Label).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs"]) && root.Total == 4 && root.Error is null && host.Connections == 0
-            && root.Nodes.All(node => node is { Icon: "folder", HasChildren: true, Ref: { Type: "folder", Owner.Kind: "server" } }), "the server's folders come from the catalogue without SQL");
+        check(root.Nodes.Select(node => node.Label).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs", "SQL Server Agent"]) && root.Total == 5 && root.Error is null
+            && host.Connections == 0 && root.Nodes.Take(4).All(node => node is { Icon: "folder", HasChildren: true, Ref: { Type: "folder", Owner.Kind: "server" } })
+            && root.Nodes[4] is { Icon: "agent", HasChildren: true, Ref: { Type: "object", Object: { Kind: "agent", Name: null, Database: null } } },
+            "the server's folders and its SQL Server Agent node (a singleton named by kind alone) come from the catalogue without SQL");
+        // The Agent node reads Agent XPs and the login's role first (one batch, a value here), and Agent refs are refused where
+        // Agent does not run.
+        var agentHost = new FakeHost();
+        using (var agentService = new ExplorerService(agentHost))
+        {
+            var agentNode = await agentService.ChildrenAsync(Args(Object(new ObjectRefDto("agent"))), CancellationToken.None);
+            check(agentNode is { Nodes.Count: 0, Error: { Code: "CONNECTION_LOST" or "SQL_ERROR" or "TIMEOUT" } } && agentHost.Connections == 1,
+                "listing the Agent node runs its access step first, on one connection, and lists nothing when it fails: " + agentNode.Error?.Code);
+        }
+        using (var express = new ExplorerService(new FakeHost(16, 4)))
+        {
+            check(!(await express.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Any(node => node.Ref.Object?.Kind == "agent"), "Express lists no SQL Server Agent node");
+            foreach (var agentArgs in new[] { Args(Object(new ObjectRefDto("agent"))), Args(Folder(new ObjectRefDto("agent"), "agentJobs")), Args(Object(new ObjectRefDto("agentProxySubsystem", Name: "CmdExec"))) })
+                try { await express.ChildrenAsync(agentArgs, CancellationToken.None); check(false, "an Agent ref is refused on Express"); }
+                catch (RequestException error) { check(error.Code == "INVALID_PARAMS", "an Agent ref is refused where Agent does not run (Express)"); }
+        }
         var database = new ObjectRefDto("database", Name: "Sales");
         var programmability = await service.ChildrenAsync(Args(Folder(database, "programmability")), CancellationToken.None);
         check(programmability.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["storedProcedures", "functions", "databaseTriggers", "assemblies", "types", "rules", "defaults", "planGuides", "sequences"])
@@ -785,11 +849,11 @@ internal static class ExplorerChecks
             && azureDatabase.Contains("securityPolicies"), "a cloud edition reporting version 12 serves the folders its catalog columns allow: " + string.Join(",", azureTables));
         // Managed Instance (EngineEdition 8) reports version 12 too, and is browsed like SQL Server.
         var instance = new ExplorerService(new FakeHost(12, 8, 16));
-        var instanceServer = (await instance.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
+        var instanceServer = (await instance.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder ?? node.Ref.Object?.Kind).ToList();
         var instanceTables = (await instance.ChildrenAsync(Args(Folder(database, "tables")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
         var instanceDatabase = ExplorerCatalog.Current.StaticFolders("database", null, new FakeHost(12, 8, 16).Profile("x").Explorer(ExplorerCatalog.Current));
         var instanceSecurity = (await instance.ChildrenAsync(Args(Folder(database, "databaseSecurity")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
-        check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
+        check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs", "agent"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
             && instanceDatabase.Contains("externalResources") && instanceSecurity.Contains("alwaysEncryptedKeys") && instanceSecurity.Contains("securityPolicies"),
             "Managed Instance reporting version 12 serves the server folders and the folders its catalog columns allow: " + string.Join(",", instanceTables));
 
@@ -799,7 +863,7 @@ internal static class ExplorerChecks
         {
             var page = await lists.ChildrenAsync(Args(Object(server)), CancellationToken.None);
             var next = await lists.ChildrenAsync(Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null))), CancellationToken.None);
-            check(page.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs"]) && page.Error is { Retryable: true } && next.Nodes.Count == 0
+            check(page.Nodes.Select(node => node.Ref.Folder ?? node.Ref.Object?.Kind).SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs", "agent"]) && page.Error is { Retryable: true } && next.Nodes.Count == 0
                 && next.Error is not null && listing.Connections == 2, "an object kind that lists rows serves its folders first, then runs its query; a cursor page runs the query alone");
         }
 
