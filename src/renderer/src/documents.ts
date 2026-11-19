@@ -81,7 +81,7 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
 /** Each engine's query language in Monaco: Transact-SQL is Monaco's `sql`, GoogleSQL Varia's own (languages/googlesql.ts). */
 export const queryLanguages: Readonly<Record<ProviderId, string>> = { sqlserver: 'sql', bigquery: 'googlesql' }
 const googleSqlInfo: KindInfo = { ...kindInfo.sql, language: queryLanguages.bigquery, label: 'GoogleSQL' }
-/** A query's engine (SQL Server unless it says otherwise); '' for anything else, which has no engine of its own. */
+/** The active document's engine: a query's (SQL Server unless it says otherwise), SQL Server for every other tab, '' with none open. */
 export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider'> | undefined): ProviderContext => !document ? '' : isQueryDocument(document) ? document.provider ?? 'sqlserver' : 'sqlserver'
 /** `kindInfo` for a document: a BigQuery query is GoogleSQL, in its language, where every other query is Transact-SQL. */
 export function documentInfo(document: Pick<QueryDocument, 'kind' | 'provider'>): KindInfo {

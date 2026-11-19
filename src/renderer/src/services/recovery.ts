@@ -33,8 +33,8 @@ export function savedAgo(savedAt: string, now: number = Date.now()): string {
   if (seconds > -86_400) return format.format(Math.round(seconds / 3600), 'hour')
   return format.format(Math.round(seconds / 86_400), 'day')
 }
-/** A query's record, and the model version it holds (none until a write succeeded). */
-interface Kept { readonly id: string; version?: number }
+/** A query's record, and the model version and engine it holds (none until a write succeeded). */
+interface Kept { readonly id: string; version?: number; provider?: string }
 const minuteMs = 60_000
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const failed = (error: unknown) => error instanceof Error ? error.message : 'The operation failed.'
@@ -93,7 +93,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   copyId(tabId: string): string | undefined { return this.kept.get(tabId)?.id }
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
   resume(tabId: string, id: string): void {
-    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId() })
+    const document = this.options.documents.get(tabId)
+    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId(), provider: document && !document.kind ? document.provider : undefined })
   }
 
   /**
@@ -114,14 +115,15 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     const { documents } = this.options, document = documents.get(tabId), model = documents.getModel(tabId)
     // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
-    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId)
-    if (current?.version === version) return
+    // Moving a query to another engine changes no text, but the copy must still reopen in the new language.
+    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined
+    if (current?.version === version && current.provider === provider) return
     // Kept before the write, so a save or close meanwhile deletes the copy after it is written.
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
     const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
     // A BigQuery query keeps its engine, so it reopens as GoogleSQL; SQL Server is the absence of one.
-    const bigQuery = !document.kind && document.provider === 'bigquery'
+    const bigQuery = provider === 'bigquery'
     try {
       unwrap(await this.options.api.writeRecovery({
         id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...document.file ? { fileId: document.file.id } : {},
@@ -130,6 +132,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
         ...bigQuery ? { provider: 'bigquery' as const } : {}, text: model.getValue()
       }))
       kept.version = version
+      kept.provider = provider
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A query that has no unsaved changes any more, or closed, needs no copy. */

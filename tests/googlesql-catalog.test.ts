@@ -113,6 +113,12 @@ describe('GoogleSQL call context and signature help', () => {
     expect(at('SELECT IF(x IN (1, 2, 3), [4, 5], |')).toMatchObject({ name: 'IF', argument: 2 })
     expect(at('SELECT CAST(x AS STRUCT<a INT64, b STRING>|')).toMatchObject({ name: 'CAST', argument: 0 })
     expect(at('SELECT COALESCE(a, ARRAY<INT64>[1, 2], |')).toMatchObject({ name: 'COALESCE', argument: 2 })
+    // A field named like a type after a dot is compared, not given type arguments.
+    for (const text of ['SELECT IF(t.range < 5, a, |', 'SELECT IF(`p.d.t`.range < 5, a, |', 'SELECT IF(f(x).array < 5, a, |', 'SELECT IF(arr[OFFSET(0)].struct < 5, a, |', 'SELECT IF(@p.range < 5, a, |']) {
+      expect(at(text), text).toMatchObject({ name: 'IF', argument: 2 })
+    }
+    // A backslash at a line's end does not carry a single-quoted string onto the next line.
+    expect(at("SELECT IF(x, 'a\\\n, |")).toMatchObject({ name: 'IF', argument: 2 })
     // Commas and parentheses inside strings, comments and quoted names are text.
     expect(at("SELECT CONCAT('a, (b', /* , ) */ `c,)`, |")).toMatchObject({ name: 'CONCAT', argument: 2 })
     expect(at('SELECT CONCAT(a, -- x, y\n b, |')).toMatchObject({ name: 'CONCAT', argument: 2 })
@@ -137,6 +143,13 @@ describe('GoogleSQL call context and signature help', () => {
     expect(googleSqlSignatureHelp('SELECT SAFE.NET.HOST(')!.signatures[0].label).toBe('NET.HOST(url) → STRING')
     for (const text of ['SELECT my_udf(', 'SELECT x IN (', 'SELECT ']) expect(googleSqlSignatureHelp(text), text).toBeUndefined()
   })
+  it('keeps the signature the user stepped to while it still reaches the argument', () => {
+    const shown = googleSqlSignatureHelp('SELECT DATE(')!
+    expect(googleSqlSignatureHelp('SELECT DATE(ts, ', { ...shown, activeSignature: 1 })).toMatchObject({ activeSignature: 1, activeParameter: 1 })
+    // Past that signature's parameters, or for another function, the first that fits is active again.
+    expect(googleSqlSignatureHelp('SELECT DATE(a, b, ', { ...shown, activeSignature: 1 })).toMatchObject({ activeSignature: 0, activeParameter: 2 })
+    expect(googleSqlSignatureHelp('SELECT SUBSTR(a, ', { ...shown, activeSignature: 1 })).toMatchObject({ activeSignature: 0 })
+  })
   it('answers through Monaco\'s provider on ( and ,, and gives none for a document over the language limit', () => {
     expect(googleSqlSignatureHelpProvider.signatureHelpTriggerCharacters).toEqual(['(', ','])
     const model = (text: string) => ({ getValueLength: () => text.length, getValueInRange: () => text }) as never
@@ -144,5 +157,9 @@ describe('GoogleSQL call context and signature help', () => {
     const answer = googleSqlSignatureHelpProvider.provideSignatureHelp(model('SELECT LEFT('), position, token, context) as { value: { signatures: { label: string }[] } }
     expect(answer.value.signatures[0].label).toBe('LEFT(value, length) → STRING or BYTES')
     expect(googleSqlSignatureHelpProvider.provideSignatureHelp(model('SELECT LEFT(' + ' '.repeat(250_000)), position, token, context)).toBeNull()
+    // The help already showing reaches the catalogue, so a signature the user stepped to stays active.
+    const shown = { ...googleSqlSignatureHelp('SELECT DATE(')!, activeSignature: 1 }
+    const kept = googleSqlSignatureHelpProvider.provideSignatureHelp(model('SELECT DATE(ts, '), position, token, { activeSignatureHelp: shown } as never) as { value: { activeSignature: number } }
+    expect(kept.value.activeSignature).toBe(1)
   })
 })

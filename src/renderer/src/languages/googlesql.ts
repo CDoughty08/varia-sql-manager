@@ -6,7 +6,7 @@ import {
 import { googleSqlCallContext } from '../../../shared/googlesql/lexer'
 import { languageLimits } from '../../../shared/language-service'
 
-/** BigQuery query documents' Monaco language; SQL Server's stay `sql` (documents.ts `documentLanguage`). */
+/** BigQuery query documents' Monaco language; SQL Server's stay `sql` (documents.ts `queryLanguages`). */
 export const googleSqlLanguageId = 'googlesql'
 
 const operators = new Set<string>(googleSqlOperatorWords)
@@ -130,9 +130,10 @@ export const googleSqlConfiguration: Monaco.languages.LanguageConfiguration = {
 /**
  * Signature help for the call the caret is in, from the function catalogue: every signature of the function, the one
  * whose parameters reach the caret's argument active, and that parameter highlighted. Undefined outside a known
- * function's call, or in a string or comment. `text` is the document up to the caret.
+ * function's call, or in a string or comment. `text` is the document up to the caret. `previous` is the help already
+ * showing: a signature the user stepped to (Up/Down) for the same function stays active while it reaches the argument.
  */
-export function googleSqlSignatureHelp(text: string): Monaco.languages.SignatureHelp | undefined {
+export function googleSqlSignatureHelp(text: string, previous?: Monaco.languages.SignatureHelp): Monaco.languages.SignatureHelp | undefined {
   const call = googleSqlCallContext(text, text.length)
   const entry = call ? googleSqlFunction(call.name) : undefined
   if (!call || !entry) return undefined
@@ -140,7 +141,9 @@ export function googleSqlSignatureHelp(text: string): Monaco.languages.Signature
     const { label, parameters } = signatureLabel(entry.name, signature)
     return { label, documentation: entry.summary, parameters: parameters.map(range => ({ label: range })) }
   })
-  const active = Math.max(0, entry.signatures.findIndex(signature => parameterFor(signature, call.argument) !== undefined))
+  const kept = previous && previous.signatures.length === signatures.length && previous.signatures.every((signature, index) => signature.label === signatures[index].label)
+    && parameterFor(entry.signatures[previous.activeSignature] ?? { parameters: [], returns: '' }, call.argument) !== undefined ? previous.activeSignature : -1
+  const active = kept >= 0 ? kept : Math.max(0, entry.signatures.findIndex(signature => parameterFor(signature, call.argument) !== undefined))
   const parameter = parameterFor(entry.signatures[active], call.argument)
   return { signatures, activeSignature: active, activeParameter: parameter ?? entry.signatures[active].parameters.length }
 }
@@ -148,10 +151,10 @@ export function googleSqlSignatureHelp(text: string): Monaco.languages.Signature
 export const googleSqlSignatureHelpProvider: Monaco.languages.SignatureHelpProvider = {
   signatureHelpTriggerCharacters: ['(', ','],
   signatureHelpRetriggerCharacters: [')'],
-  provideSignatureHelp(model, position) {
+  provideSignatureHelp(model, position, _token, context) {
     // As for SQL Server's language services, a document over the limit gets none.
     if (model.getValueLength() > languageLimits.documentCharacters) return null
-    const help = googleSqlSignatureHelp(model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }))
+    const help = googleSqlSignatureHelp(model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }), context.activeSignatureHelp)
     return help ? { value: help, dispose: () => {} } : null
   }
 }

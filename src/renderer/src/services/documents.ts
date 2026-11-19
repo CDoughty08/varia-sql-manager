@@ -316,7 +316,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    */
   restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId): QueryDocument {
     const value = kind === 'sql' ? undefined : kind
-    return this.add(name, text, value ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, provider ? { provider } : {})
+    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, provider ? { provider } : {})
   }
   /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
@@ -339,7 +339,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
     const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
-    const document = this.add(o.name, o.text, kind ? '' : o.database ?? 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
+    const document = this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
     // A file whose text was all deleted is still a change to save.
     if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
     return this.get(document.id) ?? document

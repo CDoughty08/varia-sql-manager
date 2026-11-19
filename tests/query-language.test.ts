@@ -81,6 +81,8 @@ describe('a query document\'s provider and language (docs/bigquery-plan.md, BQ-4
     expect([old.provider, model(old.id).language]).toEqual([undefined, 'sql'])
     const recovered = documents.restore('k.sql', 'SELECT 4', 'sql', 'lf', undefined, 'bigquery')
     expect([recovered.provider, model(recovered.id).language]).toEqual(['bigquery', 'googlesql'])
+    // A BigQuery tab restored without a dataset has none, rather than SQL Server's master.
+    expect([restored.database, recovered.database, documents.reopen({ name: 'n.sql', kind: 'sql', eol: 'lf', dirty: true, text: '', provider: 'bigquery' }).database, old.database]).toEqual(['sales', '', '', 'master'])
     documents.dispose()
   })
 
@@ -126,14 +128,18 @@ describe('a query document\'s provider and language (docs/bigquery-plan.md, BQ-4
       const query = documents.create('q.sql', 'SELECT 1', 'master')
       targets.update(query.id, { connectionId: 'c1' })
       expect(context.getState().activeDocumentProvider).toBe('sqlserver')
+      workbench.model(query.id).edit('SELECT 2')
+      expect(await workbench.commands.execute('file.autoRecoverNow', undefined, 'menu')).toBe(true)
+      await vi.waitFor(() => expect(api.writeRecovery).toHaveBeenCalledTimes(1))
+      expect(api.writeRecovery.mock.calls[0][0]).not.toHaveProperty('provider')
+      // Moving the query changes no text, yet the next copy must reopen it as GoogleSQL.
       targets.update(query.id, { connectionId: 'b1', database: 'sales' })
       expect(context.getState().activeDocumentProvider).toBe('bigquery')
       expect(workbench.model(query.id).language).toBe('googlesql')
       expect(notifications.getSnapshot().visible.map(toast => toast.message)).toEqual(['q.sql is now GoogleSQL, the language of its BigQuery connection. Its Transact-SQL is unlikely to run as is.'])
-      workbench.model(query.id).edit('SELECT 2')
       expect(await workbench.commands.execute('file.autoRecoverNow', undefined, 'menu')).toBe(true)
-      for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0))
-      expect(api.writeRecovery.mock.calls.at(-1)?.[0]).toMatchObject({ provider: 'bigquery', server: 'analytics-proj', database: 'sales' })
+      await vi.waitFor(() => expect(api.writeRecovery).toHaveBeenCalledTimes(2))
+      expect(api.writeRecovery.mock.calls[1][0]).toMatchObject({ provider: 'bigquery', server: 'analytics-proj', database: 'sales', text: 'SELECT 2' })
     } finally { workbench.dispose() }
   })
 })

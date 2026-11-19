@@ -27,7 +27,8 @@ function quoted(text: string, at: number, quote: string, triple: boolean): { end
   let index = at
   while (index < text.length) {
     const char = text[index]
-    if (char === '\\') { index += 2; continue }
+    // A backslash cannot carry a single-quoted string onto the next line (the tokenizer ends it there too).
+    if (char === '\\' && (triple || text[index + 1] !== '\n')) { index += 2; continue }
     if (!triple && char === '\n') return { end: index, open: true }
     if (char === quote && (!triple || (text[index + 1] === quote && text[index + 2] === quote))) return { end: index + (triple ? 3 : 1), open: false }
     index++
@@ -98,7 +99,7 @@ const callName = (chain: readonly string[]) => chain.length === 1 && reserved.ha
  */
 export function googleSqlCallContext(text: string, offset: number): GoogleSqlCallContext | undefined {
   const frames: Frame[] = []
-  let chain: string[] | undefined, last: GoogleSqlToken | undefined, lastText = ''
+  let chain: string[] | undefined, last: GoogleSqlToken | undefined, lastText = '', beforeLastText = ''
   for (const token of scanGoogleSql(text.slice(0, offset))) {
     if (token.kind === 'whitespace') continue
     if (token.kind === 'comment' || token.kind === 'string' || token.kind === 'quotedIdentifier') {
@@ -113,7 +114,8 @@ export function googleSqlCallContext(text: string, offset: number): GoogleSqlCal
         const name = value === '(' && last?.kind === 'word' && chain ? callName(chain) : undefined
         if (value === '(') frames.push({ bracket: '(', open: token.start, commas: 0, ...name ? { name } : {} })
         else if (value === '[') frames.push({ bracket: '[', open: token.start, commas: 0 })
-        else if (value === '<' && last?.kind === 'word' && angleOwners.has(lastText.toUpperCase())) frames.push({ bracket: '<', open: token.start, commas: 0 })
+        // `t.range < 5` compares a field; only a bare ARRAY, STRUCT or RANGE opens a type's angle brackets.
+        else if (value === '<' && last?.kind === 'word' && beforeLastText !== '.' && angleOwners.has(lastText.toUpperCase())) frames.push({ bracket: '<', open: token.start, commas: 0 })
         else if (value === '>' && frames.at(-1)?.bracket === '<') frames.pop()
         else if (value === ')' || value === ']') {
           const opening = value === ')' ? '(' : '['
@@ -123,6 +125,7 @@ export function googleSqlCallContext(text: string, offset: number): GoogleSqlCal
         chain = undefined
       }
     } else chain = undefined
+    beforeLastText = lastText
     last = token
     lastText = value
   }
