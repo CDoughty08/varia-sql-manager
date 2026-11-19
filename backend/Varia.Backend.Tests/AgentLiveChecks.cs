@@ -218,6 +218,26 @@ internal static class AgentLiveChecks
             && result.ElapsedMs < AgentCatalog.Current.Limit("profileMs"),
             "agent.profile reads this login's Agent facts on the Object Explorer pool: msdb access, Agent XPs on, the " + platform + " platform, sysadmin " + sysadmin
             + " with every permission but no Agent role membership when sysadmin (dbo is no role's member), within its budget: " + JsonSerializer.Serialize(result));
+
+        // Past its budget the read is a retryable TIMEOUT value; a disconnect meanwhile cancels it instead. Either way it unregisters.
+        var options = service.Explorer.Options;
+        options.TestDelay = TimeSpan.FromSeconds(3);
+        options.AgentProfileBudget = TimeSpan.FromMilliseconds(400);
+        try
+        {
+            var slow = await service.Explorer.AgentProfileAsync(new AgentProfileArgs(info.Id, Guid.NewGuid().ToString()), CancellationToken.None);
+            check(slow is { Profile: null, Error: { Code: "TIMEOUT", Retryable: true } } && slow.ElapsedMs < 2500 && service.Explorer.RunningCount == 0,
+                "agent.profile past its budget is a retryable TIMEOUT value, and unregisters (" + slow.ElapsedMs + " ms): " + slow.Error?.Code);
+            options.AgentProfileBudget = TimeSpan.FromSeconds(30);
+            var pending = service.Explorer.AgentProfileAsync(new AgentProfileArgs(info.Id, Guid.NewGuid().ToString()), CancellationToken.None);
+            await Task.Delay(300);
+            service.Explorer.Forget(info.Id);
+            var code = "completed";
+            try { await pending; }
+            catch (RequestException error) { code = error.Code; }
+            check(code == "CANCELLED" && service.Explorer.RunningCount == 0, "a disconnect cancels a running agent.profile (CANCELLED, not TIMEOUT), and it unregisters: " + code);
+        }
+        finally { options.TestDelay = null; options.AgentProfileBudget = null; }
     }
 
     private static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";

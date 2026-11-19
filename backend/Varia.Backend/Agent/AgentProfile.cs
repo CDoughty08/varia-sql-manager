@@ -63,6 +63,15 @@ namespace Varia.Backend.Agent
         /// <summary>msdb refused the login (916, where its guest CONNECT was revoked): no Agent role, the server options unread.</summary>
         public static AgentProfileDto NoMsdb(string platform, int engineEdition) => new(platform, engineEdition, false, false, false, false, false, false, false, false, false, false, null, null, false);
 
+        /// <summary>A failed read as agent.profile answers it: msdb refusing the login (NO_DB_ACCESS) is a profile with no role,
+        /// anything else the error itself.</summary>
+        public static AgentProfileResult Failed(ExplorerError error, string platform, int engineEdition) => error.Code == "NO_DB_ACCESS"
+            ? new(NoMsdb(platform, engineEdition), 0)
+            : new(null, 0, error);
+
+        /// <summary>The batch returned no row, which a working server never does.</summary>
+        public static readonly ExplorerError NoRow = new("SQL_ERROR", "The SQL Server Agent capability read returned no row. Refresh to retry.", true);
+
         /// <summary>Why a server serves no Agent node, by its engine edition.</summary>
         public static string Unsupported(int engineEdition) => engineEdition == 4
             ? "SQL Server Agent isn't available on SQL Server Express."
@@ -99,8 +108,8 @@ namespace Varia.Backend.Explorer
                 var result = await RunAsync(args.ConnectionId, "msdb", "SQL Server Agent", profile, QueryScope.Database, AgentProfileSql.Render(new SqlRender(profile.Band)), values,
                     async (_, reader) => await AgentProfileSql.ReadAsync(reader, platform, server.EngineEdition, source.Token) is { } read
                         ? new AgentProfileResult(read, 0)
-                        : new AgentProfileResult(null, 0, ExplorerErrors.Create("SQL_ERROR", "SQL Server Agent", null, 0, "The capability read returned no row.")),
-                    error => error.Code == "NO_DB_ACCESS" ? new AgentProfileResult(AgentProfileSql.NoMsdb(platform, server.EngineEdition), 0) : new AgentProfileResult(null, 0, error),
+                        : new AgentProfileResult(null, 0, AgentProfileSql.NoRow),
+                    error => AgentProfileSql.Failed(error, platform, server.EngineEdition),
                     source.Token, started: () => source.CancelAfter(budget));
                 return result with { ElapsedMs = watch.ElapsedMilliseconds };
             }
