@@ -8,6 +8,7 @@ import {
 } from '../activity/catalog.ts'
 import { limits } from '../ipc/wire/protocol.ts'
 import { catalogFingerprintStatus } from '../ssis/catalog.ts'
+import type { ProviderId } from '../providers.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
@@ -93,6 +94,8 @@ export interface LiveProbeSpec {
 }
 export interface LiveSourceSpec {
   readonly id: string
+  /** The engines this source samples (live.subscribe serves SQL Server only); absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  readonly providers?: readonly ProviderId[]
   readonly label: string
   readonly description: string
   readonly scope: LiveScope

@@ -22,7 +22,8 @@ export class TestModel {
   private version = 1
   /** pushEOL and pushEditOperations join one undo step until pushStackElement closes it, as in Monaco. */
   private open = false
-  constructor(value: string, readonly uri: string, readonly language = 'sql') { this.history = [{ value, alternative: 1 }] }
+  constructor(value: string, readonly uri: string, public language = 'sql') { this.history = [{ value, alternative: 1 }] }
+  getLanguageId(): string { return this.language }
   getValue(): string { return this.history[this.index].value }
   getValueLength(): number { return this.getValue().length }
   getVersionId(): number { return this.version }
@@ -137,7 +138,7 @@ export function documentFixture(options: DocumentOptions = {}) {
   const frames: (() => void)[] = []
   const documents = new DocumentService((text, uri, language) => {
     const model = new TestModel(text, uri, language); models.set(uri, model); return model.asModel()
-  }, api, events, callback => { frames.push(callback) }, options)
+  }, api, events, callback => { frames.push(callback) }, { setLanguage: (model, language) => { (model as unknown as TestModel).language = language }, ...options })
   const model = (id: string) => models.get(`varia-sql://query/${id}`)!
   /** Runs the callbacks waiting for the next animation frame. */
   const frame = () => { for (const callback of frames.splice(0)) callback() }

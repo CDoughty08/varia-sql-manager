@@ -7,6 +7,7 @@ import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 import type { SecretCipher } from './secret-cipher'
 
 const fileLimit = 4 * 1024 * 1024
+export const savedPasswordFileLimit = fileLimit
 const maxEntries = 200
 /** Decoded ciphertext; a 1,024-character password encrypts to far less on every platform. */
 export const maxCipherBytes = 8192
@@ -15,6 +16,7 @@ const entrySchema = z.object({
 }).strict()
 const fileSchema = z.object({ version: z.literal(1), entries: z.array(entrySchema).max(maxEntries) }).strict()
   .refine(value => new Set(value.entries.map(entry => entry.profileId)).size === value.entries.length, 'Duplicate saved password IDs.')
+export const savedPasswordFileSchema = fileSchema
 type SavedPasswordFile = z.infer<typeof fileSchema>
 type Entry = SavedPasswordFile['entries'][number]
 
@@ -47,7 +49,7 @@ function unseal(text: string, options: Omit<ConnectionOptions, 'password'>, revi
 type LibrarySource = ConnectionLibrary | (() => Promise<ConnectionLibrary | null>)
 
 /**
- * Remembered passwords, as OS-protected ciphertext in their own file (never connections.json), keyed by the history
+ * Remembered passwords, as OS-protected ciphertext in their own file (never the connections file), keyed by the history
  * entry's id and bound to the credentials they were saved with. Only main reads it. While the cipher is unavailable the
  * file is neither read nor written, so a keyring that is missing for one run loses nothing.
  */

@@ -228,24 +228,19 @@ internal static class ExplorerStatusLiveChecks
     /// <summary>An Agent job of this run's own that waits 30 s: counted while it runs, and no longer once it is stopped. Agent
     /// jobs are server-wide, and other runs start and stop theirs, so each value is compared with direct counts of the Agent's
     /// current session taken just before and after the sample, while this job's own row says it runs (or has stopped). Stale
-    /// jobs of earlier runs (named as a run names its own, marked, older than 6 hours) are deleted first, by id; this one is
-    /// deleted in finally.</summary>
+    /// Agent objects of earlier runs are swept first (any live group may run this suite without Explorer's full sweep); this
+    /// one is deleted in finally.</summary>
     private static async Task AgentAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
     {
-        var agent = (await sql("SELECT COUNT(*) FROM sys.dm_server_services WHERE servicename LIKE N'SQL Server Agent%' AND status = 4;", "master")).Scalar;
-        if (agent != "1")
+        // The same Agent-up condition as the Agent suites (Agent XPs on and an Agent session), which Linux's container meets
+        // too; with VARIA_TEST_SQL_AGENT=1 it waits for Agent, which starts after the server's health check passes.
+        if (!await AgentLiveChecks.UpAsync(sql, AgentLiveChecks.Required ? (int)Agent.AgentCatalog.Current.Limit("agentUpWaitMs") : 0))
         {
+            check(!AgentLiveChecks.Required, "SQL Server Agent is up for the Object Explorer status Agent checks, as VARIA_TEST_SQL_AGENT=1 requires");
             Console.WriteLine("Object Explorer status Agent checks skipped: SQL Server Agent is not running on this server.");
             return;
         }
-        var stale = await sql("SELECT CONVERT(nvarchar(36), j.job_id), j.name FROM msdb.dbo.sysjobs AS j WHERE j.name LIKE N'VariaScratch[_]%[_]job' AND j.description = "
-            + Literal(ScratchDatabase.JobMarker) + " AND j.date_created < DATEADD(hour, -6, GETDATE());", "msdb");
-        foreach (var row in stale.Sets.Count == 0 ? [] : stale.Sets[0])
-            if (row[0] is { } id && Guid.TryParse(id, out var jobId) && row[1] is { } name && ScratchDatabase.IsScratchJob(name))
-            {
-                Console.WriteLine("Deleting stale scratch Agent job " + name);
-                await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + jobId.ToString("D") + "', @delete_history = 1;", "msdb");
-            }
+        await ScratchDatabase.SweepAgentAsync(sql, Console.WriteLine);
         // Independent of the probe's own statement: the Agent's newest session by its start time, and this job's row in it.
         var direct = "DECLARE @session int = (SELECT TOP (1) s.session_id FROM msdb.dbo.syssessions AS s ORDER BY s.agent_start_date DESC, s.session_id DESC);\n"
             + "SELECT COUNT(*), COUNT(CASE WHEN j.name = " + Literal(job) + " THEN 1 END) FROM msdb.dbo.sysjobactivity AS a JOIN msdb.dbo.sysjobs AS j ON j.job_id = a.job_id\n"

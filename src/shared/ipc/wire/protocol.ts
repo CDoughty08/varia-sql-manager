@@ -125,6 +125,9 @@ export const errorCodes = [
   'BUDGET_STOPPED',
   // Backend and main: an Object Explorer requestId that is already running.
   'DUPLICATE_REQUEST',
+  // Backend and main: the method has no such engine (its `providers` lack the connection's provider). Not NOT_SUPPORTED
+  // ("this server cannot have it") or AUTH_UNSUPPORTED (an authentication failure).
+  'UNSUPPORTED_PROVIDER',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

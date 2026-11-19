@@ -62,7 +62,7 @@ interface Pending<T extends BackendConnectionHandle> {
 
 const targetIdSchema = z.uuid()
 const samePrincipal = (left: ConnectionPrincipalEvidence, right: ConnectionPrincipalEvidence) => left.authentication === right.authentication && left.id === right.id
-const validPrincipal = (principal: ConnectionPrincipalEvidence) => expectedConnectionPrincipalSchema.safeParse({ provider: 'sqlServer', ...principal }).success
+const validPrincipal = (principal: ConnectionPrincipalEvidence) => expectedConnectionPrincipalSchema.safeParse({ provider: 'sqlserver', ...principal }).success
 const handleKey = (handle: BackendConnectionHandle) => `${handle.generation}:${handle.id}`
 const affinityKey = (key: ConnectionIdentityKey, principal: ConnectionPrincipalEvidence) => JSON.stringify([key, principal.authentication, principal.id])
 

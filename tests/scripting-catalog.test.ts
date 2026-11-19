@@ -259,7 +259,7 @@ describe('scripting catalogue', () => {
     // The backend's budget ends before main's deadline, and 4,000,000 characters of UTF-8 stay under PR6's 16 MiB body.
     expect(scriptLimits.budgetMs).toBeLessThan(scriptLimits.requestMs)
     expect(scriptLimits.maxScriptChars * 3).toBeLessThan(16 * 1024 * 1024)
-    expect(scriptErrorCodes).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'ENCRYPTED', 'NO_DEFINITION', 'PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'TOO_LARGE', 'EMPTY', 'BLOCKED',
+    expect(scriptErrorCodes).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'ENCRYPTED', 'NO_DEFINITION', 'PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'TOO_LARGE', 'EMPTY', 'BLOCKED',
       'TIMEOUT', 'CONNECTION_LOST', 'UNREPRESENTABLE', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY'])
     expect(scriptErrorCodes.filter(code => scriptErrorRetryable[code])).toEqual(['PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA'])
   })

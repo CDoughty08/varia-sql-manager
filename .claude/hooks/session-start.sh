@@ -55,7 +55,7 @@ start_sql() {
     fi
   else
     say 'creating the varia-sql container (SQL Server 2022; the first image pull takes a few minutes)'
-    quiet sql-create docker run -d --name varia-sql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$sql_password" -p 127.0.0.1:1433:1433 \
+    quiet sql-create docker run -d --name varia-sql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$sql_password" -e MSSQL_AGENT_ENABLED=true -p 127.0.0.1:1433:1433 \
       mcr.microsoft.com/mssql/server:2022-latest || { say 'SQL Server could not be created; live SQL checks will be skipped'; return 0; }
   fi
   local probe='' deadline=$((SECONDS + 150))
@@ -66,6 +66,10 @@ start_sql() {
       # The container is disposable, so the Object Explorer checks may create and drop their scratch databases.
       persist 'export VARIA_TEST_SQL_SCRATCH=1'
       persist "export VARIA_TEST_SQL_PASSWORD='$sql_password'"
+      # The Agent live suites require SQL Server Agent; a container created before Agent was enabled here runs without it.
+      if docker container inspect -f '{{range .Config.Env}}{{println .}}{{end}}' varia-sql | grep -qx 'MSSQL_AGENT_ENABLED=true'; then
+        persist 'export VARIA_TEST_SQL_AGENT=1'
+      fi
       say 'SQL Server is ready on localhost:1433; live SQL checks are enabled'
       return 0
     fi

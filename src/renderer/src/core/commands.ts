@@ -1,5 +1,6 @@
-import { commandDescriptor, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
+import { commandAllowsProvider, commandDescriptor, isCommandId, paletteLabel, type CommandId } from '../../../shared/commands/catalog'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
+import { explorerNodeProvider } from '../../../shared/providers'
 import { compileWhen, evaluateWhen } from '../../../shared/commands/when'
 import { onUnexpectedError } from './errors'
 import { Emitter } from './events'
@@ -60,8 +61,14 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
     const handler = this.handlers.get(id)
     if (!handler) return false
     try {
-      const { precondition } = commandDescriptor(id)
-      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), this.stateFor(args))) return false
+      const { precondition } = commandDescriptor(id), state = this.stateFor(args)
+      // A command for another engine than the document's, or than the object or Explorer selection it runs on, is
+      // unavailable (`providers`). An Object Explorer node's own engine counts, selected or not: its menu, row buttons,
+      // jump menu and toolbars all pass it as the target; a search result's arguments stand its engine in.
+      const node = args?.target?.kind === 'explorer' ? args.target.node : undefined
+      const onObject = !!node || args?.target?.kind === 'searchHit'
+      if (!commandAllowsProvider(id, node ? { ...state, explorerSelectionProvider: explorerNodeProvider(node) } : state, onObject)) return false
+      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), state)) return false
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }
   }

@@ -2,6 +2,7 @@
 // pivot grid shows. PivotService runs it; PivotPanel draws the draft.
 import type { PivotAggregate, PivotValueSpec, ResultColumn } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import { sortKindOf } from '../../../shared/results/sort-kind'
 import type { PivotSpec } from './ResultClient'
 import { formatCount, plural } from './status'
 import { pivotName } from './ResultsService'
@@ -17,12 +18,11 @@ export const pivotAggregates: readonly { readonly aggregate: PivotAggregate; rea
   { aggregate: 'max', label: 'Max' }
 ]
 
-const typeName = (column: ResultColumn) => column.dataType.split('(')[0].trim().toLowerCase()
-const numericTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
+const numericKinds: ReadonlySet<string> = new Set(['integer', 'decimal', 'float'])
 
 /** Whether SUM and AVG take a column: exact and approximate numerics, not bit (ResultPivoter.IsNumeric in C#). */
 export function isNumericColumn(column: ResultColumn): boolean {
-  return column.wire === 'text' && numericTypes.has(typeName(column))
+  return column.wire === 'text' && numericKinds.has(sortKindOf(column))
 }
 
 /** Whether a value of `aggregate` may use `column` (undefined: the rows, which only Count counts). */

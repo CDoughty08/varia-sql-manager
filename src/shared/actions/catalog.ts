@@ -12,6 +12,7 @@ import type { LongRunKind } from '../long-runs.ts'
 import { loginRules, loginSubtypes, loginsCatalog, type LoginRule, type LoginSubtype } from './logins.ts'
 import { restoreCatalog, restoreMessages } from './restore.ts'
 import { tablesCatalog } from './tables.ts'
+import type { ProviderId } from '../providers.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -89,6 +90,8 @@ export type DialogId = typeof dialogIds[number]
 export const actionMenus = ['explorer.context', 'explorer.tasks', 'explorer.tasks.restore'] as const
 export type ActionMenuId = typeof actionMenus[number]
 export interface ObjectActionSpec {
+  /** The engines that offer this action (it runs actions.*, which serve SQL Server only); absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  readonly providers?: readonly ProviderId[]
   /** The palette's title, and the menu's unless `menuTitle` is set. */
   readonly title: string
   /** The menu's title when it is shorter than the palette's (SSMS's "Disable" for "Disable Login"). */
@@ -180,6 +183,8 @@ export type ServerAction = typeof serverActions[number]
  *  object actions, the server actions, the create actions (New Login) and the kind dialog actions (Login Properties). */
 export type CatalogAction = ObjectAction | ServerAction | CreateAction | KindDialogAction
 export interface ServerActionSpec {
+  /** The engines that offer this action (it runs actions.*, which serve SQL Server only); absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  readonly providers?: readonly ProviderId[]
   /** The palette's and the menu's title. */
   readonly title: string
   readonly mnemonic: string
@@ -461,6 +466,8 @@ export interface ActionCommandEntry {
   /** A menu-only command: a row placement (`rows`) or a server action's node place (ServerActionSpec.nodePlace); the palette offers
    *  the action once, through its main command. */
   readonly palette?: false
+  /** The spec's `providers`, so the command is offered for the engines the action is. */
+  readonly providers?: readonly ProviderId[]
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
   selectTop: {
@@ -516,7 +523,7 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
     const precondition = `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : '')
     // A Search Objects result's menu stands in the result's keys for the selection's (`selectionContextOf`).
     const search: ActionMenuPlacement[] = spec.searchResults ? [{ ...placement, menu: 'search.hit.context', when: `${key} != ''` }] : []
-    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search] }
+    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search], ...spec.providers ? { providers: spec.providers } : {} }
     if (!spec.rows) return [[spec.command, entry]]
     const { command, ...rows } = spec.rows
     const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background'` }] }
@@ -540,7 +547,7 @@ export function serverActionCommandEntries(): { readonly [K in ServerActionComma
     const folderPlaces = spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), kindPlaces = spec.kinds.map(kind => `explorerNode == '${kind}'`)
     const selectionPlaces = anyOf([...spec.folders.map(folder => `explorerSelectionFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerSelectionKind == '${kind}'`)])
     const entry = (group: string, order: number, places: readonly string[]): ActionCommandEntry => ({
-      title: spec.title, category: 'Object Explorer', ...serverCommandData[action],
+      title: spec.title, category: 'Object Explorer', ...serverCommandData[action], ...spec.providers ? { providers: spec.providers } : {},
       precondition: `backendReady && ${selectionPlaces} && ${engines('explorerSelectionServerEngine')}`,
       menus: [{ menu: 'explorer.context', group, order, mnemonic: spec.mnemonic, when: `${anyOf(places)} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
     })
@@ -831,7 +838,9 @@ export const serverFileTypesLabel = (purpose: ServerFilePurpose): string | undef
 
 /** Why an action failed, as a value; `retryable` says whether trying again can help. */
 export const actionErrorRetryable = {
-  NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
+  NOT_FOUND: false, NOT_SUPPORTED: false,
+  // The connection's engine has no object actions (src/shared/providers.ts): an error response, before the action runs.
+  UNSUPPORTED_PROVIDER: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
   // The server file picker's folder does not exist, or the server's account cannot see it.
   PATH_NOT_FOUND: false,
   // SQL Server could not open a database or backup file (5120, 5123, or 3201 with operating system error 5): missing, used by

@@ -1,4 +1,4 @@
-import type { BackendConnectionHandle } from '../../../shared/connection-targets'
+import { targetServerName, type BackendConnectionHandle } from '../../../shared/connection-targets'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { DisconnectPromptRequest, DisconnectChoice } from '../disconnect/DisconnectPromptService'
 import type { ConnectionOperation, ConnectionTargetService } from './connection-targets'
@@ -106,7 +106,7 @@ export class DisconnectCoordinator {
         if (refusal) { result = { status: 'blocked', error: refusal }; return }
         // A query-only Disconnect retains target context but is not attached to this transport.
         const queries = approved.filter(document => document.query && document.connectionId === handle.id)
-        const choice = queries.length ? await host.confirm({ targetId, name: target.details.displayName ?? target.options.server, tabs: queries.map(({ id, name, dirty, running }) => ({ id, name, dirty, running })) }) : 'keep-tabs'
+        const choice = queries.length ? await host.confirm({ targetId, name: target.details.displayName ?? targetServerName(target.options), tabs: queries.map(({ id, name, dirty, running }) => ({ id, name, dirty, running })) }) : 'keep-tabs'
         if (choice === 'cancel') { result = { status: 'cancelled' }; return }
         validate()
         let close: PreparedQueryClose | undefined

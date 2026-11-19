@@ -82,7 +82,7 @@ describe('DatabaseListService', () => {
   it('retains the exact handle cache through a failed disconnect and refresh without admitting work during teardown', async () => {
     const f = fixture(), targetId = '00000000-0000-4000-8000-000000000001', connectionId = '00000000-0000-4000-8000-000000000050'
     const attempt = f.connections.beginConnect(connectionOptions, 1, targetId)!
-    f.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }, attempt)
+    f.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }, attempt)
     f.answer(0, { ok: true, value: list('master', 'AppData') })
     await Promise.resolve()
     const cached = f.service.get(connectionId), refresh = f.service.reload(connectionId)

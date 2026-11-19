@@ -30,7 +30,7 @@ function fixture() {
   docs.documents.registerProvider(provider)
   const accept = (targetId: string, handleId: string, generation = 1) => {
     const attempt = connections.beginConnect(connectionOptions, generation, targetId)!
-    const authentication: ConnectionAuthentication = { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }
+    const authentication: ConnectionAuthentication = { principal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' } }
     expect(connections.accept(connectionInfo(handleId, generation), connectionOptions, targetId, authentication, attempt).status).toBe('accepted')
   }
   const custom = (handleId: string) => {

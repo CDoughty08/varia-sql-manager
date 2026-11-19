@@ -1,6 +1,6 @@
 import {
   backendConnectionHandleSchema, connectionAuthenticationSchema, connectionDetailsSchema, connectionLifecycleSchema, connectionTargetLimits,
-  connectionWorkspaceSchema, persistedConnectionTargetSchema,
+  connectionWorkspaceSchema, isBigQueryTarget, persistedConnectionTargetSchema, principalFits, samePrincipal,
   type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionFailureReason, type ConnectionLifecycle,
   type ConnectionTarget, type ConnectionWorkspace, type PersistedConnectionTarget
 } from '../../../shared/connection-targets'
@@ -120,7 +120,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
         || lifecycle.handle.id !== change.handle.id || lifecycle.handle.generation !== change.handle.generation) continue
       const previous = this.bindingRevisions.get(target.id), expected = target.expectedPrincipal, actual = change.authentication.principal
       if (previous?.id === change.handle.id && previous.generation === change.handle.generation && previous.revision >= change.revision) continue
-      if (!expected || expected.provider !== actual.provider || expected.authentication !== actual.authentication || expected.id !== actual.id) continue
+      if (!expected || !samePrincipal(expected, actual) || isBigQueryTarget(target.options)) continue
       const { database: _oldDatabase, ...oldSettings } = target.options, { database: _newDatabase, ...newSettings } = change.options
       if (JSON.stringify(oldSettings) !== JSON.stringify(newSettings)) continue
       const { credential: oldCredential, ...rest } = persisted(target)
@@ -141,7 +141,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     if (!parsedHandle.success || !proof.success) return false
     const target = this.getSnapshot().find(value => value.lifecycle.state === 'connected' && value.lifecycle.handle.id === parsedHandle.data.id && value.lifecycle.handle.generation === parsedHandle.data.generation)
     const expected = target?.expectedPrincipal, actual = proof.data.principal
-    if (!target || !expected || expected.provider !== actual.provider || expected.authentication !== actual.authentication || expected.id !== actual.id) return false
+    if (!target || !expected || !samePrincipal(expected, actual)) return false
     if (proof.data.credential === undefined) return true
     const { credential: _credential, ...rest } = persisted(target)
     const replacement = persistedConnectionTargetSchema.safeParse({ ...rest, ...proof.data.credential ? { credential: proof.data.credential } : {} })
@@ -193,7 +193,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     if (!proof.success) reason = 'unknown'
     else {
       const expected = target.expectedPrincipal, actual = proof.data.principal
-      if (actual.authentication !== target.options.authentication || (expected && (expected.provider !== actual.provider || expected.authentication !== actual.authentication || expected.id !== actual.id))) reason = 'identity-changed'
+      if (!principalFits(actual, target.options) || (expected && !samePrincipal(expected, actual))) reason = 'identity-changed'
       if (!reason && operation.credentialIntent === 'preserve' && proof.data.credential !== undefined) {
         const current = target.credential, next = proof.data.credential
         if ((current && (!next || current.profileId !== next.profileId || current.revision !== next.revision)) || (!current && target.expectedPrincipal && next)) reason = 'credentials-required'

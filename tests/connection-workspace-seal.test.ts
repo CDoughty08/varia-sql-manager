@@ -4,17 +4,18 @@ import { ConnectionAuthenticationGuard } from '../src/main/connection-authentica
 import { ConnectionWorkspaceSealer, unprovenWithoutAccount } from '../src/main/connection-workspace-seal'
 import { lockedCipher, testCipher, type SecretCipher } from '../src/main/secret-cipher'
 import { encodeSession, type SessionInput } from '../src/main/session-store'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const windows = (value: number, server = 'sql-prod'): PersistedConnectionTarget => ({
   id: id(value), options: { server, database: 'Sales', authentication: 'windows', trustServerCertificate: false },
   details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
-  expectedPrincipal: { provider: 'sqlServer', authentication: 'windows', id: 'sid:0105' }
+  expectedPrincipal: { provider: 'sqlserver', authentication: 'windows', id: 'sid:0105' }
 })
 const sql = (value: number): PersistedConnectionTarget => ({
   id: id(value), options: { server: 'sql-prod', database: 'Sales', authentication: 'sql', username: 'alex', trustServerCertificate: false },
   details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
-  credential: { profileId: id(90), revision: id(91) }, expectedPrincipal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:0106' }
+  credential: { profileId: id(90), revision: id(91) }, expectedPrincipal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:0106' }
 })
 const workspace = (...targets: PersistedConnectionTarget[]): ConnectionWorkspace => ({ version: 1, targets })
 
@@ -28,6 +29,18 @@ describe('connection workspace seal', () => {
     expect(encrypt).toHaveBeenCalledTimes(1)
     // The next process holds a different key but reads the same OS-protected one from the file.
     expect(await new ConnectionWorkspaceSealer(cipher).trusted(kept, seal)).toEqual(kept)
+  })
+
+  it("keeps the accounts of a 0.9.0 session, sealed over the sqlServer spelling, after it is read as sqlserver", async () => {
+    const cipher = testCipher()
+    // 0.9.0 sealed its targets as it wrote them: the principal's provider spelled sqlServer.
+    const as090 = (target: PersistedConnectionTarget) => ({ ...target, expectedPrincipal: { ...target.expectedPrincipal!, provider: 'sqlServer' } }) as unknown as PersistedConnectionTarget
+    const seal = await new ConnectionWorkspaceSealer(cipher).seal(workspace(as090(windows(1)), sql(2)))
+    const migrated = workspace(windows(1), sql(2))
+    expect(await new ConnectionWorkspaceSealer(cipher).trusted(migrated, seal)).toEqual(migrated)
+    // The re-spelling proves only the same targets: an edited one still loses its account.
+    const trusted = await new ConnectionWorkspaceSealer(cipher).trusted(workspace(windows(1, 'attacker.example'), sql(2)), seal)
+    expect(trusted.targets[0].expectedPrincipal).toBeUndefined()
   })
 
   it('drops silent accounts from a planted or edited target, but leaves password targets to their bound ciphertext', async () => {
@@ -95,7 +108,7 @@ describe('connection workspace seal', () => {
     const disconnected = { ...windows(1), resumeWanted: false }
     guard.restore(workspace(disconnected))
     const { expectedPrincipal: _principal, ...withoutAccount } = disconnected
-    const asPassword: PersistedConnectionTarget = { ...disconnected, options: { ...disconnected.options, authentication: 'sql', username: 'alex' }, expectedPrincipal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:0105' } }
+    const asPassword: PersistedConnectionTarget = { ...disconnected, options: { ...disconnected.options as SqlServerTargetOptions, authentication: 'sql', username: 'alex' }, expectedPrincipal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:0105' } }
     for (const edited of [withoutAccount, asPassword]) {
       const read = workspace({ ...edited, resumeWanted: true }), trusted = await sealer.trusted(read, undefined)
       const [target] = unprovenWithoutAccount(trusted, guard.project(trusted)).targets

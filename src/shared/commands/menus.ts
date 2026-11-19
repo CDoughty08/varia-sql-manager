@@ -3,6 +3,7 @@ import { scriptAsTitleKeys, scriptAsTitles, scriptCommandIds, scriptSubmenuEntri
 import { commandDescriptor, commandIds, type CommandId, type RoleName } from './catalog'
 import { defaultRules, primaryRule, splitChord, toAccelerator, type Platform, type ResolvedRule } from './keybindings'
 import { compileWhen, type WhenAst } from './when'
+import { bothProviders, type ProviderId } from '../providers.ts'
 
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
 export const applicationMenus = [
@@ -96,20 +97,22 @@ export interface SubmenuDescriptor {
   /** The title names the selected object ("Script Table as"): `scriptAsTitles[explorerScriptTitle]`, else `title`. */
   readonly dynamicTitle?: 'scriptAs'
   readonly placements: readonly SubmenuPlacement[]
+  /** The engines it is for; absent, SQL Server only. Object Explorer's menu leaves it out for a node of another engine. */
+  readonly providers?: readonly ProviderId[]
 }
 /** What a dynamic submenu's own items come from: View › Theme's theme state, or File › Recent Files' list. */
 export type DynamicSubmenu = 'theme' | 'recentFiles'
 /** Submenus, placed like commands. One with nothing visible in it is left out (`pruneMenu`). */
 export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // Visual Studio's File › Recent Files, before Exit; its items are the files (File › Open Recent File… runs each).
-  'file.recent': { title: 'Recent Files', nativeId: 'file.recent', dynamic: 'recentFiles', placements: [{ menu: 'file', group: '7_recent', order: 1, mnemonic: 'f' }] },
+  'file.recent': { providers: bothProviders, title: 'Recent Files', nativeId: 'file.recent', dynamic: 'recentFiles', placements: [{ menu: 'file', group: '7_recent', order: 1, mnemonic: 'f' }] },
   // Edit's submenus in the order of the Visual Studio shell SSMS 22 runs on: Advanced comes before Bookmarks.
-  'edit.findReplace': { title: 'Find and Replace', nativeId: 'edit.findReplace', placements: [{ menu: 'edit', group: '3_find', order: 1, mnemonic: 'f' }] },
-  'edit.advanced': { title: 'Advanced', nativeId: 'edit.advanced', placements: [{ menu: 'edit', group: '4_more', order: 1, mnemonic: 'v' }] },
-  'edit.bookmarks': { title: 'Bookmarks', nativeId: 'edit.bookmarks', placements: [{ menu: 'edit', group: '4_more', order: 2, mnemonic: 'k' }] },
+  'edit.findReplace': { providers: bothProviders, title: 'Find and Replace', nativeId: 'edit.findReplace', placements: [{ menu: 'edit', group: '3_find', order: 1, mnemonic: 'f' }] },
+  'edit.advanced': { providers: bothProviders, title: 'Advanced', nativeId: 'edit.advanced', placements: [{ menu: 'edit', group: '4_more', order: 1, mnemonic: 'v' }] },
+  'edit.bookmarks': { providers: bothProviders, title: 'Bookmarks', nativeId: 'edit.bookmarks', placements: [{ menu: 'edit', group: '4_more', order: 2, mnemonic: 'k' }] },
   // List Members, Parameter Info and the other IntelliSense commands join the snippets here with the language service.
   'edit.intellisense': { title: 'IntelliSense', nativeId: 'edit.intellisense', placements: [{ menu: 'edit', group: '4_more', order: 3, mnemonic: 'i' }] },
-  theme: { title: 'Theme', nativeId: 'view.theme', dynamic: 'theme', placements: [{ menu: 'view', group: '3_theme', order: 1, mnemonic: 'h' }] },
+  theme: { providers: bothProviders, title: 'Theme', nativeId: 'view.theme', dynamic: 'theme', placements: [{ menu: 'view', group: '3_theme', order: 1, mnemonic: 'h' }] },
   'query.connection': {
     title: 'Connection', nativeId: 'query.connection',
     placements: [{ menu: 'query', group: '0_connection', order: 1, mnemonic: 'o' }, { menu: 'editor.context', group: '1_connection', order: 1, mnemonic: 'o' }]
@@ -130,11 +133,11 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // Script as › <verb> To, from src/shared/scripting/catalog.ts.
   ...scriptSubmenuEntries(),
   // The results grid's Highlight submenu (results PR 8): a colour for the selected rows, or none.
-  'output.highlight': { title: 'Highlight', nativeId: 'output.highlight', placements: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'g', when: "outputView == 'grid'" }] },
+  'output.highlight': { providers: bothProviders, title: 'Highlight', nativeId: 'output.highlight', placements: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'g', when: "outputView == 'grid'" }] },
   // The results grid's Filter submenu (results PR 4): filters by the selected cells' values, NULL and duplicates (results.view).
-  'output.filter': { title: 'Filter', nativeId: 'output.filter', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'e', when: "outputView == 'grid' || outputLiveFilterable" }] },
+  'output.filter': { providers: bothProviders, title: 'Filter', nativeId: 'output.filter', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'e', when: "outputView == 'grid' || outputLiveFilterable" }] },
   // The results grid's Transpose submenu: the grid drawn with its columns as rows (a toggle), of the selected rows only, and the column that heads the drawn columns.
-  'output.transposeMenu': { title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 12, mnemonic: 'n', when: 'outputGridTransposable' }] },
+  'output.transposeMenu': { providers: bothProviders, title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 12, mnemonic: 'n', when: 'outputGridTransposable' }] },
   // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.
   'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] }
 }

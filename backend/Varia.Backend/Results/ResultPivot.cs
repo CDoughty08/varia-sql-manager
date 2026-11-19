@@ -106,7 +106,7 @@ internal static class ResultPivoter
 
     /// <summary>A column SUM and AVG take: exact or approximate numerics (not bit), as SQL Server's SUM does.</summary>
     public static bool IsNumeric(ResultColumn column, WireKind wire) =>
-        ViewSorter.KindOf(column, wire) is ViewSorter.Kind.Approximate || (ViewSorter.KindOf(column, wire) is ViewSorter.Kind.Exact && ViewSorter.TypeName(column) != "bit");
+        ViewSorter.KindOf(column, wire) is ViewSorter.Kind.Approximate || (ViewSorter.KindOf(column, wire) is ViewSorter.Kind.Exact && column.SortKind != ColumnTypes.Boolean);
 
     /// <summary>Groups the rows (the view's, in its order, or the sealed ones) and aggregates each value. <paramref name="reserve"/>
     /// is asked for the figures' bytes once the groups are known; false throws <see cref="PivotTooLargeException"/>.</summary>
@@ -356,15 +356,10 @@ internal static class ResultPivoter
     }
 
     /// <summary>The scale of an exact numeric column's values (decimal(p,s)'s s; money's 4; integers' 0).</summary>
-    internal static int Scale(ResultColumn column) => ViewSorter.TypeName(column) switch
-    {
-        "money" or "smallmoney" => 4,
-        "decimal" or "numeric" => column.Scale ?? 0,
-        _ => 0
-    };
+    internal static int Scale(ResultColumn column) => ColumnTypes.IsMoney(column) ? 4 : column.SortKind == ColumnTypes.Decimal ? column.Scale ?? 0 : 0;
 
     /// <summary>An integer type, whose SUM is a bigint as SQL Server's is.</summary>
-    internal static bool IsInteger(ResultColumn column) => ViewSorter.TypeName(column) is "tinyint" or "smallint" or "int" or "bigint";
+    internal static bool IsInteger(ResultColumn column) => column.SortKind == ColumnTypes.Integer;
 
     /// <summary>Keeps the lower (or higher) of a cell's row and this one; equal values keep the earlier row.</summary>
     private static void Extreme(int[] best, int cell, int row, ViewSorter.Key key, bool max)

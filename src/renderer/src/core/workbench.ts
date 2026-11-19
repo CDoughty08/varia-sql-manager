@@ -58,6 +58,7 @@ import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
+import { providerSwitchToast, switchModelLanguage } from '../languages/query-language'
 import { filesContribution, watchExternalChanges } from '../contributions/files'
 import { editorContribution } from '../contributions/editor'
 import { paletteContribution } from '../contributions/palette'
@@ -319,7 +320,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
-    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server, target: id => targets.targetForConnection(id) })
+    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server, target: id => targets.targetForConnection(id),
+      provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
+      setLanguage: (model, language) => switchModelLanguage(monaco, model, language),
+      providerChanged: document => notifications.notify(providerSwitchToast(document)) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const sqlLanguage = new SqlLanguageService(monaco, api, documents, connections, backend)
   const sqlDiagnostics = new SqlDiagnosticsService(monaco, sqlLanguage, documents, connections,

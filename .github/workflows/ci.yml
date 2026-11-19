@@ -131,6 +131,8 @@ jobs:
           ACCEPT_EULA: 'Y'
           # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
           MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
+          MSSQL_AGENT_ENABLED: 'true'
         ports:
           - 1433:1433
         options: >-
@@ -148,6 +150,8 @@ jobs:
       # Only this disposable container records New Login's and Create Catalog's batches in an Extended Events session, to prove
       # neither password reaches any recorded field (wave 5 decision 14); a developer's server runs it only when its owner asks.
       VARIA_TEST_SQL_XE: '1'
+      # The Agent live suites require SQL Server Agent and fail if it never comes up.
+      VARIA_TEST_SQL_AGENT: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -216,6 +220,8 @@ jobs:
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
+          MSSQL_AGENT_ENABLED: 'true'
         ports:
           - 1433:1433
         options: >-

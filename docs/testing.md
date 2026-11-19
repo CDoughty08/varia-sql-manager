@@ -151,6 +151,15 @@ npm run test:smoke:wsl -- --all
   `SSISDB`; only the opt-in `VARIA_TEST_SSIS_CREATE=1` creates and drops it, on a server whose owner allows it and only
   when it has no `SSISDB`: it never drops a catalog it did not create. docs/integration-services.md records what is
   verified.
+- **SQL Server Agent.** `VARIA_TEST_SQL_AGENT=1` (set by CI's live job and, for a container with Agent enabled, the
+  session hook) runs the Agent live suites: they wait for Agent to come up (Agent XPs on and an Agent session; it starts
+  after the container's health check), up to `agentLimits.agentUpWaitMs`, and fail if it never does; without the variable
+  they skip with one line saying why. CI's live and Linux smoke containers set `MSSQL_AGENT_ENABLED=true`. With
+  `VARIA_TEST_SQL_SCRATCH=1` they also create a scratch job and login, named with the run prefix and a kind tag (`_job`,
+  `_sch`, `_op`, `_al`, `_px`, `_cr`; logins `_l…`), dropped in `finally` and swept by `ScratchDatabase.SweepAsync` once
+  the prefix is 6 hours old. Each scratch job run adds rows to Agent's server-wide history cap, pushing out real jobs'
+  oldest rows on a shared server, so a suite runs few jobs. Other Agent suites never stop Agent. docs/sql-server-agent.md
+  records what is verified.
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs

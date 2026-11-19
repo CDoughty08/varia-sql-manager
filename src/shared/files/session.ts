@@ -1,10 +1,11 @@
 import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
 import type { EditorGroupsLayout } from '../editor-groups'
 import type { ConnectionWorkspace } from '../connection-targets'
+import type { ProviderId } from '../providers'
 
 /**
  * Hot exit (Tools › Options › Environment › Documents › Restore open queries on startup), as VS Code has it: a normal
- * close keeps the open text tabs in `<userData>/Session/session.json`, readable only by the user, instead of asking to
+ * close keeps the open text tabs in `<userData>/WorkbenchSession/session.json`, readable only by the user, instead of asking to
  * save them, and the next start reopens them. Only text and nonsecret connection targets: never results or live handles.
  */
 export const sessionLimits = {
@@ -16,7 +17,9 @@ export const sessionLimits = {
   nameChars: 512,
   pathChars: 4096,
   serverChars: 256,
-  databaseChars: 128
+  databaseChars: 128,
+  /** A BigQuery tab's dataset (its `database`): BigQuery's 1,024 characters, on BigQuery tabs only. */
+  datasetChars: 1024
 } as const
 
 /** A tab name the user chose (Rename Tab): trimmed, at most this many characters. */
@@ -31,7 +34,8 @@ export function cleanTabName(value: string): string {
  * the user's rename (absent when not renamed). `text` is absent only for a clean tab with a file, which reopens from its
  * file; main adds the path from its own registration of `fileId`. `server` and `database` are where the query was
  * connected, as a legacy display hint. `targetId` is the exact durable association; `attachWanted` remembers whether
- * reconnecting that target should attach the query. Every associated query keeps its own database.
+ * reconnecting that target should attach the query. Every associated query keeps its own database. `provider` is the
+ * tab's engine (absent: SQL Server, as in every 0.9.0 record); a BigQuery tab's `database` is its dataset.
  */
 export interface SessionDocumentWrite {
   readonly name: string
@@ -45,6 +49,7 @@ export interface SessionDocumentWrite {
   readonly database?: string
   readonly targetId?: string
   readonly attachWanted?: boolean
+  readonly provider?: ProviderId
   readonly text?: string
 }
 /**
@@ -76,6 +81,8 @@ export interface RestoredDocument {
   readonly database?: string
   readonly targetId?: string
   readonly attachWanted?: boolean
+  /** The tab's engine as kept (absent: SQL Server); a query reopens in its language without its connection. */
+  readonly provider?: ProviderId
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
 export interface RestoredSession {

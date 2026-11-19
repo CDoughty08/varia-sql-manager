@@ -1401,6 +1401,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | --- | --- |
 | `NOT_FOUND` | No |
 | `NOT_SUPPORTED` | No |
+| `UNSUPPORTED_PROVIDER` | No |
 | `PERMISSION_DENIED` | Yes |
 | `IN_USE` | Yes |
 | `BLOCKED` | Yes |

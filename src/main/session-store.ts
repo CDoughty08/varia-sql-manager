@@ -6,6 +6,7 @@ import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
+import { providerIds } from '../shared/providers'
 import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
@@ -14,8 +15,12 @@ const fits = (value: { kind: DocumentKind; text?: string }) => value.text === un
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().max(sessionLimits.databaseChars)
+const dataset = z.string().max(sessionLimits.datasetChars)
 const legacyFields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.min(1).optional(), text: z.string().max(maxDocumentCharacters).optional() }
 const fields = { ...legacyFields, database: database.optional(), targetId: z.uuid().optional(), attachWanted: z.boolean().optional() }
+/** Version 3: the tab's provider, and a BigQuery tab's dataset at BigQuery's length (SQL Server's 128 characters otherwise). */
+const providerFields = { ...fields, provider: z.enum(providerIds).optional(), database: dataset.optional() }
+const databaseFits = (document: { provider?: string; database?: string }) => document.provider === 'bigquery' || (document.database ?? '').length <= sessionLimits.databaseChars
 const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
   ? document.kind === 'sql' && document.attachWanted !== undefined && document.database !== undefined
   : document.attachWanted === undefined
@@ -25,8 +30,9 @@ const targetsPresent = (session: { documents: readonly { targetId?: string }[]; 
 }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
-  documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
+  documents: z.array(z.object({ ...providerFields, fileId: z.uuid().optional() }).strict()
     .refine(associated, 'A query target requires its database and attachment preference.')
+    .refine(databaseFits, 'A database name has at most 128 characters.')
     .refine(fits, 'A query is too large to keep for the next start.')
     .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
@@ -44,7 +50,7 @@ const legacyRecordSchema = z.object({
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents)
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
-const recordSchema = z.object({
+const v2RecordSchema = z.object({
   ...recordFields, version: z.literal(2), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
   documents: z.array(z.object({
     ...fields, ...fileFields
@@ -52,8 +58,19 @@ const recordSchema = z.object({
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
-/** Version 1 has only server hints. Migration cannot infer an account or manufacture a target association. */
-const storedSessionSchema = z.union([recordSchema, legacyRecordSchema.transform(record => ({ ...record, version: 2 as const }))])
+/** Version 3 (0.10.0, `WorkbenchSession/`): version 2 with each tab's provider and the provider-tagged workspace. */
+const recordSchema = z.object({
+  ...recordFields, version: z.literal(3), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
+  documents: z.array(z.object({
+    ...providerFields, ...fileFields
+  }).strict().refine(fits).refine(associated).refine(databaseFits)
+    .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
+    .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
+/** Version 1 has only server hints. Migration cannot infer an account or manufacture a target association. Versions 1
+ *  and 2 (0.9.0's `Session/`) read as version 3 with every tab SQL Server's. */
+export const storedSessionSchema = z.union([recordSchema, v2RecordSchema.transform(record => ({ ...record, version: 3 as const })),
+  legacyRecordSchema.transform(record => ({ ...record, version: 3 as const }))])
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
@@ -85,7 +102,7 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
   const places = new Map(reopens.map(({ index }, place) => [index, place]))
   const groups = session.groups ? remapEditorGroups(session.groups, index => places.get(index)) : undefined
   const record: SessionRecord = {
-    version: 2, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
+    version: 3, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
     documents: reopens.map(({ document }) => ({
       name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
       ...document.pinned ? { pinned: true } : {},
@@ -94,6 +111,7 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
       } : {},
       ...document.server ? { server: document.server } : {}, ...document.database !== undefined ? { database: document.database } : {},
       ...document.targetId ? { targetId: document.targetId, attachWanted: document.attachWanted } : {},
+      ...document.provider ? { provider: document.provider } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     })),
     ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace, ...session.seal ? { seal: session.seal } : {} } : {}
@@ -111,7 +129,7 @@ export function encodeReloadSession(session: SessionInput, recoveryIds: readonly
 }
 
 /**
- * `<userData>/Session/`: hot exit's copy of the open tabs, written once as a normal close goes ahead instead of asking to
+ * `<userData>/WorkbenchSession/` (0.9.0's `Session/`, migrated at startup by profile-migration.ts): hot exit's copy of the open tabs, written once as a normal close goes ahead instead of asking to
  * save them. The folder is 0700 and the file 0600 on POSIX, written atomically; it holds text, names, paths, server and
  * database names and nonsecret connection targets, never results, live handles or secrets, and nothing here logs its content.
  *

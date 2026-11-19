@@ -7,6 +7,7 @@
   "createCatalog": {"assemblyFile":"Microsoft.SqlServer.IntegrationServices.Server.dll","backupFiles":[{"file":"SSISDBBackup.bak","since":13}],"cleanupStep":"Remove the incomplete catalog"},
   "errors": [
     {"code":"CATALOG_MISSING","retryable":false},
+    {"code":"UNSUPPORTED_PROVIDER","retryable":false},
     {"code":"NO_DB_ACCESS","retryable":false},
     {"code":"DATABASE_UNAVAILABLE","retryable":true},
     {"code":"BLOCKED","retryable":true},

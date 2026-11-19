@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
-  connectionAuthenticationSchema, connectionTargetLimits, connectionTargetOptions, connectionWorkspaceSchema,
-  type ConnectionAuthentication, type ConnectionWorkspace, type PersistedConnectionTarget
+  connectionAuthenticationSchema, connectionTargetLimits, connectionTargetOptions, connectionWorkspaceSchema, isBigQueryTarget,
+  type ConnectionAuthentication, type ConnectionTargetOptions, type ConnectionWorkspace, type PersistedConnectionTarget
 } from '../shared/connection-targets'
 import type { ConnectContext } from '../shared/connections'
 import type { ConnectionOptions } from '../shared/contracts'
@@ -9,13 +9,15 @@ import { advancedDefaults } from '../shared/connections'
 
 type Pin = Pick<PersistedConnectionTarget, 'id' | 'options' | 'expectedPrincipal' | 'credential'>
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
-const settings = (options: ConnectionOptions) => {
-  const clean = connectionTargetOptions(options)
+const settings = (options: ConnectionOptions | ConnectionTargetOptions) => {
+  // A BigQuery pin never matches SQL Server options: each provider's settings name the provider first.
+  if (isBigQueryTarget(options)) return ['bigquery', options]
+  const clean = connectionTargetOptions(options as ConnectionOptions)
   return [clean.server, clean.database, clean.authentication, clean.username ?? '', clean.encrypt ?? 'mandatory', clean.trustServerCertificate,
     clean.hostNameInCertificate ?? '', Object.keys(advancedDefaults).sort().map(key => [key, clean.advanced?.[key as keyof typeof advancedDefaults] ?? advancedDefaults[key as keyof typeof advancedDefaults]]),
     clean.advanced?.commandTimeout === undefined ? ['inherit'] : ['explicit', clean.advanced.commandTimeout]]
 }
-const sameSettings = (left: ConnectionOptions, right: ConnectionOptions) => equal(settings(left), settings(right))
+const sameSettings = (left: ConnectionOptions | ConnectionTargetOptions, right: ConnectionOptions | ConnectionTargetOptions) => equal(settings(left), settings(right))
 const different = () => new Error('The remembered target identity changed. Choose a connection explicitly.')
 
 /** Security evidence only. The renderer registry remains the sole owner of lifecycle, intent and Explorer membership. */
