@@ -1368,8 +1368,8 @@
         },
         "resultsGrid.selectionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text of selected cells while the grid is focused, and of selected Table Designer rows. Default @list.activeSelectionForeground (Dark #d9dce3, Light #1c1f26).",
-          "markdownDescription": "(Varia) Text of selected cells while the grid is focused, and of selected Table Designer rows. Default `@list.activeSelectionForeground` (Dark `#d9dce3`, Light `#1c1f26`)."
+          "description": "(Varia) Text of selected Table Designer rows. Selected grid cells keep their own text colour under resultsGrid.selectionOverlay. Default @list.activeSelectionForeground (Dark #d9dce3, Light #1c1f26).",
+          "markdownDescription": "(Varia) Text of selected Table Designer rows. Selected grid cells keep their own text colour under resultsGrid.selectionOverlay. Default `@list.activeSelectionForeground` (Dark `#d9dce3`, Light `#1c1f26`)."
         },
         "resultsGrid.inactiveSelectionBackground": {
           "$ref": "#/definitions/value",

@@ -109,14 +109,16 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   // Selected Table Designer rows; selected grid cells are a translucent layer over the grid and the striped row.
-  ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground'], [...grid, 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.selectionOverlay']),
+  ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   // Selected cells keep their text color while the grid is not focused (links, read errors and the truncation marker
   // too); NULL takes the grid's foreground there (styles.css), as its tint is too faint on that fill.
   ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground', 'resultsGrid.truncationForeground'],
     ['panel.background', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.inactiveSelectionOverlay']),
+  // On the focused selection a link takes the grid's foreground too (styles.css).
+  ...text(['foreground', 'resultsGrid.foreground', 'errorForeground', 'resultsGrid.truncationForeground'], ['panel.background', 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.selectionOverlay']),
   // A search match is a layer too, under the selection; a NULL and a link take the grid's foreground on it (styles.css).
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.hitOverlay']),
-  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
+  ...text(['resultsGrid.foreground'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
   // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
@@ -156,7 +158,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   // match and the selection; its row number is tinted with it over the header.
   ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).flatMap(color => [
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
-    ...text(['resultsGrid.selectionForeground'], [...grid, `resultsGrid.highlight${color}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
+    ...text(['resultsGrid.foreground'], [...grid, `resultsGrid.highlight${color}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
     ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`]),
     // Transposed, the highlighted row is a column: its tint lies over each cell, on the grid and on a striped row.
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}ColumnBackground`], [...striped, `resultsGrid.highlight${color}ColumnBackground`])
@@ -169,7 +171,7 @@ export const contrastPairs: readonly ContrastPair[] = [
     ...text(['resultsGrid.foreground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.inactiveSelectionOverlay'],
       [...grid, `resultsGrid.diffChanged${kind}Background`], [...striped, `resultsGrid.diffChanged${kind}Background`],
       [...striped, `resultsGrid.diffChanged${kind}Background`, 'resultsGrid.inactiveSelectionOverlay']),
-    ...text(['resultsGrid.selectionForeground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
+    ...text(['resultsGrid.foreground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
       [...striped, `resultsGrid.diffChanged${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
       ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).map(color => [...grid, `resultsGrid.diffChanged${kind}Background`, `resultsGrid.highlight${color}Background`, 'resultsGrid.selectionOverlay'] as ColorKey[])),
     ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`]),
@@ -179,14 +181,14 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A NULL keeps its own tint under a search match and the selection, where it takes the grid's or the selection's text.
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay'],
     [...grid, 'resultsGrid.nullBackground', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.inactiveSelectionOverlay']),
-  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
+  ...text(['resultsGrid.foreground'], [...striped, 'resultsGrid.nullBackground', 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   // Every stack a cell can show (styles.css): its own colour (the grid, the stripe, a diff's wash or a changed value's
   // colour), the row's highlight (which replaces the stripe), a search match, then the unfocused selection with the grid's
   // text (NULL, links and read errors take it on all but the plain grid and stripe, where their own colours are checked) or the focused selection with its own.
-  ...cellStacks().flatMap(stack => [...text(['resultsGrid.foreground'], stack, [...stack, 'resultsGrid.inactiveSelectionOverlay']), ...text(['resultsGrid.selectionForeground'], [...stack, 'resultsGrid.selectionOverlay'])]),
+  ...cellStacks().flatMap(stack => [...text(['resultsGrid.foreground'], stack, [...stack, 'resultsGrid.inactiveSelectionOverlay']), ...text(['resultsGrid.foreground'], [...stack, 'resultsGrid.selectionOverlay'])]),
   // The one-row layout's changed value (old struck through, then new), likewise under the selection.
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground']),
-  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.selectionOverlay']),
+  ...text(['resultsGrid.foreground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.selectionOverlay']),
   // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
   ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
     ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
@@ -196,7 +198,7 @@ export const contrastPairs: readonly ContrastPair[] = [
       // A selected cell keeps the row's text colour while the grid is not focused, and a departed (muted) row is the
       // selected one by construction.
       ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionOverlay']),
-      ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', background, 'resultsGrid.selectionOverlay'])
+      ...text(['resultsGrid.foreground'], ['resultsGrid.background', background, 'resultsGrid.selectionOverlay'])
     ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),

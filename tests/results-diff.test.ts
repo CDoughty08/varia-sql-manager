@@ -195,7 +195,10 @@ describe('result diffs', () => {
     expect(marks?.selector).toBe('.rg-c:is(.is-hit, .is-chg) .rg-ws, :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c .rg-ws')
     expect(css.indexOf('.rg-c:is(.is-hit, .is-chg) .rg-ws')).toBeLessThan(css.indexOf('.rg-c.is-sel .rg-ws { color: inherit; }'))
     expect(screen.filter(rule => /is-null/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
-      .toEqual(['.rg-c.is-null', '.rg:not(:focus-within) .rg-c.is-sel.is-null'])
+      .toEqual(['.rg-c.is-null', '.rg-c.is-sel.is-null'])
+    // A selected cell keeps its text colour: the selection is a tint, so an opaque fill's text colour would not fit it.
+    expect(screen.filter(rule => /\.is-sel\b/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
+      .toEqual(['.rg-c.is-sel .rg-ws', '.rg-c.is-sel.is-null', '.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after'])
     // The old half's strikethrough sets only the line, keeping a link's or read error's underline beside it.
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration')).toBeUndefined()
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration-line')).toBe('line-through')

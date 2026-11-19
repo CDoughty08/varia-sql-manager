@@ -2412,7 +2412,7 @@ try {
     // The selection is a translucent layer over the cell's own colour, which it keeps.
     const own = (await computed(cell(0, 0))).background
     await cell(0, 0).click()
-    await expect.poll(() => computed(cell(0, 0))).toEqual({ color: await tokenColor('resultsGrid.selectionForeground'), background: own })
+    await expect.poll(() => computed(cell(0, 0))).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: own })
     const selection = await tokenColor('resultsGrid.selectionOverlay')
     await expect.poll(() => layers(cell(0, 0))).toContain(selection)
     await page.screenshot({ path: resolve('artifacts', `results-${mode}.png`) })

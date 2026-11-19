@@ -229,7 +229,7 @@ const groups = {
     'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Truncation notices and the marker on truncated values.', 'css'],
     'resultsGrid.whitespaceForeground': ['X', '$textMuted', 'White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters.', 'css'],
     'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected Table Designer rows and Column Profile cards. Selected grid cells take resultsGrid.selectionOverlay instead.', 'css'],
-    'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells while the grid is focused, and of selected Table Designer rows.', 'css'],
+    'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected Table Designer rows. Selected grid cells keep their own text colour under resultsGrid.selectionOverlay.', 'css'],
     'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Not drawn: selected grid cells take resultsGrid.inactiveSelectionOverlay while the grid is not focused. Still accepted from themes.', ''],
     'resultsGrid.selectionOverlay': ['X', '$accent/14', 'Selected cells while the grid is focused: a translucent layer over the cell\'s own colour, so a comparison\'s colour, a highlight and a search match stay visible under it. Keep it translucent.', 'css'],
     'resultsGrid.inactiveSelectionOverlay': ['X', '$accent/10', 'Selected cells while the grid is not focused; a translucent layer, as resultsGrid.selectionOverlay is. Their text keeps its color.', 'css'],
