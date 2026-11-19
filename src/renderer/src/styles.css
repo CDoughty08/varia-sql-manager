@@ -1275,11 +1275,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
 .rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
-/* NULL, link and read-error colours are checked on the grid, the stripe and the unfocused selection only: on a diff colour,
+/* NULL, link, read-error and white space mark colours are checked on the grid, the stripe and the unfocused selection only: on a diff colour,
    a highlight or a search match they take the grid's text colour (italics and the underlines still tell them apart). The
    focused selection's text colour, a later rule of the same weight, still wins; forced colours keep their system colours. */
 @media (forced-colors: none) {
   .rg-c:is(.is-null, .is-link, .is-err):is(.is-hit, .is-chg), :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c:is(.is-null, .is-link, .is-err) { color: var(--varia-resultsGrid-foreground); }
+  /* White space marks likewise; in a selected cell they take its text colour (a later rule). */
+  .rg-c:is(.is-hit, .is-chg) .rg-ws, :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c .rg-ws { color: var(--varia-resultsGrid-foreground); }
 }
 .rg:focus-within .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-selectionOverlay); color: var(--varia-resultsGrid-selectionForeground); }
 .rg:not(:focus-within) .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-inactiveSelectionOverlay); }
@@ -1296,7 +1298,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-c.is-dim, .rg-ch.dim { opacity: 0.4; }
 .rg-ch.hit { background: var(--varia-banner-warningBackground); }
 .rg-ch.cur { background: var(--varia-banner-warningBackground); box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
-@media (forced-colors: active) { .rg-c.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
+/* Forced colours: a match is Mark, outranking a diff's colour and the layers (`.rg-row.tone-changedOld .rg-c.is-chg` is
+   four classes), which would otherwise stay under forced-color-adjust: none. */
+@media (forced-colors: active) { .rg-row .rg-c.is-hit.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }

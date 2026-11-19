@@ -189,7 +189,8 @@ export const contrastPairs: readonly ContrastPair[] = [
       ...text(['resultsGrid.nullForeground'], ['resultsGrid.background', background]),
       // A selected cell keeps the row's text colour while the grid is not focused, and a departed (muted) row is the
       // selected one by construction.
-      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionOverlay'])
+      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionOverlay']),
+      ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', background, 'resultsGrid.selectionOverlay'])
     ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),

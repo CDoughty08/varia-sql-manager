@@ -190,6 +190,10 @@ describe('result diffs', () => {
     expect(plain?.selector).toBe('.rg-c:is(.is-null, .is-link, .is-err):is(.is-hit, .is-chg), :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c:is(.is-null, .is-link, .is-err)')
     expect(plain?.declarations).toEqual([{ property: 'color', value: 'var(--varia-resultsGrid-foreground)' }])
     expect(css.indexOf('.rg-c:is(.is-null, .is-link, .is-err)')).toBeLessThan(css.indexOf('.rg:focus-within .rg-c.is-sel {'))
+    const marks = rules.find(rule => rule.selector.startsWith('.rg-c:is(.is-hit, .is-chg) .rg-ws'))
+    expect(marks?.at).toEqual(['@media (forced-colors: none)'])
+    expect(marks?.selector).toBe('.rg-c:is(.is-hit, .is-chg) .rg-ws, :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c .rg-ws')
+    expect(css.indexOf('.rg-c:is(.is-hit, .is-chg) .rg-ws')).toBeLessThan(css.indexOf('.rg-c.is-sel .rg-ws { color: inherit; }'))
     expect(screen.filter(rule => /is-null/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
       .toEqual(['.rg-c.is-null', '.rg:not(:focus-within) .rg-c.is-sel.is-null'])
     // The old half's strikethrough sets only the line, keeping a link's or read error's underline beside it.
@@ -221,6 +225,10 @@ describe('result diffs', () => {
     expect(forced.find(rule => rule.selector === '.rg-c.is-sel:where(.is-chg)')?.declarations).toEqual([{ property: 'outline-color', value: 'HighlightText' }])
     expect(forced.find(rule => rule.selector === '.rg-rn:is(.tone-removed, .tone-changedOld)')?.declarations).toEqual([{ property: 'border-left', value: '3px dashed CanvasText' }])
     expect(css).not.toMatch(/\.rg-c\.is-chg[^{]*\{ outline/)
+    // A forced-colours match is Mark even on a diff colour or highlight: four classes, after the four-class changed rule.
+    const hit = forced.find(rule => rule.selector === '.rg-row .rg-c.is-hit.is-hit')
+    expect(hit?.declarations.find(item => item.property === 'background')?.value).toBe('Mark')
+    expect(css.indexOf('.rg-row .rg-c.is-hit.is-hit')).toBeGreaterThan(css.indexOf('.rg-row.tone-changedOld .rg-c.is-chg {'))
   })
 
   it('tells a changed row\'s halves from added and removed rows by their listed cells', () => {
