@@ -368,7 +368,8 @@ internal static class SearchNarrowingChecks
         var seeded = new Random(11);
         for (var r = 0; r < 6_000; r++) AddRandom(wide, seeded, sparse: r % 2 == 0);
         wide.Complete();
-        // A shuffled view is far from the pages' order, so a packed result is read page by page (ScanPages).
+        // A shuffled view is far from the pages' order, so in the suite's packed pass the result is read page by page
+        // (ScanPages); unpacked, it is read in view order.
         var shuffled = store.AddView(wide, [.. Enumerable.Range(0, 6_000).OrderBy(_ => seeded.Next())], [], false, true, 0, null, 6_000);
         foreach (var order in new ResultView?[] { null, shuffled })
         {

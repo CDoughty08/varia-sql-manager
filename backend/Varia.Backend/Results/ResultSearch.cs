@@ -183,7 +183,7 @@ internal static class ResultSearcher
             if (plan is not null && plan.Skip(position) is var skip and > 0)
             {
                 work--;
-                part.Skipped += skip;
+                part.Skipped += Math.Min(skip, to - position);
                 position += skip - 1;
                 continue;
             }
