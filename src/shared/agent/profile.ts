@@ -12,7 +12,7 @@ export interface AgentProfile {
   /** Where the server runs, from its engine edition and path separator (`agentPlatform`). */
   readonly platform: AgentPlatform
   readonly engineEdition: number
-  /** False when msdb refused the login (error 916, only where msdb's guest CONNECT was revoked): every role fact is then false. */
+  /** False when msdb refused the login (error 916, only where msdb's guest CONNECT was revoked): every role and msdb permission fact is then false, and the server facts come from a second read at server scope. */
   readonly msdbAccess: boolean
   readonly sysadmin: boolean
   /** Membership of msdb's Agent roles (`IS_ROLEMEMBER`, nested membership included). False for sysadmin, who is dbo in msdb and so no role's member: `sysadmin` outranks them. */
@@ -28,7 +28,7 @@ export interface AgentProfile {
   readonly alterAnyCredential: boolean
   /** `SERVERPROPERTY('IsClustered')`: a failover cluster instance, whose cluster owns the Agent service. */
   readonly clustered: boolean
-  /** `Agent XPs` in use (`sys.configurations` 16384, `value_in_use`); absent when unreadable (msdb refused the login). */
+  /** `Agent XPs` in use (`sys.configurations` 16384, `value_in_use`); absent when unreadable (msdb refused the login and the server-scope read failed too). */
   readonly agentXps?: boolean
   /** `Database Mail XPs` in use (`sys.configurations` 16386); absent when unreadable. */
   readonly databaseMailXps?: boolean

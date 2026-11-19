@@ -206,7 +206,7 @@ children are first listed, so the collapsed Agent node already has it, and befor
 `noAccess` badge is absent, Start/Stop/Restart and Properties are disabled with "Reading this login's Agent role…", and
 the read is also started when the Agent node's context menu or an Agent palette command opens (vitest of the node menu
 before the profile arrives); if the read fails with 916 (no msdb access: it runs through `msdb.sys.sp_executesql`) the
-role is `none` with a no-msdb flag, so the `noAccess` badge still shows; any other failure (deadline, error) is
+role is `none` with a no-msdb flag (the server facts then come from a second read at server scope), so the `noAccess` badge still shows; any other failure (deadline, error) is
 `profileFailed`, whose disabled reason is "Could not read this login's Agent role: <reason>. Refresh to retry." and
 Refresh re-reads it (vitests for 916, a failure and the retry; a live `AgentRoles` check with guest CONNECT revoked on a
 scratch database login where practical; mock note on `oe-unknown`), re-read on Refresh of the Agent node and on reconnect, dropped on disconnect) that

@@ -19,17 +19,19 @@ namespace Varia.Backend.Agent
         };
 
         /// <summary>The batch for a version band: the two server-state permissions SQL Server 2022 split from VIEW SERVER STATE
-        /// exist from band 16 (Managed Instance reports it too), and read as 0 below it.</summary>
-        public static string Render(Explorer.SqlRender render)
+        /// exist from band 16 (Managed Instance reports it too), and read as 0 below it. Without <paramref name="msdb"/> (msdb
+        /// refused the login) it reads only the server's facts, at server scope, with every msdb fact 0.</summary>
+        public static string Render(Explorer.SqlRender render, bool msdb = true)
         {
+            string Msdb(string expression) => msdb ? Bit(expression) : "CONVERT(bit, 0)";
             static string Bit(string expression) => "CONVERT(bit, ISNULL(" + expression + ", 0))";
             static string Option(int id) => "(SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = " + id.ToString(CultureInfo.InvariantCulture) + ")";
             return "SELECT " + string.Join(", ",
                 Bit("IS_SRVROLEMEMBER(N'sysadmin')"),
-                Bit("IS_ROLEMEMBER(N'SQLAgentUserRole')"),
-                Bit("IS_ROLEMEMBER(N'SQLAgentReaderRole')"),
-                Bit("IS_ROLEMEMBER(N'SQLAgentOperatorRole')"),
-                Bit("HAS_PERMS_BY_NAME(N'msdb.dbo.sp_purge_jobhistory', N'OBJECT', N'EXECUTE')"),
+                Msdb("IS_ROLEMEMBER(N'SQLAgentUserRole')"),
+                Msdb("IS_ROLEMEMBER(N'SQLAgentReaderRole')"),
+                Msdb("IS_ROLEMEMBER(N'SQLAgentOperatorRole')"),
+                Msdb("HAS_PERMS_BY_NAME(N'msdb.dbo.sp_purge_jobhistory', N'OBJECT', N'EXECUTE')"),
                 Bit("HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE')"),
                 render.Col(16, Bit("HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER SECURITY STATE')"), "CONVERT(bit, 0)"),
                 render.Col(16, Bit("HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER PERFORMANCE STATE')"), "CONVERT(bit, 0)"),
@@ -37,7 +39,7 @@ namespace Varia.Backend.Agent
                 Bit("CONVERT(int, SERVERPROPERTY(N'IsClustered'))"),
                 Option(16384),
                 Option(16386),
-                Bit("HAS_PERMS_BY_NAME(N'msdb.dbo.sysmail_help_profile_sp', N'OBJECT', N'EXECUTE')")) + ";\n";
+                Msdb("HAS_PERMS_BY_NAME(N'msdb.dbo.sysmail_help_profile_sp', N'OBJECT', N'EXECUTE')")) + ";\n";
         }
 
         /// <summary>The lint's problems for every band's render; empty when all pass.</summary>
@@ -46,25 +48,28 @@ namespace Varia.Backend.Agent
             for (var band = Explorer.ExplorerCatalog.MinBand; band <= Explorer.ExplorerCatalog.MaxBand; band++)
             {
                 var render = new Explorer.SqlRender(band);
-                yield return (band, Explorer.CatalogSql.Lint(Render(render), render, list: false, mayCheckAccess: false, Literals));
+                yield return (band, Explorer.CatalogSql.Lint(Render(render), render, list: false, mayCheckAccess: false, Literals)
+                    .Concat(Explorer.CatalogSql.Lint(Render(render, msdb: false), render, list: false, mayCheckAccess: false, Literals)).ToList());
             }
         }
 
         /// <summary>Reads the batch's one row.</summary>
-        public static async Task<AgentProfileDto?> ReadAsync(SqlDataReader reader, string platform, int engineEdition, CancellationToken token)
+        public static async Task<AgentProfileDto?> ReadAsync(SqlDataReader reader, string platform, int engineEdition, CancellationToken token, bool msdb = true)
         {
             if (!await reader.ReadAsync(token)) return null;
             bool Bit(int ordinal) => !reader.IsDBNull(ordinal) && reader.GetBoolean(ordinal);
             bool? Option(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture) == 1;
             bool state = Bit(5), security = Bit(6), performance = Bit(7);
-            return new(platform, engineEdition, true, Bit(0), Bit(1), Bit(2), Bit(3), Bit(4), state || security || performance, state || performance, Bit(8), Bit(9), Option(10), Option(11), Bit(12));
+            return new(platform, engineEdition, msdb, Bit(0), Bit(1), Bit(2), Bit(3), Bit(4), state || security || performance, state || performance, Bit(8), Bit(9), Option(10), Option(11), Bit(12));
         }
 
-        /// <summary>msdb refused the login (916, where its guest CONNECT was revoked): no Agent role, the server options unread.</summary>
+        /// <summary>msdb refused the login (916, where its guest CONNECT was revoked) and the server-scope read failed too: no Agent
+        /// role, nothing read.</summary>
         public static AgentProfileDto NoMsdb(string platform, int engineEdition) => new(platform, engineEdition, false, false, false, false, false, false, false, false, false, false, null, null, false);
 
         /// <summary>A failed read as agent.profile answers it: msdb refusing the login (NO_DB_ACCESS once the pool connection is open,
-        /// so from the msdb scope wrapper) is a profile with no role; anything else, a refused open included, is the error itself.</summary>
+        /// so from the msdb scope wrapper) is a profile with no role, whose server facts a second read at server scope then fills in;
+        /// anything else, a refused open included, is the error itself.</summary>
         public static AgentProfileResult Failed(ExplorerError error, bool opened, string platform, int engineEdition) => opened && error.Code == "NO_DB_ACCESS"
             ? new(NoMsdb(platform, engineEdition), 0)
             : new(null, 0, error);
@@ -113,6 +118,15 @@ namespace Varia.Backend.Explorer
                         : new AgentProfileResult(null, 0, AgentProfileSql.NoRow),
                     error => AgentProfileSql.Failed(error, opened, platform, server.EngineEdition),
                     source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget), () => opened = true);
+                // msdb refused the login: the server's own facts (server state, ALTER ANY CREDENTIAL, clustering, the options) are
+                // still this login's to read, so read them at server scope rather than report them false. Failing, no role and nothing read.
+                if (result is { Profile.MsdbAccess: false })
+                {
+                    var unread = result;
+                    result = await RunAsync(args.ConnectionId, null, "SQL Server Agent", profile, QueryScope.Server, AgentProfileSql.Render(new SqlRender(profile.Band), msdb: false), values,
+                        async (_, reader) => new AgentProfileResult(await AgentProfileSql.ReadAsync(reader, platform, server.EngineEdition, source.Token, msdb: false) ?? unread.Profile, 0),
+                        _ => unread, source.Token, agentProfileGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(1)), () => source.CancelAfter(budget));
+                }
                 return result with { ElapsedMs = watch.ElapsedMilliseconds };
             }
             catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
