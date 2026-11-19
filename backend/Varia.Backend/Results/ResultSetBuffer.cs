@@ -667,8 +667,11 @@ internal sealed class ResultSetBuffer
             if (Volatile.Read(ref stopped) != 0 || proceed is not null && !proceed()) return false;
             if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) return true;
             var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
-            // Built outside the lock from the raw page, only for a page that stays packed.
-            var filter = keep && raw.Length >= store.FilterMinBytes ? PageFilter.Build(raw, Columns, Wires) : null;
+            // Built outside the lock from the raw page, only for a page that stays packed, and capped: at most an eighth of
+            // the packed bytes, and the page with its filter still saves a tenth (a wide page of GUIDs would cost more).
+            var filter = keep && raw.Length >= store.FilterMinBytes
+                ? PageFilter.Build(raw, Columns, Wires, store.FilterCapped ? Math.Min(bytes.Length / 8, raw.Length - raw.Length / 10 - bytes.Length) : long.MaxValue)
+                : null;
             var stored = bytes.Length + (filter?.Bytes ?? 0);
             lock (gate)
             {

@@ -9,7 +9,8 @@ namespace Varia.Backend.Tests;
 /// exactly what reading every page finds, in base order, through a filter and through a sort (read page by page), forward
 /// and backward, typed a key at a time, across ordinal, ignore-case, CI_AS, CI_AI, CS_AS, Japanese, a culture without a fold
 /// (Danish), GUIDs and binary; truncated cells keep the answer approximate; the ignore-case classes follow .NET; filters are
-/// charged to the budget with their page and returned when it is unpacked or released.</summary>
+/// charged to the budget with their page and returned when it is unpacked or released; a filter stays within its cap, and a
+/// filter built at its size is the one built in 16 KiB and halved.</summary>
 internal static class PageFilterChecks
 {
     // SqlCompareOptions: IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16, BinarySort2 16384.
@@ -53,6 +54,7 @@ internal static class PageFilterChecks
         Differential(check, sets: 6, seed: 3);
         Typing(check);
         Budget(check);
+        Capped(check);
     }
 
     /// <summary>The ignore-case classes are .NET's own: every code unit equals its class ignoring case, and two code units
@@ -80,7 +82,7 @@ internal static class PageFilterChecks
     private static void Crafted(Action<bool, string> check)
     {
         // Pages large enough that the first is sealed at its 64 rows, not by size.
-        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 64 * 1024, FilterMinBytes = 0 };
+        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 64 * 1024, FilterMinBytes = 0, FilterCapped = false };
         var set = Open(store, "crafted");
         for (var r = 0; r < 400; r++)
         {
@@ -110,7 +112,7 @@ internal static class PageFilterChecks
         store.Release(set.ResultId);
     }
 
-    private static ResultStore Store() => new(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 3 * 1024, FilterMinBytes = 0 };
+    private static ResultStore Store() => new(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 3 * 1024, FilterMinBytes = 0, FilterCapped = false };
 
     private static ResultSetBuffer Open(ResultStore store, string name) =>
         store.Open(store.BeginQuery(name), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
@@ -272,6 +274,104 @@ internal static class PageFilterChecks
         store.Release(set.ResultId);
         plainStore.Release(plain.ResultId);
         check(store.UsedBytes == 0, "a released result returns its pages' filters: " + store.UsedBytes);
+    }
+
+    private static readonly ResultColumn[] WideColumns =
+    [
+        .. Enumerable.Range(0, 12).Select(i => new ResultColumn("key" + i, "uniqueidentifier", "text")),
+        new("note", "varchar", "text", Collation: Collation(1033, 16384)),
+        new("label", "nvarchar", "text"),
+    ];
+    private static readonly WireKind[] WideWires = [.. WideColumns.Select(_ => WireKind.Text)];
+
+    /// <summary>Rows of twelve GUIDs (about 45 % incompressible, every 4-gram new), a note now and then of a few hundred to a
+    /// few thousand random letters, and a word.</summary>
+    private static ResultSetBuffer FillWide(ResultStore store, string name, int rows)
+    {
+        var random = new Random(41);
+        var set = store.Open(store.BeginQuery(name), 0, 1, 1, "rows", WideColumns, WideWires) ?? throw new InvalidOperationException("The result set was not kept.");
+        for (var r = 0; r < rows; r++)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            for (var k = 0; k < 12; k++) builder.AppendText(new Guid(Enumerable.Range(0, 16).Select(_ => (byte)random.Next(256)).ToArray()).ToString());
+            if (r % 10 == 0) builder.AppendText(new string([.. Enumerable.Range(0, 300 + random.Next(3000)).Select(_ => (char)('a' + random.Next(26)))]));
+            else builder.AppendNull();
+            builder.AppendText(Words[random.Next(Words.Length)]);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        return set;
+    }
+
+    /// <summary>Real pages under the store's real cap: a page of GUIDs would need more filter than packing saves, so its filter
+    /// is cut to an eighth of its packed bytes and the page with it still saves a tenth; Find through what is left finds what
+    /// reading every page finds. A filter built at its size equals the one built in 16 KiB and halved.</summary>
+    private static void Capped(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, FilterMinBytes = PageFilter.MinPageBytes, FilterCapped = true };
+        var set = FillWide(store, "capped", 6000);
+        var pages = set.SealedSnapshot();
+        var filtered = pages.Where(page => page.Filter is not null).ToArray();
+        var within = filtered.All(page => page.Filter!.Bytes <= ((PackedPage)page.Stored).Bytes.Length / 8 && page.StoredLength <= page.Length - page.Length / 10);
+        check(filtered.Length >= 2 && within,
+            "a page's filter stays within an eighth of its packed bytes, and the page with it saves a tenth: " + string.Join(", ", filtered.Take(4).Select(page => page.Filter!.Bytes + "/" + ((PackedPage)page.Stored).Bytes.Length + "/" + page.Length)));
+        var differences = new List<string>();
+        foreach (var text in new[] { "deadlock", "Datenbank", "qzxv", "4-4", "zzzzzz", "abcd" })
+        {
+            var with = Shown(ResultSearcher.Search(set, pages, null, text, 0, false, 10, CancellationToken.None, narrow: false));
+            var without = Shown(ResultSearcher.Search(set, pages, null, text, 0, false, 10, CancellationToken.None, narrow: false, filters: false));
+            if (with != without) differences.Add(text + ": " + with + " against " + without);
+        }
+        check(differences.Count == 0, "Find through capped filters finds what reading every page finds: " + string.Join(" | ", differences.Take(2)));
+        store.Release(set.ResultId);
+
+        // Random bytes barely pack: a page kept packed anyway has no room for a filter that would leave it saving under a tenth.
+        var dense = store.Open(store.BeginQuery("dense"), 0, 1, 1, "rows", [new("blob", "varbinary", "binary"), new("label", "nvarchar", "text")], [WireKind.Binary, WireKind.Text])!;
+        var random = new Random(43);
+        for (var r = 0; r < 3000; r++)
+        {
+            dense.CountRow();
+            var builder = dense.BeginRow()!;
+            builder.AppendBinary([.. Enumerable.Range(0, 200).Select(_ => (byte)random.Next(256))]);
+            builder.AppendText(Words[random.Next(Words.Length)]);
+            dense.TryCommitRow();
+        }
+        dense.Complete();
+        var densePages = dense.SealedSnapshot();
+        check(densePages.Length >= 2 && densePages.All(page => page.Stored is PackedPage && page.Filter is null),
+            "a page that packs to more than nine tenths of its size gets no filter: " + string.Join(", ", densePages.Take(3).Select(page => page.StoredLength + "/" + page.Length)));
+        store.Release(dense.ResultId);
+
+        var plainStore = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off };
+        var plain = FillWide(plainStore, "sized", 6000);
+        int same = 0, total = 0;
+        using (plain.Pin())
+            foreach (var page in plain.SealedSnapshot())
+            {
+                var body = page.Body();
+                var sized = PageFilter.Build(body, WideColumns, WideWires);
+                var full = PageFilter.Build(body, WideColumns, WideWires, sized: false);
+                total++;
+                if (sized is not null && full is not null && sized.SameAs(full)) same++;
+            }
+        plainStore.Release(plain.ResultId);
+        // Small pages too: the fuzzed columns' short cells take the smallest sizes.
+        var smallStore = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off, SealBytes = 3 * 1024 };
+        var small = Open(smallStore, "small");
+        Fill(small, new Random(29), 600);
+        small.Complete();
+        using (small.Pin())
+            foreach (var page in small.SealedSnapshot())
+            {
+                var body = page.Body();
+                var sized = PageFilter.Build(body, Columns, Wires);
+                var full = PageFilter.Build(body, Columns, Wires, sized: false);
+                total++;
+                if (sized is null ? full is null : full is not null && sized.SameAs(full)) same++;
+            }
+        smallStore.Release(small.ResultId);
+        check(total > 10 && same == total, $"a filter built at its size is the one built in 16 KiB and halved: {same} of {total} pages");
     }
 
     private static string Escape(string text) => string.Concat(text.Select(c => c < 128 && !char.IsControl(c) ? c.ToString() : "\\u" + ((int)c).ToString("X4", CultureInfo.InvariantCulture)));

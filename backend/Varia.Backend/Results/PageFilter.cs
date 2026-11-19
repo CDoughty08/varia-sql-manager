@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Numerics;
 using System.Text;
 
@@ -21,6 +22,9 @@ internal sealed class PageFilter
     /// <summary>A column's filter while it is built: 16 KiB, halved while it stays at most <see cref="MaxFill"/> full.</summary>
     private const int BuildWords = 2048;
     private const int MinWords = 8;
+    /// <summary>A column's grams held before its filter is sized: past this many a filter of two bits a gram at most
+    /// <see cref="MaxFill"/> full needs all of <see cref="BuildWords"/>, so they go straight into it.</summary>
+    private const int HeldGrams = (int)(BuildWords * 64 * MaxFill / 2);
     /// <summary>The share of bits set past which a column keeps no gram filter (a gram then passes half the time or more).</summary>
     private const double MaxFill = 0.4;
     private const char Surrogate = '\uD800';
@@ -36,6 +40,10 @@ internal sealed class PageFilter
         public int N => n;
         public bool Truncated => truncated;
         public ulong[]? Bits => bits;
+        public Column WithoutGrams() => new(space, fold, n, ascii0, ascii1, other, truncated, null);
+        public bool SameAs(Column column) => space == column.Space && fold == column.Fold && n == column.N && truncated == column.Truncated
+            && Characters == column.Characters && (bits is null ? column.Bits is null : column.Bits is not null && bits.AsSpan().SequenceEqual(column.Bits));
+        private (ulong, ulong, bool) Characters => (ascii0, ascii1, other);
 
         /// <summary>Whether no cell of the column can hold <paramref name="text"/>, already in the column's space.</summary>
         public bool Excludes(string text)
@@ -82,8 +90,18 @@ internal sealed class PageFilter
         return (collation.Options & 1) != 0 ? Space.IgnoreCase : Space.Ordinal;
     }
 
-    /// <summary>Builds the filter of a raw page, or null when no column could have one.</summary>
-    public static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires)
+    /// <summary>Builds the filter of a raw page, at most <paramref name="maxBytes"/> (the largest gram filters left out
+    /// first), or null when no column could have one or even the columns' characters would take more. Each column's gram
+    /// filter is built at the size it would halve to from <see cref="BuildWords"/> (<paramref name="sized"/> false builds it
+    /// that way, for the checks), so a column of short cells costs its cells, not 16 KiB.</summary>
+    public static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes = long.MaxValue, bool sized = true)
+    {
+        var held = ArrayPool<ulong>.Shared.Rent(HeldGrams);
+        try { return Build(page, resultColumns, wires, maxBytes, sized, held); }
+        finally { ArrayPool<ulong>.Shared.Return(held); }
+    }
+
+    private static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes, bool sized, ulong[] held)
     {
         var count = wires.Count;
         var view = PageView.Parse(page, count);
@@ -105,7 +123,10 @@ internal sealed class PageFilter
             if (SpaceOf(resultColumns[c], wires[c], out var fold) is not { } space) continue;
             // GUIDs and binary hold every hex trigram: their grams are four characters.
             var n = space == Space.Hex || resultColumns[c].DataType == "uniqueidentifier" ? 4 : 3;
-            Array.Clear(scratch);
+            // Grams are held until the column ends, to size its filter, unless they would need all of it anyway.
+            var grams = 0;
+            var direct = !sized;
+            if (direct) Array.Clear(scratch);
             ulong ascii0 = 0, ascii1 = 0;
             bool other = false, truncated = false, vouched = true;
             for (var row = 0; row < view.Rows && vouched; row++)
@@ -142,25 +163,63 @@ internal sealed class PageFilter
                     else if (ch < 128) ascii1 |= 1UL << (ch - 64);
                     else other = true;
                 }
-                for (var i = 0; i + n <= text.Length; i++) Set(scratch, BuildWords * 64 - 1, Gram(text.Slice(i, n)));
+                for (var i = 0; i + n <= text.Length; i++)
+                {
+                    var gram = Gram(text.Slice(i, n));
+                    if (!direct)
+                    {
+                        if (grams < HeldGrams) { held[grams++] = gram; continue; }
+                        Array.Clear(scratch);
+                        for (var k = 0; k < grams; k++) Set(scratch, BuildWords * 64 - 1, held[k]);
+                        direct = true;
+                    }
+                    Set(scratch, BuildWords * 64 - 1, gram);
+                }
             }
             if (!vouched) continue;
-            var bits = Shrink(scratch);
+            var words = BuildWords;
+            if (!direct)
+            {
+                // The smallest size two bits a gram leave at most MaxFill full: every larger size folds to it no fuller, so
+                // halving from BuildWords would reach it, and folding is building smaller.
+                words = MinWords;
+                while (words < BuildWords && words * 64 * MaxFill < 2.0 * grams) words *= 2;
+                Array.Clear(scratch, 0, words);
+                for (var k = 0; k < grams; k++) Set(scratch, (uint)words * 64 - 1, held[k]);
+            }
+            var bits = Shrink(scratch, words);
             built[c] = new Column(space, fold, n, ascii0, ascii1, other, truncated, bits);
-            bytes += 72 + (bits is null ? 0 : 24 + 8L * bits.Length);
+            bytes += ColumnBytes + (bits is null ? 0 : GramBytes(bits));
             any = true;
         }
-        return any ? new PageFilter(built, bytes) : null;
+        if (!any) return null;
+        // Over the cap: leave out the largest gram filters until it fits (a column keeps its characters).
+        while (bytes > maxBytes)
+        {
+            var largest = -1;
+            for (var c = 0; c < count; c++)
+                if (built[c]?.Bits is { } bits && (largest < 0 || bits.Length > built[largest]!.Bits!.Length)) largest = c;
+            if (largest < 0) return null;
+            bytes -= GramBytes(built[largest]!.Bits!);
+            built[largest] = built[largest]!.WithoutGrams();
+        }
+        return new PageFilter(built, bytes);
     }
+
+    private const int ColumnBytes = 72;
+    private static long GramBytes(ulong[] bits) => 24 + 8L * bits.Length;
+
+    /// <summary>Whether two filters hold the same, for the checks.</summary>
+    internal bool SameAs(PageFilter other) => Bytes == other.Bytes && columns.Length == other.columns.Length
+        && columns.Zip(other.columns).All(pair => pair.First is null ? pair.Second is null : pair.Second is not null && pair.First.SameAs(pair.Second));
 
     /// <summary>The scratch filter halved (each half's bits joined) while it stays at most <see cref="MaxFill"/> full, or
     /// null when it is fuller than that already.</summary>
-    private static ulong[]? Shrink(ulong[] scratch)
+    private static ulong[]? Shrink(ulong[] scratch, int words)
     {
         long set = 0;
-        foreach (var word in scratch) set += BitOperations.PopCount(word);
-        if (set > MaxFill * scratch.Length * 64) return null;
-        var words = scratch.Length;
+        foreach (var word in scratch.AsSpan(0, words)) set += BitOperations.PopCount(word);
+        if (set > MaxFill * words * 64) return null;
         while (words > MinWords)
         {
             var half = words / 2;

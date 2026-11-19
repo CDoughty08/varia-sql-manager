@@ -1388,8 +1388,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   filter's value search uses the same matcher.
 - **Page filters** (`Results/PageFilter.cs`). Packing a page of 32 KiB or more also builds a filter for each searchable
   column: which ASCII characters its cells hold (and whether any other), and a Bloom filter of its trigrams (4-grams for
-  binary and `uniqueidentifier`, whose hex holds every trigram; two hashes, built in 16 KiB and halved while at most 40 %
-  full, left out when fuller) in the matcher's own compare space: code points for _BIN/_BIN2, .NET's ignore-case classes
+  binary and `uniqueidentifier`, whose hex holds every trigram; two hashes, at the smallest power-of-two size up to 16 KiB
+  its grams leave at most 40 % full, left out when fuller) in the matcher's own compare space: code points for _BIN/_BIN2, .NET's ignore-case classes
   for no collation and for binary's `0x` hex, and the culture's search fold for a verified culture. A text of 4 or more
   characters that a page's filter rules out in every searched column cannot match there, so the search passes the page
   over without unpacking it. A column of only NULLs on the page rules any text out; a column with a cell the fold does
@@ -1397,9 +1397,11 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   truncated cell keeps the answer `approximate`; through a view such a page is read, as the view may leave that row out.
   Ruling out by filter is ruling out by fold, so a narrowed search after it must meet the fold rule (below). A filter is
   charged to the budget with its packed page ([Charges](#result-store-and-memory-budget)), dropped when the page is
-  unpacked and freed with its result. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
-  2.8 KiB a page (4.6 % of the packed bytes) and build at about 90 MB/s on the packer's thread; specific words pass over
-  40 – 67 % of the pages (8152, xp_cmdshell, Datenbank, データベース: Find 1.4 – 1.8 times faster), common words
+  unpacked and freed with its result. It takes at most an eighth of the page's packed bytes, and never so much that the
+  page with it saves under a tenth (a page of GUIDs or random text would otherwise cost more than it saved): over that,
+  the largest gram filters are left out, then the whole filter. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
+  2.8 KiB a page (4.6 % of the packed bytes) and build at about 240 MB/s on the packer's thread; specific words pass over
+  40 – 66 % of the pages (8152, xp_cmdshell, Datenbank, データベース: Find 1.3 – 1.9 times faster), common words
   (database, error) none, and pages holding cells the fold cannot vouch for (Thai, Indic, Chinese punctuation) are always
   read. `PageFilterChecks` compares filtered searches with reading every page over fuzzed multilingual pages, in base
   order and through filtered and shuffled views, both ways and while typing, and checks the budget to the byte; the

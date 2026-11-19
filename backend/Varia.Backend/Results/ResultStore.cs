@@ -212,6 +212,11 @@ internal sealed partial class ResultStore
     /// <summary>The checks' packed pass lowers it so the small pages of every suite there are filtered.</summary>
     internal static int DefaultFilterMinBytes { get; set; } = PageFilter.MinPageBytes;
 
+    /// <summary>Whether a page's filter is capped by its packed size (<see cref="ResultSetBuffer.Pack"/>); the checks turn it
+    /// off to filter pages of any size.</summary>
+    internal bool FilterCapped { get; init; } = DefaultFilterCapped;
+    internal static bool DefaultFilterCapped { get; set; } = true;
+
     private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
     /// <summary>The store's packing figures (<see cref="PackingSnapshot"/>): what is held now (packed bytes, their bytes as
