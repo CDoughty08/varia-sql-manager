@@ -138,9 +138,12 @@ internal static class AgentLiveChecks
             var deadline = Environment.TickCount64 + 60_000;
             while (started.Status == "completed" && Environment.TickCount64 < deadline)
             {
-                var (results, _) = await reader.ReadAsync(connection, null, [AgentSql.History], Values, CancellationToken.None);
+                // Agent writes the job outcome's history row and the job's last outcome (sysjobservers, Unknown 5 until then) in
+                // separate calls, so the wait ends once both are in.
+                var (results, _) = await reader.ReadAsync(connection, null, [AgentSql.History, AgentSql.Job], Values, CancellationToken.None);
                 history = results.GetValueOrDefault("history");
-                if (history is not null && history.Rows.Any(row => Convert.ToInt32(history.Value(row, "step_id"), System.Globalization.CultureInfo.InvariantCulture) == 0)) break;
+                var last = results.GetValueOrDefault("job") is { Rows: [var only] } listed ? Convert.ToInt32(listed.Value(only, "last_run_outcome"), System.Globalization.CultureInfo.InvariantCulture) : 5;
+                if (last != 5 && history is not null && history.Rows.Any(row => Convert.ToInt32(history.Value(row, "step_id"), System.Globalization.CultureInfo.InvariantCulture) == 0)) break;
                 await Task.Delay(500);
             }
             var outcome = history?.Rows.FirstOrDefault(row => Convert.ToInt32(history.Value(row, "step_id"), System.Globalization.CultureInfo.InvariantCulture) == 0);

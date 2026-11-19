@@ -347,7 +347,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `listRows` | 5,000 | Jobs one listing holds; more set `truncated` |
 | `historyRows` | 10,000 | History rows one history read holds, newest first; more set `truncated` |
 | `historyJobs` | 64 | Jobs one history filter or one Delete History names |
-| `logRows` | 10,000 | Error log rows one read holds, newest first; the rest are cancelled and a notice says so |
+| `logRows` | 10,000 | Error log rows one read holds, newest first (oldest first on Managed Instance, whose `sp_readmierrorlog` takes no sort argument); the rest are cancelled and a notice says so |
 | `searchChars` | 200 | Characters of a history or error log search text |
 | `gridMessageChars` | 512 | Characters of a history message in a grid cell (the details pane reads all of it) |
 | `roleMessageChars` | 1,024 | Characters of a message `sp_help_jobhistory` returns to logins below sysadmin |

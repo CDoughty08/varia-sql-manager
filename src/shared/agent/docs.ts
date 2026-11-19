@@ -22,7 +22,7 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   listRows: 'Jobs one listing holds; more set `truncated`',
   historyRows: 'History rows one history read holds, newest first; more set `truncated`',
   historyJobs: 'Jobs one history filter or one Delete History names',
-  logRows: 'Error log rows one read holds, newest first; the rest are cancelled and a notice says so',
+  logRows: 'Error log rows one read holds, newest first (oldest first on Managed Instance, whose `sp_readmierrorlog` takes no sort argument); the rest are cancelled and a notice says so',
   searchChars: 'Characters of a history or error log search text',
   gridMessageChars: 'Characters of a history message in a grid cell (the details pane reads all of it)',
   roleMessageChars: 'Characters of a message `sp_help_jobhistory` returns to logins below sysadmin',

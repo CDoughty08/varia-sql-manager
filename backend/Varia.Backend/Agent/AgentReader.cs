@@ -52,6 +52,9 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             if (!AgentSql.Callers.Any(caller => caller.Prologue == prologue)) throw new RequestException("BACKEND_ERROR", "An Agent read ran after a prologue the lint never checked.");
             var cap = (int)catalog.Limit(statement.Cap);
             var arguments = statement.Parameters.ToDictionary(parameter => parameter.Name, parameter => values(statement, parameter), StringComparer.Ordinal);
+            // SqlClient cuts a longer string to the parameter's size without a word; a bound input is refused instead.
+            if (statement.Parameters.Any(parameter => parameter.Size > 0 && arguments[parameter.Name] is string text && text.Length > parameter.Size))
+                throw new RequestException("INVALID_PARAMS", "An Agent read's text is longer than its limit.");
             try
             {
                 results[statement.Id] = TestRun is { } run ? await run(statement, arguments, cap).ConfigureAwait(false)
