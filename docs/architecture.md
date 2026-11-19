@@ -270,7 +270,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `ResultHandle`); `LocalSource` (`grid/local-source.ts`) serves the table from memory, and a sort is a new source the
     grid swaps in. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
     built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
-    with its own source (view `live`, `LiveOutput`); a `card` has no Save. Its strip says what the bounds left out (rows
+    with its own source (view `live`, `LiveOutput`); a `card` has no Save, and a `fit` page (a list in a scrolling column) is
+    sized to its rows as a card is but keeps Save. A kept view state's selection is held to a new table's rows. Its strip says what the bounds left out (rows
     past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
     and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
