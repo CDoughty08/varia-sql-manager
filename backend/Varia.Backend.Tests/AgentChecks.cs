@@ -93,14 +93,27 @@ internal static class AgentChecks
             && AgentProfileSql.Failed(denied, true, "windows", 3) is { Profile: null } refused && refused.Error == denied
             && AgentProfileSql.Failed(refusedOpen, false, "windows", 3) is { Profile: null } unopened && unopened.Error == refusedOpen,
             "agent.profile answers msdb refusing the login (NO_DB_ACCESS once open) as a profile with no role, and any other failure, a refused open included, as the error itself");
-        // msdb refusing the login once the pool connection is open (916 from the scope wrapper) is a profile with no role.
+        // msdb refusing the login once the pool connection is open (916 from the scope wrapper) is a profile with no role; the
+        // server-scope read of its server facts follows, and failing too (1222 here) leaves that profile with nothing read.
         var refusing = new ExplorerChecks.FakeHost { Opening = (_, _) => Task.CompletedTask };
-        using (var service = new ExplorerService(refusing, new ExplorerOptions { TestStatementFailure = () => ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal is not able to access the database \"msdb\" under the current security context.") }))
+        var scopes = new List<string?>();
+        using (var service = new ExplorerService(refusing, new ExplorerOptions { TestStatementFailure = database =>
+        {
+            lock (scopes) scopes.Add(database);
+            return database == "msdb"
+                ? ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal is not able to access the database \"msdb\" under the current security context.")
+                : ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded.");
+        } }))
         {
             var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
-            check(result is { Error: null, Profile: { MsdbAccess: false, Sysadmin: false, UserRole: false, AgentXps: null } } && service.RunningCount == 0,
-                "agent.profile whose msdb refuses the login after the connection opened (916) answers a profile with msdb access off and no role: " + result.Error?.Code + " " + result.Error?.Message);
+            check(result is { Error: null, Profile: { MsdbAccess: false, Sysadmin: false, UserRole: false, ServerServices: false, AgentXps: null } } && service.RunningCount == 0
+                && scopes.SequenceEqual(["msdb", null]),
+                "agent.profile whose msdb refuses the login after the connection opened (916) reads the server facts at server scope next, and with that failing too answers a profile with msdb access off and no role: "
+                + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope ?? "server")));
         }
+        check(new[] { 13, 16 }.All(band => AgentProfileSql.Render(new SqlRender(band), msdb: false) is var text && !text.Contains("msdb", StringComparison.OrdinalIgnoreCase)
+                && !text.Contains("IS_ROLEMEMBER", StringComparison.Ordinal) && text.Contains("IsClustered", StringComparison.Ordinal) && text.Contains("16384", StringComparison.Ordinal)),
+            "agent.profile's server-scope batch names nothing in msdb and still reads the server state, clustering and Agent XPs");
         // A pool connection the server refuses to open (4060: its database was dropped) is an error value, never "msdb refused the login".
         var dropped = new ExplorerChecks.FakeHost { Opening = (_, _) => throw ConnectionFailureChecks.Sql(4060, 1, 11, "server", "Cannot open database requested by the login.") };
         using (var service = new ExplorerService(dropped))

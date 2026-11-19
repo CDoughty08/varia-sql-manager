@@ -168,7 +168,7 @@ npm run test:smoke:wsl -- --all
   records what is verified.
 - **SQL Server Agent's release gate.** `VARIA_AGENT_PREVIEW=1` shows Agent's surfaces (context key `agentEnabled`) in
   any build until 0.11.0 removes the gate; `electron.launch` in `scripts/fixtures/smoke.mjs` sets it unless the
-  suite's environment says otherwise, so smoke runs see the Agent node.
+  suite's environment says otherwise, so smoke runs open the release gate.
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs

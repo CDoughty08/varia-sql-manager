@@ -26,7 +26,7 @@ the Agent node, Job Activity Monitor and the job documents arrive in later lanes
   sessions need (VIEW SERVER STATE, and from SQL Server 2022 VIEW SERVER SECURITY or PERFORMANCE STATE), ALTER ANY
   CREDENTIAL, whether the server is a failover cluster instance, and `Agent XPs` and `Database Mail XPs` in use. A server
   with no Agent (Express, the cloud editions) answers `NOT_SUPPORTED` without connecting; msdb refusing the login (916)
-  is a profile with no role. The renderer derives the login's Agent role from it (`agentRoleOf`: sysadmin, operator,
+  is a profile with no role and no msdb permission, whose server facts a second read at server scope still fills in. The renderer derives the login's Agent role from it (`agentRoleOf`: sysadmin, operator,
   reader, user, none; unknown before the read, profileFailed after a failed one), which the context keys `agentRole`
   (Object Explorer's menu) and `explorerSelectionAgentRole` carry for Agent nodes.
 

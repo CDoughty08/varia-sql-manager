@@ -219,7 +219,7 @@ internal static class AgentLiveChecks
             var mapped = await sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";\nALTER ROLE SQLAgentUserRole ADD MEMBER " + Bracket(login) + ";", "msdb");
             Dictionary<string, AgentResult> results = [];
             List<AgentReadError> errors = [];
-            AgentProfileDto? facts = null;
+            AgentProfileDto? facts = null, serverFacts = null;
             await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
             try
             {
@@ -228,11 +228,17 @@ internal static class AgentLiveChecks
                 await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
                 command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = AgentProfileSql.Render(new SqlRender(band)) });
                 await using (var read = await command.ExecuteReaderAsync()) facts = await AgentProfileSql.ReadAsync(read, "windows", 3, CancellationToken.None);
+                // The server-scope batch agent.profile falls back to when msdb refuses a login reads the same server facts, and no role.
+                await using var server = new SqlCommand(AgentProfileSql.Render(new SqlRender(band), msdb: false), connection);
+                await using (var read = await server.ExecuteReaderAsync()) serverFacts = await AgentProfileSql.ReadAsync(read, "windows", 3, CancellationToken.None, msdb: false);
             }
             finally { await Run("REVERT;"); }
             check(facts is { MsdbAccess: true, Sysadmin: false, UserRole: true, ReaderRole: false, OperatorRole: false, PurgeHistory: false, ServerServices: false, Sessions: false, AlterAnyCredential: false, AgentXps: true },
                 "agent.profile's batch reads a SQLAgentUserRole login as that role alone, with no EXECUTE on sp_purge_jobhistory, no server state and no ALTER ANY CREDENTIAL, and Agent XPs on: "
                 + (facts is null ? "no row" : JsonSerializer.Serialize(facts)));
+            check(facts is not null && serverFacts == facts with { MsdbAccess = false, UserRole = false, ReaderRole = false, OperatorRole = false, PurgeHistory = false, DatabaseMail = false },
+                "agent.profile's server-scope batch reads the same server facts as the msdb batch, with msdb access, every Agent role and the msdb permissions off: "
+                + (serverFacts is null ? "no row" : JsonSerializer.Serialize(serverFacts)));
             check(made.Status == "completed" && mapped.Status == "completed" && results.TryGetValue("jobs", out var jobs) && jobs.Rows.Count == 0 && results.ContainsKey("properties")
                 && errors.Select(error => error.Statement + " " + error.Code).SequenceEqual(["errorLogs PERMISSION_DENIED", "serviceState PERMISSION_DENIED"]),
                 "a SQLAgentUserRole login reads its own jobs (none) and Agent's properties, and is refused xp_enumerrorlogs and xp_servicecontrol as PERMISSION_DENIED values: "
