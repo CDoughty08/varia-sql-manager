@@ -255,9 +255,9 @@ internal static class BigQueryChecks
                     "a process's environment under /proc is refused: " + Outcome("/proc/self/environ"));
             check(Outcome("/dev/null") == "AUTH_KEY_FILE: The federation configuration's credential file is a system file, not a subject token.",
                 "a device under /dev is refused: " + Outcome("/dev/null"));
-            var procLink = Path.Combine(root, "environ.jwt");
-            File.CreateSymbolicLink(procLink, "/proc/self/environ");
-            check(Outcome(procLink).Contains("is a system file", StringComparison.Ordinal), "a link to /proc is refused by its target");
+            var systemLink = Path.Combine(root, "environ.jwt");
+            File.CreateSymbolicLink(systemLink, OperatingSystem.IsLinux() ? "/proc/self/environ" : "/dev/null");
+            check(Outcome(systemLink).Contains("is a system file", StringComparison.Ordinal), "a link to a system file is refused by its target: " + Outcome(systemLink));
             // A FIFO would hold the exchange (and a thread) until a writer came; it is refused at once, with no writer.
             var fifo = Path.Combine(root, "fifo.jwt");
             using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [fifo])) mkfifo.WaitForExit();
@@ -275,7 +275,6 @@ internal static class BigQueryChecks
         check(Outcome(Make(Path.Combine("varia-user-data-other", "token.jwt"), token)) == "ok:" + token, "a sibling folder whose name only starts like a refused one is read");
     }
 
-    /// <summary>A folder link: a junction on Windows (no privilege needed), a symbolic link elsewhere. False when it cannot be made.</summary>
     /// <summary>Runs <paramref name="run"/> with the named environment variables set (null clears one), then restores them.</summary>
     static async Task<T> WithEnvironment<T>(string[] names, string?[] values, Func<Task<T>> run)
     {
@@ -285,6 +284,7 @@ internal static class BigQueryChecks
         finally { for (var index = 0; index < names.Length; index++) Environment.SetEnvironmentVariable(names[index], previous[index]); }
     }
 
+    /// <summary>A folder link: a junction on Windows (no privilege needed), a symbolic link elsewhere. False when it cannot be made.</summary>
     static bool FolderLink(string link, string target)
     {
         Directory.CreateDirectory(target);
