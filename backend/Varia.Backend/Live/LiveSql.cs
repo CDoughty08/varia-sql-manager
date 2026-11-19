@@ -182,6 +182,7 @@ internal static partial class LiveSql
     public const string ProgressProbe = "explorer.progress";
     public const string AgentProbe = "explorer.agent";
     public const string AvailabilityProbe = "explorer.availability";
+    public const string AgentServiceProbe = "explorer.agentService";
     public const string CatalogProbe = "ssis.catalogProbe";
 
     // Object Explorer's status chips (docs/object-explorer.md, Live status). Only the databases a chip is for: anything not
@@ -217,6 +218,21 @@ internal static partial class LiveSql
     private const string Agent =
         "SELECT COUNT(*) AS running_jobs FROM msdb.dbo.sysjobactivity AS a\n"
         + "WHERE a.session_id = (SELECT MAX(s.session_id) FROM msdb.dbo.syssessions AS s) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL;";
+
+    // SQL Server Agent's node (AG-1): Agent XPs needs no permission, so the probe declares no gate; the service's state and
+    // startup type are read only when HAS_PERMS_BY_NAME says the login may, and stay NULL (unknown, no chip) otherwise. Where
+    // the DMV has no Agent row, a connected Agent session says it runs. Managed Instance's Agent always runs.
+    private const string AgentService =
+        "DECLARE @xps int = ISNULL((SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = 16384), 0), @state int, @startup int;\n"
+        + "IF CONVERT(int, SERVERPROPERTY('EngineEdition')) = 8 SELECT @state = 4;\n"
+        + "ELSE IF ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE'), 0) = 1\n"
+        + "BEGIN\n"
+        + "    SELECT TOP (1) @state = CONVERT(int, s.status), @startup = CONVERT(int, s.startup_type) FROM sys.dm_server_services AS s WHERE s.servicename LIKE N'SQL Server Agent%' ORDER BY s.servicename;\n"
+        + "    IF @state IS NULL SELECT @state = CASE WHEN EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS e WHERE e.program_name LIKE N'SQLAgent - %') THEN 4 ELSE 1 END;\n"
+        + "END\n"
+        + "SELECT @xps AS agent_xps, @state AS service_state, @startup AS startup_type;";
+    private static readonly string[] AgentServiceColumns = ["agent_xps", "service_state", "startup_type"];
+    private static readonly LiveStatusColumn[] AgentServiceStatus = [new("agentXps", "agent_xps"), new("serviceState", "service_state"), new("startupType", "startup_type")];
 
     private const string Availability =
         "SELECT g.name, CONVERT(tinyint, s.synchronization_health) AS health, CONVERT(tinyint, ISNULL(r.role, 0)) AS role\n"
@@ -284,6 +300,7 @@ internal static partial class LiveSql
         ProgressProbe => new(probe, band, Progress, [], null, null, []) { Tables = [new(0)] },
         AgentProbe => new(probe, band, Agent, ["running_jobs"], null, null, [new("runningJobs", "running_jobs")]),
         AvailabilityProbe => new(probe, band, Availability, [], null, null, []) { Tables = [new(0)] },
+        AgentServiceProbe => new(probe, band, AgentService, AgentServiceColumns, null, null, [], AgentServiceStatus),
         _ => null
     };
 

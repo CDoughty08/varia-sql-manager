@@ -370,7 +370,8 @@ to 256 with an ellipsis (never inside a surrogate pair); main checks the same bo
 
 **Object Explorer cancellation** is the `varia:explorer-cancel` channel; there is no backend method. Catalog failures
 (permission, access, missing object, lock, the 40 s budget, lost connection) are `result.error` values, not envelope
-errors. A database row carries `database: { state: int, userAccess: int, readOnly: bool, standby: bool }` from
+errors. SQL Server Agent's node and listings answer `AGENT_DISABLED` (retryable) while Agent is stopped or its `Agent XPs`
+option is 0 (error 15281), and a login with no Agent role `PERMISSION_DENIED` with an Agent sentence. A database row carries `database: { state: int, userAccess: int, readOnly: bool, standby: bool }` from
 `sys.databases`; a newer live status sample wins (`currentDatabaseRuntime`), a row-capped one only for its rows. A login
 row carries `connectDenied: true` when CONNECT SQL is denied to it; its `status` stays `disabled` when also disabled.
 `connections.connect` answers `providerId` (`sqlserver`; absent from an older backend means SQL Server) and `linux: bool` when the server's profile was read (`explorerServerLinux`) and
@@ -1640,8 +1641,8 @@ A probe error is a value, so other probes carry on: `{ probe, code, message ≤ 
 values), number?, retryInMs, terminal, tables?, series? }`. `tables`/`series` name what one failed statement would have
 filled; a probe may report several errors in a tick; `terminal` is true only when the probe stopped, never beside a sample.
 `code` is one of `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_SUPPORTED`, `DATABASE_UNAVAILABLE`, `CONNECTION_LOST`,
-`SQL_ERROR`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `BUDGET`, `BUSY`, `CATALOG_MISSING`, `NOT_FOUND` or
-`LOGIN_FAILED`.
+`SQL_ERROR`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `BUDGET`, `BUSY`, `CATALOG_MISSING`, `NOT_FOUND`,
+`LOGIN_FAILED` or `AGENT_DISABLED` (SQL Server Agent stopped or `Agent XPs` 0, error 15281; terminal, restarted by a refresh).
 
 A `resorted` sample is not a sample: after an update changes a probe's sort, the next tick re-sends its snapshot tables in the
 new order (see Re-sort) with `costMs` 0 and nothing else; the renderer keeps the last sample's time, cost and error. A probe

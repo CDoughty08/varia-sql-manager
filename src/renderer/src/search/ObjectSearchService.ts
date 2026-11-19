@@ -1,7 +1,7 @@
 import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
-import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, agentSearchKinds, searchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -100,6 +100,8 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly focus?: (id: string) => void
   readonly timers?: Timers
   readonly newId?: () => string
+  /** The Agent release gate: SQL Server Agent's kinds are searched only while it is on. */
+  readonly agentEnabled?: boolean
 }
 
 export const searchTitle = 'Search Objects'
@@ -118,6 +120,16 @@ function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
   for (let at: FolderId | undefined = folder; at; at = folderSpecs[at].parent) chain.unshift({ type: 'folder', owner, folder: at })
   return chain
 }
+/** A server singleton's node (SQL Server Agent) and its folder chain, for a folder that singleton owns; the server's folder
+ *  chain otherwise. */
+function serverChain(folder: FolderId): ExplorerNodeRef[] {
+  let top = folder
+  while (folderSpecs[top].parent) top = folderSpecs[top].parent!
+  const singleton = (kindSpecs.server.singletons ?? []).find(item => kindSpecs[item.kind].folders?.includes(top))
+  if (!singleton) return folderChain({ kind: 'server' }, folder)
+  const owner: ObjectRef = { kind: singleton.kind }
+  return [{ type: 'object', object: owner }, ...folderChain(owner, folder)]
+}
 /** Reveal's answer for a hit whose kind this build does not know. */
 export const unknownKindReveal = 'This version of Varia cannot show that kind of object in Object Explorer.'
 const systemDatabases = new Set(['master', 'model', 'msdb'])
@@ -128,7 +140,7 @@ const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedur
 }
 /**
  * Where a hit is in Object Explorer, from the server down. A server object is in its folder below the server (Security ›
- * Logins), and a database in its Databases folder. Anything else is in its database, under Databases (or System Databases,
+ * Logins), or below the server singleton that owns the folder (SQL Server Agent › Jobs), and a database in its Databases folder. Anything else is in its database, under Databases (or System Databases,
  * tried first for master, model and msdb, and second for the rest: a distribution database is a system one too): the folders
  * above its listing, a child's parent in the folder the hit names (or, when it names none, under its kind's folders, then
  * their System ones), and the object. A temporal or ledger history table (or a child of one) is below the table whose history
@@ -140,7 +152,7 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
   // A kind this build does not know (a newer backend's) has no place in this build's tree.
   if (!Object.hasOwn(kindSpecs, hit.object.kind)) return []
   const scope = kindSpecs[hit.object.kind].scope
-  if (scope === 'serverObject' || scope === 'database') return [[...folderChain(server, hit.folder), { type: 'object', object: hit.object }]]
+  if (scope === 'serverObject' || scope === 'database') return [[...serverChain(hit.folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
   /** The folders down to `folder` below the database, or below the schema row when grouped and the folder moved there. */
@@ -548,7 +560,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   }
 
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
-    const kinds = searchTypeKinds(asked.types)
+    const typed = searchTypeKinds(asked.types)
+    const kinds = this.o.agentEnabled ? typed : (typed ?? searchKinds).filter(kind => !(agentSearchKinds as readonly string[]).includes(kind))
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
       ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {},

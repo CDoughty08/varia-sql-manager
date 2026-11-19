@@ -66,6 +66,7 @@ internal static class AgentLiveChecks
         var profile = host.Profile(info.Id);
         await ProfileAsync(check, service, info, json, profile, Sql);
         await TreeAsync(check, service, info, json, profile);
+        await ServiceAsync(check, Sql);
         await using var connection = host.Connection(info.Id);
         await host.OpenAsync(connection, CancellationToken.None);
         var reader = new AgentReader();
@@ -83,6 +84,20 @@ internal static class AgentLiveChecks
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
+    }
+
+    /// <summary>Object Explorer's Agent node probe (explorer.agentService, AG-1) on a server whose Agent is up: Agent XPs 1 and
+    /// running (4), with the startup type where sys.dm_server_services lists Agent (Windows; the check says whether this server's
+    /// DMV does, so the Linux container's answer is in CI's log) and the session fallback otherwise.</summary>
+    private static async Task ServiceAsync(Action<bool, string> check, Func<string, string, Task<SqlRun>> sql)
+    {
+        var probe = await sql(LiveSql.For(LiveSql.AgentServiceProbe, LiveSql.MaxBand)!.Body, "master");
+        var dmv = await sql("SELECT COUNT(*) FROM sys.dm_server_services AS s WHERE s.servicename LIKE N'SQL Server Agent%';", "master");
+        var listed = dmv.Sets is [[[var count, ..], ..], ..] && count is not null and not "0";
+        var row = probe.Sets is [[var first, ..], ..] ? first : null;
+        check(probe.Status == "completed" && row is [var xps, var state, var startup] && xps == "1" && state == "4" && (!listed || startup is "2" or "3" or "4"),
+            "explorer.agentService reads Agent XPs 1 and running (4) on a server whose Agent is up, with a startup type where sys.dm_server_services lists Agent (it "
+            + (listed ? "does" : "does not, so the session fallback answers") + " here): " + (row is null ? probe.Error : string.Join(",", row.Select(cell => cell ?? "NULL"))));
     }
 
     /// <summary>Every statement that needs no job, under each caller's prologue: each answers with its declared columns or

@@ -197,11 +197,15 @@ which list in deployment order (`package_id`: a package name can be longer than 
 
 The server's SQL Server Agent node is its own node (a singleton: its ref names only its kind), after the server's folders, on the
 servers Agent runs on (docs/sql-server-agent.md). It shows only while the Agent release gate is on (`VARIA_AGENT_PREVIEW=1`). Its
-children follow SSMS: Jobs, Job Activity Monitor (a leaf that opens its document), Alerts, Operators, Proxies (a row per
+children follow SSMS: Jobs, Job Activity Monitor (a leaf; double-clicking it opens nothing yet), Alerts, Operators, Proxies (a row per
 subsystem, then Unassigned Proxies) and Error Logs. Which of them a login sees depends on its Agent role, read when the node
-expands: sysadmin sees all; SQLAgentOperatorRole every folder but Error Logs; SQLAgentReaderRole and SQLAgentUserRole Jobs and Job
-Activity Monitor (a User sees only its own jobs). With Agent XPs off the node lists nothing and says why. The platform gates come
-from the Agent catalogue:
+expands: sysadmin sees all; SQLAgentOperatorRole Jobs, Job Activity Monitor, Alerts and Operators; SQLAgentReaderRole and
+SQLAgentUserRole Jobs and Job Activity Monitor (a User sees only its own jobs, as msdb's sysjobs_view filters them). Proxies and Error
+Logs are sysadmin's alone: msdb lets no Agent role read the proxy tables, and the error logs come from xp_enumerrorlogs. A
+login in none of the roles gets PERMISSION_DENIED naming them; with Agent stopped or Agent XPs off the node lists nothing and
+says why (AGENT_DISABLED). The node's chips say the Agent service's state when it is not running and the jobs running, and its
+sublabel says Agent XPs disabled while that option is 0 (Live status). Search Objects finds jobs, alerts and operators, and
+Ctrl+Q reveals them below the node. The platform gates come from the Agent catalogue:
 
 | Node | Id | Served on |
 | --- | --- | --- |
@@ -392,6 +396,7 @@ count and connection dot keep their size, and the label gives up the row's empty
 | --- | --- |
 | `server` | `explorer.agent`, `explorer.availability` |
 | `database` | `explorer.databases`, `explorer.progress` |
+| `agent` | `explorer.agentService`, `explorer.agent` |
 
 | Node | Chip | Tone | When |
 | --- | --- | --- | --- |
@@ -406,6 +411,13 @@ count and connection dot keep their size, and the label gives up the row's empty
 | database | SINGLE USER / RESTRICTED USER | warning | user_access 1 or 2 |
 | server | n Agent jobs running | running | SQL Server Agent jobs of its current session that started and have not stopped (none while none runs) |
 | server | <group> healthy / partially healthy / not healthy | success, warning, critical | the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica's role |
+| agent | STOPPED | warning | the Agent service's state 1: SQL Server Agent is stopped: jobs, alerts and schedules do not run. |
+| agent | STARTING | running | the Agent service's state 2: SQL Server Agent is starting. |
+| agent | STOPPING | running | the Agent service's state 3: SQL Server Agent is stopping. |
+| agent | RESUMING | running | the Agent service's state 5: SQL Server Agent is resuming. |
+| agent | PAUSING | running | the Agent service's state 6: SQL Server Agent is pausing. |
+| agent | PAUSED | warning | the Agent service's state 7: SQL Server Agent is paused. |
+| agent | n jobs running | running | as the server's chip; the node's sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip |
 
 ## Peek
 

@@ -195,6 +195,10 @@ describe('live event schemas', () => {
     expect(ok(liveEventSchema, { ...opened, extra: true })).toBe(false)
     expect(ok(fixture.event, { ...opened, source: 'one', probes: [{ ...opened.probes[0], probe: 'two.only' }] })).toBe(false)
   })
+  it('accepts an AGENT_DISABLED tick error (SQL Server Agent stopped or Agent XPs 0)', () => {
+    expect(liveErrorCodes).toContain('AGENT_DISABLED')
+    expect(ok(liveEventSchema, tick([], { errors: [{ probe: 'debug.synthetic.table', code: 'AGENT_DISABLED', message: 'SQL Server Agent is stopped.', retryInMs: 0, terminal: true }] }))).toBe(true)
+  })
   it('checks every sample against its probe\'s catalogue entry', () => {
     const table = (patch: Record<string, unknown> = {}) => ({ table: 0, descriptor: descriptor(rows), revision: 1, ...patch })
     expect(ok(liveEventSchema, tick([sample({ tables: [table({ retired: [1, 2], diff: { added: 1, removed: 1, changed: 0 }, tracked: { seq: 1, rows: [-1, 0] } })] })]))).toBe(true)

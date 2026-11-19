@@ -34,8 +34,9 @@ const rejects = (schema: { safeParse(value: unknown): { success: boolean } }, va
 describe('node identity', () => {
   it('maps each kind to its scope', () => {
     const expected: Record<KindScope, NodeKind[]> = {
-      server: ['server'],
-      serverObject: ['login', 'serverRole', 'credential', 'cryptographicProvider', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger'],
+      server: ['server', 'agent', 'agentJobActivity'],
+      serverObject: ['login', 'serverRole', 'credential', 'cryptographicProvider', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger',
+        'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog'],
       database: ['database'],
       databaseObject: ['user', 'databaseRole', 'applicationRole', 'schema', 'assembly', 'asymmetricKey', 'certificate', 'symmetricKey', 'columnMasterKey', 'columnEncryptionKey',
         'databaseAuditSpecification', 'databaseTrigger', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme', 'partitionFunction',
@@ -59,9 +60,9 @@ describe('node identity', () => {
     // Generated at 74d3ab7, before ObjectRef had SSIS fields: Object Explorer keys its selection, filters and expansion by these.
     const golden = JSON.parse(readFileSync('tests/fixtures/explorer/ref-keys.json', 'utf8')) as { connectionId: string; ref: ExplorerNodeRef; key: string }[]
     expect(golden.length).toBeGreaterThan(300)
-    // Every kind and folder but the SSIS ones (S1b), which came after the golden keys.
-    expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis'))))
-    expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis'))))
+    // Every kind and folder but the SSIS ones (S1b) and SQL Server Agent's (AG-1), which came after the golden keys.
+    expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis') && !kind.startsWith('agent'))))
+    expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis') && !id.startsWith('agent'))))
     for (const entry of golden) expect(refKey(entry.connectionId, entry.ref), entry.key).toBe(entry.key)
   })
   it('keys the SSIS kinds and their folders with their folder and project appended', () => {
@@ -115,7 +116,9 @@ describe('node identity', () => {
     const expected: Partial<Record<NodeKind, string | undefined>> = {
       server: undefined, returnValue: undefined, parameter: '@n',
       // SSIS Catalog objects are not SQL objects: dragging them inserts nothing.
-      ssisCatalog: undefined, ssisFolder: undefined, ssisProject: undefined, ssisPackage: undefined, ssisEnvironment: undefined
+      ssisCatalog: undefined, ssisFolder: undefined, ssisProject: undefined, ssisPackage: undefined, ssisEnvironment: undefined,
+      // Nor do SQL Server Agent's: none is a name a query uses as it stands.
+      agent: undefined, agentJobActivity: undefined, agentJob: undefined, agentAlert: undefined, agentOperator: undefined, agentProxySubsystem: undefined, agentProxy: undefined, agentErrorLog: undefined
     }
     for (const kind of nodeKinds) {
       const style = kindSpecs[kind].insert

@@ -79,9 +79,16 @@ checks impersonated a scratch SQL login (`EXECUTE AS LOGIN`) that was a member o
   and the reader reports `NOT_SUPPORTED`; `xp_readerrorlog 0, 2, …` still reads the current Agent log, and
   `xp_servicecontrol N'QueryState'` answers "Running.".
 
-Not checked yet: the Linux container's `sys.dm_server_services` and subsystems (AG-1, against CI's container), Managed
-Instance's `sp_readmierrorlog` and archives (no instance; AG-1 from Microsoft's documentation), service control on a
-named instance or under a domain account (AG-2's Windows workflow), and how history records a reordered step (AG-6b).
+- **Agent's state (Object Explorer's `explorer.agentService`).** On Windows `sys.dm_server_services` lists `SQL Server Agent
+  (<instance>)` with its status and startup type. Where it lists no Agent row, the probe falls back to whether an
+  `SQLAgent - …` session is connected (running or stopped, no startup type). The Agent live suite's check says which
+  answered, so CI's Linux container log records the Linux answer. Managed Instance's Agent always runs and cannot be
+  stopped (Microsoft's T-SQL differences page), so the probe reads running there without the DMV.
+- **Subsystems.** `msdb.dbo.syssubsystems` lists TSQL as `subsystem_id` 1. Object Explorer's Proxies folder lists every
+  other subsystem with its proxies, labelled as SSMS labels them, so Linux shows the ones its container reports.
+
+Not checked yet: Managed Instance's `sp_readmierrorlog` and archives (no instance to test), service control on a named
+instance or under a domain account (AG-2's Windows workflow), and how history records a reordered step (AG-6b).
 
 ## Testing
 

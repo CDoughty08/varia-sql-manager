@@ -53,6 +53,7 @@ internal static class LiveErrors
         _ when Unsupported.Contains(number) => "NOT_SUPPORTED",
         _ when Unavailable.Contains(number) => "DATABASE_UNAVAILABLE",
         _ when ConnectionFailures.LoginFailed(number) => "LOGIN_FAILED",
+        15281 => "AGENT_DISABLED",
         -2 => "TIMEOUT",
         _ when severity >= 20 || Lost.Contains(number) => "CONNECTION_LOST",
         _ => "SQL_ERROR"
@@ -60,7 +61,8 @@ internal static class LiveErrors
 
     /// <summary>A missing SSISDB catalog (CATALOG_MISSING) or a missing object the view follows (NOT_FOUND, such as an execution
     /// that was cleaned up) will not come back by retrying either.</summary>
-    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND" or "AUTH_IDENTITY";
+    /// <para>AGENT_DISABLED stops the probe too: its view's Agent XPs signal restarts it with a refresh once the option reads 1.</para>
+    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND" or "AUTH_IDENTITY" or "AGENT_DISABLED";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>
     public static bool Breaks(string code) => code is "CONNECTION_LOST" or "TIMEOUT";
@@ -79,6 +81,7 @@ internal static class LiveErrors
             "TIMEOUT" => TimeoutMessage,
             "CONNECTION_LOST" => LostMessage,
             "LOGIN_FAILED" => LoginFailedMessage,
+            "AGENT_DISABLED" => Explorer.ExplorerErrors.AgentDisabled,
             _ => "Msg " + number + ": " + (first?.Message ?? error.Message)
         };
         return Create(probe, code, message, number == 0 ? null : number, maxCharacters);

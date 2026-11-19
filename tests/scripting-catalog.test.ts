@@ -385,7 +385,7 @@ describe('generated scripting files', () => {
     expect(docs).toContain('`table` (`droppedLedger`)')
     expect(docs).toContain('`certificate`')
     expect(docs).toContain('| `login` | none, `sa`, `system`, `sql`, `windowsUser`, `windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | Script Login as |')
-    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`.')
+    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog`.')
     expect(docs).toContain('| `maxScriptChars` | 4,000,000 |')
   })
 })

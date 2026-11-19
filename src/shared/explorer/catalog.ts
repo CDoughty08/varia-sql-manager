@@ -500,12 +500,14 @@ export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
 
 /**
  * Live status chips (src/shared/explorer/status.ts; docs/object-explorer.md, Live status): the kinds whose rows show them,
- * and the probes of the `explorer` live source (src/shared/live/catalog.ts) each reads. SQL Server Agent and Always On
- * High Availability are not served yet (`laterFolders`), so the server row carries their chips until they are.
+ * and the probes of the `explorer` live source (src/shared/live/catalog.ts) each reads. Always On High Availability is not
+ * served yet (`laterFolders`), so the server row carries its chip; the server row keeps the running-jobs chip beside the
+ * SQL Server Agent node's (both read the one `explorer.agent` sample, so a probe list built from these repeats none).
  */
 export const statusChipKinds = {
   server: ['explorer.agent', 'explorer.availability'],
-  database: ['explorer.databases', 'explorer.progress']
+  database: ['explorer.databases', 'explorer.progress'],
+  agent: ['explorer.agentService', 'explorer.agent']
 } as const satisfies Partial<Record<NodeKind, readonly string[]>>
 export type StatusChipKind = keyof typeof statusChipKinds
 
