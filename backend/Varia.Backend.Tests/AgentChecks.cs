@@ -88,11 +88,21 @@ internal static class AgentChecks
         check(AgentProfileSql.NoMsdb("windows", 3) is { MsdbAccess: false, Sysadmin: false, UserRole: false, ReaderRole: false, OperatorRole: false, AgentXps: null, DatabaseMailXps: null },
             "msdb refusing the login (916) is a profile with msdb access off, no role and the server options unread");
         var denied = new ExplorerError("PERMISSION_DENIED", "denied", false);
-        check(AgentProfileSql.Failed(new("NO_DB_ACCESS", "no msdb", false), "linux", 2) is { Error: null, Profile: { MsdbAccess: false, Platform: "linux", EngineEdition: 2 } }
-            && AgentProfileSql.Failed(denied, "windows", 3) is { Profile: null } refused && refused.Error == denied,
-            "agent.profile answers msdb refusing the login (NO_DB_ACCESS) as a profile with no role, and any other failure as the error itself");
-        check(AgentProfileSql.NoRow is { Code: "SQL_ERROR", Retryable: true } && !AgentProfileSql.NoRow.Message.StartsWith("Msg ", StringComparison.Ordinal),
-            "a capability read with no row is a retryable SQL_ERROR in words, not a message numbered Msg 0");
+        var refusedOpen = new ExplorerError("NO_DB_ACCESS", "no default database", false);
+        check(AgentProfileSql.Failed(new("NO_DB_ACCESS", "no msdb", false), true, "linux", 2) is { Error: null, Profile: { MsdbAccess: false, Platform: "linux", EngineEdition: 2 } }
+            && AgentProfileSql.Failed(denied, true, "windows", 3) is { Profile: null } refused && refused.Error == denied
+            && AgentProfileSql.Failed(refusedOpen, false, "windows", 3) is { Profile: null } unopened && unopened.Error == refusedOpen,
+            "agent.profile answers msdb refusing the login (NO_DB_ACCESS once open) as a profile with no role, and any other failure, a refused open included, as the error itself");
+        // A pool connection the server refuses to open (4060: its database was dropped) is an error value, never "msdb refused the login".
+        var dropped = new ExplorerChecks.FakeHost { Opening = (_, _) => throw ConnectionFailureChecks.Sql(4060, 1, 11, "server", "Cannot open database requested by the login.") };
+        using (var service = new ExplorerService(dropped))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && service.RunningCount == 0,
+                "agent.profile whose pool connection cannot open its database (4060) answers the error, not a no-role profile: " + result.Error?.Code + " " + (result.Profile is null ? "" : "profile"));
+        }
+        check(AgentProfileSql.NoRow is { Code: "SQL_ERROR", Retryable: true } && !AgentProfileSql.NoRow.Message.StartsWith("Msg ", StringComparison.Ordinal) && !AgentProfileSql.NoRow.Message.Contains("Refresh", StringComparison.Ordinal),
+            "a capability read with no row is a retryable SQL_ERROR in words, not a message numbered Msg 0, and leaves Refresh to retry to the renderer");
     }
 
     private static void Catalog(Action<bool, string> check)

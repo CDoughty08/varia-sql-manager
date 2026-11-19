@@ -79,6 +79,9 @@ describe('agentRole', () => {
   it('says why a verb waits on the role, and nothing once it is read', () => {
     expect(agentRoleReason(undefined)).toBe('Reading this login\'s Agent role…')
     expect(agentRoleReason({ status: 'failed', error: { code: 'TIMEOUT', message: 'Too slow.', retryable: true } })).toBe("Could not read this login's Agent role: Too slow. Refresh to retry.")
+    // The backend's own wording leaves the retry hint to this reason, so it is said once.
+    const timedOut = agentRoleReason({ status: 'failed', error: { code: 'TIMEOUT', message: "Reading this login's SQL Server Agent role took longer than 10 seconds.", retryable: true } })
+    expect(timedOut).toBe("Could not read this login's Agent role: Reading this login's SQL Server Agent role took longer than 10 seconds. Refresh to retry.")
     expect(agentRoleReason(ready({ userRole: true }))).toBeUndefined()
   })
   it('is a target key of the Object Explorer menu and a selection key, each with every role and ""', () => {
