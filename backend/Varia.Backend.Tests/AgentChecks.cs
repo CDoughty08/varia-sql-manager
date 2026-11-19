@@ -31,7 +31,7 @@ internal static class AgentChecks
 
     /// <summary>agent.profile (AG-0b): its batch passes Object Explorer's lint for every band with only its own literals, reads the
     /// 2022 server-state permissions only from band 16, and Agent XPs by configuration id; the method is a SQL Server-only read on
-    /// the metadata lane that checks ids and members before the connection; a server with no Agent answers NOT_SUPPORTED without
+    /// the explorer lane that checks ids and members before the connection; a server with no Agent answers NOT_SUPPORTED without
     /// connecting, a failed connection is a value, and msdb refusing the login is a profile with no role.</summary>
     private static async Task ProfileAsync(Action<bool, string> check)
     {
@@ -112,23 +112,32 @@ internal static class AgentChecks
                 "agent.profile whose msdb refuses the login after the connection opened (916) runs the server-scope batch at server scope next, and with that failing too answers a profile with msdb access off and no role: "
                 + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope.Database ?? "server")));
         }
-        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 1 s of a 1.5 s budget, so
-        // the whole call ends near 1.5 s (a reset budget would run to 2.5 s or more), with the no-role profile the 916 settled.
+        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 1 s of a 3 s budget, so the
+        // server-scope read is cancelled under 3.5 s after msdb's started (a reset budget: 4 s or more), and the 916's no-role
+        // profile stands. The times are taken inside the fake statements, so the call's own overhead does not count.
+        var budgetWatch = System.Diagnostics.Stopwatch.StartNew();
+        long msdbAt = -1, cancelledAt = -1;
         using (var service = new ExplorerService(refusing, new ExplorerOptions
         {
-            AgentProfileBudget = TimeSpan.FromMilliseconds(1500),
+            AgentProfileBudget = TimeSpan.FromSeconds(3),
             TestStatementFailure = async (database, _, token) =>
             {
-                await Task.Delay(database == "msdb" ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(10), token);
+                if (database == "msdb")
+                {
+                    msdbAt = budgetWatch.ElapsedMilliseconds;
+                    await Task.Delay(TimeSpan.FromSeconds(1), token);
+                    return NoMsdb();
+                }
+                try { await Task.Delay(TimeSpan.FromSeconds(10), token); }
+                finally { cancelledAt = budgetWatch.ElapsedMilliseconds; }
                 return NoMsdb();
             }
         }))
         {
-            var slowWatch = System.Diagnostics.Stopwatch.StartNew();
             var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
-            check(result is { Error: null, Profile.MsdbAccess: false } && slowWatch.ElapsedMilliseconds < 2100 && service.RunningCount == 0,
+            check(result is { Error: null, Profile.MsdbAccess: false } && msdbAt >= 0 && cancelledAt - msdbAt is > 1000 and < 3500 && service.RunningCount == 0,
                 "agent.profile whose server-scope read outlasts what is left of the one budget answers the no-role profile, not a TIMEOUT, without restarting the budget: "
-                + result.Error?.Code + " in " + slowWatch.ElapsedMilliseconds + " ms");
+                + result.Error?.Code + ", cancelled " + (cancelledAt - msdbAt) + " ms after msdb's read started");
         }
         // A disconnect during the server-scope read cancels the request (CANCELLED), never a profile for a connection that is gone.
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

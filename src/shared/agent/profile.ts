@@ -1,6 +1,6 @@
 // agent.profile: what this login may do with SQL Server Agent, read once per connection (docs/agent-plan.md › Permissions
 // and how the UI degrades), and the Agent role the menus and the tree branch on (context keys `agentRole` and
-// `explorerSelectionAgentRole`). The backend reads it in one constant batch run in msdb (Agent/AgentProfile.cs).
+// `explorerSelectionAgentRole`). The backend reads it in one constant batch run in msdb, and the server facts at server scope when msdb refuses the login (Agent/AgentProfile.cs).
 import { z } from 'zod'
 import { explorerErrorCodes, type ExplorerError } from '../contracts'
 import { agentPlatforms, type AgentPlatform } from './catalog.ts'
