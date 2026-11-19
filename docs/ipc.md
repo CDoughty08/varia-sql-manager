@@ -1390,7 +1390,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   column: which ASCII characters its cells hold (and whether any other), and a Bloom filter of its trigrams (4-grams for
   binary and `uniqueidentifier`, whose hex holds every trigram; two hashes, at the smallest power-of-two size up to 16 KiB
   its grams leave at most 40 % full, left out when fuller) in the matcher's own compare space: code points for _BIN/_BIN2, .NET's ignore-case classes
-  for no collation and for binary's `0x` hex, and the culture's search fold for a verified culture. A text of 4 or more
+  for no collation and for binary's `0x` hex, and the culture's search fold for a verified culture (packing waits for the
+  fold's first build, so a page packed before any search still gets the column's filter). A text of 4 or more
   characters that a page's filter rules out in every searched column cannot match there, so the search passes the page
   over without unpacking it. A column of only NULLs on the page rules any text out; a column with a cell the fold does
   not vouch for, or of a culture without a fold, has no filter and the page is read. A page passed over that holds a

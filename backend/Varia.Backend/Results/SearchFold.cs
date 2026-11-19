@@ -26,7 +26,8 @@ internal sealed class SearchFold
         1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
-    // About 400 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
+    // About 400 KB a fold, kept for the process: a search, or packing a page with a column in the culture (its Find filter,
+    // PageFilter), builds one for the column's culture and options, so a session holds
     // a handful (at most 35 cultures times 16 option sets, about 220 MB, if every one were searched).
     private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
@@ -40,6 +41,14 @@ internal sealed class SearchFold
         var build = Lazy(lcid, options).Value;
         return build.IsCompletedSuccessfully ? build.Result : null;
     }
+
+    /// <summary>Forgets a fold, as if never built (the checks: a later use builds a new one).</summary>
+    internal static bool Forget(int lcid, CompareOptions options) => folds.TryRemove((lcid, options), out _) || !folds.ContainsKey((lcid, options));
+
+    /// <summary>The fold for a culture and options, waiting for its build, or null for a culture that is not verified (a
+    /// page's Find filter, built off the search, on the packer's thread).</summary>
+    public static SearchFold? Awaited(int lcid, CompareOptions options) =>
+        Array.IndexOf(Verified, lcid) < 0 ? null : Lazy(lcid, options).Value.GetAwaiter().GetResult();
 
     /// <summary>The fold for a culture and options, waiting for its build (the checks and benchmarks).</summary>
     internal static SearchFold Ready(int lcid, CompareOptions options)

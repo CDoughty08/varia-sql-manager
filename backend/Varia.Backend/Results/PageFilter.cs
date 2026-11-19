@@ -84,7 +84,9 @@ internal sealed class PageFilter
         if ((collation.Options & (16384 | 32768)) != 0) return Space.Ordinal;
         if (ViewSorter.Culture(collation) is { } culture)
         {
-            fold = SearchFold.For(collation.Lcid, culture.Options);
+            // Waits for the fold's first build (0.05 - 0.1 s, once a culture and options): a page packed without it would
+            // keep no filter for the column as long as it stays packed.
+            fold = SearchFold.Awaited(collation.Lcid, culture.Options);
             return fold is null ? null : Space.Fold;
         }
         return (collation.Options & 1) != 0 ? Space.IgnoreCase : Space.Ordinal;
@@ -98,11 +100,19 @@ internal sealed class PageFilter
     {
         var held = ArrayPool<ulong>.Shared.Rent(HeldGrams);
         try { return Build(page, resultColumns, wires, maxBytes, sized, held); }
-        // Cleared: grams are invertible, so a pooled array would keep pieces of cell text past the result's release.
-        finally { ArrayPool<ulong>.Shared.Return(held, clearArray: true); }
+        finally { ArrayPool<ulong>.Shared.Return(held); }
     }
 
-    private static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes, bool sized, ulong[] held)
+    /// <summary><see cref="Build(ReadOnlySpan{byte}, IReadOnlyList{ResultColumn}, IReadOnlyList{WireKind}, long, bool)"/>
+    /// holding grams in <paramref name="held"/> (at least <see cref="HeldGrams"/> long), which it leaves cleared: grams are
+    /// invertible, so a pooled array would keep pieces of cell text past the result's release.</summary>
+    internal static PageFilter? Build(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes, bool sized, ulong[] held)
+    {
+        try { return Columns(page, resultColumns, wires, maxBytes, sized, held); }
+        finally { Array.Clear(held, 0, HeldGrams); }
+    }
+
+    private static PageFilter? Columns(ReadOnlySpan<byte> page, IReadOnlyList<ResultColumn> resultColumns, IReadOnlyList<WireKind> wires, long maxBytes, bool sized, ulong[] held)
     {
         var count = wires.Count;
         var view = PageView.Parse(page, count);

@@ -55,6 +55,7 @@ internal static class PageFilterChecks
         Typing(check);
         Budget(check);
         Capped(check);
+        Unbuilt(check);
     }
 
     /// <summary>The ignore-case classes are .NET's own: every code unit equals its class ignoring case, and two code units
@@ -371,12 +372,43 @@ internal static class PageFilterChecks
                 if (sized is null ? full is null : full is not null && sized.SameAs(full)) same++;
             }
         smallStore.Release(small.ResultId);
-        // The pooled grams go back cleared (this thread's pool hands the same array out again).
-        var pooled = System.Buffers.ArrayPool<ulong>.Shared.Rent(PageFilter.HeldGrams);
-        var cleared = pooled.All(gram => gram == 0);
-        System.Buffers.ArrayPool<ulong>.Shared.Return(pooled);
-        check(cleared, "a filter build returns its pooled grams cleared, keeping no pieces of cell text");
+        // The grams a build held are cleared when it ends (the array is pooled).
+        var held = new ulong[PageFilter.HeldGrams];
+        var heldStore = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off, SealBytes = 3 * 1024 };
+        var heldSet = Open(heldStore, "held");
+        Fill(heldSet, new Random(31), 200);
+        heldSet.Complete();
+        PageFilter? heldFilter;
+        using (heldSet.Pin()) heldFilter = PageFilter.Build(heldSet.SealedSnapshot()[^1].Body(), Columns, Wires, long.MaxValue, true, held);
+        heldStore.Release(heldSet.ResultId);
+        check(heldFilter is not null && held.All(gram => gram == 0), "a filter build leaves the grams it held cleared, keeping no pieces of cell text");
         check(total > 10 && same == total, $"a filter built at its size is the one built in 16 KiB and halved: {same} of {total} pages");
+    }
+
+    /// <summary>A page packed before its column's fold was ever built still gets the column's filter: packing waits for the
+    /// fold (forgotten first; a culture and options few checks use).</summary>
+    private static void Unbuilt(Action<bool, string> check)
+    {
+        // Latvian, case- and accent-sensitive but width-insensitive only.
+        var collation = Collation(1062, 16);
+        var culture = ViewSorter.Culture(collation)!.Value;
+        var unbuilt = SearchFold.Forget(collation.Lcid, culture.Options);
+        ResultColumn[] columns = [new("latvian", "nvarchar", "text", Collation: collation)];
+        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete, SealBytes = 3 * 1024, FilterMinBytes = 0, FilterCapped = false };
+        var set = store.Open(store.BeginQuery("unbuilt"), 0, 1, 1, "rows", columns, [WireKind.Text])!;
+        for (var r = 0; r < 400; r++)
+        {
+            set.CountRow();
+            set.BeginRow()!.AppendText((r < 200 ? "pilsēta " : "valoda ") + r);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        var with = Shown(ResultSearcher.Search(set, pages, null, "valoda", 0, false, 5, CancellationToken.None, narrow: false));
+        var filtered = ResultSearcher.LastFiltered;
+        var without = Shown(ResultSearcher.Search(set, pages, null, "valoda", 0, false, 5, CancellationToken.None, narrow: false, filters: false));
+        store.Release(set.ResultId);
+        check(unbuilt && filtered > 0 && with == without, "a page packed before its culture's fold was built still gets a filter for the column: " + unbuilt + " " + filtered);
     }
 
     private static string Escape(string text) => string.Concat(text.Select(c => c < 128 && !char.IsControl(c) ? c.ToString() : "\\u" + ((int)c).ToString("X4", CultureInfo.InvariantCulture)));
