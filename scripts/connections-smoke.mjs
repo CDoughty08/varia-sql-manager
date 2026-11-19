@@ -35,6 +35,8 @@ const watchdog = setTimeout(() => { console.error('Connection suite timed out.')
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
 // Environment labels' phase: the fake backend behind main's real request, history and library handlers.
 const environmentProfile = await mkdtemp(resolve('artifacts', 'connections-environments-'))
+// BigQuery's phase: its own profile, against the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (docs/bigquery.md, Testing).
+const bigQueryProfile = await mkdtemp(resolve('artifacts', 'connections-bigquery-'))
 async function launch(options = launchOptions, runtime) {
   app = await electron.launch(options)
   page = await app.firstWindow()
@@ -792,12 +794,15 @@ try {
   await environmentLabels()
   expect(failures).toEqual([])
   await connectionLifecycle()
+  await bigQueryEmulator()
+  expect(failures).toEqual([])
   console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, stored independently on profiles and targets, shown on the server, its tabs, the query bar and the status bar, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
   await rm(passwordProfile, { recursive: true, force: true })
+  await rm(bigQueryProfile, { recursive: true, force: true })
   await rm(environmentProfile, { recursive: true, force: true })
 }
 
@@ -1564,4 +1569,45 @@ async function environmentLabels() {
   expect(finalKept.workspace.targets).toHaveLength(1)
   expect(finalKept.workspace.targets[0].details).toMatchObject({ displayName: 'Prod reporting', environment: 'Staging' })
   expect(await saved()).toBe('Production')
+}
+
+/**
+ * The Connect dialog's BigQuery path against the emulator (anonymous credentials, so no Google project or credential is
+ * involved): Server type, the account line, the project's datasets, Connect, then the server in Object Explorer and the
+ * query tab's project and dataset. Skipped without VARIA_TEST_BIGQUERY_ENDPOINT.
+ */
+async function bigQueryEmulator() {
+  const endpoint = process.env.VARIA_TEST_BIGQUERY_ENDPOINT
+  if (!endpoint) { console.log('BigQuery Connect dialog checks skipped: VARIA_TEST_BIGQUERY_ENDPOINT is not set.'); return }
+  await launch({ ...launchOptions, env: { ...env, VARIA_TEST_USER_DATA: bigQueryProfile, VARIA_TEST_BIGQUERY_ENDPOINT: endpoint } })
+  try {
+    const dialog = await open()
+    const type = dialog.getByLabel('Server type', { exact: true })
+    await expect(type).toHaveValue('sqlserver')
+    await type.selectOption('bigquery')
+    // SQL Server's fields give way to BigQuery's, and Undo is offered.
+    await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: 'Undo', exact: true })).toBeVisible()
+    await expect(dialog.getByRole('tab', { name: 'Connection String', exact: true })).toHaveCount(0)
+    await expect(dialog.getByText(/^Emulator account /)).toBeVisible({ timeout: 20000 })
+    await dialog.getByLabel('Project', { exact: true }).fill('varia-emulator')
+    await dialog.getByRole('button', { name: 'Load datasets', exact: true }).click()
+    await expect.poll(() => dialog.getByLabel('Default dataset', { exact: true }).evaluate(input => [...input.list?.options ?? []].map(option => option.value)), { timeout: 20000 }).toContain('varia_fixture')
+    await dialog.getByLabel('Default dataset', { exact: true }).fill('varia_fixture')
+    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(dialog).toHaveCount(0, { timeout: 30000 })
+    await expect(serverRows(page).filter({ hasText: 'varia-emulator' })).toHaveCount(1)
+    await toolbarButton(page, 'New query').click()
+    await expect(queryServer(page)).toContainText('varia-emulator')
+    await expect(page.getByLabel('Query dataset', { exact: true })).toHaveValue('varia_fixture')
+    await expect(queryStatus(page)).toContainText('varia-emulator')
+    // Next time, the dialog opens on the type used last, and history lists the project.
+    const again = await open()
+    await expect(again.getByLabel('Server type', { exact: true })).toHaveValue('bigquery')
+    await expect(savedConnections(again, 'varia-emulator').first()).toBeVisible()
+    await again.getByRole('button', { name: 'Cancel', exact: true }).click()
+    const saved = JSON.parse(await readFile(join(bigQueryProfile, 'bigquery-connections.json'), 'utf8'))
+    expect(saved.profiles.map(entry => entry.options.project)).toEqual(['varia-emulator'])
+    console.log('BigQuery Connect dialog checks passed against the emulator.')
+  } finally { await app.close(); app = undefined }
 }

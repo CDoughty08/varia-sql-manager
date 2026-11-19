@@ -1,0 +1,1 @@
+{"kind":"bigquery#datasetList","etag":"example","datasets":[{"kind":"bigquery#dataset","id":"varia-alpha:archive","datasetReference":{"datasetId":"archive","projectId":"varia-alpha"},"location":"us-east1"}]}

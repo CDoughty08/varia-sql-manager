@@ -385,12 +385,14 @@ describe('IPC validation', () => {
     expect(methodAllows('connections.preview', 'bigquery')).toBe(false)
     expect(methodAllows('bigquery.projects', 'sqlserver')).toBe(false)
     expect(requestProvider('bigquery.account', { authentication: 'gcloud' }, lookup)).toBeUndefined()
-    expect(methodAllows('databases.list', 'bigquery')).toBe(false)
+    // Load datasets and the query tab's dataset box use the database methods for BigQuery too.
+    expect(methodAllows('databases.list', 'bigquery')).toBe(true)
+    expect(methodAllows('connections.databases', 'bigquery')).toBe(true)
     expect(methodAllows('databases.list', 'sqlserver')).toBe(true)
     expect(methodAllows('results.close', 'bigquery')).toBe(true)
     // Main cannot tell: C# checks.
     expect(methodAllows('explorer.children', undefined)).toBe(true)
-    // Connect takes either engine's options (main adds BigQuery's credential); the other connection methods stay SQL Server's.
+    // Connect and Load databases take either engine's options (main adds BigQuery's credential); the others stay SQL Server's.
     const options = { server: 'sql.example', database: '', authentication: 'windows', trustServerCertificate: false }
     const bigQuery = { provider: 'bigquery', project: 'my-project-1', authentication: 'gcloud' }
     expect(() => validateRequest('connections.connect', { ...options, provider: 'sqlserver' })).not.toThrow()
@@ -399,7 +401,9 @@ describe('IPC validation', () => {
     expect(() => validateRequest('connections.connect', { ...bigQuery, credential: { source: 'adc', json: '{}' } })).toThrow()
     expect(() => validateRequest('connections.connect', { ...bigQuery, authentication: 'serviceAccountKey', keyFile: 'C:/keys/sa.json' })).toThrow()
     expect(() => validateRequest('connections.connect', { ...bigQuery, server: 'sql.example' })).toThrow()
-    for (const method of ['connections.databases', 'connections.preview'] as const) expect(() => validateRequest(method, bigQuery), method).toThrow()
+    expect(() => validateRequest('connections.databases', bigQuery)).not.toThrow()
+    expect(() => validateRequest('connections.databases', { ...bigQuery, credential: { source: 'adc', json: '{}' } })).toThrow()
+    expect(() => validateRequest('connections.preview', bigQuery)).toThrow()
   })
   it('takes the Connect dialog\'s context, with the request id Stop uses, only for connect and Load databases', () => {
     const requestId = crypto.randomUUID()

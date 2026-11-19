@@ -64,8 +64,10 @@ describe('integrated identity', () => {
     expect(validateResult('connections.identity', { principal: '\u{1D49C}lice@X' })).toEqual({ principal: '\u{1D49C}lice@X' })
     for (const answer of [{ principal: 'a'.repeat(257) }, { principal: '' }, { principal: 'alice\n@CONTOSO.COM' }, { principal: '‮alice@CONTOSO.COM' }, { principal: 'al​ice' }, { principal: 'alice\u{E0041}@X' },
       { principal: 7 }, { principal: 'alice@CONTOSO.COM', password: 'x' }, null]) expect(() => validateResult('connections.identity', answer), JSON.stringify(answer)).toThrow('The backend sent an invalid answer.')
-    // Other answers are passed on as they are.
-    expect(validateResult('databases.list', [{ name: 'master' }])).toEqual([{ name: 'master' }])
+    // The database list is checked for both engines: a BigQuery dataset carries its location.
+    expect(validateResult('databases.list', [{ name: 'master', isSystem: true, isSnapshot: false }])).toEqual([{ name: 'master', isSystem: true, isSnapshot: false }])
+    expect(validateResult('databases.list', [{ name: 'sales', isSystem: false, isSnapshot: false, location: 'europe-west2' }])).toEqual([{ name: 'sales', isSystem: false, isSnapshot: false, location: 'europe-west2' }])
+    for (const answer of [[{ name: 'master' }], [{ name: '', isSystem: false, isSnapshot: false }], [{ name: 'x', isSystem: false, isSnapshot: false, location: 'eu west' }]]) expect(() => validateResult('databases.list', answer), JSON.stringify(answer)).toThrow()
   })
 })
 describe('per-platform authentication defaults', () => {
