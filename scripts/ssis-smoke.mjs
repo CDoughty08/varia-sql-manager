@@ -159,10 +159,12 @@ try {
   await expect(gridCell(parameters, 2, 3)).toHaveText('Environment variable')
   expect(await rowText(localGrid(loads, 'References'), 0, 4)).toEqual(['Test', '.', 'Relative', 'Not validated'])
   // A short list is as tall as its rows: its last row is inside its frame, with no band of empty rows under it.
-  expect(await rowShown(parameters, 'Parameters', 2)).toBe(true)
+  await expect.poll(() => rowShown(parameters, 'Parameters', 2)).toBe(true)
   expect(await listFrame('Parameters').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(160)
   // A list narrower than its section has no room kept for a horizontal scroll bar: its header, two rows and its border.
-  expect(await listFrame('Packages').evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(22 + 2 * 20 + 4)
+  // Polled until two reads agree: the grid says whether it is wide on its first frame.
+  const packagesHeight = () => listFrame('Packages').evaluate(element => element.getBoundingClientRect().height)
+  await expect.poll(async () => { const height = await packagesHeight(); await page.evaluate(() => new Promise(requestAnimationFrame)); return height === await packagesHeight() && height }).toBeLessThanOrEqual(22 + 2 * 20 + 4)
   // Copy writes what the cell shows: the stars, never a value. Copy with Headers of every row does too.
   await gridCell(parameters, 1, 2).click()
   await page.keyboard.press('Control+C')
@@ -327,7 +329,7 @@ try {
   await page.keyboard.press('Control+End')
   const last = gridCell(references, 2047, 0)
   await expect(last).toHaveText('Environment 2048')
-  expect(await rowShown(references, 'References', 2047)).toBe(true)
+  await expect.poll(() => rowShown(references, 'References', 2047)).toBe(true)
   await sectionColumn(frame('Loads'), 'Loads').evaluate(column => { column.scrollTop = column.scrollHeight })
   await expect(last).toBeInViewport()
   await bounded()

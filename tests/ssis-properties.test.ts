@@ -225,7 +225,9 @@ describe('SSIS properties documents', () => {
     await run('ssis.projectProperties', 'ssisProject')
     await settled()
     const first = documents.getSnapshot().activeId, lists = ssisProperties.get(first)!.lists
-    lists.set('Parameters', { topRow: 40, virtualTop: 0, scrollLeft: 0, sized: true })
+    // The tab's Parameters grid gets the document's view, made on first use.
+    const shown = list(ssisSectionViews(ssisProperties.get(first)!)[2]).state
+    expect(lists.get('Parameters')).toBe(shown)
     await ssisProperties.refresh(first)
     await settled()
     expect(ssisProperties.get(first)!.lists).toBe(lists)
@@ -234,7 +236,10 @@ describe('SSIS properties documents', () => {
     await settled()
     const again = ssisProperties.get(documents.getSnapshot().activeId)!
     expect(again.id).not.toBe(first)
-    expect(again.lists.size).toBe(0)
+    // The fixture answers both reads with the same model object: the new tab's grids still get its own views.
+    expect(again.model).toBe(project)
+    expect(list(ssisSectionViews(again)[2]).state).not.toBe(shown)
+    expect(again.lists.get('Parameters')).toBe(list(ssisSectionViews(again)[2]).state)
   })
   it('cancels a read in flight when its tab closes, and ignores its late answer', async () => {
     const { documents, api, ssisProperties, run } = ssis()
@@ -447,11 +452,14 @@ describe('SSIS properties view', () => {
   })
   it('builds a model\'s sections once, so choosing a section does not rebuild lists of thousands of rows', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
-    const first = ssisSectionViews(viewState(many)), again = ssisSectionViews(viewState(many, { frame: { ...initialFrameState(ssisDocumentSpecs.ssisProject.sections), section: 'references' } }))
+    const lists = new Map()
+    const first = ssisSectionViews(viewState(many, { lists })), again = ssisSectionViews(viewState(many, { lists, frame: { ...initialFrameState(ssisDocumentSpecs.ssisProject.sections), section: 'references' } }))
     expect(again.map(section => section.content)).toEqual(first.map(section => section.content))
     again.forEach((section, index) => expect(section.content).toBe(first[index].content))
     // A new model (a Refresh) builds them again.
-    expect(ssisSectionViews(viewState({ ...many }))[2].content).not.toBe(first[2].content)
+    expect(ssisSectionViews(viewState({ ...many }, { lists }))[2].content).not.toBe(first[2].content)
+    // Another document with the same model builds its own, over its own grid views.
+    expect(ssisSectionViews(viewState(many))[2].content).not.toBe(first[2].content)
   })
   it('focuses a document opened while its first read runs once that read ends, unless focus moved meanwhile', () => {
     let loading = true

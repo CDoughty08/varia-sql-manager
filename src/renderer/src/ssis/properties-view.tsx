@@ -154,10 +154,14 @@ type SectionContent = Readonly<Record<string, { readonly content: ReactNode; rea
  * Each model's sections, built once: the document renders again on every snapshot (a section chosen, another document's
  * read), and the same elements let React skip lists of up to ssisLimits.rows rows each. Models are immutable snapshots.
  */
-const contents = new WeakMap<SsisPropertiesModel, SectionContent>()
+const contents = new WeakMap<Map<string, GridViewState>, WeakMap<SsisPropertiesModel, SectionContent>>()
 function sectionContent(model: SsisPropertiesModel, lists: Map<string, GridViewState>): SectionContent {
-  let content = contents.get(model)
-  if (!content) contents.set(model, content = buildContent(model, lists))
+  // By document (its lists) and model: the content holds the document's grid views, so one model never lends another
+  // document its views.
+  let byModel = contents.get(lists)
+  if (!byModel) contents.set(lists, byModel = new WeakMap())
+  let content = byModel.get(model)
+  if (!content) byModel.set(model, content = buildContent(model, lists))
   return content
 }
 /** The general rows and the lists of a model, by section id. */
