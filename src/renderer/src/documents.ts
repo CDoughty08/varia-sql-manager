@@ -1,5 +1,6 @@
 import type { DocumentKind, SqlFile } from '../../shared/contracts'
 import type { IconId } from '../../shared/icons'
+import type { ProviderContext, ProviderId } from '../../shared/providers'
 import { ssisDocumentKinds, ssisDocumentSpecs, type SsisDocumentKind } from '../../shared/ssis/catalog.ts'
 
 export interface QueryDocument {
@@ -29,6 +30,9 @@ export interface QueryDocument {
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
    *  designer, Database Properties, an SSIS Catalog object's properties and an Activity Monitor have no text at all. */
   readonly kind?: Exclude<WorkbenchDocumentKind, 'sql'>
+  /** A query's engine, absent for SQL Server: its connection's, or the one it last had (a query keeps it when it
+   *  disconnects, and hot exit and AutoRecover keep it). Its editor language follows it (`documentInfo`). */
+  readonly provider?: ProviderId
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */
@@ -72,6 +76,16 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
   help: { language: '', icon: 'info', label: 'Getting Started', value: 'guide', blankName: 'Getting Started' },
   releaseNotes: { language: '', icon: 'info', label: 'Release Notes', value: 'release notes', blankName: 'Release Notes' },
   ...Object.fromEntries((Object.keys(ssisDocumentSpecs) as SsisDocumentKind[]).map(kind => [kind, { language: '', icon: ssisDocumentSpecs[kind].icon, label: ssisDocumentSpecs[kind].title, value: ssisDocumentSpecs[kind].noun, blankName: ssisDocumentSpecs[kind].title }])) as Record<SsisDocumentKind, KindInfo>
+}
+
+/** Each engine's query language in Monaco: Transact-SQL is Monaco's `sql`, GoogleSQL Varia's own (languages/googlesql.ts). */
+export const queryLanguages: Readonly<Record<ProviderId, string>> = { sqlserver: 'sql', bigquery: 'googlesql' }
+const googleSqlInfo: KindInfo = { ...kindInfo.sql, language: queryLanguages.bigquery, label: 'GoogleSQL' }
+/** The active document's engine: a query's (SQL Server unless it says otherwise), SQL Server for every other tab, '' with none open. */
+export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider'> | undefined): ProviderContext => !document ? '' : isQueryDocument(document) ? document.provider ?? 'sqlserver' : 'sqlserver'
+/** `kindInfo` for a document: a BigQuery query is GoogleSQL, in its language, where every other query is Transact-SQL. */
+export function documentInfo(document: Pick<QueryDocument, 'kind' | 'provider'>): KindInfo {
+  return isQueryDocument(document) && document.provider === 'bigquery' ? googleSqlInfo : kindInfo[documentKind(document)]
 }
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {

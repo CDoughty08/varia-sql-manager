@@ -325,7 +325,7 @@ describe('Monaco runtime keybinding rules', () => {
         if (expected !== closePeekCardCommand) kept.push(expected)
         expect(press(KeyCode.Escape, { ...context, [peekCardContextKey]: true }), rule.id).toBe(expected)
       }
-      expect(kept).toEqual(expect.arrayContaining(['hideSuggestWidget', 'closeFindWidget', 'leaveEditorMessage', 'leaveSnippet']))
+      expect(kept).toEqual(expect.arrayContaining(['hideSuggestWidget', 'closeFindWidget', 'leaveEditorMessage', 'leaveSnippet', 'closeParameterHints']))
     } finally { registration.dispose() }
     expect(press(KeyCode.Escape, { ...editor, [peekCardContextKey]: true })).toBeUndefined()
     // The rule runs the card's close through Monaco's command registry, for the editor that has focus.

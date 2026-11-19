@@ -104,6 +104,7 @@ After changing a catalogue, regenerate its outputs with the matching command and
 | `src/shared/designer/catalog.ts` | `npx vitest run tests/table-designer-catalog.test.ts -u` |
 | `src/shared/activity/catalog.ts` | `npx vitest run tests/activity-catalog.test.ts -u` |
 | `src/shared/ssis/catalog.ts` | `npx vitest run tests/ssis-catalog.test.ts -u` |
+| `src/shared/googlesql/catalog.ts` | `npx vitest run tests/googlesql-catalog.test.ts -u` |
 | `src/shared/settings/` | `npx vitest run tests/settings-catalog.test.ts -u` |
 | `src/shared/theme/metrics.ts` | `npx vitest run tests/theme-metrics.test.ts -u` |
 | `src/shared/icons.ts` | `npx vitest run tests/icons.test.ts -u` |

@@ -1,0 +1,38 @@
+1: -- a dash comment
+    comment                -- a dash comment
+2: # a hash comment
+    comment                # a hash comment
+3: SELECT 1 -- trailing
+    keyword                SELECT
+    number                 1
+    comment                -- trailing
+4:   , 2 # trailing hash
+    delimiter              ,
+    number                 2
+    comment                # trailing hash
+5:   , 3 /* inline */ , 4;
+    delimiter              ,
+    number                 3
+    comment.quote          /*
+    comment                 inline 
+    comment.quote          */
+    delimiter              ,
+    number                 4
+    delimiter              ;
+6: /* a block
+    comment.quote          /*
+    comment                 a block
+7:    comment over lines * and / alone
+    comment                   comment over lines * and / alone
+8: */
+    comment.quote          */
+9: SELECT '-- not a comment', "# not a comment either", '/* nor this */';
+    keyword                SELECT
+    string                 '-- not a comment'
+    delimiter              ,
+    string                 "# not a comment either"
+    delimiter              ,
+    string                 '/* nor this */'
+    delimiter              ;
+10: #legacySQL
+    comment                #legacySQL

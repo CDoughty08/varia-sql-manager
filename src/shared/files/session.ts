@@ -81,6 +81,8 @@ export interface RestoredDocument {
   readonly database?: string
   readonly targetId?: string
   readonly attachWanted?: boolean
+  /** The tab's engine as kept (absent: SQL Server); a query reopens in its language without its connection. */
+  readonly provider?: ProviderId
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
 export interface RestoredSession {
