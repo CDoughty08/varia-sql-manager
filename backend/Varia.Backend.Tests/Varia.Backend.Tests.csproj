@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures/*.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures/BigQuery/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <!-- Only for the page compression benchmark (docs/page-compression-findings.md): LZ4 to compare with the runtime's
        Zstandard. The backend itself does not reference it. -->

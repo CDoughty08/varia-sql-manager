@@ -1,0 +1,212 @@
+[
+  {
+    "id": "Azure.Core",
+    "version": "1.53.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Azure.Identity",
+    "version": "1.21.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Google.Api.Gax",
+    "version": "4.13.1",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "id": "Google.Api.Gax.Rest",
+    "version": "4.13.1",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "id": "Google.Apis",
+    "version": "1.74.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Google.Apis.Auth",
+    "version": "1.74.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Google.Apis.Bigquery.v2",
+    "version": "1.74.0.4090",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Google.Apis.Core",
+    "version": "1.74.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Google.Cloud.BigQuery.V2",
+    "version": "3.12.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Microsoft.Bcl.AsyncInterfaces",
+    "version": "10.0.3",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Bcl.Cryptography",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Data.SqlClient",
+    "version": "7.1.2",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Data.SqlClient.Extensions.Abstractions",
+    "version": "7.1.2",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Data.SqlClient.Internal.Logging",
+    "version": "7.1.2",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Data.SqlClient.SNI.runtime",
+    "version": "7.1.2",
+    "license": "file:LICENSE.txt"
+  },
+  {
+    "id": "Microsoft.Extensions.Caching.Memory",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Identity.Client",
+    "version": "4.92.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.Identity.Client.Extensions.Msal",
+    "version": "4.83.1",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.Abstractions",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.JsonWebTokens",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.Logging",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.Protocols",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.Protocols.OpenIdConnect",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.IdentityModel.Tokens",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.SqlServer.Server",
+    "version": "1.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.SqlServer.SqlManagementObjects",
+    "version": "181.38.1",
+    "license": "MIT"
+  },
+  {
+    "id": "Microsoft.SqlServer.TransactSql.ScriptDom",
+    "version": "180.154.0",
+    "license": "MIT"
+  },
+  {
+    "id": "Newtonsoft.Json",
+    "version": "13.0.4",
+    "license": "MIT"
+  },
+  {
+    "id": "System.ClientModel",
+    "version": "1.10.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.CodeDom",
+    "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Configuration.ConfigurationManager",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Data.OleDb",
+    "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Diagnostics.EventLog",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Diagnostics.PerformanceCounter",
+    "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.IdentityModel.Tokens.Jwt",
+    "version": "8.16.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Management",
+    "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Memory.Data",
+    "version": "10.0.3",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Security.Cryptography.Pkcs",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Security.Cryptography.ProtectedData",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Security.Permissions",
+    "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Threading.RateLimiting",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
+    "id": "System.Windows.Extensions",
+    "version": "8.0.0",
+    "license": "MIT"
+  }
+]

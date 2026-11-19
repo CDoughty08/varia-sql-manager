@@ -69,6 +69,11 @@ describe('CI workflow', () => {
     expect(live.matrix.get('group')!.split(', ').map(Number)).toEqual(Array.from({ length: liveGroups }, (_, index) => index + 1))
     expect(live.steps.find(step => step.run.trim().endsWith('--live-group ${{ matrix.group }}/' + liveGroups))?.id).toBe('test')
     for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.group == 1 && (success() || failure())')
+    // BigQuery's emulator checks ride in the first live group, with no job of their own, against the emulator pinned by digest.
+    const emulator = live.steps.find(step => step.run.includes('--bigquery-emulator-live'))!
+    expect(emulator.if?.startsWith('matrix.group == 1 && (success() || failure())')).toBe(true)
+    expect(emulator.run).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64} --project=varia-emulator --dataset=varia_fixture/)
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).not.toContain('VARIA_TEST_BIGQUERY_PROJECT')
   })
   it('keeps triggers unfiltered, validates docs without installing runtimes, and always aggregates every job', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')

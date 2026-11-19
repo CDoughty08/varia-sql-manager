@@ -89,8 +89,8 @@ export interface ConnectionOptions {
 
 /**
  * BigQuery's branch of the connection options union (src/shared/connections.ts has its rules). `keyFile` is an opaque
- * reference (a pick token or the saved profile's id): only main knows the path. No backend method accepts it yet: each
- * answers UNSUPPORTED_PROVIDER until a BigQuery lane declares it.
+ * reference (a pick token or the saved profile's id): only main knows the path, and main sends the backend the file's
+ * content instead (BigQueryCredentialMaterial).
  */
 export interface BigQueryConnectionOptions {
   provider: 'bigquery'
@@ -106,6 +106,25 @@ export interface BigQueryConnectionOptions {
   color?: string
   environment?: string
 }
+/**
+ * The credential a BigQuery request signs in with, which only main builds (docs/bigquery.md, Authentication): a key or
+ * federation configuration file's JSON (`file`), the Application Default Credentials file's (`adc`), the metadata
+ * server (`metadata`, ADC's last step), or emulator mode's `anonymous`. At most 64 KiB; never stored, logged or shown.
+ */
+export interface BigQueryCredentialMaterial { source: 'file' | 'adc' | 'metadata' | 'anonymous'; json?: string }
+/** What the backend's BigQuery connect takes: the options with main's credential material (sensitive). */
+export type BigQueryBackendConnectOptions = BigQueryConnectionOptions & { credential: BigQueryCredentialMaterial; nonInteractive?: boolean }
+/** The pre-connect methods' credential (bigquery.account, bigquery.projects): the renderer names the mode and, for a key
+ *  or configuration file, its reference; main adds the material. */
+export interface BigQueryCredentialParams { authentication: BigQueryAuthenticationMode; keyFile?: string; impersonateServiceAccount?: string }
+/** How a BigQuery principal was verified (BigQueryIdentity): its pin's kind. */
+export type BigQueryAccountKind = 'serviceAccount' | 'user' | 'computeEngine' | 'external' | 'aws' | 'externalUser' | 'impersonated' | 'emulator'
+/** bigquery.account: the account line (one visible line of at most 256 characters) and the impersonated service account. */
+export interface BigQueryAccount { kind: BigQueryAccountKind; account: string; impersonated?: string }
+/** One project from BigQuery's projects.list; `friendlyName` is one visible line of at most 256 characters. */
+export interface BigQueryProject { id: string; friendlyName?: string }
+/** A page of at most 1,000 projects and the token (at most 1,024 characters) for the next. */
+export interface BigQueryProjectList { projects: BigQueryProject[]; nextPageToken?: string }
 /** Connection options of any provider, discriminated on `provider` (missing: SQL Server). */
 export type ProviderConnectionOptions = ConnectionOptions | BigQueryConnectionOptions
 
@@ -501,7 +520,7 @@ export interface ExplorerNode {
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
 // NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER'] as const
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -532,11 +551,13 @@ export interface RpcMethods {
   'plans.parse': { params: { xml: string }; result: PlanDocument }
   'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
-  'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
+  'connections.connect': { params: ProviderConnectionOptions; result: ConnectionInfo }
   'connections.databases': { params: ConnectionOptions; result: DatabaseInfo[] }
   'connections.discover': { params: { scope: 'local' | 'network' }; result: { servers: DiscoveredServer[]; warning?: string } }
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
+  'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
+  'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -636,6 +657,11 @@ export interface AuthMethods {
 export interface ResultMemoryMethods {
   'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
 }
+/** BigQuery's pre-connect methods as main sends them: the renderer's parameters with the credential material main read. */
+export interface BigQueryMainMethods {
+  'bigquery.account': { params: BigQueryCredentialParams & { credential: BigQueryCredentialMaterial }; result: BigQueryAccount }
+  'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string; credential: BigQueryCredentialMaterial }; result: BigQueryProjectList }
+}
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
@@ -646,8 +672,8 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {
-  'connections.connect': { params: ConnectionOptions & { nonInteractive?: boolean }; result: ConnectionInfo }
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, BigQueryMainMethods, DebugMethods {
+  'connections.connect': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: ConnectionInfo }
   'connections.databases': { params: ConnectionOptions & { nonInteractive?: boolean }; result: DatabaseInfo[] }
 }
 export type BackendMethod = keyof BackendMethods
@@ -780,6 +806,9 @@ export interface VariaApi {
    *  history) and returns the library it wrote. */
   setConnectionEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
+  /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
+  bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
+  bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */

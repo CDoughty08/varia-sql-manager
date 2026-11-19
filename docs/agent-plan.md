@@ -20,6 +20,13 @@ updates the mock in the same PR when the design changes.
 - **Release gate**: agreed as proposed in Coordination with BigQuery (`agentEnabled`, `VARIA_AGENT_PREVIEW=1`, removed in
   AG-9).
 - **Create from… schedules** default to **Share**; the user can switch a schedule to Copy or Leave out.
+- **Agent service control: the Windows route, state only elsewhere.** AG-0 found `xp_servicecontrol` Start and Stop
+  refused on default installs: it runs as the engine's service account, which has no service rights. SSMS instead calls
+  the server machine's Service Control Manager as the user's own Windows account, so it works wherever that user is an
+  administrator on the server. Varia does the same: Start, Stop and Restart run from a **Windows client** against a
+  **Windows server**, as the signed-in Windows user (Service control in SQL rules). On macOS and Linux clients, and for
+  Linux servers, Managed Instance and failover cluster instances, Varia shows Agent's state only, with the actions
+  disabled and the reason. Other platforms are revisited later. This replaces the 2026-11-15 `xp_servicecontrol` design.
 
 ## Owner decisions (2026-11-16)
 
@@ -36,8 +43,8 @@ updates the mock in the same PR when the design changes.
 
 - **Plan home**: this docs page plus the mocks, in a docs-only PR (as docs/bigquery-plan.md), pushed only with mocks for
   all new and changed UI in Varia's style.
-- **Agent service control**: Start, Stop and Restart in 0.11.0 through `master.dbo.xp_servicecontrol`, behind a
-  confirmation, sysadmin and Windows servers only, hidden on Linux and Managed Instance. **Must ship** (lane AG-2).
+- **Agent service control**: Start, Stop and Restart in 0.11.0, behind a confirmation. **Must ship** (lane AG-2).
+  Revised on 2026-11-18: the Windows route, not `xp_servicecontrol` (above).
 - **Proxies and credentials**: full dialogs in 0.11.0: New and Properties for proxies (General, Principals, References),
   New Credential **and** Credential Properties (lane AG-8b).
 - **Log File Viewer**: master/detail (runs grid, the selected run's steps below, details pane); no tree mode in `GridView`.
@@ -880,7 +887,30 @@ the same `sp_update_alert`, under the alert's identity guard; the page shows 0 p
   actions; the secrets record (`LoginSecretsDto`, Password and OldPassword) gains a `Secret` field with its own length
   limit (a credential secret is not a login password), mirrored in the zod secrets schema; `Secret()` picks the limit by
   field.
-- **Service control**: `EXEC @rc = master.dbo.xp_servicecontrol @action, N'SQLServerAgent';` with `@action` in
+- **Service control** (revised 2026-11-18; the owner decision above). What changes from the design below:
+  - **Start and Stop are not SQL.** A backend `AgentServiceControl` calls the server machine's Service Control Manager
+    (`System.ServiceProcess.ServiceController`, Windows only) as the Varia process's Windows user, the way SSMS does. It
+    is the only call Varia makes to a server's operating system, and gets its own bullet in docs/architecture.md. The
+    machine is `SERVERPROPERTY('ComputerNamePhysicalNetBIOS')` and the service `SQLSERVERAGENT` or `SQLAgent$<instance>`
+    from `SERVERPROPERTY('InstanceName')`, both read on the connection and checked against strict patterns; nothing the
+    user types names a machine or service. Each call is bounded by `serviceStatementMs`, and the waits poll the
+    controller's status, bounded by `serviceWaitMs`.
+  - **Who may run it**: Windows decides, as in SSMS, not the SQL login, so sysadmin is no longer required. Refusals map
+    to values: access denied (Windows error 5) is `PERMISSION_DENIED`, "Starting and stopping SQL Server Agent needs
+    Windows administrator rights on <machine>"; an unreachable machine or service manager (RPC errors such as 1722, an
+    unknown host) is a new action code `SERVICE_UNREACHABLE`, not retryable, naming the machine; a missing service is
+    `NOT_FOUND`.
+  - **Where it is offered**: a Windows client, a Windows server, not Managed Instance, not `IsClustered`. Everywhere else
+    the three verbs stay in the menu, disabled with the reason ("Needs Varia on Windows", "On Linux, use systemctl on the
+    server", "Use Failover Cluster Manager for a clustered instance"), and the preflight refuses them `NOT_SUPPORTED`.
+  - **State stays SQL** on every platform: `xp_servicecontrol N'QueryState'` and `sys.dm_server_services`, as below.
+    `xp_servicecontrol` Start and Stop are dropped, so `LintExecutable` no longer admits `xp_servicecontrol` at all.
+  - **Tests**: an `IServiceControl` seam with an offline fake covers every refusal, the waits and the gates; the
+    Windows workflow runs the real controller against its local instance; the owner's test instance runs it locally
+    with `VARIA_TEST_SQL_AGENT_SERVICE=1`. A remote server is checked by hand before AG-2 merges.
+  - Kept as designed below: the confirmation and progress dialogs, the long-run rows, steps, limits and cleanup formula.
+
+  Original design (statement parts superseded): `EXEC @rc = master.dbo.xp_servicecontrol @action, N'SQLServerAgent';` with `@action` in
   `N'Start'`, `N'Stop'`, `N'QueryState'` as a parameter; `LintExecutable` allows exactly this positional shape, with
   `N'SQLServerAgent'` its only literal, beside the `EXEC @rc = msdb.dbo.<proc> @arg = @param` shape. `xp_servicecontrol` maps the constant `SQLServerAgent` to the
   connected instance's Agent (`SQLSERVERAGENT` or `SQLAgent$<instance>`), as the QueryState fact showed; the Windows CI job
@@ -1269,7 +1299,7 @@ CLAUDE.md requires. The **Shared files** column names files BigQuery lanes also 
 | AG-0a | **Done.** Foundations in new files only: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, `AgentSql.ReadProcedures`/`WriteProcedures` lists) with `tests/agent-catalog.test.ts` generating docs/sql-server-agent.md's reference part and `Agent/agent-catalog.json`; `backend/Varia.Backend/Agent/` with `AgentSql` and `AgentSql.LintRead`, `AgentReader` (not yet wired to a method), offline suites; `VARIA_TEST_SQL_AGENT`, the scratch prefix and sweep extension, the Agent live suite skeleton; CI `MSSQL_AGENT_ENABLED` and the Agent-up wait; AG-0's spikes on the owner's test instance (results in the PR and in docs/sql-server-agent.md) | — | Program.cs `offlineSuites`, `LiveGroups.Suites`, ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, CLAUDE.md's generated-files table (one row each) | M |
 | AG-0b | **Done.** `agent.profile` in the five places, the `agentRole` context keys, the release gate (Coordination with BigQuery) | AG-0a, **BQ-0 merged** | contracts.ts, validation.ts, methods.ts, preload, `SqlService.DispatchAsync`, Contracts.cs, context keys | S |
 | AG-1 | Object Explorer, as before (catalogue kinds, Agent node, folders, `explorer.agentService`, chips, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden, Ctrl+Q reveal), all behind the release gate | AG-0b; **before BQ-5** | explorer catalogue and its generated docs, live catalogue, icons, menus | M |
-| AG-2 | Job verbs from the tree (Start Job at Step dialog for the tree, Stop, Enable/Disable, Rename, Delete), `AgentSql.LintExecutable`, identity guard, msdb error mapping, Agent service Start / Stop / Restart, `agent-service.yml` | AG-1 | actions catalogue, ActionService | M |
+| AG-2 | Job verbs from the tree (Start Job at Step dialog for the tree, Stop, Enable/Disable, Rename, Delete), `AgentSql.LintExecutable`, identity guard, msdb error mapping, Agent service Start / Stop / Restart through the Windows route (state only elsewhere), `agent-service.yml` | AG-1 | actions catalogue, ActionService | M |
 | AG-3 | Job Activity Monitor (`agent.jobs`, LiveGrid, tiles, chips, filters, states) with the rethink's chevron (last run in place), double-click to open (hidden until AG-6a), bulk Enable, Disable, Start and Stop with one result per job; status-bar running job and Agent-stopped probe | AG-1 (AG-2 for actions) | live catalogue, status bar | M |
 | AG-4 | Script As for Job, Alert, Operator, ProxyAccount | AG-1; **before BQ-5** | scripting catalogue, `ScriptPipeline` | S |
 | AG-5a | Log File Viewer for cross-job history, unchanged (master/detail, `agent.history`, `agent.historyMessage`, Delete History) | AG-1, AG-2, AG-3 | live catalogue | M |
@@ -1329,6 +1359,6 @@ slow it down:
 
 ## Questions still open
 
-None blocking (the release gate and Share as the Create from… default were decided on 2026-11-18). AG-0's spikes and AG-1's platform-gate verification report back in their PRs. If service control cannot
-work on default virtual accounts or a named instance, or the Windows CI job cannot install SQL Server in a reasonable time,
-that comes back to the owner before AG-2 merges.
+None blocking (the release gate, Share as the Create from… default and the Windows service-control route were decided on
+2026-11-18). AG-1's platform-gate verification reports back in its PR. If the Windows CI job cannot install SQL Server in
+a reasonable time, that comes back to the owner before AG-2 merges.

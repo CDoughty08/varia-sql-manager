@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
-import { connectionOptionsSchema } from '../shared/connections'
+import { bigQueryAccountSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
@@ -33,11 +33,14 @@ export const requestSchemas = {
   'plans.parse': planParseSchema,
   'plans.estimate': estimatedPlanRequestSchema,
   'system.health': z.object({}).strict(),
-  'connections.connect': connectionOptionsSchema,
+  // Either engine's options; main adds BigQuery's credential material before sending (never from the renderer).
+  'connections.connect': providerConnectionOptionsSchema,
   'connections.databases': connectionOptionsSchema,
   'connections.preview': connectionOptionsSchema,
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
+  'bigquery.account': bigQueryCredentialParamsSchema,
+  'bigquery.projects': bigQueryProjectsParamsSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
@@ -76,11 +79,15 @@ const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.connect': z.object({
-    id: z.uuid(), server: z.string().max(256), database: z.string().max(128), serverVersion: z.string().max(256), generation: z.number().int().min(0),
+    // A BigQuery dataset name may be 1,024 characters; SQL Server's database names stay at 128.
+    id: z.uuid(), server: z.string().max(256), database: z.string().max(1024), serverVersion: z.string().max(256), generation: z.number().int().min(0),
     displayName: z.string().max(128).optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), commandTimeout: z.number().int().min(0).max(86400).optional(),
     productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.enum(providerIds).optional(),
     principalId: connectionPrincipalIdSchema.optional(), bindingRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
-  }).strict(),
+  }).strict().refine(value => value.providerId === 'bigquery' ? value.principalId?.startsWith('bigquery:') !== false : value.database.length <= 128 && !value.principalId?.startsWith('bigquery:'),
+    'A connection answer must match its provider.'),
+  'bigquery.account': bigQueryAccountSchema,
+  'bigquery.projects': bigQueryProjectListSchema,
   'language.status': languageStatusSchema,
   'language.complete': languageCompletionsSchema,
   'language.hover': languageHoverSchema,

@@ -67,13 +67,14 @@ import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
 import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
-import { userInfo } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import { maxClipboardText, type ApiResult, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { isBigQueryOptions } from '../shared/connections'
+import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionInfo, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -90,6 +91,8 @@ import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
 import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type WindowPlacement } from './window-state'
+import { BigQueryCredentials, BigQueryKeyFiles } from './bigquery-credentials'
+import { bigQueryEmulatorEndpoint } from './backend/spawn-spec'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -137,6 +140,11 @@ let sessionCheckpoint: SessionCheckpoint | undefined
 const connectionAuthentication = new ConnectionAuthenticationGuard()
 let credentialRequestsPending = () => false
 let connectionOpen: ConnectionOpenService | undefined
+// BigQuery's credential material (docs/bigquery.md, Authentication): key files by reference, and ADC found and read here.
+const bigQueryKeyFiles = new BigQueryKeyFiles()
+// BigQuery handles opened through the interim path below; BQ-2 moves them into ConnectionOpenService (targets, reuse, pins, receipts).
+const bigQueryHandles = new Set<string>()
+const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, { env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined })
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
@@ -319,6 +327,8 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   resultsJobs?.reset()
   connectionOpen?.reset({ replaceRenderer: true })
   if (!hotExitAvailable) connectionOpen?.retainTargets([])
+  // BigQuery handles (opened outside connectionOpen until BQ-2) end with the backend generation restarted or stopped below.
+  bigQueryHandles.clear()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -800,7 +810,7 @@ app.whenReady().then(async () => {
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
   loaded.catch(() => {})
-  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale() }), {
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale(), userData: app.getPath('userData') }), {
     appVersion: app.getVersion(),
     // The backend starts with the result memory limit as it is at each launch: its first launch waits for the settings
     // (a read of one small file). Changes after that go to the running backend (ResultMemoryLimit).
@@ -1046,7 +1056,23 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+      if (method === 'connections.connect' && isBigQueryOptions(validated as { provider?: string })) {
+        if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+        // Main adds the credential material the renderer never holds; the supervisor records the handle as BigQuery's.
+        const options = validated as BigQueryConnectionOptions
+        const answer = await backend.request('connections.connect', { ...options, credential: await bigQueryCredentials.material(options) })
+        let info: ConnectionInfo
+        try { info = validateResult('connections.connect', answer) as ConnectionInfo }
+        catch (error) {
+          // The backend opened a handle main will not hand out; release it rather than leave its client alive.
+          const id = (answer as { id?: unknown } | null)?.id
+          if (typeof id === 'string' && id.length <= 128) void backend.request('connections.disconnect', { connectionId: id }).catch(() => {})
+          throw error
+        }
+        bigQueryHandles.add(info.id)
+        return { ok: true, value: info }
+      }
       if (method === 'connections.connect') {
         if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
@@ -1066,6 +1092,15 @@ app.whenReady().then(async () => {
         })
         if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
         return { ok: true, value: outcome.value }
+      }
+      // BigQuery before connecting: main adds the credential material the renderer never holds.
+      if (method === 'bigquery.account' || method === 'bigquery.projects') {
+        const params = validated as RpcMethods['bigquery.projects']['params']
+        const credential = await bigQueryCredentials.material(params)
+        return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
+      }
+      if (method === 'connections.disconnect' && bigQueryHandles.delete((validated as { connectionId: string }).connectionId)) {
+        return { ok: true, value: await backend.request('connections.disconnect', validated as { connectionId: string }) }
       }
       if (method === 'connections.disconnect') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')

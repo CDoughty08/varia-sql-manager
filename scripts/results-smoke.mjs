@@ -1287,6 +1287,26 @@ try {
   await expect(keptGrid.locator(gridPart.sortButton)).toHaveCount(0)
   await rerenderLocal(localTable, { keepState: 'one', sortable: true })
   await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  // A fitted page (a list among other content) is as tall as its rows, as a card is, and keeps Save. A kept selection comes
+  // back over a table with fewer rows held to them, so Copy copies what is left rather than rows that are gone.
+  const fitOptions = { label: 'Local fit', preset: 'page', fit: true, maxRows: 20, keepState: 'fit' }
+  await mountLocal(localTable, fitOptions)
+  const fitGrid = localGrid(page, 'Local fit'), fitFrame = localGridFrame(page, 'Local fit')
+  const fitShown = async row => {
+    const box = await gridCell(fitGrid, row, 0).boundingBox(), view = await fitFrame.locator(gridPart.scroller).evaluate(element => ({ top: element.getBoundingClientRect().top, height: element.clientHeight }))
+    return !!box && box.y + box.height <= view.top + view.height + 0.5
+  }
+  await expect.poll(() => fitShown(2)).toBe(true)
+  expect(await fitFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  await gridCell(fitGrid, 2, 3).click()
+  await gridCell(fitGrid, 2, 3).click({ button: 'right' })
+  await expect(page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Save Results As…', exact: true })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await mountLocal({ columns: localTable.columns, rows: localTable.rows.slice(0, 1) }, fitOptions)
+  await expect(fitGrid).toHaveAttribute('aria-label', 'Local fit, 1 row, 4 columns')
+  await fitGrid.focus()
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('NULL')
   // A header wide enough for its sort button sorts by value from it, then descending.
   await mountLocal({ columns: [{ name: 'Name of the object shown' }, { name: 'Row count of the table', kind: 'number' }], rows: [['Orders', '1,200'], ['customers', '80'], ['Order Lines', '9000']] }, { label: 'Local header', preset: 'card' })
   const headerGrid = localGrid(page, 'Local header'), rowsHeader = headerGrid.getByRole('columnheader', { name: 'Row count of the table', exact: true })

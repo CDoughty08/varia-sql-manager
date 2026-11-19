@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { AdvancedConnectionOptions, BigQueryConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from './contracts'
-import { authenticationModes, bigQueryAuthenticationModes, requiresUser, showsIdentity, usesKeyFile, usesPassword } from './auth'
+import { authenticationModes, bigQueryAuthenticationModes, requiresUser, showsIdentity, usesKeyFile, usesPassword, type BigQueryAuthenticationMode } from './auth'
 import { environmentSchema } from './environments'
 import { normalizedProvider } from './providers'
 
@@ -74,6 +74,29 @@ export const bigQueryConnectionOptionsSchema = z.object({
   maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional()
 }).strict().refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), { error: issue => usesKeyFile((issue.input as BigQueryConnectionOptions).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' })
+const keyFileRule = { error: (issue: { input: unknown }) => usesKeyFile((issue.input as { authentication: BigQueryAuthenticationMode }).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' }
+/** bigquery.account's parameters (and bigquery.projects' with a page token): the mode and, for a key or configuration file,
+ *  its reference. Main adds the credential material; the renderer never sends it. */
+const bigQueryCredentialShape = {
+  authentication: z.enum(bigQueryAuthenticationModes), keyFile: z.uuid().optional(), impersonateServiceAccount: z.email().max(bigQueryLimits.serviceAccount).optional()
+}
+// A projects.list page token, as BigQueryLimits.CheckPageToken bounds it.
+const bigQueryPageToken = z.string().min(1).max(1024).regex(/^[^\p{Cc}]+$/u)
+export const bigQueryCredentialParamsSchema = z.object(bigQueryCredentialShape).strict()
+  .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
+export const bigQueryProjectsParamsSchema = z.object({ ...bigQueryCredentialShape, pageToken: bigQueryPageToken.optional() }).strict()
+  .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
+// One visible line, as BigQueryIdentity.Account writes it.
+const bigQueryLine = (max: number) => z.string().min(1).max(max).regex(/^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u)
+/** The pre-connect answers, checked in main before the renderer sees them (BigQueryContracts.cs bounds them the same). */
+export const bigQueryAccountSchema = z.object({
+  kind: z.enum(['serviceAccount', 'user', 'computeEngine', 'external', 'aws', 'externalUser', 'impersonated', 'emulator']), account: bigQueryLine(256),
+  impersonated: z.email().max(bigQueryLimits.serviceAccount).optional()
+}).strict()
+export const bigQueryProjectListSchema = z.object({
+  projects: z.array(z.object({ id: bigQueryProjectSchema, friendlyName: bigQueryLine(256).optional() }).strict()).max(1000),
+  nextPageToken: bigQueryPageToken.optional()
+}).strict()
 /** Connection options of any provider; a missing `provider` is SQL Server. */
 export const providerConnectionOptionsSchema = z.union([connectionOptionsSchema, bigQueryConnectionOptionsSchema])
 export const isBigQueryOptions = (options: { readonly provider?: string }): options is BigQueryConnectionOptions => options.provider === 'bigquery'

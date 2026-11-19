@@ -1,0 +1,1 @@
+{"azp":"764086051850-example.apps.googleusercontent.com","aud":"764086051850-example.apps.googleusercontent.com","sub":"104857600000000000001","scope":"openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform","exp":"1763341200","expires_in":"3599","email":"ada@example.com","email_verified":"true","access_type":"offline"}
