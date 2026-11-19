@@ -7,6 +7,7 @@
 // on, or the system colors under forced colors, as the DOM resolves them. Text on the canvas is drawn with fillText; the
 // tooltip and the crosshair's announcement are Text nodes.
 import type { LiveProbeId, LiveUnit } from '../../../shared/live/catalog'
+import type { LocalTableData } from '../../../shared/results/local-table'
 import { chartCategorical, type ChartSeriesColor, type ChartSurface } from '../../../shared/theme/charts'
 import { typeScale } from '../../../shared/theme/metrics'
 import type { ColorKey } from '../../../shared/theme/registry'
@@ -105,6 +106,13 @@ interface Span { readonly start: number; readonly span: number; readonly first: 
 interface Layout extends Span { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number; readonly min: number; readonly max: number }
 interface Crosshair { readonly time: number; readonly from: 'pointer' | 'key' | 'link' }
 export interface ChartTableRow { readonly time: string; readonly values: readonly string[]; readonly gapBefore: boolean }
+/** "View as table"'s rows as the grid shows, copies and saves them: the time (marked after a gap), then each series' value. */
+export function chartTable(series: readonly ChartSeries[], rows: readonly ChartTableRow[]): LocalTableData {
+  return {
+    columns: [{ name: 'Time' }, ...series.map(entry => ({ name: entry.label, kind: 'number' as const }))],
+    rows: rows.map(row => [row.gapBefore ? `${row.time} (after a gap)` : row.time, ...series.map((_, column) => row.values[column] ?? null)])
+  }
+}
 export interface ChartStats { frames: number; draws: number }
 
 export function browserChartEnvironment(): ChartEnvironment {

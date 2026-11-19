@@ -18,9 +18,10 @@
 .comparison-pairing { flex: none; max-height: 25%; overflow: auto; }
 .comparison-pairing > button { display: block; width: 100%; text-align: left; font-size: inherit; }
 .comparison-pairing > button[aria-pressed="true"] { outline: 1px solid var(--varia-focusBorder); }
-.comparison-details { flex: 0 0 220px; max-height: 40%; min-height: 120px; overflow: auto; padding: var(--varia-space-1) var(--varia-space-2); border-top: 1px solid var(--varia-panel-border); user-select: text; }
-.comparison-details p { margin: var(--varia-space-1) 0; color: var(--varia-descriptionForeground); }
-.comparison-details table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.comparison-details th, .comparison-details td { padding: var(--varia-space-1); text-align: left; vertical-align: top; overflow-wrap: anywhere; border-bottom: 1px solid var(--varia-panel-border); }
-.comparison-details [data-changed] { background: var(--varia-list-inactiveSelectionBackground); }
-.comparison-details summary { cursor: pointer; padding: var(--varia-space-1) 0; }
+/* Differences: notes above each grid (LocalGrid, page), which share what the notes leave; the statements grid shows on
+   demand and the pane grows to hold both. */
+.comparison-details { display: flex; flex: 0 0 300px; flex-direction: column; min-height: 220px; overflow: auto; padding: var(--varia-space-1) var(--varia-space-2); border-top: 1px solid var(--varia-panel-border); }
+.comparison-details[data-statements] { flex-basis: 520px; }
+.comparison-details p { flex: none; margin: var(--varia-space-1) 0; color: var(--varia-descriptionForeground); }
+.comparison-details > .local-grid { flex: 1; min-height: 120px; }
+.comparison-disclosure { display: inline-flex; flex: none; align-self: flex-start; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-1) var(--varia-space-1) 0; font-size: inherit; }

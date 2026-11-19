@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
-import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView, pane, selectOpenDocument } from './fixtures/ui.mjs'
+import { backendReady, localGrid, planCanvas, planViewer, queryBarButton, documentTabs, outputView, pane, selectOpenDocument } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -60,7 +60,7 @@ try {
     await expect(firstCell).toHaveText(/^\d+$/)
     const retainedValue = await firstCell.innerText()
     await outputView(page, 'Client Statistics').click()
-    const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })
+    const statistics = localGrid(page, 'Client statistics comparison')
     await expect(statistics.getByRole('columnheader', { name: 'Run 1', exact: true })).toBeVisible()
     await text('SELECT name FROM sys.objects;')
     await page.keyboard.press(`${mod}+l`)

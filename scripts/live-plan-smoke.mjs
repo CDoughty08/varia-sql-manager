@@ -4,7 +4,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkLargePlan } from './fixtures/large-plan.mjs'
 import { checkCaptureRecovery } from './fixtures/capture-recovery.mjs'
-import { backendReady, documentTabs, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, localGrid, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -90,8 +90,10 @@ try {
   await documentTabs(page).getByRole('tab', { name: origin, exact: true }).click()
   step = 'client statistics'
   await outputView(page, 'Client Statistics').click()
-  const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })
-  await expect(statistics.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Server round trips', exact: true }) }).getByRole('cell').first()).toHaveText('1')
+  const statistics = localGrid(page, 'Client statistics comparison')
+  // The report's fifth row (the provider's order): its Run column.
+  await expect(gridCell(statistics, 4, 0)).toHaveText('Server round trips')
+  await expect(gridCell(statistics, 4, 1)).toHaveText('1')
   await expect(page.getByLabel('Statistics execution').getByRole('option')).toContainText(['live plan'])
   // Cancel a later long statement: earlier completed plans and every GO repetition remain distinct.
   step = 'cancelling repeated batches'

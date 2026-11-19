@@ -1,6 +1,7 @@
 import type { QueryResult } from '../../../shared/contracts'
 import type { ClientStatisticsSample } from '../../../shared/client-statistics'
-import { clientStatisticsHistoryLimit } from '../../../shared/client-statistics'
+import { clientStatisticsHistoryLimit, providerMetricDefinitions } from '../../../shared/client-statistics'
+import type { LocalTableData } from '../../../shared/results/local-table'
 import { SnapshotStore } from '../core/store'
 
 export interface StatisticsRun {
@@ -49,4 +50,32 @@ export function statisticsPeers(runs: readonly StatisticsRun[], selected: Statis
 export function metricAverage(runs: readonly StatisticsRun[], value: (sample: ClientStatisticsSample) => number | undefined): number | undefined {
   const values = runs.flatMap(run => { const n = run.sample && value(run.sample); return n === undefined ? [] : [n] })
   return values.length ? values.reduce((sum, n) => sum + n / values.length, 0) : undefined
+}
+
+const number = (value: number | undefined) => value === undefined ? 'Unavailable' : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+/** The report's rows, in the provider's order, then the backend's wall time. */
+const measurements: readonly { readonly label: string; readonly definition: string; readonly value: (sample: ClientStatisticsSample) => number | undefined }[] = [
+  ...providerMetricDefinitions.map(([key, label, definition]) => ({ label, definition, value: (sample: ClientStatisticsSample) => sample.counters[key] })),
+  { label: 'Collection wall time (ms)', definition: 'Backend wall time from just before the first batch to after all readers close. Includes server waits, provider calls, value formatting and result storage; excludes login, setup, observer collection, IPC delivery and rendering.', value: sample => sample.collectionElapsedMs }
+]
+/** The run before `selected` in its context (connection, session, database, plan capture), finished or not. */
+export const previousRun = (runs: readonly StatisticsRun[], selected: StatisticsRun): StatisticsRun | undefined =>
+  runs.filter(run => run.scope === selected.scope && run.sequence < selected.sequence && run.status !== 'running').at(-1)
+/**
+ * The selected run against the previous attempt in its context and its peers' mean, as the Client Statistics grid shows,
+ * copies and saves it (display text: "Unavailable" where a measurement is missing). Its rows are an ordered report.
+ */
+export function statisticsTable(runs: readonly StatisticsRun[], selected: StatisticsRun): LocalTableData {
+  const peers = statisticsPeers(runs, selected), previous = previousRun(runs, selected)
+  return {
+    columns: [
+      { name: 'Measurement' }, { name: `Run ${selected.sequence}`, kind: 'number' }, { name: previous ? `Previous (run ${previous.sequence})` : 'Previous', kind: 'number' },
+      { name: 'Change', kind: 'number' }, { name: `Average (${peers.length} runs)`, kind: 'number' }, { name: 'Definition' }
+    ],
+    rows: measurements.map(row => {
+      const current = selected.sample && row.value(selected.sample), before = previous?.sample && row.value(previous.sample)
+      const change = current === undefined || before === undefined ? undefined : current - before
+      return [row.label, number(current), number(before), change === undefined ? 'Unavailable' : `${change > 0 ? '+' : ''}${number(change)}`, number(metricAverage(peers, row.value)), row.definition]
+    })
+  }
 }

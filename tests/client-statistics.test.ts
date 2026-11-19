@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { QueryResult } from '../src/shared/contracts'
-import { clientStatisticsSchema } from '../src/shared/client-statistics'
+import { clientStatisticsSchema, providerMetricDefinitions } from '../src/shared/client-statistics'
 import { validateRequest } from '../src/main/validation'
-import { ClientStatisticsService, metricAverage, statisticsPeers } from '../src/renderer/src/statistics/ClientStatisticsService'
+import { ClientStatisticsService, metricAverage, statisticsPeers, statisticsTable } from '../src/renderer/src/statistics/ClientStatisticsService'
 
 const summary = (bytes: number, status: QueryResult['status'] = 'completed') => ({ status, clientStatistics: { counters: { BytesSent: bytes }, collectionElapsedMs: bytes } }) as QueryResult
 describe('client statistics history', () => {
@@ -56,7 +56,7 @@ describe('client statistics history', () => {
     service.begin('a', '1', 'c', 'master', false); service.finish('a', '1', { status: 'completed', clientStatistics: { counters: {} } } as QueryResult)
     expect(metricAverage(service.getSnapshot().a, sample => sample.counters.BytesSent)).toBe(0)
   })
-})
+
 describe('statistics wire boundaries', () => {
   it('accepts partial counter sets and refuses unknown, unsafe, negative and nonnumeric metrics', () => {
     expect(clientStatisticsSchema.parse({ counters: { BytesSent: 0 } })).toEqual({ counters: { BytesSent: 0 } })
@@ -68,5 +68,24 @@ describe('statistics wire boundaries', () => {
     expect(validateRequest('query.execute', args)).not.toHaveProperty('includeClientStatistics')
     expect(validateRequest('query.execute', { ...args, includeClientStatistics: true })).toMatchObject({ includeClientStatistics: true })
     expect(() => validateRequest('query.execute', { ...args, includeClientStatistics: 'true' })).toThrow()
+  })
+})
+  it('builds the grid\'s ordered report: the selected run, the previous in its context, the change and the mean', () => {
+    const service = new ClientStatisticsService()
+    for (const [id, bytes] of [['1', 1000], ['2', 1500]] as const) { service.begin('a', id, 'connection', 'master', false); service.finish('a', id, summary(bytes)) }
+    const runs = service.getSnapshot().a, table = statisticsTable(runs, runs[1])
+    expect(table.columns.map(column => column.name)).toEqual(['Measurement', 'Run 2', 'Previous (run 1)', 'Change', 'Average (2 runs)', 'Definition'])
+    expect(table.columns.slice(1, 5).every(column => column.kind === 'number')).toBe(true)
+    // The provider's order, then the backend's wall time: a report, which the grid shows unsorted.
+    expect(table.rows.map(row => row[0])).toEqual([...providerMetricDefinitions.map(([, label]) => label), 'Collection wall time (ms)'])
+    const bytes = table.rows[0]
+    expect(bytes.slice(1, 5)).toEqual([(1500).toLocaleString(), (1000).toLocaleString(), `+${(500).toLocaleString()}`, (1250).toLocaleString()])
+    expect(bytes[5]).toBe(providerMetricDefinitions[0][2])
+    // A counter neither run reported is Unavailable throughout, never zero.
+    expect(table.rows[1].slice(1, 5)).toEqual(['Unavailable', 'Unavailable', 'Unavailable', 'Unavailable'])
+    // The first run has no previous run in its context.
+    const first = statisticsTable(runs, runs[0])
+    expect(first.columns[2].name).toBe('Previous')
+    expect(first.rows[0].slice(2, 4)).toEqual(['Unavailable', 'Unavailable'])
   })
 })

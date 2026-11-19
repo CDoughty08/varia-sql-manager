@@ -4,7 +4,7 @@ import { liveUnits, type LiveProbeId } from '../src/shared/live/catalog'
 import { chartSeriesColors } from '../src/shared/theme/charts'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpan, niceCeiling } from '../src/renderer/src/live/chart-format'
-import { ChartLink, ChartView, chartColor, chartLimits, forcedColorsDashes, probeCurrent, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
+import { ChartLink, ChartView, chartColor, chartLimits, chartTable, forcedColorsDashes, probeCurrent, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
 import type { LiveSnapshot, PageVisibility } from '../src/renderer/src/live/LiveService'
 import { MetricRing, ringGap } from '../src/renderer/src/live/ring'
 import { FakeCanvas, FakeChartEnvironment, fakeOwner, type FakeElement } from './fixtures/fake-canvas'
@@ -448,6 +448,14 @@ describe('ChartView', () => {
     view.setWindow({ spanMs: 10_000, end: start - 100_000 })
     expect(view.table().rows.map(row => row.time)).toEqual(Array.from({ length: 11 }, (_, k) => formatClock(start - 100_000 - k * 1000)))
     expect(chart({ ringValue: undefined }).view.table()).toEqual({ rows: [], total: 0 })
+  })
+  it('gives View as table\'s grid the time and one number column a series, a gap marked on its row', () => {
+    const series: ChartSeries[] = [{ index: 1, label: 'Wave', color: 'charts.blue' }, { index: 2, label: 'Rate', color: 'charts.orange' }]
+    const table = chartTable(series, [{ time: 'now', values: ['5 %', '2/s'], gapBefore: true }, { time: '0:01 ago', values: ['4 %'], gapBefore: false }])
+    expect(table.columns).toEqual([{ name: 'Time' }, { name: 'Wave', kind: 'number' }, { name: 'Rate', kind: 'number' }])
+    // A row is as wide as the columns, whatever the sample gave: a value it lacks is NULL, never a shifted column.
+    expect(table.rows).toEqual([['now (after a gap)', '5 %', '2/s'], ['0:01 ago', '4 %', null]])
+    expect(chartTable([], []).columns).toEqual([{ name: 'Time' }])
   })
   it('labels expanded charts with values and times', () => {
     const ring = ringOf(30, 1, index => index)

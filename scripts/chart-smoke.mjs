@@ -10,7 +10,7 @@
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { backendReady, chartLegend, chartSwatchLines, chartTableRegion, chartTooltip, part, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, chartLegend, chartSwatchLines, chartTable, chartTableCaption, chartTooltip, gridCell, gridCellSelector, gridPart, part, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
@@ -27,6 +27,7 @@ page.on('pageerror', error => failures.push(error.message))
 
 const live = (method, ...args) => page.evaluate(([name, values]) => window.__variaLive[name](...values), [method, args])
 const chart = key => live('chart', key)
+const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText())
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 // A chart renames itself at most once per chartLimits.labelMs (5 s), so a poll on its name waits past that; the fixture's
 // default (5 s off Windows) raced it on a slow Linux runner.
@@ -183,56 +184,60 @@ try {
   console.log('Pointer crosshair passed: the tooltip follows the pointer, stays under a pointer held still as the window moves, stays inside a narrow plot, and goes when the pointer leaves.')
 
   step = 'table'
+  // View as table is the results grid (LocalGrid, card) in the plot's place: a new table each tick, its selection kept.
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
   await expect(box.getByRole('button', { name: 'View as table', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  const table = box.getByRole('table')
-  await expect(table.locator('caption')).toHaveText(/^Synthetic metrics: \d+ samples, newest first$/)
-  await expect(table.getByRole('columnheader')).toHaveText(['Time', 'Wave'])
-  await expect(table.locator('tbody tr').first().locator('th')).toHaveText('now')
-  // The table takes the plot's place in the fixed box and stays filled tick after tick, inside the box.
+  const table = chartTable(box), caption = chartTableCaption(box)
+  await expect(caption).toHaveText(/^Synthetic metrics: \d+ samples, newest first$/)
+  await expect(table).toHaveAttribute('aria-label', /^Synthetic metrics table, \d+ rows?, 2 columns$/)
+  await expect(table.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Time', 'Wave'])
+  await expect(gridCell(table, 0, 0)).toHaveText('now')
   await expect(canvas).toBeHidden()
-  expect(await table.locator('thead th').first().evaluate(element => getComputedStyle(element).textAlign)).toBe('left')
+  // Ctrl+A before the ticks: the selection lasts through the tables each tick swaps in.
+  await gridCell(table, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  // The grid takes the plot's place in the fixed box, as many rows tall as fit, and stays filled tick after tick.
   const boxBounds = await box.boundingBox()
+  const values = new Set()
   for (let sample = 0; sample < 10; sample++) {
-    const seen = await box.evaluate((element, wrapSelector) => {
-      const wrap = element.querySelector(wrapSelector).getBoundingClientRect()
-      return { rows: element.querySelectorAll('table tbody tr').length, caption: element.querySelector('table caption').textContent, bottom: wrap.bottom }
-    }, part.chartTableWrap)
+    const seen = await box.evaluate((element, [wrapSelector, captionSelector, frameSelector, newest]) => {
+      const wrap = element.querySelector(wrapSelector).getBoundingClientRect(), frame = element.querySelector(frameSelector).getBoundingClientRect()
+      return { label: element.querySelector('[role="grid"]').getAttribute('aria-label'), caption: element.querySelector(captionSelector).textContent, value: element.querySelector(newest)?.textContent, bottom: wrap.bottom, frameBottom: frame.bottom }
+    }, [part.chartTableWrap, part.chartTableCaption, part.localGrid, gridCellSelector(0, 1)])
     expect(seen.caption).toMatch(/^Synthetic metrics: (\d+ of )?\d+ samples, newest first$/)
-    expect(seen.rows).toBeGreaterThan(5)
-    expect(seen.rows).toBeLessThanOrEqual(120)
+    const rows = Number(/, (\d+) rows?,/.exec(seen.label)?.[1])
+    expect(rows).toBeGreaterThan(5)
+    expect(rows).toBeLessThanOrEqual(120)
+    values.add(seen.value)
     expect(seen.bottom).toBeLessThanOrEqual(boxBounds.y + boxBounds.height + 1)
+    expect(seen.frameBottom).toBeLessThanOrEqual(seen.bottom + 1)
+    // No more than a row's height (and a scroll bar's) left empty under it once the samples outnumber what fits.
+    expect(seen.bottom - seen.frameBottom).toBeLessThan(20 + 20)
     await sleep(150)
   }
-  // The caption takes one line across the plot's width, and the header stays in view as the rows scroll.
-  const region = chartTableRegion(box)
-  const layout = await region.evaluate(element => {
-    const caption = element.querySelector('caption'), header = element.querySelector('thead th')
-    const lines = caption.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(caption).lineHeight)
-    element.scrollTop = element.scrollHeight
-    return { lines, scrolled: element.scrollTop, top: element.getBoundingClientRect().top, header: header.getBoundingClientRect().top, wide: element.querySelector('table').getBoundingClientRect().width / element.clientWidth }
-  })
-  expect(layout.lines).toBeLessThan(1.5)
-  expect(layout.wide).toBeGreaterThan(0.99)
-  expect(layout.scrolled).toBeGreaterThan(50)
-  expect(Math.abs(layout.header - layout.top)).toBeLessThan(2)
-  // Shift+Tab from the toggle reaches the scroll box, ringed like every other control.
+  // The newest value follows the ticks (the synthetic wave moves on each sample).
+  if (values.size < 2) await expect.poll(() => table.locator(gridCellSelector(0, 1)).textContent(), { timeout: 10_000 }).not.toBe([...values][0])
+  // The caption takes one line across the plot's width.
+  expect(await caption.evaluate(element => element.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(element).lineHeight))).toBeLessThan(1.5)
+  // Ctrl+Shift+C copies the kept selection of the latest table, with headers, as a results grid copies.
+  await page.keyboard.press('Control+Shift+C')
+  const eol = process.platform === 'win32' ? '\r\n' : '\n'
+  await expect.poll(async () => (await clipboard()).split(eol).slice(0, 2).join('|')).toMatch(/^Time\tWave\|now\t\d/)
+  expect((await clipboard()).split(eol).length).toBeGreaterThan(6)
+  // Shift+Tab from the toggle reaches the grid.
   await box.getByRole('button', { name: 'View as table', exact: true }).focus()
   await page.keyboard.press('Shift+Tab')
-  await expect(region).toBeFocused()
-  const ring = await region.evaluate(element => { const style = getComputedStyle(element); return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor } })
-  const focusBorder = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.color = 'var(--varia-focusBorder)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color })
-  expect(ring).toEqual({ style: 'solid', width: '2px', color: focusBorder })
+  await expect(table).toBeFocused()
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
   await expect(table).toHaveCount(0)
   await expect(canvas).toBeVisible()
-  console.log('Table passed: the window\'s samples, newest first, in the plot\'s place and filled on every tick, with a one-line caption, a header that stays and a themed focus ring.')
+  console.log('Table passed: the window\'s samples, newest first, as a results grid in the plot\'s place, a new table each tick with its selection kept, copied with headers.')
 
   step = 'table rows'
   const capped = await live('mountChart', id, { series: [1], max: 100, spanMs: 10_000, width: 360, height: 200, tableShown: true, tableRows: 7 })
   const cappedBox = page.locator(`[data-chart-test="${capped}"]`)
-  await expect(cappedBox.getByRole('table').locator('caption')).toHaveText(/^Synthetic metrics: 7 of \d+ samples, newest first$/)
-  await expect(cappedBox.getByRole('table').locator('tbody tr')).toHaveCount(7)
+  await expect(chartTableCaption(cappedBox)).toHaveText(/^Synthetic metrics: 7 of \d+ samples, newest first$/)
+  await expect(chartTable(cappedBox)).toHaveAttribute('aria-label', 'Synthetic metrics table, 7 rows, 2 columns')
   await live('unmountChart', capped)
   console.log('Table rows passed: tableRows caps the table.')
 
@@ -243,10 +248,10 @@ try {
   await expect(drivenBox.locator('canvas')).toBeVisible()
   await expect(drivenBox.getByRole('button')).toHaveCount(0)
   await live('updateChart', driven, { tableShown: true })
-  await expect(drivenBox.getByRole('table').locator('caption')).toHaveText(/^Synthetic metrics: (\d+ of )?\d+ samples, newest first$/)
+  await expect(chartTableCaption(drivenBox)).toHaveText(/^Synthetic metrics: (\d+ of )?\d+ samples, newest first$/)
   await expect(drivenBox.locator('canvas')).toBeHidden()
   await live('updateChart', driven, { tableShown: false })
-  await expect(drivenBox.getByRole('table')).toHaveCount(0)
+  await expect(chartTable(drivenBox)).toHaveCount(0)
   console.log('Table from outside passed: no button, and the table follows the tableShown prop.')
 
   step = 'props'
@@ -272,9 +277,9 @@ try {
   await live('setUserPaused', id, true)
   await expect.poll(async () => (await chart(key)).label, labelSettles).toMatch(/ from \d\d:\d\d:\d\d to \d\d:\d\d:\d\d$/)
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
-  await expect(table.locator('tbody tr').first().locator('th')).toHaveText(/^\d\d:\d\d:\d\d$/)
+  await expect(gridCell(table, 0, 0)).toHaveText(/^\d\d:\d\d:\d\d$/)
   await live('setUserPaused', id, false)
-  await expect(table.locator('tbody tr').first().locator('th')).toHaveText('now')
+  await expect(gridCell(table, 0, 0)).toHaveText('now')
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
   await expect.poll(async () => (await chart(key)).label, labelSettles).toMatch(/ over the last 10 seconds$/)
   console.log('Stale passed: paused, the chart names its window by the clock, and says "now" again once samples arrive.')

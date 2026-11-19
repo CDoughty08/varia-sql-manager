@@ -251,10 +251,11 @@ export const part = {
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
   // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
-  // status region says the same), the legend's line samples, and the scroll box that holds View as table.
+  // status region says the same), the legend's line samples, and View as table's box (caption and grid) and caption.
   chartTooltip: '.live-chart-tip',
   chartSwatch: '.live-chart-swatch',
   chartTableWrap: '.live-chart-table-wrap',
+  chartTableCaption: '.live-chart-table-caption',
   // Restore Database's Backup Timeline (src/renderer/src/restore/BackupTimeline.tsx): a backup's mark on the track (full,
   // differential or log, by kind) and the legend's samples, which draw the same shapes.
   restoreTimelineFull: '.restore-timeline-track .restore-timeline-full',
@@ -1097,5 +1098,7 @@ export const chartTooltip = box => box.locator(part.chartTooltip)
 /** The legend, named after the chart's title: shown only for two or more series. */
 export const chartLegend = box => box.getByRole('list', { name: / series$/ })
 export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('line')
-/** View as table's scroll box, a region named after the chart's title. */
-export const chartTableRegion = box => box.getByRole('region', { name: / table$/ })
+/** View as table's grid (LocalGrid, card), named after the chart's title ("Synthetic metrics table, 12 rows, 2 columns"). */
+export const chartTable = box => box.getByRole('grid', { name: / table(?:, |$)/ })
+/** The line above it: how many of the window's samples it lists. */
+export const chartTableCaption = box => box.locator(part.chartTableCaption)
