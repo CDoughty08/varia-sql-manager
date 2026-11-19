@@ -301,14 +301,21 @@ internal static partial class LiveSql
                 if (For(probe.Id, band) is { } query) yield return query;
     }
 
-    private static readonly string[] Builtins = [.. CatalogSql.Builtins, "DB_NAME(", "DB_ID(", "OBJECT_ID(", "FILE_NAME(", "FILE_ID(", "INDEXPROPERTY(", "COLUMNPROPERTY(", "SCHEMA_ID("];
+    private static readonly string[] Builtins = [.. CatalogSql.Builtins, "DB_NAME(", "DB_ID(", "OBJECT_ID(", "FILE_NAME(", "FILE_ID(", "INDEXPROPERTY(", "COLUMNPROPERTY(", "SCHEMA_ID(",
+        "IDENT_CURRENT(", "IDENT_SEED(", "IDENT_INCR(", "TYPE_ID(", "TYPEPROPERTY(", "STATS_DATE(", "FILEGROUP_NAME(", "FILEGROUP_ID(", "FILEPROPERTY(", "FILEPROPERTYEX(",
+        "INDEXKEY_PROPERTY(", "DATABASE_PRINCIPAL_ID(", "USER_ID(", "SUSER_ID(", "SUSER_SID("];
+    // COL_LENGTH stays allowed: the Activity Monitor's capability probe asks it of a system view, which takes no lock.
     /// <summary>The built-ins as words, so a space before the parenthesis hides none (OBJECTPROPERTY also covers OBJECTPROPERTYEX).</summary>
     private static readonly (string Name, Regex Pattern)[] BuiltinPatterns = [.. Builtins.Select(builtin => (builtin.TrimEnd('('),
         new Regex(@"\b" + Regex.Escape(builtin.TrimEnd('(')) + (builtin.EndsWith('(') ? @"\s*\(" : ""), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))];
 
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
-    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|MAXRECURSION)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
+    /// <summary>Functions that read the server's files, any path a UNC share included, which reaches another host as OPENROWSET
+    /// would; or the log, which fn_dump_dblog reads through a scheduler it leaves behind.</summary>
+    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file|fn_dblog|fn_dblog_xtp|fn_full_dblog|fn_dump_dblog|dm_os_enumerate_filesystem|dm_os_file_exists)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ServerFiles();
     /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
     /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
     [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
@@ -377,6 +384,7 @@ internal static partial class LiveSql
         foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
         if (Unprintable().IsMatch(code)) problems.Add("has a character outside printable ASCII in its code");
         if (FourPartName().IsMatch(code)) problems.Add("reads a four-part name through a linked server");
+        foreach (Match match in ServerFiles().Matches(code)) problems.Add("reads server files through " + match.Value);
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");
         if (code.Contains("@@SPID", StringComparison.OrdinalIgnoreCase) && !text.EndsWith(Session, StringComparison.Ordinal) && !text.EndsWith(SsisSession, StringComparison.Ordinal))

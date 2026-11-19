@@ -433,7 +433,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   after the prologue, only the statement kinds SELECT, WITH, DECLARE and IF/ELSE/BEGIN … END, and no number holding a
   letter but a hex literal (T-SQL reads `1DELETE` as 1 and DELETE, where a regex word boundary sees one word), no code
   character outside printable ASCII (SQL Server reads U+200B as whitespace, .NET's `\s` does not), no four-part
-  (linked-server) name and no locking table hint. Live Plan's `query.plan.operators`
+  (linked-server) name, no locking table hint or MAXRECURSION, and no function that reads the server's files or log
+  (`fn_xe_file_target_read_file`, `fn_dump_dblog` and kin, which reach a UNC share as OPENROWSET would). Live Plan's `query.plan.operators`
   probe (source `query.plan`, run by `Plans/LivePlanSampler.cs` on the server pool) takes its SQL from
   `Plans/LivePlanSql.cs`: one text per permission scope (Azure SQL Database, SQL Server 2022 and later, older versions and
   Managed Instance), each with `LiveSql.UncommittedPrologue` and its permission check in the same batch, held to `LiveSql`'s

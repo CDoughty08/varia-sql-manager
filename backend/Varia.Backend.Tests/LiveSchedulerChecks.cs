@@ -96,6 +96,19 @@ internal static class LiveSchedulerChecks
         ("exclusive lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (TABLOCKX);"),
         ("update lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (UPDLOCK, HOLDLOCK);"),
         ("exclusive row lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (XLOCK);"),
+        ("table lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (TABLOCK);"),
+        ("page lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (PAGLOCK);"),
+        ("serializable hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (SERIALIZABLE);"),
+        ("repeatable read hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (REPEATABLEREAD);"),
+        ("read committed lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (READCOMMITTEDLOCK);"),
+        ("unbounded recursion", "WITH r AS (SELECT 1 AS a UNION ALL SELECT a + 1 FROM r) SELECT a FROM r OPTION (MAXRECURSION 0);"),
+        ("name-resolving built-ins", "SELECT IDENT_CURRENT(N'dbo.t') AS i, TYPE_ID(N'int') AS t;"),
+        ("statistics date", "SELECT STATS_DATE (1, 1) AS s;"),
+        ("principal id", "SELECT DATABASE_PRINCIPAL_ID(N'x') AS p, SUSER_SID(N'x') AS s;"),
+        ("xel file over a share", "SELECT f.event_data FROM sys.fn_xe_file_target_read_file(N'\\\\h\\s\\x*.xel', NULL, NULL, NULL) AS f;"),
+        ("trace file", "SELECT t.TextData FROM sys.fn_trace_gettable(N'\\\\h\\s\\t.trc', 1) AS t;"),
+        ("file system", "SELECT f.full_filesystem_path FROM sys.dm_os_enumerate_filesystem(N'\\\\h\\s\\', N'*') AS f;"),
+        ("log dump", "SELECT d.[Current LSN] FROM sys.fn_dump_dblog(NULL, NULL, N'DISK', 1, N'x') AS d;"),
         ("fetch from a cursor", "SELECT 1 AS a; FETCH NEXT FROM c;"),
         ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")
     ];
@@ -226,7 +239,10 @@ internal static class LiveSchedulerChecks
             "SELECT 1 AS [1DELETE], N'SET 1e1EXEC' AS b;",
             "SELECT a.id FROM (SELECT s.session_id AS id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id DESC OFFSET @tail0 ROWS FETCH NEXT 1 ROWS ONLY) AS a;",
             "SELECT s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id OFFSET 0 ROW FETCH FIRST @take ROW ONLY;",
-            "SELECT 0X0A AS a,N'​ é' AS b, o.name FROM master.sys.objects AS o WITH (NOLOCK) WHERE o.object_id > 0;"
+            "DECLARE @x xml = N'<i>1</i>'; SELECT n.c.value(N'.', N'int') AS v, t.c.query(N'.').value(N'.', N'int') AS w FROM @x.nodes(N'/i') AS n(c) CROSS APPLY @x.nodes(N'/i') AS t(c);",
+            "SELECT o.name FROM master.sys.objects AS o JOIN master..sysobjects AS s ON s.id = o.object_id ORDER BY o.name;",
+            "SELECT CASE WHEN COL_LENGTH(N'sys.dm_exec_query_stats', N'total_spills') IS NULL THEN 0 ELSE 1 END AS spills;",
+            "SELECT 0X0A AS a, N'​ é' AS b, o.name FROM master.sys.objects AS o WITH (NOLOCK) WHERE o.object_id > 0;"
         }.Where(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text).Count != 0).ToList();
         check(missed.Count == 0 && good.Count == 0,
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
@@ -250,6 +266,9 @@ internal static class LiveSchedulerChecks
         var planMissed = LiveLintNearMisses.Where(miss => LivePlanSql.Lint(LivePlanSql.Server.Replace("SELECT CAST(1 AS int);", miss.Statement, StringComparison.Ordinal)).Count == 0)
             .Select(miss => miss.Name).ToList();
         check(planMissed.Count == 0, "the Live Plan lint refuses a number glued to a word and every statement kind but a read's, as the live lint does: " + string.Join(", ", planMissed));
+        // The live table suite runs only with scratch databases, but its texts (the one OFFSET … FETCH caller) are checked here too.
+        var tableLint = LiveTableDataChecks.Texts.SelectMany(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text)).ToList();
+        check(tableLint.Count == 0, "the live table checks' probe texts pass the live lint offline: " + string.Join("; ", tableLint));
         // Values are read by declared position, so every read checks what it got against the declaration.
         var overviewQuery = new LiveQuery("check", LiveSql.MaxBand, "SELECT 1;", ["ms_ticks", "start_ticks", "cpu_ms", "schedulers", "runnable_tasks", "batch_requests", "compilations", "recompilations", "user_sessions"],
             "ms_ticks", "start_ticks", []);
