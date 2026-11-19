@@ -127,6 +127,8 @@ internal static class AgentLiveChecks
             + "EXEC msdb.dbo.sp_add_jobserver @job_id = @id;\nSELECT CONVERT(nvarchar(36), @id);", "msdb");
         if (created.Status != "completed" || !Guid.TryParse(created.Scalar, out var id))
         {
+            // sp_add_job commits alone, so a later call's failure leaves the job: drop it by its run-unique name.
+            await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ") EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ", @delete_history = 1, @delete_unused_schedule = 1;", "msdb");
             check(false, "a scratch Agent job can be created: " + created.Error);
             return;
         }
