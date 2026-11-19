@@ -1,6 +1,7 @@
 {
   "engineEditions": [1,2,3,8],
   "executionStatuses": [
+    {"code":0,"label":"Not tracked on this server"},
     {"code":1,"label":"Executing","tone":"accent"},
     {"code":2,"label":"Waiting for worker thread","tone":"accent"},
     {"code":3,"label":"Between retries","tone":"warning"},

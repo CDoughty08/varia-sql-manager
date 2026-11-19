@@ -24,7 +24,8 @@ export const runStatuses: readonly ToneCodeLabel[] = [
   { code: 4, label: 'In Progress', tone: 'accent' }
 ]
 
-/** `sp_help_job`'s `last_run_outcome`: 5 when the job has never run (or its outcome was purged). */
+/** `sp_help_job`'s `last_run_outcome`: 5 until the job first completes on its server (`sp_add_jobserver` writes 5; purging
+ *  history leaves the outcome, which lives in `sysjobservers`). */
 export const lastRunOutcomes: readonly ToneCodeLabel[] = [
   { code: 0, label: 'Failed', tone: 'error' },
   { code: 1, label: 'Succeeded', tone: 'success' },
@@ -32,8 +33,10 @@ export const lastRunOutcomes: readonly ToneCodeLabel[] = [
   { code: 5, label: 'Unknown' }
 ]
 
-/** `sp_help_job`'s `current_execution_status`, with Job Activity Monitor's Status names. 6 (obsolete) is never returned. */
+/** `sp_help_job`'s `current_execution_status`, with Job Activity Monitor's Status names. 6 (obsolete) is never returned; 0
+ *  is a multi-server job's, whose state this server does not track (`sp_get_composite_job_info`'s `ISNULL(…, 0)`). */
 export const executionStatuses: readonly ToneCodeLabel[] = [
+  { code: 0, label: 'Not tracked on this server' },
   { code: 1, label: 'Executing', tone: 'accent' },
   { code: 2, label: 'Waiting for worker thread', tone: 'accent' },
   { code: 3, label: 'Between retries', tone: 'warning' },

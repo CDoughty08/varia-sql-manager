@@ -24,7 +24,7 @@ describe('Agent catalogue', () => {
     }
     expect(runStatuses.map(row => row.code)).toEqual([0, 1, 2, 3, 4])
     expect(lastRunOutcomes.map(row => row.code)).toEqual([0, 1, 3, 5])
-    expect(executionStatuses.map(row => row.code)).toEqual([1, 2, 3, 4, 5, 7])
+    expect(executionStatuses.map(row => row.code)).toEqual([0, 1, 2, 3, 4, 5, 7])
     for (const status of runningExecutionStatuses) expect(executionStatuses.map(row => row.code)).toContain(status)
     expect(frequencyTypes.map(row => row.code)).toEqual([1, 4, 8, 16, 32, 64, 128])
     expect(subdayTypes.map(row => row.code)).toEqual([1, 2, 4, 8])

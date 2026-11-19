@@ -125,7 +125,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             {
                 var returned = string.Join(", ", Enumerable.Range(0, reader.FieldCount).Select(reader.GetName));
                 // Disposing an open reader drains it; cancelling first stops the server sending a long log or history.
-                command.Cancel();
+                TryCancel(command);
                 throw new AgentShapeException("BACKEND_ERROR", "The Agent read " + statement.Id + " returned the columns " + returned + " without " + statement.Columns[at] + ".");
             }
         }
@@ -137,7 +137,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             {
                 truncated = true;
                 // The rest is not read: the server stops sending, and disposing the reader drains nothing.
-                command.Cancel();
+                TryCancel(command);
                 break;
             }
             var row = new object?[ordinals.Length];
@@ -145,6 +145,12 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             rows.Add(row);
         }
         return new(statement.Columns, rows, truncated);
+    }
+
+    /// <summary>Best effort, as elsewhere: a cancel that fails leaves the reader to drain, and the read's result stands.</summary>
+    private static void TryCancel(SqlCommand command)
+    {
+        try { command.Cancel(); } catch (Exception error) when (error is InvalidOperationException or SqlException) { /* Best effort. */ }
     }
 }
 

@@ -148,6 +148,7 @@ Execution status (`current_execution_status`):
 
 | Code | Meaning | Tone |
 | --- | --- | --- |
+| `0` | Not tracked on this server |  |
 | `1` | Executing | accent |
 | `2` | Waiting for worker thread | accent |
 | `3` | Between retries | warning |
