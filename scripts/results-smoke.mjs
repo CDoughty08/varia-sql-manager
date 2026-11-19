@@ -181,6 +181,8 @@ const tokenColor = name => page.evaluate(value => {
   return color
 }, name)
 const computed = (locator, pseudo) => locator.evaluate((element, which) => { const style = getComputedStyle(element, which); return { color: style.color, background: style.backgroundColor } }, pseudo ?? null)
+/** A cell's translucent layers (styles.css): the selection, a search match and its row's highlight, as one computed image list. */
+const layers = locator => locator.evaluate(element => getComputedStyle(element).backgroundImage)
 /** Pixels of focusBorder's color along the top edge of grid 0, away from its first cell, as the window draws them. */
 async function focusRingPixels() {
   const box = await grid().boundingBox(), rgb = (await tokenColor('focusBorder')).match(/\d+/g).slice(0, 3).map(Number)
@@ -2407,17 +2409,22 @@ try {
     expect(await nullCell.evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
     expect((await computed(cell(1, 3), '::after')).color).toBe(await tokenColor('resultsGrid.truncationForeground'))
     expect((await computed(cell(2, 4))).color).toBe(await tokenColor('errorForeground'))
+    // The selection is a translucent layer over the cell's own colour, which it keeps.
+    const own = (await computed(cell(0, 0))).background
     await cell(0, 0).click()
-    const selection = { color: await tokenColor('resultsGrid.selectionForeground'), background: await tokenColor('resultsGrid.selectionBackground') }
-    await expect.poll(() => computed(cell(0, 0))).toEqual(selection)
+    await expect.poll(() => computed(cell(0, 0))).toEqual({ color: await tokenColor('resultsGrid.selectionForeground'), background: own })
+    const selection = await tokenColor('resultsGrid.selectionOverlay')
+    await expect.poll(() => layers(cell(0, 0))).toContain(selection)
     await page.screenshot({ path: resolve('artifacts', `results-${mode}.png`) })
     await textbox().focus()
-    const inactive = await tokenColor('resultsGrid.inactiveSelectionBackground')
-    await expect.poll(async () => (await computed(cell(0, 0))).background).toBe(inactive)
+    const inactive = await tokenColor('resultsGrid.inactiveSelectionOverlay')
+    await expect.poll(() => layers(cell(0, 0))).toContain(inactive)
+    expect(await layers(cell(0, 0))).not.toContain(selection)
     // A selected NULL takes the grid's text color while the grid is not focused: its tint is too faint on that fill.
     await nullCell.click()
     await textbox().focus()
-    await expect.poll(() => computed(nullCell)).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: inactive })
+    await expect.poll(() => computed(nullCell)).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: nullColors.background })
+    await expect.poll(() => layers(nullCell)).toContain(inactive)
     await cell(0, 0).click()
     await expect(nullCell).toHaveAttribute('data-identity', 'kept')
   }
@@ -2785,9 +2792,23 @@ try {
     await expect(diff.locator(`${gridPart.rowNumber}[title^="${name}"]`)).toHaveText(drawn)
   }
   await expect(diff.locator(gridPart.diffMark).filter({ hasText: /^[\u2212+]$/ })).toHaveCount(4)
-  await expect(diff.locator(gridPart.removedRow)).toHaveCount(2)
-  await expect(diff.locator(gridPart.addedRow)).toHaveCount(2)
+  // The changed entry's halves are not added and removed rows: only their changed values are coloured, struck through on
+  // the old half and bold on the new; the removed and added rows keep a wash over every cell, and unchanged rows none.
+  await expect(diff.locator(gridPart.removedRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.addedRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.changedOldRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.changedNewRow)).toHaveCount(1)
   await expect(diff.locator(gridPart.changedCell)).toHaveCount(2)
+  const transparent = 'rgba(0, 0, 0, 0)'
+  const fill = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
+  const look = locator => locator.evaluate(element => { const style = getComputedStyle(element); return { weight: style.fontWeight, line: style.textDecorationLine } })
+  expect(await fill(cell(0, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedRemovedBackground'))
+  expect(await fill(cell(1, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedAddedBackground'))
+  expect(await look(cell(0, 2, diff))).toEqual({ weight: '400', line: 'line-through' })
+  expect(await look(cell(1, 2, diff))).toEqual({ weight: '600', line: 'none' })
+  for (const [row, column] of [[0, 0], [1, 1], [2, 0], [4, 2]]) expect(await fill(cell(row, column, diff)), `${row}, ${column}`).toBe(transparent)
+  for (const column of [0, 1, 2]) expect(await fill(cell(3, column, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
+  for (const column of [0, 1, 2]) expect(await fill(cell(5, column, diff))).toBe(await tokenColor('resultsGrid.diffAddedBackground'))
   await expect(cell(0, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
   await expect(cell(1, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
   await expect(cell(2, 1, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
@@ -2796,29 +2817,47 @@ try {
   // The active cell names a changed value and its row's kind for screen readers.
   await cell(1, 2, diff).click()
   await expect(cell(1, 2, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
-  // Where the features meet: a highlighted removed row shows its highlight over the diff's tone, and a search match on a
-  // changed value shows the match's tint over the changed one.
-  const background = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
-  const removedTone = await background(diff.locator(gridPart.removedRow).first())
+  // Where the features meet, nothing hides the diff's colour: the selection, a highlight and a search match are layers
+  // over it, in that order from the top.
+  const changedTint = await tokenColor('resultsGrid.diffChangedAddedBackground')
+  expect(await fill(cell(1, 2, diff))).toBe(changedTint)
+  await expect.poll(() => layers(cell(1, 2, diff))).toContain(await tokenColor('resultsGrid.selectionOverlay'))
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
   const highlightedRemoved = diff.locator(gridPart.highlightedRow).and(diff.locator(gridPart.removedRow))
   await expect(highlightedRemoved).toHaveCount(1)
-  await expect.poll(() => background(highlightedRemoved)).not.toBe(removedTone)
-  // The changed value's own tint, measured now that the selection moved off it.
-  const changedTint = await background(cell(1, 2, diff))
+  const blue = await tokenColor('resultsGrid.highlightBlueBackground')
+  await expect.poll(() => layers(cell(3, 0, diff))).toContain(blue)
+  expect(await fill(cell(3, 0, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
+  // The highlighted, selected removed row: both layers, the selection's first (on top).
+  const selectionLayers = [await tokenColor('resultsGrid.selectionOverlay'), await tokenColor('resultsGrid.inactiveSelectionOverlay')]
+  const removedLayers = await layers(cell(3, 1, diff))
+  const selectedAt = Math.max(...selectionLayers.map(color => removedLayers.indexOf(color)))
+  expect(selectedAt, removedLayers).toBeGreaterThanOrEqual(0)
+  expect(selectedAt).toBeLessThan(removedLayers.indexOf(blue))
+  expect(await fill(cell(3, 1, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
   await searchBox.click()
   await page.keyboard.type('1.75')
   const changedMatch = cell(1, 2, diff).and(diff.locator(gridPart.searchMatch))
   await expect(changedMatch).toHaveCount(1)
-  await expect.poll(() => background(changedMatch)).not.toBe(changedTint)
+  await expect.poll(() => layers(changedMatch)).toContain(await tokenColor('resultsGrid.hitOverlay'))
+  expect(await fill(changedMatch)).toBe(changedTint)
+  // Both themes, for review: the changed values, a highlighted and selected removed row, and a search match.
+  await cell(3, 1, diff).click()
+  for (const mode of ['dark', 'light']) {
+    await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+    await expect.poll(() => fill(cell(1, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedAddedBackground'))
+    await diff.screenshot({ path: resolve('artifacts', `results-compare-${mode}.png`) })
+  }
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await searchBox.click()
   await searchBox.press('Escape')
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights and search matches show over its tones.')
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights, search matches and the selection lie over its colours without hiding them.')
 
   // 14g. The Compare popover: on Result 1's grid it offers the other Table, Result 2 (never the comparison), as the old
   // side with Result 1 as the new. With one target it shows no list, only the two sides, and says nothing that does not

@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (289)
+## Color keys (293)
 
 ### Base
 
@@ -301,19 +301,23 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.highlightBlueColumnBackground` | Varia | `$blue/12` | `#6ea4ea1f` | `#2563a81f` | Tint over the column a row highlighted blue is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
 | `resultsGrid.highlightPurpleColumnBackground` | Varia | `$purple/12` | `#ab95ea1f` | `#7a4bbf1f` | Tint over the column a row highlighted purple is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
 | `resultsGrid.highlightRedColumnBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | Tint over the column a row highlighted red is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
-| `resultsGrid.diffAddedBackground` | Varia | `$green/12` | `#6fbf8a1f` | `#2e7d4f1f` | Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. |
-| `resultsGrid.diffRemovedBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. |
-| `resultsGrid.diffChangedAddedBackground` | Varia | `$green/18` | `#6fbf8a2e` | `#2e7d4f2e` | A changed value in its new row of a result diff, over the added row colour. |
-| `resultsGrid.diffChangedRemovedBackground` | Varia | `$red/18` | `#e667672e` | `#c42b3c2e` | A changed value in its old row of a result diff, over the removed row colour. |
+| `resultsGrid.diffAddedBackground` | Varia | `$green/12` | `#6fbf8a1f` | `#2e7d4f1f` | A faint wash over the cells of a row a comparison adds (+), and the kind bar of its row number. Translucent: the row stripe, a highlight, a search match and the selection show with it. |
+| `resultsGrid.diffRemovedBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | A faint wash over the cells of a row a comparison removes (−), and the kind bar of its row number. Translucent, as the added wash is. |
+| `resultsGrid.diffChangedAddedBackground` | Varia | `$green/20` | `#6fbf8a33` | `#2e7d4f33` | A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar of an added row's number. |
+| `resultsGrid.diffChangedRemovedBackground` | Varia | `$red/20` | `#e6676733` | `#c42b3c33` | A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar of a removed row's number. |
+| `resultsGrid.diffChangedBackground` | Varia | `$blue/26` | `#6ea4ea42` | `#2563a842` | A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. |
 | `resultsGrid.diffSoftUnderline` | Varia | `$warning` | `#e4bb6a` | `#875800` | The dotted underline of a result diff value equal to the other only by collation (case or trailing spaces). |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
 | `resultsGrid.nullBackground` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | NULL cells; untinted by default, so NULL reads as muted italic text. |
 | `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#e4bb6a` | `#875800` | Truncation notices and the marker on truncated values. |
 | `resultsGrid.whitespaceForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters. |
-| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#29314f` | `#d9e0fb` | Selected cells. |
-| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of selected cells. |
-| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#21273b` | `#e7ebfc` | Selected cells while the grid is not focused; their text keeps its color. |
+| `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#29314f` | `#d9e0fb` | Selected Table Designer rows and Column Profile cards. Selected grid cells take resultsGrid.selectionOverlay instead. |
+| `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of selected cells while the grid is focused, and of selected Table Designer rows. |
+| `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#21273b` | `#e7ebfc` | Not drawn: selected grid cells take resultsGrid.inactiveSelectionOverlay while the grid is not focused. Still accepted from themes. |
+| `resultsGrid.selectionOverlay` | Varia | `$accent/18` | `#8f9cff2e` | `#4453d02e` | Selected cells while the grid is focused: a translucent layer over the cell's own colour, so a comparison's colour, a highlight and a search match stay visible under it. Keep it translucent. |
+| `resultsGrid.inactiveSelectionOverlay` | Varia | `$accent/10` | `#8f9cff1a` | `#4453d01a` | Selected cells while the grid is not focused; a translucent layer, as resultsGrid.selectionOverlay is. Their text keeps its color. |
+| `resultsGrid.hitOverlay` | Varia | `$warning/14` | `#e4bb6a24` | `#87580024` | Search matches in the results grid: a translucent layer over the cell's own colour and highlight, under the selection. Keep it translucent. |
 | `resultsGrid.activeCellBorder` | Varia | `@focusBorder` | `#8f9cff` | `#4453d0` | Outline of the active cell while the grid is focused. |
 | `resultsGrid.hoverBackground` | Varia | `@list.hoverBackground` | `#262a32` | `#dfe2e7` | Hovered column or row header. |
 | `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | Column and row headers of selected cells. |

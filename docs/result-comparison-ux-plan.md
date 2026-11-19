@@ -205,8 +205,9 @@ reservation is refused, the whole diff is refused (whole or refused, as the rows
   translucent overlays instead of row backgrounds), search hits, selection (active or inactive). Each is a translucent
   `background-image`; the active cell stays an outline. The row header keeps its kind bar when selected. A CSS-order
   test pins diff < highlight < hit < selection, replacing the current tone-before-`hl-*` test.
-- Tokens: `resultsGrid.diffChangedBackground`, `resultsGrid.selectionOverlay`, `resultsGrid.inactiveSelectionOverlay`,
-  `resultsGrid.hitOverlay`, `resultsGrid.highlightOverlayAlpha`. Contrast pairs (Light and Dark, with and without the
+- Tokens: `resultsGrid.diffChangedBackground` (reserved until the one-row layout), `resultsGrid.selectionOverlay`,
+  `resultsGrid.inactiveSelectionOverlay`, `resultsGrid.hitOverlay`. The highlight keys are already translucent colours, and
+  the registry holds colours only, so there is no separate alpha key. Contrast pairs (Light and Dark, with and without the
   selection overlay): text and struck removed text on `diffChangedBackground`, text on the added/removed washes.
   Regenerate `registry.ts`, `tests/fixtures/themes/*.resolved.json`, `docs/themes/tokens.md` and the schema.
 - Forced colours: changed cells get a `CanvasText` border, selection a `Highlight` outline (backgrounds may be dropped);

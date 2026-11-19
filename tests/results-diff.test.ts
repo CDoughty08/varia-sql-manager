@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
-import { cellMarksOf } from '../src/renderer/src/grid/GridView'
+import { cellMarksOf, rowToneOf } from '../src/renderer/src/grid/GridView'
+import { cssRules } from './fixtures/css-rules'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { CompareService, compareText } from '../src/renderer/src/results/CompareService'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
@@ -166,19 +167,54 @@ describe('result diffs', () => {
     expect(compare.previousOf('t1', keyAt(results, 't1', 2))?.key).toBe(keyAt(results, 't1', 0))
   })
 
-  it('draws highlights and search matches over a diff\'s tones (styles.css order and selectors)', () => {
+  it('layers a cell as diff < highlight < search match < selection, none replacing another (styles.css)', () => {
     const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
-    const at = (rule: string) => { const index = css.indexOf(rule); expect(index, rule).toBeGreaterThanOrEqual(0); return index }
-    // Same specificity: the rule that comes later wins, so the highlight rules follow the diff tone rules.
-    expect(at('.rg-row.tone-added {')).toBeLessThan(at('.rg-row.hl-yellow {'))
-    expect(at('.rg-rn.tone-removed:not(.sel) {')).toBeLessThan(at('.rg-rn.hl-yellow:not(.sel) {'))
-    // A changed cell's tint, more specific than a search match's, leaves a match its own.
-    expect(css).toContain('.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
-    expect(css).toContain('.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
+    const rules = cssRules(css), screen = rules.filter(rule => rule.at.length === 0)
+    const value = (selector: string, property: string) => {
+      const rule = screen.find(item => item.selector === selector)
+      expect(rule, selector).toBeDefined()
+      return rule!.declarations.find(item => item.property === property)?.value
+    }
+    const layers = (images: string | undefined) => [...(images ?? '').matchAll(/linear-gradient\(var\((--rg-[a-z]+), transparent\)/g)].map(match => match[1])
+    // A background image lists its top layer first: the selection over a match over the row's highlight.
+    expect(layers(value('.rg-c:is(.is-sel, .is-hit), .rg-row.hl .rg-c', 'background-image'))).toEqual(['--rg-sel', '--rg-hit', '--rg-hl'])
+    // The ellipsis of a truncated value is opaque, so it repeats every layer over the grid, the diff's colour lowest.
+    expect(layers(value('.rg-c.is-trunc::after', 'background-image'))).toEqual(['--rg-sel', '--rg-hit', '--rg-hl', '--rg-tint'])
+    // The diff's colour is the cell's own background colour, under every image.
+    for (const selector of ['.rg-row.tone-added .rg-c', '.rg-row.tone-removed .rg-c', '.rg-row.tone-changedNew .rg-c.is-chg', '.rg-row.tone-changedOld .rg-c.is-chg']) {
+      expect(value(selector, 'background-color'), selector).toBe('var(--rg-tint)')
+      expect(value(selector, '--rg-tint'), selector).toMatch(/^var\(--varia-resultsGrid-diff/)
+    }
+    // The layers only name their colour; a highlight is the row's variable, read by each cell.
+    expect(value('.rg-c.is-hit', '--rg-hit')).toBe('var(--varia-resultsGrid-hitOverlay)')
+    expect(value('.rg:focus-within .rg-c.is-sel', '--rg-sel')).toBe('var(--varia-resultsGrid-selectionOverlay)')
+    expect(value('.rg:not(:focus-within) .rg-c.is-sel', '--rg-sel')).toBe('var(--varia-resultsGrid-inactiveSelectionOverlay)')
+    expect(value('.rg-row.hl-yellow, .rg-rn.hl-yellow', '--rg-hl')).toBe('var(--varia-resultsGrid-highlightYellowBackground)')
+    // No other cell or row rule paints a background image, or the shorthand that would clear the layers.
+    const painting = screen.filter(rule => /\.rg-(c|row)\b/.test(rule.selector) && rule.declarations.some(item => item.property === 'background' || item.property === 'background-image'))
+    expect(painting.map(rule => rule.selector).sort()).toEqual(['.rg-c.is-trunc::after', '.rg-c:is(.is-sel, .is-hit), .rg-row.hl .rg-c', '.rg-row.odd:where(:not(.hl, .tone-added, .tone-removed))',
+      '.rg-row.tone-error', '.rg-row.tone-muted', '.rg-row.tone-running', '.rg-row.tone-warning'].sort())
+    // A changed half's row is not coloured: only its changed cells are.
+    expect(screen.filter(rule => /\.rg-row\.tone-changed(Old|New)$/.test(rule.selector))).toEqual([])
+    // The row header keeps its kind bar when selected: a shadow, which the selection's fill does not replace.
+    expect(value(".rg[data-gutter='diff'] .rg-rn:is(.tone-added, .tone-changedNew)", 'box-shadow')).toMatch(/^inset 3px 0 0 /)
     // Under forced colours a changed cell's outline is the weakest outline rule, so the active cell's and the active
-    // match's win.
-    expect(css).toContain('.rg-c:where(.is-chg) { outline')
+    // match's win; on the selection's fill it takes the selection's text colour, and the halves' bars differ in style.
+    const forced = rules.filter(rule => rule.at.includes('@media (forced-colors: active)'))
+    expect(forced.find(rule => rule.selector === '.rg-c:where(.is-chg)')?.declarations[0]).toEqual({ property: 'outline', value: '1px solid CanvasText' })
+    expect(forced.find(rule => rule.selector === '.rg-c.is-sel:where(.is-chg)')?.declarations).toEqual([{ property: 'outline-color', value: 'HighlightText' }])
+    expect(forced.find(rule => rule.selector === '.rg-rn:is(.tone-removed, .tone-changedOld)')?.declarations).toEqual([{ property: 'border-left', value: '3px dashed CanvasText' }])
     expect(css).not.toMatch(/\.rg-c\.is-chg[^{]*\{ outline/)
+  })
+
+  it('tells a changed row\'s halves from added and removed rows by their listed cells', () => {
+    expect(rowToneOf('removed')).toBe('removed')
+    expect(rowToneOf('added')).toBe('added')
+    expect(rowToneOf('removed 2 ~4')).toBe('changedOld')
+    expect(rowToneOf('added 0-3 …')).toBe('changedNew')
+    expect(rowToneOf('same ~1')).toBe('same')
+    expect(rowToneOf('error')).toBe('error')
+    expect(rowToneOf('')).toBe('')
   })
 
   it('says when values were compared by their stored prefix', () => {

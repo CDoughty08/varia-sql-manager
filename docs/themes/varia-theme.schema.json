@@ -1308,23 +1308,28 @@
         },
         "resultsGrid.diffAddedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. Default $green/12 (Dark #6fbf8a1f, Light #2e7d4f1f).",
-          "markdownDescription": "(Varia) Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. Default `$green/12` (Dark `#6fbf8a1f`, Light `#2e7d4f1f`)."
+          "description": "(Varia) A faint wash over the cells of a row a comparison adds (+), and the kind bar of its row number. Translucent: the row stripe, a highlight, a search match and the selection show with it. Default $green/12 (Dark #6fbf8a1f, Light #2e7d4f1f).",
+          "markdownDescription": "(Varia) A faint wash over the cells of a row a comparison adds (+), and the kind bar of its row number. Translucent: the row stripe, a highlight, a search match and the selection show with it. Default `$green/12` (Dark `#6fbf8a1f`, Light `#2e7d4f1f`)."
         },
         "resultsGrid.diffRemovedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. Default $red/12 (Dark #e667671f, Light #c42b3c1f).",
-          "markdownDescription": "(Varia) Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. Default `$red/12` (Dark `#e667671f`, Light `#c42b3c1f`)."
+          "description": "(Varia) A faint wash over the cells of a row a comparison removes (−), and the kind bar of its row number. Translucent, as the added wash is. Default $red/12 (Dark #e667671f, Light #c42b3c1f).",
+          "markdownDescription": "(Varia) A faint wash over the cells of a row a comparison removes (−), and the kind bar of its row number. Translucent, as the added wash is. Default `$red/12` (Dark `#e667671f`, Light `#c42b3c1f`)."
         },
         "resultsGrid.diffChangedAddedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A changed value in its new row of a result diff, over the added row colour. Default $green/18 (Dark #6fbf8a2e, Light #2e7d4f2e).",
-          "markdownDescription": "(Varia) A changed value in its new row of a result diff, over the added row colour. Default `$green/18` (Dark `#6fbf8a2e`, Light `#2e7d4f2e`)."
+          "description": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar of an added row's number. Default $green/20 (Dark #6fbf8a33, Light #2e7d4f33).",
+          "markdownDescription": "(Varia) A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar of an added row's number. Default `$green/20` (Dark `#6fbf8a33`, Light `#2e7d4f33`)."
         },
         "resultsGrid.diffChangedRemovedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A changed value in its old row of a result diff, over the removed row colour. Default $red/18 (Dark #e667672e, Light #c42b3c2e).",
-          "markdownDescription": "(Varia) A changed value in its old row of a result diff, over the removed row colour. Default `$red/18` (Dark `#e667672e`, Light `#c42b3c2e`)."
+          "description": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar of a removed row's number. Default $red/20 (Dark #e6676733, Light #c42b3c33).",
+          "markdownDescription": "(Varia) A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar of a removed row's number. Default `$red/20` (Dark `#e6676733`, Light `#c42b3c33`)."
+        },
+        "resultsGrid.diffChangedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. Default $blue/26 (Dark #6ea4ea42, Light #2563a842).",
+          "markdownDescription": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. Default `$blue/26` (Dark `#6ea4ea42`, Light `#2563a842`)."
         },
         "resultsGrid.diffSoftUnderline": {
           "$ref": "#/definitions/value",
@@ -1358,18 +1363,33 @@
         },
         "resultsGrid.selectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Selected cells. Default @list.activeSelectionBackground (Dark #29314f, Light #d9e0fb).",
-          "markdownDescription": "(Varia) Selected cells. Default `@list.activeSelectionBackground` (Dark `#29314f`, Light `#d9e0fb`)."
+          "description": "(Varia) Selected Table Designer rows and Column Profile cards. Selected grid cells take resultsGrid.selectionOverlay instead. Default @list.activeSelectionBackground (Dark #29314f, Light #d9e0fb).",
+          "markdownDescription": "(Varia) Selected Table Designer rows and Column Profile cards. Selected grid cells take resultsGrid.selectionOverlay instead. Default `@list.activeSelectionBackground` (Dark `#29314f`, Light `#d9e0fb`)."
         },
         "resultsGrid.selectionForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Text of selected cells. Default @list.activeSelectionForeground (Dark #d9dce3, Light #1c1f26).",
-          "markdownDescription": "(Varia) Text of selected cells. Default `@list.activeSelectionForeground` (Dark `#d9dce3`, Light `#1c1f26`)."
+          "description": "(Varia) Text of selected cells while the grid is focused, and of selected Table Designer rows. Default @list.activeSelectionForeground (Dark #d9dce3, Light #1c1f26).",
+          "markdownDescription": "(Varia) Text of selected cells while the grid is focused, and of selected Table Designer rows. Default `@list.activeSelectionForeground` (Dark `#d9dce3`, Light `#1c1f26`)."
         },
         "resultsGrid.inactiveSelectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Selected cells while the grid is not focused; their text keeps its color. Default @list.inactiveSelectionBackground (Dark #21273b, Light #e7ebfc).",
-          "markdownDescription": "(Varia) Selected cells while the grid is not focused; their text keeps its color. Default `@list.inactiveSelectionBackground` (Dark `#21273b`, Light `#e7ebfc`)."
+          "description": "(Varia) Not drawn: selected grid cells take resultsGrid.inactiveSelectionOverlay while the grid is not focused. Still accepted from themes. Default @list.inactiveSelectionBackground (Dark #21273b, Light #e7ebfc).",
+          "markdownDescription": "(Varia) Not drawn: selected grid cells take resultsGrid.inactiveSelectionOverlay while the grid is not focused. Still accepted from themes. Default `@list.inactiveSelectionBackground` (Dark `#21273b`, Light `#e7ebfc`)."
+        },
+        "resultsGrid.selectionOverlay": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Selected cells while the grid is focused: a translucent layer over the cell's own colour, so a comparison's colour, a highlight and a search match stay visible under it. Keep it translucent. Default $accent/18 (Dark #8f9cff2e, Light #4453d02e).",
+          "markdownDescription": "(Varia) Selected cells while the grid is focused: a translucent layer over the cell's own colour, so a comparison's colour, a highlight and a search match stay visible under it. Keep it translucent. Default `$accent/18` (Dark `#8f9cff2e`, Light `#4453d02e`)."
+        },
+        "resultsGrid.inactiveSelectionOverlay": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Selected cells while the grid is not focused; a translucent layer, as resultsGrid.selectionOverlay is. Their text keeps its color. Default $accent/10 (Dark #8f9cff1a, Light #4453d01a).",
+          "markdownDescription": "(Varia) Selected cells while the grid is not focused; a translucent layer, as resultsGrid.selectionOverlay is. Their text keeps its color. Default `$accent/10` (Dark `#8f9cff1a`, Light `#4453d01a`)."
+        },
+        "resultsGrid.hitOverlay": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Search matches in the results grid: a translucent layer over the cell's own colour and highlight, under the selection. Keep it translucent. Default $warning/14 (Dark #e4bb6a24, Light #87580024).",
+          "markdownDescription": "(Varia) Search matches in the results grid: a translucent layer over the cell's own colour and highlight, under the selection. Keep it translucent. Default `$warning/14` (Dark `#e4bb6a24`, Light `#87580024`)."
         },
         "resultsGrid.activeCellBorder": {
           "$ref": "#/definitions/value",

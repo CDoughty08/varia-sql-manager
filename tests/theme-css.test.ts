@@ -81,8 +81,8 @@ describe('theme tokens in the renderer', () => {
   })
   it('drops the NULL tint on every toned live grid row, which the toned rows\' contrast pairs assume', () => {
     // contrast-pairs.ts checks resultsGrid.nullForeground over the row tone without resultsGrid.nullBackground: with the
-    // tint stacked on a tone, NULL text falls below 4.5:1.
-    const untinted = new Set(declarations.filter(({ property, value }) => property === 'background' && value === 'none').flatMap(({ selector }) => selector.split(',').map(part => part.trim().replace(/\s+/g, ' '))))
+    // tint stacked on a tone, NULL text falls below 4.5:1. Only the colour is dropped: the selection and search layers stay.
+    const untinted = new Set(declarations.filter(({ property, value }) => property === 'background-color' && value === 'transparent').flatMap(({ selector }) => selector.split(',').map(part => part.trim().replace(/\s+/g, ' '))))
     expect(liveTones.filter(tone => !untinted.has(`.rg-row.tone-${tone} .rg-c.is-null`))).toEqual([])
   })
   it('overrides every Dockview theme color on the shell, where floating groups inherit it', () => {

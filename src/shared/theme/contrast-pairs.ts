@@ -98,11 +98,15 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['banner.warningForeground'], ['quickInput.background', 'banner.warningBackground']),
   ...text(['banner.errorForeground'], ['quickInput.background', 'banner.errorBackground']),
   ...text(['resultsGrid.foreground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
-  ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground']),
+  // Selected Table Designer rows; selected grid cells are a translucent layer over the grid and the striped row.
+  ...text(['resultsGrid.selectionForeground'], ['resultsGrid.background', 'resultsGrid.selectionBackground'], [...grid, 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.selectionOverlay']),
   // Selected cells keep their text color while the grid is not focused (links, read errors and the truncation marker
   // too); NULL takes the grid's foreground there (styles.css), as its tint is too faint on that fill.
   ...text(['foreground', 'resultsGrid.foreground', 'resultsGrid.linkForeground', 'errorForeground', 'resultsGrid.truncationForeground'],
-    ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
+    ['panel.background', 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.inactiveSelectionOverlay']),
+  // A search match is a layer too, under the selection; a NULL takes the grid's foreground on it (styles.css).
+  ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.hitOverlay'], [...striped, 'resultsGrid.hitOverlay']),
+  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
   // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
@@ -138,20 +142,31 @@ export const contrastPairs: readonly ContrastPair[] = [
   // NULL cells are tinted, over the grid and over a striped row.
   ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
-  // A highlighted row's colour replaces the stripe; its row number is tinted with it over the header.
+  // A highlighted row's colour replaces the stripe and is a layer over its cells and a diff's colour, under a search
+  // match and the selection; its row number is tinted with it over the header.
   ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).flatMap(color => [
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
+    ...text(['resultsGrid.selectionForeground'], [...grid, `resultsGrid.highlight${color}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
     ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`]),
     // Transposed, the highlighted row is a column: its tint lies over each cell, on the grid and on a striped row.
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}ColumnBackground`], [...striped, `resultsGrid.highlight${color}ColumnBackground`])
   ]),
-  // A diff's added and removed rows have their own background instead of the stripe, and a changed value a stronger one,
-  // where even a NULL shows in the cells' own colour.
+  // A diff's added and removed rows wash their cells instead of the stripe, and a changed half's changed value has a
+  // stronger colour (struck through or bold) over the stripe, where even a NULL shows in the cells' own colour. Each can
+  // lie under a highlight or a search match and the selection, focused or not.
   ...(['Added', 'Removed'] as const).flatMap(kind => [
-    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.diff${kind}Background`]),
-    ...text(['resultsGrid.foreground'], ['resultsGrid.background', `resultsGrid.diff${kind}Background`, `resultsGrid.diffChanged${kind}Background`]),
+    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], [...grid, `resultsGrid.diff${kind}Background`]),
+    ...text(['resultsGrid.foreground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.inactiveSelectionOverlay'],
+      [...grid, `resultsGrid.diffChanged${kind}Background`], [...striped, `resultsGrid.diffChanged${kind}Background`],
+      [...striped, `resultsGrid.diffChanged${kind}Background`, 'resultsGrid.inactiveSelectionOverlay']),
+    ...text(['resultsGrid.selectionForeground'], [...grid, `resultsGrid.diff${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
+      [...striped, `resultsGrid.diffChanged${kind}Background`, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay'],
+      ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).map(color => [...grid, `resultsGrid.diffChanged${kind}Background`, `resultsGrid.highlight${color}Background`, 'resultsGrid.selectionOverlay'] as ColorKey[])),
     ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`])
   ]),
+  // The one-row layout's changed value (old struck through, then new), likewise under the selection.
+  ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground']),
+  ...text(['resultsGrid.selectionForeground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.selectionOverlay']),
   // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
   ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
     ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
@@ -160,7 +175,7 @@ export const contrastPairs: readonly ContrastPair[] = [
       ...text(['resultsGrid.nullForeground'], ['resultsGrid.background', background]),
       // A selected cell keeps the row's text colour while the grid is not focused, and a departed (muted) row is the
       // selected one by construction.
-      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionBackground'])
+      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionOverlay'])
     ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
@@ -222,7 +237,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['connection.favoriteForeground'], widget),
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
-  ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
+  ...graphic(['resultsGrid.activeCellBorder'], panel, [...grid, 'resultsGrid.selectionOverlay'], [...striped, 'resultsGrid.hitOverlay', 'resultsGrid.selectionOverlay']),
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
   ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar, ...statusBarStates),
   // A bookmark is the only sign of itself in the indicator margin.
