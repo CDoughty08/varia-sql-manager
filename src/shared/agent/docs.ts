@@ -25,7 +25,6 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   logRows: 'Error log rows one read holds, newest first (oldest first on Managed Instance, whose `sp_readmierrorlog` takes no sort argument); the rest are cancelled and a notice says so',
   searchChars: 'Characters of a history or error log search text',
   gridMessageChars: 'Characters of a history message in a grid cell (the details pane reads all of it)',
-  roleMessageChars: 'Characters of a message `sp_help_jobhistory` returns to logins below sysadmin',
   messageChars: 'Characters `sysjobhistory.message` holds',
   nameChars: 'UTF-16 code units in an Agent object\'s name (sysname)',
   stepsPerJob: 'Steps one job save may hold',

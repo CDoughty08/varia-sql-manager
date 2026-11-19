@@ -775,8 +775,8 @@ Database Mail logs, which SSMS shows there).
   `instance_id` lower bound) re-reads the window each sample at a slower interval, capped at `agentLimits.historyRows` with
   explicit truncation. Message text in the grid is cut to a catalogue limit. The details pane reads the full text through
   `agent.historyMessage` on the sysadmin path (`sysjobhistory.message`, up to 4,000 characters); `sp_help_jobhistory` has no
-  `instance_id` filter and returns at most 1,024 characters, so on the role path the pane shows the captured row's message
-  and says "msdb returns at most 1,024 characters to this login" when it is that long.
+  `instance_id` filter, so on the role path the pane shows the captured row's message, which AG-0 found is the whole
+  message there too (`sp_help_jobhistory_full` selects `sysjobhistory.message` as stored, with no role-based cut).
 - History cap text ("Agent keeps 1,000 history rows, 100 per job") shows only when it was read: through
   `msdb.dbo.sp_get_sqlagent_properties` (undocumented, allowlisted read; AG-0 found it returns values to SQLAgentUserRole, so every Agent role
   sees the cap text). Logins it refuses see none.
@@ -1208,7 +1208,7 @@ credentials), AG-5b (error logs).
   Express, failover cluster, Agent stopped, Agent service Disabled, Agent XPs disabled (stopped and running; tree, and `AGENT_DISABLED` in Job Activity Monitor, the status bar and the
   Log File Viewer), state
   unknown, `PERMISSION_DENIED` mid-dialog, `STALE`, `AGENT_STOPPED`, `JOB_STATE`, a save failure with no part index, empty,
-  loading and failed history and Job Activity Monitor, error-log truncation, role-path history (1,024-character message,
+  loading and failed history and Job Activity Monitor, error-log truncation, role-path history (the captured row's message,
   no elapsed time for a running job whose `start_execution_date` is NULL, the Delete History disabled reason
   for a login without EXECUTE on `sp_purge_jobhistory`, Delete History enabled for Operator with another owner's job
   checked, and a sysadmin-path start time taken from the current session's row when an older session's row has a start

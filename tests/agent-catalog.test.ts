@@ -81,7 +81,7 @@ describe('Agent catalogue', () => {
     expect(agentLimits.historyJobs + 4).toBeLessThan(agentCallIndexLimit)
     expect(agentLimits.scheduleJobChanges + 4).toBeLessThan(agentCallIndexLimit)
     for (const value of Object.values(agentLimits)) expect(Number.isSafeInteger(value) && value > 0).toBe(true)
-    expect(agentLimits).toMatchObject({ nameChars: 128, messageChars: 4_000, roleMessageChars: 1_024, serviceWaitMs: 60_000 })
+    expect(agentLimits).toMatchObject({ nameChars: 128, messageChars: 4_000, serviceWaitMs: 60_000 })
   })
   it('lists each procedure once, reads and writes apart, every argument named and every constant constant', () => {
     const reads = readProcedures.map(procedure => procedure.name), writes = writeProcedures.map(procedure => procedure.name)

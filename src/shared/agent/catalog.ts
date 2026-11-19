@@ -301,8 +301,6 @@ export const agentLimits = {
   searchChars: 200,
   /** Characters of a history message shown in a grid cell; the details pane reads the whole message. */
   gridMessageChars: 512,
-  /** Characters `sp_help_jobhistory` returns of a message to logins that read history through it. */
-  roleMessageChars: 1_024,
   /** Characters `sysjobhistory.message` holds. */
   messageChars: 4_000,
   /** UTF-16 code units in an Agent object's name (sysname). */

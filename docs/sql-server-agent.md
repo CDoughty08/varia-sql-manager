@@ -350,7 +350,6 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `logRows` | 10,000 | Error log rows one read holds, newest first (oldest first on Managed Instance, whose `sp_readmierrorlog` takes no sort argument); the rest are cancelled and a notice says so |
 | `searchChars` | 200 | Characters of a history or error log search text |
 | `gridMessageChars` | 512 | Characters of a history message in a grid cell (the details pane reads all of it) |
-| `roleMessageChars` | 1,024 | Characters of a message `sp_help_jobhistory` returns to logins below sysadmin |
 | `messageChars` | 4,000 | Characters `sysjobhistory.message` holds |
 | `nameChars` | 128 | UTF-16 code units in an Agent object's name (sysname) |
 | `stepsPerJob` | 50 | Steps one job save may hold |
