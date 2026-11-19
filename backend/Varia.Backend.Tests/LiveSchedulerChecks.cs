@@ -61,6 +61,32 @@ internal static class LiveSchedulerChecks
 
     private static string LiveType(string activityType) => activityType switch { "text" => "nvarchar", "bool" => "bit", _ => activityType };
 
+    /// <summary>Statements the live lint's word boundaries and deny list once let through. T-SQL ends a number where its digits
+    /// end (SQL Server 2025 deletes the row for <c>SELECT 1DELETE FROM @t</c> and runs the text for <c>SELECT 1e1EXEC (…)</c>), and
+    /// a statement kind the deny list did not name passed. Every lint that reuses the live lint refuses each of them.</summary>
+    internal static readonly (string Name, string Statement)[] LiveLintNearMisses =
+    [
+        ("glued delete", "DECLARE @t TABLE (a int); SELECT 1DELETE FROM @t;"),
+        ("glued exponent exec", "SELECT 1e1EXEC (N'SELECT 42');"),
+        ("glued decimal exec", "SELECT 1.5EXEC (N'SELECT 42');"),
+        ("glued money exec", "SELECT $1EXEC (N'SELECT 42');"),
+        ("glued hex insert", "DECLARE @t TABLE (a int); SELECT 0xINSERT @t VALUES (1);"),
+        ("set option", "SELECT 1 AS a; SET IMPLICIT_TRANSACTIONS ON;"),
+        ("receive", "SELECT 1 AS a; RECEIVE message_body FROM dbo.q;"),
+        ("send", "DECLARE @h uniqueidentifier; SEND ON CONVERSATION @h (N'x');"),
+        ("end conversation", "DECLARE @h uniqueidentifier; END CONVERSATION @h;"),
+        ("begin dialog", "DECLARE @h uniqueidentifier; BEGIN DIALOG @h FROM SERVICE s TO SERVICE N's';"),
+        ("checkpoint", "SELECT 1 AS a; CHECKPOINT;"),
+        ("setuser", "SELECT 1 AS a; SETUSER;"),
+        ("revert", "SELECT 1 AS a; REVERT;"),
+        ("disable trigger", "SELECT 1 AS a; DISABLE TRIGGER t ON dbo.x;"),
+        ("enable trigger", "SELECT 1 AS a; ENABLE TRIGGER t ON dbo.x;"),
+        ("writetext", "DECLARE @p varbinary(16); WRITETEXT dbo.t.c @p N'x';"),
+        ("next value for", "SELECT NEXT VALUE FOR dbo.s AS n;"),
+        ("raiserror with log", "SELECT 1 AS a; RAISERROR (N'x', 10, 1) WITH LOG;"),
+        ("if print", "SELECT 1 AS a; IF 1 = 1 PRINT N'x';")
+    ];
+
     private static void SqlChecks(Action<bool, string> check)
     {
         var catalog = LiveCatalog.Current;
@@ -172,6 +198,8 @@ internal static class LiveSchedulerChecks
             ["opendatasource"] = LiveSql.UncommittedPrologue + "SELECT * FROM OPENDATASOURCE(N'SQLNCLI', N'x').m.sys.objects;",
             ["spid outside the session probe"] = LiveSql.UncommittedPrologue + "SELECT @@SPID;"
         };
+        foreach (var (name, statement) in LiveLintNearMisses) bad[name] = LiveSql.UncommittedPrologue + statement;
+        bad["glued delete, read committed"] = LiveSql.CommittedPrologue + LiveLintNearMisses[0].Statement;
         var missed = bad.Where(item => LiveSql.Lint(item.Value).Count == 0).Select(item => item.Key).ToList();
         var good = new[]
         {
@@ -179,7 +207,10 @@ internal static class LiveSchedulerChecks
             "SELECT TOP 5 s.session_id, ROW_NUMBER() OVER (ORDER BY s.login_time) AS n FROM sys.dm_exec_sessions AS s ORDER BY s.session_id;",
             "SELECT x.session_id FROM (SELECT TOP (10) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id) AS x;",
             "SELECT p.cntr_value FROM sys.dm_os_performance_counters AS p WHERE p.counter_name = N'DROP INTO EXEC -- /*';",
-            "SELECT 1 AS [order -- by];"
+            "SELECT 1 AS [order -- by];",
+            "SELECT 0x AS a, 0x0A AS b, 1.5 AS c, 10 AS d, s.open_transaction_count FROM sys.dm_exec_sessions AS s WHERE s.session_id > 50;",
+            "IF 1 = 1 SELECT 1 AS a;\nELSE BEGIN\nSELECT 2 AS a;\nEND;",
+            "SELECT 1 AS [1DELETE], N'SET 1e1EXEC' AS b;"
         }.Where(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text).Count != 0).ToList();
         check(missed.Count == 0 && good.Count == 0,
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
@@ -200,6 +231,9 @@ internal static class LiveSchedulerChecks
             && LivePlanSql.Lint(LivePlanSql.Server[LiveSql.UncommittedPrologue.Length..]).Contains("does not start with a live prologue"),
             "the Live Plan probe's texts pass the live lint, pick their permission by edition and version, match both the session and its connection, and name DB_NAME() only once, in Azure's permission check: "
             + string.Join(", ", planProblems));
+        var planMissed = LiveLintNearMisses.Where(miss => LivePlanSql.Lint(LivePlanSql.Server.Replace("SELECT CAST(1 AS int);", miss.Statement, StringComparison.Ordinal)).Count == 0)
+            .Select(miss => miss.Name).ToList();
+        check(planMissed.Count == 0, "the Live Plan lint refuses a number glued to a word and every statement kind but a read's, as the live lint does: " + string.Join(", ", planMissed));
         // Values are read by declared position, so every read checks what it got against the declaration.
         var overviewQuery = new LiveQuery("check", LiveSql.MaxBand, "SELECT 1;", ["ms_ticks", "start_ticks", "cpu_ms", "schedulers", "runnable_tasks", "batch_requests", "compilations", "recompilations", "user_sessions"],
             "ms_ticks", "start_ticks", []);

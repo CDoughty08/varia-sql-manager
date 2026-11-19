@@ -309,6 +309,20 @@ internal static partial class LiveSql
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
     [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
+    /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
+    /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
+    [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
+    private static partial Regex Number();
+    [GeneratedRegex(@"^(?:[0-9]+(?:\.[0-9]*)?|0x[0-9A-Fa-f]*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainNumber();
+    /// <summary>Every statement keyword but SELECT, WITH, DECLARE and the control flow IF, ELSE and BEGIN … END (BEGIN only before
+    /// one of those, so BEGIN TRAN and BEGIN DIALOG are refused; END CONVERSATION by its second word). Every T-SQL statement opens
+    /// with a keyword, so this is an allow list of statement kinds, where <see cref="Forbidden"/> is a deny list.</summary>
+    [GeneratedRegex(@"(?<![\w@#])(?:ADD|ALTER|BACKUP|BREAK|BULK|CHECKPOINT|CLOSE|COMMIT|CONTINUE|CONVERSATION|CREATE|CURSOR|DBCC|DEALLOCATE|DELETE|DENY|DIALOG|DISABLE|DROP|ENABLE|EXEC|EXECUTE|FETCH|GET|GOTO|GRANT|INSERT|INTO|KILL|MERGE|MOVE|OPEN|PRINT|RAISERROR|READTEXT|RECEIVE|RECONFIGURE|RESTORE|RETURN|REVERT|REVOKE|ROLLBACK|SAVE|SEND|SET|SETUSER|SHUTDOWN|SIGNATURE|THROW|TRUNCATE|UPDATE|UPDATETEXT|USE|WAITFOR|WHILE|WRITETEXT|NEXT\s+VALUE\s+FOR|BEGIN(?!\s+(?:SELECT|WITH|DECLARE|IF)(?![\w$])))(?![\w$])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StatementKeyword();
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Whitespace();
     [GeneratedRegex(@"\bBEGIN\s+(TRAN|TRANSACTION|DISTRIBUTED)\b|\bSAVE\s+TRAN|\bCOMMIT\b|\bROLLBACK\b", RegexOptions.IgnoreCase)]
     private static partial Regex Transaction();
     [GeneratedRegex(@"\bTOP\b", RegexOptions.IgnoreCase)]
@@ -345,6 +359,13 @@ internal static partial class LiveSql
         if (code.Contains('#')) problems.Add("uses a temporary table");
         if (code.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
         foreach (Match match in Forbidden().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
+        // The statement after the prologue (whose SET options are the prologue's own): no number glued to a word, and no
+        // statement kind but a read's.
+        var statement = code.StartsWith(UncommittedPrologue, StringComparison.Ordinal) ? code[UncommittedPrologue.Length..]
+            : code.StartsWith(CommittedPrologue, StringComparison.Ordinal) ? code[CommittedPrologue.Length..] : code;
+        foreach (Match number in Number().Matches(statement))
+            if (!PlainNumber().IsMatch(number.Value)) problems.Add("glues a word to the number " + number.Value);
+        foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");
         if (code.Contains("@@SPID", StringComparison.OrdinalIgnoreCase) && !text.EndsWith(Session, StringComparison.Ordinal) && !text.EndsWith(SsisSession, StringComparison.Ordinal))
