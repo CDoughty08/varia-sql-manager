@@ -1,4 +1,4 @@
-import type { ApiResult, ExplorerNode, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
 import { isPeekKind, type PeekKind, type PeekResult } from '../../../shared/explorer/peek.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -20,8 +20,6 @@ export const shownChars = 1_000_000
 export const searchDetailsLimits = {
   /** How long the selection rests before the pane reads it, so arrowing through the hits starts no reads on the way. */
   settleMs: 80,
-  /** A table's or view's columns the pane lists: one page of Object Explorer's Columns folder. */
-  columns: 500,
   /** The pane's share of the tab's width, by its sash. */
   minimum: 0.2,
   maximum: 0.8,
@@ -54,12 +52,10 @@ export function detailsKey(size: number, key: string): number | undefined {
 /** What the pane shows of a table or view: its definition (or CREATE script) or its columns. */
 export type SearchDetailsView = 'definition' | 'columns'
 export type DefinitionPart = PeekPart<PeekDefinition> | { readonly status: 'none' }
-/** One column row as Object Explorer lists it: the name, and the type and nullability it shows beside it. */
-export interface DetailsColumn { readonly name: string; readonly detail?: string }
 /**
  * A tab's selected hit as the pane shows it. `kind` is set for the kinds Peek describes, whose properties (`facts`) come from
- * explorer.peek; every other scriptable kind's definition is its Script As CREATE script; `columns` is read for a table or a view
- * when the pane shows its columns.
+ * explorer.peek with the kind's lists (a table's or view's Columns, which the pane's Columns view shows); every other scriptable
+ * kind's definition is its Script As CREATE script.
  */
 export interface SearchDetails {
   /** Increments with every hit shown, so the pane knows a new hit from a refresh. */
@@ -72,7 +68,8 @@ export interface SearchDetails {
   /** The Peek groups the login was refused (index usage), which come with the facts. */
   readonly refused?: PeekResult['refused']
   readonly definition: DefinitionPart
-  readonly columns?: PeekPart<readonly DetailsColumn[]>
+  /** The kind's Peek lists, which come with the facts: Columns for a table or a view. */
+  readonly lists?: PeekResult['lists']
   /** Its server was lost: whatever had not arrived says so, and the hit is read again when the server comes back. */
   readonly lost?: true
 }
@@ -86,7 +83,7 @@ export interface SearchDetailsSnapshot {
 }
 
 export interface SearchDetailsOptions {
-  readonly api: Pick<VariaApi, 'scriptObjects' | 'cancelScripting' | 'explorerChildren' | 'explorerCancel'>
+  readonly api: Pick<VariaApi, 'scriptObjects' | 'cancelScripting'>
   readonly peek: { read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader }
   readonly connections: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   /** The search documents, so a closed tab's details go with it. */
@@ -96,8 +93,8 @@ export interface SearchDetailsOptions {
   readonly newId?: () => string
 }
 
-/** A tab's reads: Peek's reader, a Script As request, a Columns page. */
-interface Reads { peek?: PeekReader; script?: string; columns?: string; timer?: unknown }
+/** A tab's reads: Peek's reader, a Script As request. */
+interface Reads { peek?: PeekReader; script?: string; timer?: unknown }
 
 export const columnsOf = (object: ObjectSearchHit['object']): boolean => object.kind === 'table' || object.kind === 'view'
 /** Whether Script As can write `hit`'s CREATE script, as its menu would offer it. */
@@ -107,8 +104,8 @@ export const scriptable = (hit: ObjectSearchHit): boolean =>
 /**
  * The details pane of each Search Objects tab: the selected hit's properties and its definition, read once the selection
  * settles (`searchDetailsLimits.settleMs`). Tables, views, procedures and functions are read as Peek reads them (sharing its
- * kept table scripts); any other kind Script As can write shows its CREATE script; a table's or view's columns are one page of
- * Object Explorer's Columns folder. Nothing is read while the pane is hidden; a new hit, a closed tab or a lost server cancels
+ * kept table scripts), a table's or view's columns being Peek's Columns list; any other kind Script As can write shows its CREATE
+ * script. Nothing is read while the pane is hidden; a new hit, a closed tab or a lost server cancels
  * the tab's reads.
  */
 export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> implements Disposable {
@@ -173,15 +170,9 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     if (next !== this.getSnapshot().size) this.publish({ ...this.getSnapshot(), size: next })
   }
 
-  /** Shows a table's or view's definition or its columns; the columns are read the first time each hit shows them, and again after failing. */
+  /** Shows a table's or view's definition or its columns, which came with its properties: switching reads nothing. */
   setView(view: SearchDetailsView): void {
-    if (view === this.getSnapshot().view) return
-    this.publish({ ...this.getSnapshot(), view })
-    if (view !== 'columns') return
-    for (const [id, details] of Object.entries(this.getSnapshot().documents)) {
-      if (!columnsOf(details.hit.object) || details.columns && details.columns.status !== 'error') continue
-      if (this.reads.get(id)?.timer === undefined) this.readColumns(id, details)
-    }
+    if (view !== this.getSnapshot().view) this.publish({ ...this.getSnapshot(), view })
   }
 
   dispose(): void {
@@ -209,7 +200,6 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
       if (reads) reads.timer = undefined
       if (kind) this.readPeek(documentId, details, kind, fresh)
       else if (definition.status === 'loading') this.readScript(documentId, details)
-      if (this.getSnapshot().view === 'columns' && columnsOf(hit.object)) this.readColumns(documentId, details)
     }
     if (!settle) { start(); return }
     this.reads.set(documentId, { timer: this.timers.setTimeout(start, searchDetailsLimits.settleMs) })
@@ -242,30 +232,13 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     }).catch(onUnexpectedError)
   }
 
-  private readColumns(documentId: string, details: SearchDetails): void {
-    const { object } = details.hit
-    if (!this.isLive(details.connectionId) || object.kind !== 'table' && object.kind !== 'view') return
-    const requestId = this.newId(), reads = this.readsOf(documentId)
-    reads.columns = requestId
-    this.update(documentId, details.id, { columns: { status: 'loading' } })
-    const node = { type: 'folder' as const, owner: object, folder: 'columns' as const }
-    void settled(this.options.api.explorerChildren({ connectionId: details.connectionId, requestId, node, pageSize: searchDetailsLimits.columns })).then(result => {
-      if (this.reads.get(documentId)?.columns !== requestId) return
-      this.readsOf(documentId).columns = undefined
-      const columns: PeekPart<readonly DetailsColumn[]> = !result.ok ? { status: 'error', message: result.error }
-        : result.value.error ? { status: 'error', message: result.value.error.message }
-        : { status: 'ready', value: result.value.nodes.map(columnOf) }
-      this.update(documentId, details.id, { columns })
-    }).catch(onUnexpectedError)
-  }
-
   private readsOf(documentId: string): Reads {
     let reads = this.reads.get(documentId)
     if (!reads) { reads = {}; this.reads.set(documentId, reads) }
     return reads
   }
 
-  /** Ends the tab's reads: the settle timer, Peek's reader (which keeps a table's script for its cache), the script and the columns. */
+  /** Ends the tab's reads: the settle timer, Peek's reader (which keeps a table's script for its cache) and the script. */
   private release(documentId: string): void {
     const reads = this.reads.get(documentId)
     if (!reads) return
@@ -274,7 +247,6 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     reads.peek?.release(true)
     try {
       if (reads.script) report(this.options.api.cancelScripting([reads.script]))
-      if (reads.columns) report(this.options.api.explorerCancel([reads.columns]))
     } catch (error) { onUnexpectedError(error) }
   }
 
@@ -285,7 +257,7 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     if (!details) return
     const gone = { status: 'error' as const, message: peekMessages.notConnected }
     const loading = (part: { readonly status: string } | undefined) => part?.status === 'loading'
-    this.put(documentId, { ...details, lost: true, ...(loading(details.facts) ? { facts: gone } : {}), ...(loading(details.definition) ? { definition: gone } : {}), ...(loading(details.columns) ? { columns: gone } : {}) })
+    this.put(documentId, { ...details, lost: true, ...(loading(details.facts) ? { facts: gone } : {}), ...(loading(details.definition) ? { definition: gone } : {}) })
   }
 
   private drop(documentId: string): void {
@@ -299,11 +271,6 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
   }
 }
 
-/** Object Explorer's column row: its label is the name; its sublabel the keys, type and nullability, as `(PK, int, not null)`. */
-const columnOf = (node: ExplorerNode): DetailsColumn => {
-  const detail = node.sublabel ?? node.detail
-  return detail ? { name: node.label, detail } : { name: node.label }
-}
 /** Cancels are fire and forget: a failure is reported, never shown. */
 const report = (result: Promise<ApiResult<unknown>>) => { void result.then(value => { if (!value.ok) onUnexpectedError(new Error(value.error)) }, onUnexpectedError) }
 /** A request that throws (a lost IPC channel) settles as a failure value. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
+import type { ApiResult } from '../src/shared/contracts'
 import type { PeekResult } from '../src/shared/explorer/peek'
 import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
@@ -24,13 +24,13 @@ const rule: ObjectSearchHit = { object: { kind: 'rule', database: 'Sales', schem
 const column: ObjectSearchHit = { object: { kind: 'column', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, folder: 'columns', label: 'dbo.Orders.Id' }
 
 function setup() {
-  const pending: { peek: ((value: ApiResult<PeekResult>) => void)[]; script: ((value: ApiResult<{ text?: string }>) => void)[]; columns: ((value: ApiResult<ExplorerChildrenResult>) => void)[] } = { peek: [], script: [], columns: [] }
+  const pending: { peek: ((value: ApiResult<PeekResult>) => void)[]; script: ((value: ApiResult<{ text?: string }>) => void)[] } = { peek: [], script: [] }
   const api = {
     explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { pending.peek.push(resolve) })),
     explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
     scriptObjects: vi.fn(() => new Promise(resolve => { pending.script.push(resolve as never) })),
     cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),
-    explorerChildren: vi.fn(() => new Promise<ApiResult<ExplorerChildrenResult>>(resolve => { pending.columns.push(resolve) })),
+    explorerChildren: vi.fn(),
     writeClipboardText: vi.fn(async () => ok(undefined))
   }
   let live = [{ id: connectionId }]
@@ -141,25 +141,23 @@ describe('Search Objects details pane', () => {
     expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'ready', value: { disabled: false } }, definition: { status: 'ready', value: { text: expect.stringContaining('CREATE TRIGGER') } } })
   })
 
-  it('reads a table\'s columns when the pane shows them, once per hit', async () => {
+  it('shows a table\'s columns from Peek\'s Columns list, which comes with its facts: choosing Columns reads nothing', async () => {
     const { service, api, pending, settle } = setup()
     service.show('tab', connectionId, table)
     settle()
-    service.setView('columns')
-    expect(api.explorerChildren).toHaveBeenCalledWith(expect.objectContaining({ connectionId, node: { type: 'folder', owner: table.object, folder: 'columns' }, pageSize: searchDetailsLimits.columns }))
-    pending.columns[0]!(ok({ nodes: [
-      { ref: { type: 'object', object: column.object }, label: 'Id', icon: 'key', hasChildren: false, sublabel: '(PK, int, not null)' },
-      { ref: { type: 'object', object: { ...column.object, name: 'Note' } }, label: 'Note', icon: 'symbol-field', hasChildren: false }
-    ], elapsedMs: 1 }))
+    const rows = [['Id', 'int', false, 'PK', '1, 1', null, null, '[Id] int IDENTITY(1,1) NOT NULL'], ['Note', 'nvarchar(50)', true, null, null, null, null, '[Note] nvarchar(50) NULL']]
+    pending.peek[0]!(ok({ facts: { schema: 'dbo' }, lists: { columns: { rows, truncated: true } }, elapsedMs: 1 }))
     await flush()
-    expect(service.getSnapshot().documents.tab?.columns).toEqual({ status: 'ready', value: [{ name: 'Id', detail: '(PK, int, not null)' }, { name: 'Note' }] })
+    expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'ready' }, lists: { columns: { rows, truncated: true } } })
+    service.setView('columns')
     service.setView('definition')
     service.setView('columns')
-    expect(api.explorerChildren).toHaveBeenCalledTimes(1)
-    // A procedure has no columns to read.
+    expect(service.getSnapshot().view).toBe('columns')
+    expect(api.explorerChildren).not.toHaveBeenCalled()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    // A new hit starts without the last one's list.
     service.show('tab', connectionId, procedure)
-    settle()
-    expect(api.explorerChildren).toHaveBeenCalledTimes(1)
+    expect(service.getSnapshot().documents.tab?.lists).toBeUndefined()
   })
 
   it('cancels a tab\'s reads on a new hit, a closed tab, a hidden pane or a lost server', async () => {
@@ -186,8 +184,8 @@ describe('Search Objects details pane', () => {
     service.dispose()
   })
 
-  it('takes a new answer\'s hit for the same object, reads columns once while settling and again after failing, and reads a lost hit again on reconnect', async () => {
-    const { service, api, pending, settle, lose, restore } = setup()
+  it('takes a new answer\'s hit for the same object, reads columns with its facts, and reads a lost hit again on reconnect', async () => {
+    const { service, api, settle, lose, restore } = setup()
     service.show('tab', connectionId, procedure)
     settle()
     // Another query matches the same procedure on another line: the pane shows that match, without reading again.
@@ -195,18 +193,12 @@ describe('Search Objects details pane', () => {
     service.show('tab', connectionId, again)
     expect(service.getSnapshot().documents.tab?.hit).toBe(again)
     expect(api.explorerPeek).toHaveBeenCalledTimes(1)
-    // Columns chosen while the table settles are read once, by the settled read.
+    // Columns chosen while a table settles read nothing of their own: its columns come with the settled read's facts.
     service.show('tab', connectionId, table)
     service.setView('columns')
-    expect(api.explorerChildren).not.toHaveBeenCalled()
     settle()
-    expect(api.explorerChildren).toHaveBeenCalledTimes(1)
-    pending.columns[0]!(ok({ nodes: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Timed out.', retryable: true } } as never))
-    await flush()
-    expect(service.getSnapshot().documents.tab?.columns).toMatchObject({ status: 'error' })
-    service.setView('definition')
-    service.setView('columns')
-    expect(api.explorerChildren).toHaveBeenCalledTimes(2)
+    expect(api.explorerPeek).toHaveBeenCalledTimes(2)
+    expect(api.explorerChildren).not.toHaveBeenCalled()
     // A lost server marks the hit once; its return reads the hit again.
     lose()
     expect(service.getSnapshot().documents.tab).toMatchObject({ lost: true, facts: { status: 'error', message: 'The server is not connected.' } })
@@ -214,7 +206,7 @@ describe('Search Objects details pane', () => {
     lose()
     expect(service.getSnapshot()).toBe(marked)
     restore()
-    expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'loading' }, columns: { status: 'loading' } })
+    expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'loading' } })
     expect(service.getSnapshot().documents.tab?.lost).toBeUndefined()
     expect(api.explorerPeek).toHaveBeenCalledTimes(3)
     service.dispose()

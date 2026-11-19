@@ -7,9 +7,10 @@ import type { AppliedTick } from '../src/renderer/src/live/LiveService'
 import type { LiveOutput, LiveRowActions, MenuTarget } from '../src/renderer/src/menus/targets'
 import { targetKeys } from '../src/renderer/src/menus/targets'
 import {
-  detailsState, detailsText, isVariaPool, killOffer, killQuestion, killReport, loginTimeOf, sessionColumns, sessionFromRow, sessionRows, type SessionRef
+  detailsState, detailsText, isVariaPool, killOffer, killQuestion, killReport, locksTable, loginTimeOf, sessionColumns, sessionFromRow, sessionRows, transactionsTable, waitsTable, type SessionRef
 } from '../src/renderer/src/activity/session-actions'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { localCopyText } from '../src/shared/results/local-table'
 
 // Details and Kill Process (docs/activity-monitor.md, Session actions): what they read from a row, whether Kill is
 // offered, how each answer reads, and the service's requests, over the workbench fixture's fake API.
@@ -97,6 +98,30 @@ describe('Details', () => {
     expect(text).toContain('Current statement\n-----------------\nSELECT 1\n(First 8 of 70,000 characters.)')
     expect(text).toContain('Last batch\n----------\nEvent: Language Event\nBEGIN TRAN;')
     expect(text).toContain('Locks\n-----\nKEY\t\tX\tGRANT\t3')
+  })
+})
+
+describe('Details card grids', () => {
+  it('lists waits, transactions and locks as local tables: counts as numbers, a value the server did not give as NULL', () => {
+    const waits = waitsTable([{ waitType: 'LCK_M_S', waitingTasks: 1, waitTimeMs: 41200, maxWaitTimeMs: 41200, signalWaitTimeMs: 0 }])
+    expect(waits.columns.map(column => column.kind ?? 'text')).toEqual(['text', 'number', 'number', 'number', 'number'])
+    expect(waits.rows).toEqual([['LCK_M_S', '1', '41,200', '41,200', '0']])
+    const transactions = transactionsTable([
+      { transactionId: 90211, name: 'user_transaction', beginTime: '2026-11-09T08:00:05.000', type: 'readWrite', state: 'active', userTransaction: true, database: 'SalesDb', logBytesUsed: 2048 },
+      { transactionId: 7, type: 'system', state: 'active', userTransaction: false }
+    ])
+    expect(transactions.columns.map(column => column.name)).toEqual(['ID', 'Name', 'Type', 'State', 'Database', 'Begin time', 'Log used (bytes)'])
+    expect(transactions.rows).toEqual([['90211', 'user_transaction', 'readWrite', 'active', 'SalesDb', '2026-11-09 08:00:05.000', '2,048'], ['7', null, 'system', 'active', null, null, null]])
+    // A lock group whose database name could not be read shows its id.
+    expect(locksTable([{ resourceType: 'KEY', database: 'SalesDb', mode: 'X', status: 'GRANT', count: 3 }, { resourceType: 'OBJECT', databaseId: 9, mode: 'IS', status: 'GRANT', count: 1200 }]).rows)
+      .toEqual([['KEY', 'SalesDb', 'X', 'GRANT', '3'], ['OBJECT', '9', 'IS', 'GRANT', '1,200']])
+    expect(locksTable([]).rows).toEqual([])
+  })
+
+  it('copies a grid with headers as a results grid copies it', async () => {
+    const table = locksTable([{ resourceType: 'KEY', database: 'SalesDb', mode: 'X', status: 'GRANT', count: 1 }])
+    const copied = await localCopyText(table, [{ rows: [[0, 0]], columns: [[0, 4]] }], { headers: true, crlf: false })
+    expect(copied.text).toBe('Resource\tDatabase\tMode\tStatus\tCount\nKEY\tSalesDb\tX\tGRANT\t1')
   })
 })
 
