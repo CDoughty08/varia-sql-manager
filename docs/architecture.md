@@ -242,7 +242,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
-  highlights from sorted positions by binary search per painted row, theme colours only. Diffs (`Results/ResultDiff.cs`,
+  highlights from sorted positions by binary search per painted row, theme colours only. A cell's own colour (a diff's
+  tint, NULL's) is its `background-color`; the row's highlight, a search match and the selection lie over it in that order
+  as translucent `background-image` layers set through `--rg-hl`, `--rg-hit` and `--rg-sel`, so none replaces another, and
+  no other cell rule sets an image or the `background` shorthand outside forced colours (`tests/results-diff.test.ts`).
+  Diffs (`Results/ResultDiff.cs`,
   `results.diff`) store the unified diff as a derived result of the same query: its data columns, then a hidden suffix
   (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
   in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`

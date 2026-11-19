@@ -1278,7 +1278,10 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
-  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`) and draws each row's gutter
+  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): a removed or added kind that lists
+  cells is a changed row's old or new half (`changedOld`, `changedNew` in `rowTones`), whose changed cells alone are
+  coloured. The colour is each cell's background colour, under translucent highlight, search-match and selection layers
+  in that order (`styles.css`, pinned by `tests/results-diff.test.ts`). It also draws each row's gutter
   from the suffix it reads with every row tile (`GridData`'s suffix tiles): a kind bar, the mark and the row's number in
   its own input (the old input's on a − row), named for screen readers and in the tooltip ("Removed; row 3 in Result
   1").

@@ -232,7 +232,11 @@ are only the compared data: each row's header is a gutter with a bar for its kin
 own result (the old one's on a − row), and names the kind and the row in both results for screen readers and in its
 tooltip ("Changed, old values; row 3 in Result 1, row 4 in Result 2"). The kind and row numbers are not columns, so
 they cannot be sorted, filtered, searched or profiled; Copy writes only the data columns, while **Save Results As**
-writes `Change`, `Old row` and `New row` before them. A comparison is never transposed. Rows match by a key column unique in both, else by whole rows. **Compare with Previous
+writes `Change`, `Old row` and `New row` before them. An added or removed row has a faint wash; on a changed row's old
+and new rows only the changed values are coloured, struck through on the old row and bold on the new, and unchanged rows
+are not coloured. Highlights, search matches and the selection are drawn over these colours as translucent layers rather
+than replacing them, so a changed value stays visible when it is highlighted, matched or selected; in Windows high
+contrast, changed values are outlined and keep their strikethrough or bold. A comparison is never transposed. Rows match by a key column unique in both, else by whole rows. **Compare with Previous
 Result (Exact Text)** in the palette compares every character. Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
 A run keeps at most 1,000 results, comparisons and Pivots (including those building); past that it is refused.
 

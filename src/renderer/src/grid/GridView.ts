@@ -44,11 +44,21 @@ const classes = Array.from({ length: 4096 }, (_, bits) => 'rg-c' + (bits & NULL 
 const headerMarks = ['', 'hit', 'cur', 'dim'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
 // A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's added or removed
-// row); the row number's likewise.
-const rowTones = [...liveTones, 'added', 'removed'] as const
+// row or a changed row's old or new half); the row number's likewise.
+const rowTones = [...liveTones, 'added', 'removed', 'changedOld', 'changedNew'] as const
 const toneIndex = new Map<string, number>(rowTones.map((tone, index) => [tone, index + 1]))
-/** What a screen reader hears on a diff's added or removed row. */
-const diffLabels: Readonly<Record<string, string>> = { added: 'added row', removed: 'removed row' }
+/** What a screen reader hears on a diff's row: a changed row's halves are heard as its removed and added rows. */
+const diffLabels: Readonly<Record<string, string>> = { added: 'added row', removed: 'removed row', changedOld: 'removed row', changedNew: 'added row' }
+/**
+ * A row's tone from its tone text's kind. A changed row's halves are written as removed and added rows that list the
+ * changed cells, so a removed or added kind followed by cells is the old or new half: only those cells are emphasised.
+ */
+export function rowToneOf(toneText: string): string {
+  const space = toneText.indexOf(' ')
+  const kind = space < 0 ? toneText : toneText.slice(0, space)
+  if (space < 0) return kind
+  return kind === 'removed' ? 'changedOld' : kind === 'added' ? 'changedNew' : kind
+}
 // A highlight (highlights.ts) adds its colour's class to both: 0 for none, else 1 + its index in highlightColors.
 const highlightClass = ['', ...highlightColors.map(color => ' hl hl-' + color)]
 const rowClasses = [false, true].map(odd => ['', ...rowTones].map(tone => highlightClass.map(hl => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '') + hl)))
@@ -1692,7 +1702,7 @@ export class GridView {
     const slot = this.pinSlot.shown && this.pinSlot.row === row ? this.pinSlot : this.rowSlots.find(item => item.shown && item.row === row)
     if (!slot || slot.tone === 0) return undefined
     const tone = rowTones[slot.tone - 1]
-    return tone === 'added' || tone === 'removed' ? diffLabels[tone] : this.o.toneLabel?.(tone)
+    return diffLabels[tone] ?? this.o.toneLabel?.(tone as LiveTone)
   }
 
   /**
@@ -1745,7 +1755,7 @@ export class GridView {
     if (toneText !== slot.toneText) {
       const space = toneText.indexOf(' ')
       slot.toneText = toneText
-      slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
+      slot.toneOf = toneIndex.get(rowToneOf(toneText)) ?? 0
       slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
     }
     if (this.diff) this.paintGutter(slot, row, tile)
