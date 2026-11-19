@@ -13,8 +13,8 @@ internal static partial class DiffChecks
     private static readonly ResultColumn[] Wide =
         [new("Id", "int", "text"), new("A", "int", "text"), new("B", "int", "text"), new("C", "int", "text"), new("D", "int", "text")];
 
-    private static DiffModel Diff(ResultSetBuffer left, ResultSetBuffer right, DiffMatch match, Func<long, bool>? reserve = null) =>
-        ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None, reserve, match: match);
+    private static DiffModel Diff(ResultSetBuffer left, ResultSetBuffer right, DiffMatch match, Func<long, bool>? reserve = null, bool exact = false) =>
+        ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), exact, CancellationToken.None, reserve, match: match);
 
     private static DiffMatch By(params int[] pairs) => new(DiffMatchMode.Columns, pairs);
 
@@ -57,6 +57,10 @@ internal static partial class DiffChecks
         var (fl, fr) = Pair(store, [["1.5", "1"], ["2.25", "2"]], [["2.25", "3"], ["1.5", "1"]], floats, floats);
         var byFloat = Diff(fl, fr, By(0));
         check(Entries(byFloat) == "~1:0 =0:1", "a float column can be the key: " + Entries(byFloat));
+        ResultColumn[] binaries = [new("B", "varbinary(10)", "binary"), new("V", "int", "text")];
+        var (bl, br) = Pair(store, [["ab", "1"], ["cd", "2"]], [["cd", "3"], ["AB", "4"], ["ab", "1"]], binaries, binaries);
+        var byBinary = Diff(bl, br, By(0));
+        check(Entries(byBinary) == "~1:0 +:1 =0:2", "a binary column can be the key, its bytes compared exactly: " + Entries(byBinary));
         // A truncated key value is refused, rather than matched by its prefix.
         var budget = store.BeginQuery("truncated");
         var tl = Truncated(store, budget, 0);
@@ -105,6 +109,10 @@ internal static partial class DiffChecks
         check(Diff(l2, r2, DiffMatch.Auto).Possible.Count == 0, "2 of 4 equal is under 75%: no possible match");
         var (l3, r3) = Pair(store, [["1", "10", NULL, NULL, "40"]], [["9", "10", NULL, NULL, "41"]], Wide, Wide);
         check(Diff(l3, r3, DiffMatch.Auto).Possible.Count == 0, "equal NULLs count toward 75% but not toward the 3 values that must agree");
+        // Text equal only by its collation is equal unless compared exactly, as the cells are.
+        var (el, er) = Pair(store, [["1", "plum", "3"]], [["9", "PLUM", "3"]]);
+        check(Diff(el, er, By(0)).Possible.Count == 2 && Diff(el, er, By(0), exact: true).Possible.Count == 0,
+            "text differing only in case looks alike, but not with Exact text");
         // A tie on either side keeps neither.
         var (l4, r4) = Pair(store, [["1", "10", "20", "30", "40"]], [["8", "10", "20", "30", "41"], ["9", "10", "20", "30", "42"]], Wide, Wide);
         check(Diff(l4, r4, DiffMatch.Auto).Possible.Count == 0, "two equally good partners are a tie: no possible match");

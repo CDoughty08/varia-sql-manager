@@ -723,6 +723,9 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
   }
   const over = (result, rows, side, chosen) => Array.from({ length: rows }, (_, row) => chosen.map(p => { const text = norm(result, row, pairs[p][side]); return text === null ? '\u0000' : 'v' + text }).join('\u0001'))
   if (mode === 'rows') { const all = pairs.map((_, p) => p); leftIds = over(left, leftRows, 0, all); rightIds = over(right, rightRows, 1, all) }
+  // A chosen key column holding a stored prefix is refused, as the real backend does (DIFF_KEY_TRUNCATED).
+  const cut = (result, rows, side) => Array.from({ length: rows }, (_, row) => result.rowAt(row)).some(cells => match.columns.some(p => { const cell = cells[pairs[p][side]]; return cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) && cell.truncated }))
+  if (mode === 'columns' && (cut(left, leftRows, 0) || cut(right, rightRows, 1))) return { keyTruncated: 'A key column holds values too long to compare. Choose another.' }
   if (mode === 'columns') { keys = [...match.columns]; leftIds = over(left, leftRows, 0, keys); rightIds = over(right, rightRows, 1, keys) }
   if (mode === 'position') { leftIds = Array.from({ length: leftRows }, (_, row) => String(row)); rightIds = Array.from({ length: rightRows }, (_, row) => String(row)) }
   // Under columns, an entry whose key occurs more than once on either side is flagged dup.
@@ -763,7 +766,12 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
     else {
       const score = (r, a) => {
         let equal = 0, values = 0
-        for (const p of compared) { const x = norm(left, r.left, pairs[p][0]), y = norm(right, a.right, pairs[p][1]); if (x === y) { equal++; if (x !== null) values++ } }
+        for (const p of compared) {
+          // Equal as the cells compare: with Exact text, text equal only by its collation is not.
+          const [lc, rc] = pairs[p], textual = !(numeric(left, lc) && numeric(right, rc))
+          const x = exact && textual ? raw(left, r.left, lc) : norm(left, r.left, lc), y = exact && textual ? raw(right, a.right, rc) : norm(right, a.right, rc)
+          if (x === y) { equal++; if (x !== null) values++ }
+        }
         return 4 * equal >= 3 * compared.length && values >= Math.min(3, compared.length) ? equal : -1
       }
       const best = (list, scoreOf) => {
@@ -1973,6 +1981,7 @@ async function workbench(id, method, params, credit) {
       const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1, params.match)
       if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
       if (diff.invalid) return fail(id, 'INVALID_PARAMS', diff.invalid)
+      if (diff.keyTruncated) return fail(id, 'DIFF_KEY_TRUNCATED', diff.keyTruncated)
       const result = storeResult(diff.set, right.index)
       result.inputs = { left: params.left, right: params.right }
       const { set: _set, ...counts } = diff

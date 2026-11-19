@@ -1272,8 +1272,8 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   entries whose key occurs more than once on either side (only `columns` can have them; flagged `dup`). `possible`
   counts possible matches: after alignment (not `position`), removed and added rows are compared over the pairs that did
   not match rows (all pairs for whole rows; none left when every pair is a key, so nothing is sought); a pair qualifies
-  when at least 75% of those columns are equal (NULL equal to NULL) and at least min(3, columns) of the equal values are
-  not NULL, and is kept only when each is the other's unique best (a tie on either side keeps neither). Counts and colours
+  when at least 75% of those columns are equal as the cells compare (NULL equal to NULL; with `exact`, text equal only
+  by its collation is not) and at least min(3, columns) of the equal values are not NULL, and is kept only when each is the other's unique best (a tie on either side keeps neither). Counts and colours
   never change. `possibleSkipped`: more than 1,000 removed or added rows, more than 4,000,000 comparisons (removed ×
   added × columns), or the values' working memory refused. `nothingPaired`: both inputs have rows and none matched.
   `columnChanges`: each pair's `{ changed, soft }` cells, in pair order (the true counts, whatever a cut tone lists).
@@ -1286,8 +1286,8 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves); `changed` is
   reserved for the one-row layout. Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
   `poss=<row>` (on `added`/`removed` only: the possible match's 1-based row in the other input) and `gap=<n>` (the
-  unchanged entries left out just before this row, absent when 0; on a change, its `changedOld` half). Readers ignore
-  unknown flags. Then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs as
+  unchanged entries left out just before this row, under any `context` but -1, absent when 0; on a change, its
+  `changedOld` half). Readers ignore unknown flags. Then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs as
   `first-last` (`changedOld dup 0-5 ~7`); the cells are cut at a whole entry with ` …` so the whole text, kind and flags
   included, is at most 500 characters. An unchanged row with no flags and no soft cell has a NULL tone. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
   `tone`; a previous value's `of` names its pair) are not data: `results.view` sort keys and filters, `duplicates`

@@ -422,6 +422,8 @@ describe('ResultsJobHost over the fake backend', () => {
       ['auto', 1, 10, 10, false], ['rows', 0, 10, 10, false], ['position', 0, 10, 10, false], ['columns', 1, 10, 10, false]
     ])
     expect(await failure(ask({ mode: 'columns', columns: [99] }))).toMatchObject({ code: 'INVALID_PARAMS' })
+    // N1's fourth column holds stored prefixes: a key there is refused, as the real backend refuses it.
+    expect(await failure(ask({ mode: 'columns', columns: [3] }))).toMatchObject({ code: 'DIFF_KEY_TRUNCATED' })
   })
   it('passes BUDGET_STOPPED from a pivot or diff of a stopped query through main with its sentence', async () => {
     const { control, supervisor, execute } = await workbench()

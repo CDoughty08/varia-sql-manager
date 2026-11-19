@@ -476,7 +476,7 @@ internal static class ResultDiffer
         if (mode != DiffMatchMode.Position)
         {
             int[] others = [.. Enumerable.Range(0, pairs.Length).Where(pair => !keyPairs.Contains(pair))];
-            (possible, skipped) = LookAlikes(entries, pairs, others, leftHasher, leftPages, rightHasher, rightPages, reserve, token, leftRooms, rightRooms);
+            (possible, skipped) = LookAlikes(entries, pairs, others, leftHasher, leftPages, rightHasher, rightPages, reserve, token, leftRooms, rightRooms, exact);
         }
         if (stages is not null) stages.Aligning += System.Diagnostics.Stopwatch.GetTimestamp() - aligning;
         return new DiffModel(entries, pairs, cells, mode, keyPairs, approximate) { Possible = possible, PossibleSkipped = skipped };
@@ -525,9 +525,10 @@ internal static class ResultDiffer
     /// that a key changed. A pair qualifies when at least 75% of the compared columns hold equal values (NULL equal to NULL)
     /// and at least min(3, columns) of those are not NULL; it is kept only when each is the other's unique best (a tie on
     /// either side keeps neither). Skipped past <see cref="MaxLookAlikeRows"/> rows a side or <see cref="MaxLookAlikeWork"/>
-    /// comparisons, or when the values read are refused as working memory: the answer says so. Never changes a kind.</summary>
+    /// comparisons, or when the values read are refused as working memory: the answer says so. Never changes a kind. Values are
+    /// equal as the diff compares them: with <paramref name="exact"/>, text equal only by its collation is not.</summary>
     internal static (Dictionary<int, int> Partners, bool Skipped) LookAlikes(DiffEntry[] entries, (int Left, int Right)[] pairs, int[] compared, CellHasher leftHasher, StoredPage[] leftPages,
-        CellHasher rightHasher, StoredPage[] rightPages, Func<long, bool>? reserve, CancellationToken token, PageRooms? leftRooms = null, PageRooms? rightRooms = null)
+        CellHasher rightHasher, StoredPage[] rightPages, Func<long, bool>? reserve, CancellationToken token, PageRooms? leftRooms = null, PageRooms? rightRooms = null, bool exact = false)
     {
         var partners = new Dictionary<int, int>();
         if (compared.Length == 0) return (partners, false);
@@ -558,10 +559,19 @@ internal static class ResultDiffer
                 {
                     var column = isLeft ? pairs[compared[c]].Left : pairs[compared[c]].Right;
                     nulls[k * columns + c] = view.IsNull(column, at);
-                    hashes[k * columns + c] = hasher.CellValue(view, column, at);
+                    var hash = hasher.CellValue(view, column, at);
+                    // Exact text compares character for character (CompareCells), so its hash takes the bytes in too.
+                    if (exact && hasher.IsText(column) && !nulls[k * columns + c]) hash ^= Bytes(view.Span(column, at));
+                    hashes[k * columns + c] = hash;
                 }
             }
             return (hashes, nulls);
+        }
+        static ulong Bytes(ReadOnlySpan<byte> span)
+        {
+            var hash = 14695981039346656037UL;
+            foreach (var b in span) hash = (hash ^ b) * 1099511628211UL;
+            return hash;
         }
         var (oldHashes, oldNulls) = Read(removed, true);
         var (newHashes, _) = Read(added, false);
