@@ -1298,7 +1298,7 @@ try {
   expect(await fitFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
   await gridCell(fitGrid, 2, 3).click()
   await gridCell(fitGrid, 2, 3).click({ button: 'right' })
-  expect(await menuItemNames(page.getByRole('menu', { name: 'Query output', exact: true }), { disabled: true })).not.toContain('Save Results As…')
+  await expect(page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Save Results As…', exact: true })).toBeEnabled()
   await page.keyboard.press('Escape')
   await mountLocal({ columns: localTable.columns, rows: localTable.rows.slice(0, 1) }, fitOptions)
   await expect(fitGrid).toHaveAttribute('aria-label', 'Local fit, 1 row, 4 columns')
