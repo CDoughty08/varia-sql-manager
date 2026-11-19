@@ -121,7 +121,12 @@ internal static class LiveSchedulerChecks
         ("live event stream", "SELECT s.object_name FROM sys.fn_MSxe_read_event_stream(N'system_health', 0) AS s;"),
         ("every page of every index", "SELECT p.page_count FROM sys.dm_db_index_physical_stats(NULL, NULL, NULL, NULL, N'DETAILED') AS p;"),
         ("more name-resolving built-ins", "SELECT FILE_IDEX(N'x') AS a, FILEGROUPPROPERTY(N'PRIMARY', N'IsDefault') AS b, DATABASEPROPERTY(N'x', N'IsShutDown') AS c, APPLOCK_TEST(N'public', N'x', N'Exclusive', N'Session') AS d;"),
-        ("trace flag hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (QUERYTRACEON 8649);"),
+        // The server resolves a full-width name in brackets or quotes as its ASCII twin (width-insensitive catalog collation).
+        ("full-width bracketed log reader", "SELECT TOP (1) d.[Current LSN] FROM sys.[ｆｎ_dblog](NULL, NULL) AS d ORDER BY d.[Current LSN];"),
+        ("full-width quoted password hash", "SELECT TOP (1) l.\"ｐassword_hash\" FROM sys.sql_logins AS l ORDER BY l.name;"),
+        ("read committed hint", "SELECT TOP (1) o.name FROM sys.objects AS o WITH (READCOMMITTED) ORDER BY o.name;"),
+        ("hash index scan", "SELECT h.total_bucket_count FROM sys.dm_db_xtp_hash_index_stats AS h;"),
+        ("trace flag hint","SELECT COUNT(*) AS n FROM sys.objects OPTION (QUERYTRACEON 8649);"),
         ("memory grant hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (MIN_GRANT_PERCENT = 100);"),
         ("fetch from a cursor","SELECT 1 AS a; FETCH NEXT FROM c;"),
         ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")

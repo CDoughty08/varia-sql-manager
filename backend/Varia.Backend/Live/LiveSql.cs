@@ -310,12 +310,12 @@ internal static partial class LiveSql
         new Regex(@"\b" + Regex.Escape(builtin.TrimEnd('(')) + (builtin.EndsWith('(') ? @"\s*\(" : ""), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))];
 
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
-    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|MAXRECURSION|QUERYTRACEON|MIN_GRANT_PERCENT)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|READCOMMITTED|MAXRECURSION|QUERYTRACEON|MIN_GRANT_PERCENT)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
     /// <summary>Functions that read the server's files, any path a UNC share included, which reaches another host as OPENROWSET
     /// would; the log or backups, which fn_dump_dblog reads through a scheduler it leaves behind; every page of an index or
     /// database; or the live event stream, which never ends.</summary>
-    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations)\b",RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations|dm_db_xtp_hash_index_stats)\b",RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ServerFiles();
     /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
     /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
@@ -328,7 +328,8 @@ internal static partial class LiveSql
     [GeneratedRegex(@"(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)", RegexOptions.CultureInvariant)]
     private static partial Regex FourPartName();
     /// <summary>Code outside printable ASCII, tab and line breaks. SQL Server reads some characters .NET's <c>\s</c> does not
-    /// (U+200B, U+001C–U+001F) as whitespace, which would split every multi-word pattern here; literals are blanked first.</summary>
+    /// (U+200B, U+001C–U+001F) as whitespace, which would split every multi-word pattern here, and resolves a full-width name in
+    /// brackets (sys.[ｆｎ_dblog]) as its ASCII twin. It reads the names text: literals blanked, identifiers kept.</summary>
     [GeneratedRegex(@"[^\x20-\x7E\t\r\n]", RegexOptions.CultureInvariant)]
     private static partial Regex Unprintable();
     /// <summary>Every statement keyword but SELECT, WITH, DECLARE and the control flow IF, ELSE and BEGIN … END (BEGIN only before
@@ -393,7 +394,7 @@ internal static partial class LiveSql
         foreach (Match number in Number().Matches(statement))
             if (!PlainNumber().IsMatch(number.Value)) problems.Add("glues a word to the number " + number.Value);
         foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
-        if (Unprintable().IsMatch(code)) problems.Add("has a character outside printable ASCII in its code");
+        if (Unprintable().IsMatch(names)) problems.Add("has a character outside printable ASCII in its code or names");
         if (FourPartName().IsMatch(code)) problems.Add("reads a four-part name through a linked server");
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");

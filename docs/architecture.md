@@ -431,9 +431,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
   temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. `LiveSql.Lint` also allows,
   after the prologue, only the statement kinds SELECT, WITH, DECLARE and IF/ELSE/BEGIN … END, and no number holding a
-  letter but a hex literal (T-SQL reads `1DELETE` as 1 and DELETE, where a regex word boundary sees one word), no code
+  letter but a hex literal (T-SQL reads `1DELETE` as 1 and DELETE, where a regex word boundary sees one word), no code or name
   character outside printable ASCII (SQL Server reads U+200B as whitespace, .NET's `\s` does not), no four-part
-  (linked-server) name, no locking table hint, MAXRECURSION, QUERYTRACEON or MIN_GRANT_PERCENT, and no function that
+  (linked-server) name, no locking or isolation table hint, MAXRECURSION, QUERYTRACEON or MIN_GRANT_PERCENT, and no function that
   reads the server's files or log or every page (`fn_xe_file_target_read_file`, `fn_dump_dblog`,
   `dm_db_index_physical_stats` and kin; a file path can be a UNC share, which reaches another host as OPENROWSET would).
   Its name checks read bracketed and quoted names unwrapped (`l.[password_hash]` is still `password_hash`). Live Plan's `query.plan.operators`
