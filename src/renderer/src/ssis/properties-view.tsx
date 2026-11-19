@@ -2,15 +2,20 @@
 // the sections. Pure, so tests render it without a workbench; SsisProperties.tsx puts it in the document frame.
 import type { ReactNode } from 'react'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import type { LocalTableData } from '../../../shared/results/local-table.ts'
 import { catalogDatabase, referenceTypes, ssisDocumentSpecs, ssisLimits, validationStatuses, valueTypes } from '../../../shared/ssis/catalog.ts'
 import type { SsisParameter } from '../../../shared/ssis/schema.ts'
 import type { StatusTone } from '../../../shared/theme/tones'
 import { formatCount } from '../results/status'
+import type { GridViewState } from '../results/ResultsService'
 import type { Crumb, Fact, FrameSection } from '../kit/DocumentFrame'
-import PropertiesList, { listValue, sensitiveMask, type ListColumn } from './PropertiesList'
+import { LocalGrid } from '../grid/LocalGrid'
 import type { SsisPropertiesModel, SsisPropertiesState } from './SsisPropertiesService'
 
-export { sensitiveMask }
+/** What General says to a screen reader for an empty value, where the page draws a dash. */
+export const noneLabel = 'None'
+/** What a sensitive parameter or variable shows: the catalog never returns its value, and Varia never reads it. */
+export const sensitiveMask = '********'
 
 /**
  * A catalog time as the catalog stores it, in its own offset ("2026-10-21 14:05:06 +02:00"): never converted to the
@@ -81,8 +86,11 @@ export function truncatedNote(state: SsisPropertiesState): string | undefined {
   return `This ${noun} has more ${model.view === 'package' ? 'parameters' : 'variables'} than one read returns: the list shows its first ${first}.`
 }
 
-/** A value the catalog left empty: a muted dash (None to a screen reader), the same in General and in the lists. */
-const valueText = (value: string): ReactNode => listValue(displayText(value))
+/** A value the catalog left empty: a muted dash (None to a screen reader). */
+function valueText(value: string): ReactNode {
+  if (value === '') return <span className="ssis-properties-none"><span aria-hidden="true">—</span><span className="visually-hidden">{noneLabel}</span></span>
+  return displayText(value)
+}
 
 type Row = readonly [label: string, value: string]
 /** The General section: label and value pairs, as SSMS's General page lists them (facts as text, not input boxes). */
@@ -92,39 +100,77 @@ function General({ rows }: { readonly rows: readonly Row[] }) {
   </dl>
 }
 
-/** A read-only list of at most ssisLimits.rows rows, or what an empty one says. */
-function List<T>({ label, rows, columns, empty, rowKey }: { readonly label: string; readonly rows: readonly T[]; readonly columns: readonly ListColumn<T>[]; readonly empty: string; readonly rowKey: (row: T, index: number) => string }) {
-  if (!rows.length) return <p className="ssis-properties-empty">{empty}</p>
-  return <PropertiesList label={label} rows={rows} columns={columns} rowKey={rowKey} text={displayText} />
+/** A list's column: its title and a row's value as the page shows it (a sensitive value already masked). */
+interface ListColumn<T> { readonly title: string; readonly value: (row: T) => string }
+
+/**
+ * A list's rows as the page shows them (docs/architecture.md, Local tables): control characters named, a sensitive value
+ * as stars, an empty value as an empty cell. Copy and Save write this text, so nothing the page does not show can leave.
+ */
+export function listTable<T>(rows: readonly T[], columns: readonly ListColumn<T>[]): LocalTableData {
+  return { columns: columns.map(column => ({ name: column.title })), rows: rows.map(row => columns.map(column => displayText(column.value(row)))) }
 }
 
-// Column widths in characters: names and codes fit; values and descriptions share the rest.
-const nameWidth = 24, flagWidth = 11
+/** The most rows a list shows before it scrolls inside its section. */
+export const listRows = 20
+
+export interface SsisListProps {
+  readonly label: string
+  readonly table: LocalTableData
+  readonly empty: string
+  readonly suggestedName: string
+  /** Scroll, widths, selection and sort, kept per document so a tab switched back to shows the list as it was left. */
+  readonly state: GridViewState
+}
+/**
+ * A read-only list of at most ssisLimits.rows rows in the results grid (LocalGrid): a page, with Save, as tall as its rows
+ * up to listRows (the section column scrolls, so there is no area to fill), or what an empty one says.
+ */
+export function SsisList({ label, table, empty, suggestedName, state }: SsisListProps) {
+  return <div className="ssis-properties-grid">
+    <LocalGrid table={table} label={label} preset="page" fit maxRows={listRows} empty={empty} suggestedName={suggestedName} state={state} />
+  </div>
+}
+
+/** A document's view of one list, made on first use. */
+function listState(states: Map<string, GridViewState>, list: string): GridViewState {
+  let state = states.get(list)
+  if (!state) states.set(list, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+  return state
+}
+
 const parameterColumns: readonly ListColumn<SsisParameter>[] = [
-  { title: 'Name', value: parameter => parameter.name, width: nameWidth },
-  { title: 'Data type', value: parameter => parameter.dataType, width: 12 },
-  { title: 'Value', value: parameterValue, masked: parameter => parameter.sensitive },
-  { title: 'Source', value: parameterSource, width: 21 },
-  { title: 'Required', value: parameter => yesNo(parameter.required), width: flagWidth },
-  { title: 'Sensitive', value: parameter => yesNo(parameter.sensitive), width: flagWidth },
+  { title: 'Name', value: parameter => parameter.name },
+  { title: 'Data type', value: parameter => parameter.dataType },
+  { title: 'Value', value: parameterValue },
+  { title: 'Source', value: parameterSource },
+  { title: 'Required', value: parameter => yesNo(parameter.required) },
+  { title: 'Sensitive', value: parameter => yesNo(parameter.sensitive) },
   { title: 'Description', value: parameter => parameter.description ?? '' }
 ]
-const parameters = (rows: readonly SsisParameter[], owner: string) =>
-  <List label="Parameters" rows={rows} columns={parameterColumns} empty={`This ${owner} has no parameters.`} rowKey={parameter => parameter.name} />
 
 type SectionContent = Readonly<Record<string, { readonly content: ReactNode; readonly count?: number }>>
 /**
  * Each model's sections, built once: the document renders again on every snapshot (a section chosen, another document's
  * read), and the same elements let React skip lists of up to ssisLimits.rows rows each. Models are immutable snapshots.
  */
-const contents = new WeakMap<SsisPropertiesModel, SectionContent>()
-function sectionContent(model: SsisPropertiesModel): SectionContent {
-  let content = contents.get(model)
-  if (!content) contents.set(model, content = buildContent(model))
+const contents = new WeakMap<Map<string, GridViewState>, WeakMap<SsisPropertiesModel, SectionContent>>()
+function sectionContent(model: SsisPropertiesModel, lists: Map<string, GridViewState>): SectionContent {
+  // By document (its lists) and model: the content holds the document's grid views, so one model never lends another
+  // document its views.
+  let byModel = contents.get(lists)
+  if (!byModel) contents.set(lists, byModel = new WeakMap())
+  let content = byModel.get(model)
+  if (!content) byModel.set(model, content = buildContent(model, lists))
   return content
 }
 /** The general rows and the lists of a model, by section id. */
-function buildContent(model: SsisPropertiesModel): SectionContent {
+function buildContent(model: SsisPropertiesModel, lists: Map<string, GridViewState>): SectionContent {
+  // A list's file is named for the object and the list ("Loads-Parameters"), as a result's is for its query.
+  const list = <T,>(label: string, rows: readonly T[], columns: readonly ListColumn<T>[], empty: string) => ({
+    count: rows.length,
+    content: <SsisList label={label} table={listTable(rows, columns)} empty={empty} suggestedName={`${displayText(model.name)}-${label}`} state={listState(lists, label)} />
+  })
   switch (model.view) {
     case 'folder': return {
       general: { content: <General rows={[['Name', model.name], ['Identifier', String(model.id)], ['Description', model.description ?? ''], ['Created by', model.createdBy], ['Created', ssisTime(model.created)],
@@ -134,39 +180,30 @@ function buildContent(model: SsisPropertiesModel): SectionContent {
       general: { content: <General rows={[['Name', model.name], ['Identifier', String(model.id)], ['Description', model.description ?? ''], ['Folder', model.folder],
         ['Project format version', model.formatVersion === undefined ? '' : String(model.formatVersion)], ['Version LSN', String(model.versionLsn)], ['Deployed by', model.deployedBy],
         ['Last deployed', ssisTime(model.deployed)], ['Created', ssisTime(model.created)], ['Validation status', validationLabel(model.validationStatus)], ['Last validated', ssisTime(model.validated)]]} /> },
-      packages: {
-        count: model.packages.length,
-        content: <List label="Packages" rows={model.packages} empty="This project has no packages." rowKey={item => item.name} columns={[
-          { title: 'Name', value: item => item.name, width: nameWidth }, { title: 'Entry point', value: item => yesNo(item.entryPoint), width: flagWidth },
-          { title: 'Version', value: item => item.version, width: 14 }, { title: 'Description', value: item => item.description ?? '' }
-        ]} />
-      },
-      parameters: { count: model.parameters.length, content: parameters(model.parameters, 'project') },
-      references: {
-        count: model.references.length,
-        content: <List label="References" rows={model.references} empty="This project references no environments." rowKey={item => String(item.id)} columns={[
-          { title: 'Environment', value: item => item.environment }, { title: 'Folder', value: item => referenceFolder(item.folder) }, { title: 'Type', value: item => referenceTypeLabel(item.type), width: 12 },
-          { title: 'Validation status', value: item => validationLabel(item.validationStatus), width: 18 }
-        ]} />
-      }
+      packages: list('Packages', model.packages, [
+        { title: 'Name', value: item => item.name }, { title: 'Entry point', value: item => yesNo(item.entryPoint) },
+        { title: 'Version', value: item => item.version }, { title: 'Description', value: item => item.description ?? '' }
+      ], 'This project has no packages.'),
+      parameters: list('Parameters', model.parameters, parameterColumns, 'This project has no parameters.'),
+      references: list('References', model.references, [
+        { title: 'Environment', value: item => item.environment }, { title: 'Folder', value: item => referenceFolder(item.folder) }, { title: 'Type', value: item => referenceTypeLabel(item.type) },
+        { title: 'Validation status', value: item => validationLabel(item.validationStatus) }
+      ], 'This project references no environments.')
     }
     case 'package': return {
       general: { content: <General rows={[['Name', model.name], ['Identifier', String(model.id)], ['Description', model.description ?? ''], ['Folder', model.folder], ['Project', model.project],
         ['Entry point', yesNo(model.entryPoint)], ['Package format version', String(model.formatVersion)], ['Version', model.version], ['Version comments', model.versionComments ?? ''],
         ['Validation status', validationLabel(model.validationStatus)], ['Last validated', ssisTime(model.validated)]]} /> },
-      parameters: { count: model.parameters.length, content: parameters(model.parameters, 'package') }
+      parameters: list('Parameters', model.parameters, parameterColumns, 'This package has no parameters.')
     }
     case 'environment': return {
       general: { content: <General rows={[['Name', model.name], ['Identifier', String(model.id)], ['Description', model.description ?? ''], ['Folder', model.folder], ['Created by', model.createdBy],
         ['Created', ssisTime(model.created)]]} /> },
-      variables: {
-        count: model.variables.length,
-        content: <List label="Variables" rows={model.variables} empty="This environment has no variables." rowKey={item => item.name} columns={[
-          { title: 'Name', value: item => item.name, width: nameWidth }, { title: 'Type', value: item => item.type, width: 12 },
-          { title: 'Value', value: item => item.sensitive ? sensitiveMask : item.value ?? '', masked: item => item.sensitive },
-          { title: 'Sensitive', value: item => yesNo(item.sensitive), width: flagWidth }, { title: 'Description', value: item => item.description ?? '' }
-        ]} />
-      }
+      variables: list('Variables', model.variables, [
+        { title: 'Name', value: item => item.name }, { title: 'Type', value: item => item.type },
+        { title: 'Value', value: item => item.sensitive ? sensitiveMask : item.value ?? '' },
+        { title: 'Sensitive', value: item => yesNo(item.sensitive) }, { title: 'Description', value: item => item.description ?? '' }
+      ], 'This environment has no variables.')
     }
   }
   return {}
@@ -178,7 +215,7 @@ const countNouns: Readonly<Record<string, readonly [one: string, many: string]>>
 /** The document's sections, with a count after each list's title; none before the first model arrives. */
 export function ssisSectionViews(state: SsisPropertiesState): FrameSection[] {
   if (!state.model) return []
-  const content = sectionContent(state.model)
+  const content = sectionContent(state.model, state.lists)
   return ssisDocumentSpecs[state.kind].sections.map(section => {
     const item = content[section.id], nouns = countNouns[section.id]
     const count = item?.count === undefined || !nouns ? undefined : { text: formatCount(item.count), label: `${formatCount(item.count)} ${item.count === 1 ? nouns[0] : nouns[1]}` }

@@ -9,10 +9,9 @@ import { ssisDefaultVerb, ssisDocumentSpecs, ssisVerbs, ssisVerbSpecs } from '..
 import type { SsisDescribeRequest, SsisDescribeResult, SsisEnvironmentModel, SsisFolderModel, SsisPackageModel, SsisProjectModel } from '../src/shared/ssis/schema'
 import { isCustomKind, isTextDocument, kindInfo } from '../src/renderer/src/documents'
 
-import { parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, truncatedNote, validationLabel } from '../src/renderer/src/ssis/properties-view'
+import { listRows, noneLabel, parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, SsisList, truncatedNote, validationLabel, type SsisListProps } from '../src/renderer/src/ssis/properties-view'
 import type { SsisPropertiesState } from '../src/renderer/src/ssis/SsisPropertiesService'
 import { SsisNotice } from '../src/renderer/src/ssis/SsisProperties'
-import { listLimits, listWindow, maskedLabel, noneLabel } from '../src/renderer/src/ssis/PropertiesList'
 import { ssisFocuser, type SsisFocusHost } from '../src/renderer/src/ssis/focus'
 import { initialFrameState, toggleSection } from '../src/renderer/src/kit/document-frame'
 import { deferred } from './fixtures/documents'
@@ -44,6 +43,8 @@ const targets: Record<'ssisFolder' | 'ssisProject' | 'ssisPackage' | 'ssisEnviro
 }
 const models = { folder, project, package: pkg, environment } as const
 const html = (element: ReactElement) => renderToStaticMarkup(element)
+/** A list section's grid, as its element gives it: the table it shows (and copies and saves), its name and its empty note. */
+const list = (section: { readonly content?: unknown } | undefined) => (section?.content as ReactElement<SsisListProps>).props
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -100,7 +101,7 @@ function catalogTree(params: ExplorerChildrenParams): ExplorerChildrenResult {
 }
 const viewState = (model: SsisPropertiesState['model'], extra: Partial<SsisPropertiesState> = {}): SsisPropertiesState => {
   const kind = (model ? `ssis${model.view[0].toUpperCase()}${model.view.slice(1)}` : 'ssisProject') as SsisPropertiesState['kind']
-  return { id: 'd1', kind, target: targets[kind], connectionId: 'c1', server: 'sql01', serverLabel: 'Production SQL', loading: false, gone: false, disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections), ...model ? { model, loadedAt: 1000 } : {}, ...extra }
+  return { id: 'd1', kind, target: targets[kind], connectionId: 'c1', server: 'sql01', serverLabel: 'Production SQL', loading: false, gone: false, disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections), lists: new Map(), ...model ? { model, loadedAt: 1000 } : {}, ...extra }
 }
 
 describe('SSIS properties documents', () => {
@@ -218,6 +219,27 @@ describe('SSIS properties documents', () => {
     expect(state(id).model).toBeUndefined()
     expect(ssisHeaderState(state(id))).toMatchObject({ tone: 'critical', label: 'Not found' })
     expect(ssisHeaderState({ ...state(id), error: { code: 'CATALOG_MISSING', message: 'x', retryable: false } })).toMatchObject({ label: 'Catalog missing' })
+  })
+  it('gives each document its own lists\' views, so a tab closed and opened again for the same node starts afresh', async () => {
+    const { documents, ssisProperties, run } = ssis()
+    await run('ssis.projectProperties', 'ssisProject')
+    await settled()
+    const first = documents.getSnapshot().activeId, lists = ssisProperties.get(first)!.lists
+    // The tab's Parameters grid gets the document's view, made on first use.
+    const shown = list(ssisSectionViews(ssisProperties.get(first)!)[2]).state
+    expect(lists.get('Parameters')).toBe(shown)
+    await ssisProperties.refresh(first)
+    await settled()
+    expect(ssisProperties.get(first)!.lists).toBe(lists)
+    await documents.close(first)
+    await run('ssis.projectProperties', 'ssisProject')
+    await settled()
+    const again = ssisProperties.get(documents.getSnapshot().activeId)!
+    expect(again.id).not.toBe(first)
+    // The fixture answers both reads with the same model object: the new tab's grids still get its own views.
+    expect(again.model).toBe(project)
+    expect(list(ssisSectionViews(again)[2]).state).not.toBe(shown)
+    expect(again.lists.get('Parameters')).toBe(list(ssisSectionViews(again)[2]).state)
   })
   it('cancels a read in flight when its tab closes, and ignores its late answer', async () => {
     const { documents, api, ssisProperties, run } = ssis()
@@ -351,13 +373,13 @@ describe('SSIS properties view', () => {
     expect([server, password, port, timeout].map(parameterSource)).toEqual(['Literal', 'Literal', 'Environment variable', 'Default'])
     // Even a sensitive value the backend sent by mistake stays masked.
     expect(parameterValue({ ...password, value: 'hunter2' })).toBe(sensitiveMask)
-    const markup = html(createElement('div', null, ssisSectionViews(viewState(environment)).map(section => createElement('section', { key: section.id }, section.content))))
-    expect(markup).toContain('1433')
-    // The stars are drawn but not read: a screen reader hears that the value is hidden.
-    expect(markup).toContain(`<td title="${maskedLabel}"><bdi><span aria-hidden="true">${sensitiveMask}</span><span class="visually-hidden">${maskedLabel}</span></bdi></td>`)
-    const parameters = html(createElement('div', null, ssisSectionViews(viewState(project))[2].content))
-    expect(parameters).toContain(`<span aria-hidden="true">${sensitiveMask}</span><span class="visually-hidden">${maskedLabel}</span>`)
-    expect(parameters.split(maskedLabel)).toHaveLength(3)
+    // The grids' tables are the text the page shows, which is all Copy and Save write: stars, never a secret, even one the
+    // backend sent by mistake.
+    const variables = list(ssisSectionViews(viewState({ ...environment, variables: [environment.variables[0], { ...environment.variables[1], value: 'hunter2' }] }))[1])
+    expect(variables.table.rows).toEqual([['Port', 'Int32', '1433', 'No', ''], ['Secret', 'String', sensitiveMask, 'Yes', '']])
+    const parameters = list(ssisSectionViews(viewState({ ...project, parameters: project.parameters.map(parameter => parameter.sensitive ? { ...parameter, value: 'hunter2', designDefault: 'hunter3' } : parameter) }))[2])
+    expect(parameters.table.rows[1]).toEqual(['Password', 'String', sensitiveMask, 'Literal', 'No', 'Yes', ''])
+    expect(JSON.stringify([variables.table, parameters.table])).not.toMatch(/hunter/)
   })
   it('lays a project out in General, Packages, Parameters and References, with counts after the lists\' titles', () => {
     const sections = ssisSectionViews(viewState(project))
@@ -369,26 +391,26 @@ describe('SSIS properties view', () => {
     expect(ssisSectionViews(viewState({ ...environment, variables: environment.variables.slice(0, 1) }))[1].count).toEqual({ text: '1', label: '1 variable' })
     expect(markup('general')).toContain('<dt>Last deployed</dt><dd title="2026-10-21 14:05:06 +02:00"><bdi>2026-10-21 14:05:06 +02:00</bdi></dd>')
     expect(markup('general')).toContain('<dt>Validation status</dt><dd title="Not validated">')
-    // An empty value shows a muted dash, not a blank, in General and in the lists alike, and is read as None.
+    // An empty value in General shows a muted dash, not a blank, read as None; in a list it is an empty cell, as it copies.
     const none = `<bdi><span class="ssis-properties-none"><span aria-hidden="true">—</span><span class="visually-hidden">${noneLabel}</span></span></bdi>`
     expect(markup('general')).toContain(`<dt>Description</dt><dd title="">${none}</dd>`)
     expect(markup('general')).toContain(`<dt>Last validated</dt><dd title="">${none}</dd>`)
-    expect(markup('packages')).toContain(`<td title="">${none}</td>`)
-    expect(markup('packages')).not.toMatch(/<bdi><\/bdi>/)
-    expect(markup('packages')).toContain('aria-label="Packages"')
-    expect(markup('references')).toMatch(/<td[^>]*><bdi>Test<\/bdi><\/td><td[^>]*><bdi>\.<\/bdi><\/td><td[^>]*><bdi>Relative<\/bdi><\/td>/)
-    expect(markup('references')).toContain('<bdi>Absolute</bdi>')
-    // The header row and four parameters, each with its place in the list.
-    expect(markup('parameters')).toContain('aria-rowcount="5"')
-    expect(markup('parameters').match(/<tr aria-rowindex="\d+">/g)).toEqual(['<tr aria-rowindex="1">', '<tr aria-rowindex="2">', '<tr aria-rowindex="3">', '<tr aria-rowindex="4">', '<tr aria-rowindex="5">'])
-    // A package without parameters says so.
-    expect(html(createElement('div', null, ssisSectionViews(viewState(pkg))[1].content))).toContain('This package has no parameters.')
+    // Each list is a page grid named for its section, whose Save suggests a file named for the object and the list.
+    const packages = list(sections.find(section => section.id === 'packages'))
+    expect(packages).toMatchObject({ label: 'Packages', suggestedName: 'Loads-Packages', empty: 'This project has no packages.' })
+    expect(packages.table).toEqual({ columns: ['Name', 'Entry point', 'Version', 'Description'].map(name => ({ name })), rows: [['Daily.dtsx', 'Yes', '1.0.7', ''], ['Child.dtsx', 'No', '1.0.2', 'Called by Daily']] })
+    expect(list(sections.find(section => section.id === 'references')).table.rows).toEqual([['Test', '.', 'Relative', 'Not validated'], ['Prod', 'Shared', 'Absolute', 'V']])
+    expect(list(sections.find(section => section.id === 'parameters')).table.columns.map(column => column.name)).toEqual(['Name', 'Data type', 'Value', 'Source', 'Required', 'Sensitive', 'Description'])
+    expect(list(sections.find(section => section.id === 'parameters')).table.rows.map(row => row[2])).toEqual(['sql01', sensitiveMask, 'PortVariable', '30'])
+    // A package without parameters says so, in its grid.
+    expect(list(ssisSectionViews(viewState(pkg))[1])).toMatchObject({ empty: 'This package has no parameters.', table: { rows: [] } })
   })
   it('names control characters instead of drawing them, in the title path and the lists', () => {
     const state = viewState({ ...folder, name: 'Fin\u0007ance' }, { serverLabel: 'sql\u000a01' })
     expect(ssisCrumbs(state).map(crumb => crumb.label)).toEqual(['sql⟨U+000A⟩01', 'Integration Services Catalogs', 'SSISDB'])
     expect(ssisCrumbs(viewState(pkg)).map(crumb => crumb.label)).toEqual(['Production SQL', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Loads'])
     expect(html(createElement('div', null, ssisSectionViews(state)[0].content))).toContain('Fin⟨U+0007⟩ance')
+    expect(list(ssisSectionViews(viewState({ ...environment, variables: [{ name: 'Po\u202ert', type: 'Int32', sensitive: false, value: '14\u000a33' }] }))[1]).table.rows[0].slice(0, 3)).toEqual(['Po⟨U+202E⟩rt', 'Int32', '14⟨U+000A⟩33'])
   })
   it('says what the header shows: loading, refreshing, failures, disconnection, or the model\'s age', () => {
     expect(ssisHeaderState(viewState(undefined, { loading: true }))).toEqual({ kind: 'pill', tone: 'running', label: 'Loading' })
@@ -415,34 +437,29 @@ describe('SSIS properties view', () => {
     expect(notice({ disconnected: true })).not.toContain('>Retry</button>')
     expect(notice({ gone: true, error: { code: 'NOT_FOUND', message: 'Gone.', retryable: false } })).toContain('>Close</button>')
   })
-  it('draws only the rows near the view of a list at the cap, with spacers for the rest', () => {
+  it('shows a list at the cap as one page grid, as tall as its rows up to a bound, keeping its view per document', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
-    const markup = html(createElement('div', null, ssisSectionViews(viewState(many))[2].content))
-    expect(markup).toContain('aria-rowcount="2049"')
-    expect(markup.match(/<tr aria-rowindex=/g)).toHaveLength(listLimits.initialRows + 1)
-    expect(markup.match(/class="ssis-properties-spacer"/g)).toHaveLength(1)
-    // In view at the top: the first rows and the overscan, snapped out to a block.
-    expect(listWindow(2048, 23, 0, 600)).toEqual({ start: 0, end: 64 })
-    // Scrolled to row 1,000: from a block before it to a block past the view.
-    expect(listWindow(2048, 23, -1000 * 23, 600)).toEqual({ start: 960, end: 1056 })
-    expect(listWindow(2048, 23, -2048 * 23 + 300, 600)).toEqual({ start: 1984, end: 2048 })
-    // A list far below the view draws nothing yet; before any measure it draws the first rows.
-    expect(listWindow(2048, 23, 5000, 600)).toEqual({ start: 0, end: 0 })
-    expect(listWindow(100, 23, 0, Number.NaN)).toEqual({ start: 0, end: 64 })
-    expect(listWindow(0, 23, 0, 600)).toEqual({ start: 0, end: 0 })
-    for (let top = -50000; top <= 1000; top += 997) {
-      const { start, end } = listWindow(2048, 23, top, 600), first = Math.max(0, Math.floor(-top / 23)), last = Math.min(2048, Math.ceil((600 - top) / 23))
-      if (first < last) expect(start <= first && end >= last, String(top)).toBe(true)
-      expect(end - start).toBeLessThanOrEqual(Math.ceil(600 / 23) + 2 * (listLimits.overscan + listLimits.block))
-    }
+    const parameters = list(ssisSectionViews(viewState(many))[2])
+    expect(parameters.table.rows).toHaveLength(2048)
+    // A page as tall as its rows up to listRows (the section column scrolls), as LocalGrid's fitted page draws it.
+    const grid = (SsisList(parameters) as ReactElement<{ children: ReactElement<{ preset: string; fit: boolean; maxRows: number }> }>).props.children
+    expect(grid.props).toMatchObject({ preset: 'page', fit: true, maxRows: listRows })
+    // The list's view state is the document's (its lists): kept across Refresh's new models, never another document's.
+    const lists = new Map(), mine = list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state
+    expect(list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state).toBe(mine)
+    expect(list(ssisSectionViews(viewState({ ...many }, { lists }))[1]).state).not.toBe(mine)
+    expect(list(ssisSectionViews(viewState({ ...many }, { id: 'd2' }))[2]).state).not.toBe(mine)
   })
   it('builds a model\'s sections once, so choosing a section does not rebuild lists of thousands of rows', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
-    const first = ssisSectionViews(viewState(many)), again = ssisSectionViews(viewState(many, { frame: { ...initialFrameState(ssisDocumentSpecs.ssisProject.sections), section: 'references' } }))
+    const lists = new Map()
+    const first = ssisSectionViews(viewState(many, { lists })), again = ssisSectionViews(viewState(many, { lists, frame: { ...initialFrameState(ssisDocumentSpecs.ssisProject.sections), section: 'references' } }))
     expect(again.map(section => section.content)).toEqual(first.map(section => section.content))
     again.forEach((section, index) => expect(section.content).toBe(first[index].content))
     // A new model (a Refresh) builds them again.
-    expect(ssisSectionViews(viewState({ ...many }))[2].content).not.toBe(first[2].content)
+    expect(ssisSectionViews(viewState({ ...many }, { lists }))[2].content).not.toBe(first[2].content)
+    // Another document with the same model builds its own, over its own grid views.
+    expect(ssisSectionViews(viewState(many))[2].content).not.toBe(first[2].content)
   })
   it('focuses a document opened while its first read runs once that read ends, unless focus moved meanwhile', () => {
     let loading = true

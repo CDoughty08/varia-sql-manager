@@ -9,6 +9,7 @@ import { LocalGrid, type LocalGridPreset } from './LocalGrid'
 
 export interface TestLocalGridOptions {
   readonly label: string; readonly preset: LocalGridPreset; readonly empty?: string; readonly suggestedName?: string; readonly sortable?: boolean
+  readonly fit?: boolean; readonly maxRows?: number
   /** The name of a view state kept across mounts, as an owner that remounts its grid (a tab switch) keeps one per tab. */
   readonly keepState?: string
 }
@@ -21,7 +22,7 @@ export function mountTestLocalGrid(workbench: Workbench, table: LocalTableData, 
   unmountTestLocalGrid()
   const host = document.createElement('div')
   host.className = 'local-grid-test'
-  host.style.cssText = `position: fixed; left: 48px; top: 96px; width: 640px; ${o.preset === 'page' ? 'height: 320px;' : ''} z-index: 20; display: flex; flex-direction: column;`
+  host.style.cssText = `position: fixed; left: 48px; top: 96px; width: 640px; ${o.preset === 'page' && !o.fit ? 'height: 320px;' : ''} z-index: 20; display: flex; flex-direction: column;`
   document.body.append(host)
   const root = createRoot(host)
   root.render(<WorkbenchProvider workbench={workbench}><LocalGrid table={table} {...props(o)} /></WorkbenchProvider>)
