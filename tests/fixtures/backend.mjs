@@ -2058,6 +2058,8 @@ async function workbench(id, method, params, credit) {
     case 'ssis.describe': return ssisDescribe(id, params)
     case 'activity.details': return respond(id, activityDetails(params))
     case 'activity.kill': return respond(id, activityKill(params))
+    // SQL Server Agent's capability read: a sysadmin on Windows with Agent XPs on.
+    case 'agent.profile': return respond(id, { profile: { platform: 'windows', engineEdition: 3, msdbAccess: true, sysadmin: true, userRole: true, readerRole: true, operatorRole: true, purgeHistory: true, serverServices: true, sessions: true, alterAnyCredential: true, clustered: false, agentXps: true, databaseMailXps: false, databaseMail: true }, elapsedMs: 1 })
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.

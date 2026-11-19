@@ -47,12 +47,14 @@ internal sealed class ExplorerOptions
     public TimeSpan? PeekBudget { get; set; }
     /// <summary>Replaces User mapping's share of Peek's budget (half of it; deadline checks).</summary>
     public TimeSpan? PeekMappingBudget { get; set; }
+    /// <summary>Replaces agent.profile's budget from the Agent catalogue (timeout checks).</summary>
+    public TimeSpan? AgentProfileBudget { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
 /// catalog SQL under per-connection and global gates, paged by keyset. Catalog failures are values; a cancelled
 /// request (CANCEL frame, deadline, disconnect) throws.</summary>
-internal sealed class ExplorerService : IDisposable
+internal sealed partial class ExplorerService : IDisposable
 {
     private readonly IExplorerHost host;
     private readonly ExplorerCatalog catalog;

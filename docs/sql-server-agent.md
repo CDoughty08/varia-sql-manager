@@ -2,8 +2,7 @@
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Nothing of it is visible yet: the foundations below are in the code, and
-the Agent node, Job Activity Monitor and the job documents arrive in later lanes, behind the `VARIA_AGENT_PREVIEW=1`
-release gate until 0.11.0.
+the Agent node, Job Activity Monitor and the job documents arrive in later lanes, behind the release gate until 0.11.0.
 
 ## How it works
 
@@ -18,6 +17,18 @@ release gate until 0.11.0.
   refusal, a missing procedure, or `AGENT_DISABLED` for error 15281), reads at most its cap plus one row, and cancels the
   rest so a full result says it was truncated.
 - **Times** are the server's local time, as msdb stores them; nothing converts them to this computer's time zone.
+- **Release gate.** Agent's surfaces show only when Varia was started with `VARIA_AGENT_PREVIEW=1`: main reads the
+  variable once and passes the window an argument, which becomes the static context key `agentEnabled`. Without it Object
+  Explorer keeps its planned SQL Server Agent folder and no Agent command, menu item or document is offered.
+- **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool under its gates,
+  reads the login's sysadmin membership and Agent roles (`IS_ROLEMEMBER`, so nested membership counts), EXECUTE on
+  `sp_purge_jobhistory` and `sysmail_help_profile_sp`, the server-state permissions `sys.dm_server_services` and Agent's
+  sessions need (VIEW SERVER STATE, and from SQL Server 2022 VIEW SERVER SECURITY or PERFORMANCE STATE), ALTER ANY
+  CREDENTIAL, whether the server is a failover cluster instance, and `Agent XPs` and `Database Mail XPs` in use. A server
+  with no Agent (Express, the cloud editions) answers `NOT_SUPPORTED` without connecting; msdb refusing the login (916)
+  is a profile with no role. The renderer derives the login's Agent role from it (`agentRoleOf`: sysadmin, operator,
+  reader, user, none; unknown before the read, profileFailed after a failed one), which the context keys `agentRole`
+  (Object Explorer's menu) and `explorerSelectionAgentRole` carry for Agent nodes.
 
 ## What AG-0 found on a real server
 
@@ -362,5 +373,6 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `serviceWaitMs` | 60,000 | How long a Start or Stop waits for the service's new state, in ms |
 | `serviceReadMs` | 10,000 | One service state read, in ms |
 | `agentUpWaitMs` | 120,000 | How long the live checks wait for Agent after the server is up, in ms |
+| `profileMs` | 10,000 | The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it) |
 
 A job save makes at most 140 calls at these caps, below the 255 a THROW state can number.

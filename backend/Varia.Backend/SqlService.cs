@@ -36,7 +36,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
-        "ssis.describe", "ssis.execute", "ssis.catalogSetup"
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup",
+        "agent.profile"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -527,6 +528,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
         "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
+        "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };

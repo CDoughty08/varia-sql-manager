@@ -21,6 +21,7 @@ import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
+import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -579,6 +580,8 @@ export interface RpcMethods {
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
   'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
+  /** What this login may do with SQL Server Agent (roles, permissions, Agent XPs, platform), read in msdb on the Object Explorer pool. */
+  'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -820,6 +823,8 @@ export interface VariaApi {
   executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
   /** Reads what Create Catalog would do on a server, or why it cannot (`result.error`). */
   catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
+  /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
+  agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
@@ -867,6 +872,8 @@ export interface VariaApi {
   readonly testMode: boolean
   /** True only in unpackaged smoke runs that ask for it (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1): motion follows the system's preference whatever the setting says. */
   readonly followSystemMotion: boolean
+  /** True when main was started with VARIA_AGENT_PREVIEW=1: SQL Server Agent's surfaces show (context key `agentEnabled`) until 0.11.0 removes the gate. */
+  readonly agentPreview: boolean
   /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
   openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>

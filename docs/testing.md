@@ -161,6 +161,9 @@ npm run test:smoke:wsl -- --all
   the prefix is 6 hours old. Each scratch job run adds rows to Agent's server-wide history cap, pushing out real jobs'
   oldest rows on a shared server, so a suite runs few jobs. Other Agent suites never stop Agent. docs/sql-server-agent.md
   records what is verified.
+- **SQL Server Agent's release gate.** `VARIA_AGENT_PREVIEW=1` shows Agent's surfaces (context key `agentEnabled`) in
+  any build until 0.11.0 removes the gate; `electron.launch` in `scripts/fixtures/smoke.mjs` sets it unless the
+  suite's environment says otherwise, so smoke runs see the Agent node.
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs

@@ -1,3 +1,4 @@
+import type { AgentRole } from '../../../shared/agent/profile.ts'
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
@@ -51,13 +52,14 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerSelectionServerLinux: boolean
   readonly explorerSelectionPeekable: boolean
   readonly explorerSelectionDependencies: boolean
+  readonly explorerSelectionAgentRole: '' | AgentRole
   readonly explorerLoading: boolean
   /** Group by Schema is on (`objectExplorer.groupBySchema`). */
   readonly explorerGroupBySchema: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionProvider: '', explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
+  explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false, explorerSelectionAgentRole: '', ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
   explorerLoading: false, explorerGroupBySchema: false
 }
 /** The selection's keys, without the pane's own (loading, Group by Schema). */
@@ -83,6 +85,8 @@ export function selectionContextOf(target: ExplorerTarget | undefined, row: { re
     explorerSelectionServerLinux: !!target?.linux,
     explorerSelectionPeekable: !!target && target.kind !== 'folder' && isPeekKind(target.kind),
     explorerSelectionDependencies: !!target && target.kind !== 'folder' && isDependencyKind(target.kind),
+    // No Agent node is served before AG-1 (docs/agent-plan.md › Object Explorer).
+    explorerSelectionAgentRole: '',
     ...scriptContextValues(scriptMenuState(target && { kind: target.kind, subtype: target.subtype, parentKind: target.ref.type === 'object' ? target.ref.object.parent?.kind : undefined })),
     ...actionContextValues(actionMenuState(target)),
     ...ssisVerbContextValues(ssisVerbMenuState(target?.kind))

@@ -64,6 +64,7 @@ internal static class AgentLiveChecks
 
         var host = (IActionHost)service;
         var profile = host.Profile(info.Id);
+        await ProfileAsync(check, service, info, json, profile, Sql);
         await using var connection = host.Connection(info.Id);
         await host.OpenAsync(connection, CancellationToken.None);
         var reader = new AgentReader();
@@ -80,7 +81,7 @@ internal static class AgentLiveChecks
         // A killed earlier run's job, login user or other Agent object goes first, so this suite alone keeps a shared server clean.
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql);
-        await RolesAsync(check, connection, reader, scratch, Sql, None);
+        await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
     }
 
     /// <summary>Every statement that needs no job, under each caller's prologue: each answers with its declared columns or
@@ -166,7 +167,7 @@ internal static class AgentLiveChecks
     /// <summary>A login in SQLAgentUserRole alone, impersonated on the reader's connection: the master error-log procedures
     /// are refused as values, while its own (no) jobs and Agent's properties read, as AG-0 found on SQL Server 2025.</summary>
     private static async Task RolesAsync(Action<bool, string> check, SqlConnection connection, AgentReader reader, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql,
-        Func<AgentStatement, AgentParameter, object?> values)
+        Func<AgentStatement, AgentParameter, object?> values, int band)
     {
         var login = scratch.OwnLogin("agu");
         var made = await sql("CREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Quote(ScratchDatabase.Throwaway()) + ", CHECK_POLICY = OFF;", "master");
@@ -175,9 +176,20 @@ internal static class AgentLiveChecks
             var mapped = await sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";\nALTER ROLE SQLAgentUserRole ADD MEMBER " + Bracket(login) + ";", "msdb");
             Dictionary<string, AgentResult> results = [];
             List<AgentReadError> errors = [];
+            AgentProfileDto? facts = null;
             await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
-            try { (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.Jobs, AgentSql.Properties, AgentSql.ErrorLogs, AgentSql.ServiceState], values, CancellationToken.None); }
+            try
+            {
+                (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.Jobs, AgentSql.Properties, AgentSql.ErrorLogs, AgentSql.ServiceState], values, CancellationToken.None);
+                // agent.profile's batch as the explorer pool runs it (in msdb through sp_executesql), under the impersonated login.
+                await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
+                command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = AgentProfileSql.Render(new SqlRender(band)) });
+                await using (var read = await command.ExecuteReaderAsync()) facts = await AgentProfileSql.ReadAsync(read, "windows", 3, CancellationToken.None);
+            }
             finally { await Run("REVERT;"); }
+            check(facts is { MsdbAccess: true, Sysadmin: false, UserRole: true, ReaderRole: false, OperatorRole: false, PurgeHistory: false, ServerServices: false, Sessions: false, AlterAnyCredential: false, AgentXps: true },
+                "agent.profile's batch reads a SQLAgentUserRole login as that role alone, with no EXECUTE on sp_purge_jobhistory, no server state and no ALTER ANY CREDENTIAL, and Agent XPs on: "
+                + (facts is null ? "no row" : JsonSerializer.Serialize(facts)));
             check(made.Status == "completed" && mapped.Status == "completed" && results.TryGetValue("jobs", out var jobs) && jobs.Rows.Count == 0 && results.ContainsKey("properties")
                 && errors.Select(error => error.Statement + " " + error.Code).SequenceEqual(["errorLogs PERMISSION_DENIED", "serviceState PERMISSION_DENIED"]),
                 "a SQLAgentUserRole login reads its own jobs (none) and Agent's properties, and is refused xp_enumerrorlogs and xp_servicecontrol as PERMISSION_DENIED values: "
@@ -190,6 +202,21 @@ internal static class AgentLiveChecks
             await using var command = new SqlCommand(text, connection);
             await command.ExecuteNonQueryAsync();
         }
+    }
+
+    /// <summary>agent.profile (AG-0b) as the suite's own login: msdb access, Agent XPs on (Agent is up), the platform the server
+    /// profile says, sysadmin as the server says, and for sysadmin every Agent role and permission.</summary>
+    private static async Task ProfileAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, ServerProfile server,
+        Func<string, string, Task<SqlRun>> sql)
+    {
+        var result = (AgentProfileResult)await service.DispatchAsync("agent.profile", JsonSerializer.SerializeToElement(new AgentProfileArgs(info.Id, Guid.NewGuid().ToString()), json), json);
+        var sysadmin = (await sql("SELECT CONVERT(int, IS_SRVROLEMEMBER(N'sysadmin'));", "master")).Scalar == "1";
+        var platform = server.EngineEdition == 8 ? "managedInstance" : server.Linux ? "linux" : "windows";
+        check(result is { Error: null, Profile: { MsdbAccess: true, AgentXps: true } facts } && facts.Sysadmin == sysadmin && facts.Platform == platform && facts.EngineEdition == server.EngineEdition
+            && (!sysadmin || facts is { UserRole: true, ReaderRole: true, OperatorRole: true, PurgeHistory: true, ServerServices: true, Sessions: true, AlterAnyCredential: true })
+            && result.ElapsedMs < AgentCatalog.Current.Limit("profileMs"),
+            "agent.profile reads this login's Agent facts on the Object Explorer pool: msdb access, Agent XPs on, the " + platform + " platform, sysadmin " + sysadmin
+            + " with every Agent role and permission when sysadmin, within its budget: " + JsonSerializer.Serialize(result));
     }
 
     private static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";

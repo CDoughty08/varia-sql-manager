@@ -5,6 +5,7 @@ import type { ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
+import { agentPreviewFromArgv } from '../shared/agent/gate'
 import type { ThemeState } from '../shared/theme/types'
 import type { ActionProgress } from '../shared/actions/schema'
 import type { ObjectIndexProgress } from '../shared/explorer/search'
@@ -102,6 +103,7 @@ const api: VariaApi = {
   describeSsis: params => request('ssis.describe', params),
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
+  agentProfile: params => request('agent.profile', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),
   activityKill: params => request('activity.kill', params),
@@ -148,6 +150,7 @@ const api: VariaApi = {
   },
   testMode: process.argv.includes('--varia-test-mode'),
   followSystemMotion: process.argv.includes('--varia-follow-system-motion'),
+  agentPreview: agentPreviewFromArgv(process.argv),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),

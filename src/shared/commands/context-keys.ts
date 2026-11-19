@@ -5,6 +5,7 @@ import { folderIds, nodeKinds, nodeStatuses, serverEngines } from '../explorer/c
 import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
 import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey } from '../ssis/catalog.ts'
 import { providerIds } from '../providers.ts'
+import { agentRoleValues } from '../agent/profile.ts'
 
 /**
  * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
@@ -42,6 +43,7 @@ export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
   isWindows: { type: 'boolean', scope: 'static', description: 'The app runs on Windows.' },
   isLinux: { type: 'boolean', scope: 'static', description: 'The app runs on Linux or another platform treated like it.' },
+  agentEnabled: { type: 'boolean', scope: 'static', description: "SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out." },
   editorFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the query editor, including its find widget.' },
   editorTextFocus: { type: 'boolean', scope: 'focus', description: "The query editor's text has focus." },
   inputFocus: { type: 'boolean', scope: 'focus', description: 'Focus is on an input, text area, select, or editable element other than the editor text. The find widget\'s inputs count.' },
@@ -171,6 +173,10 @@ export const contextKeys = {
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
   explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
   explorerSelectionDependencies: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
+  explorerSelectionAgentRole: {
+    type: 'enum', scope: 'state', values: ['', ...agentRoleValues],
+    description: "The login's SQL Server Agent role on the server of the selected Object Explorer node, when that node is an Agent node (`agentRoleOf` in `src/shared/agent/profile.ts`): 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' while `agent.profile` is being read, or 'profileFailed' when it failed; '' for any other node. Keep it out of keybinding `when` clauses."
+  },
   ...actionKeys,
   ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
@@ -203,6 +209,10 @@ export const contextKeys = {
   explorerProvider: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...providerIds],
     description: "The engine of the server the Object Explorer node the menu is for is on: 'sqlserver' or 'bigquery', or '' for the empty area. Items whose `providers` lack it are left out."
+  },
+  agentRole: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...agentRoleValues],
+    description: "The login's SQL Server Agent role on the server of the Object Explorer node the menu is for, when that node is an Agent node: 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' (not read yet) or 'profileFailed'; '' for any other node."
   },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'live', ''], description: "The Query Output view the menu is for: a results grid, the messages, or a grid with its own source: a live view's (an Activity Monitor pane) or a local table's (a Peek list)." },
   outputGridTransposable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set." },

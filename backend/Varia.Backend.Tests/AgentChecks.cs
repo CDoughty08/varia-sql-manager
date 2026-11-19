@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Varia.Backend.Agent;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
+using Varia.Backend.Protocol;
 
 namespace Varia.Backend.Tests;
 
@@ -18,6 +20,73 @@ internal static class AgentChecks
         Scratch(check);
         await SweepAsync(check);
         await ReaderAsync(check);
+        await ProfileAsync(check);
+    }
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+    };
+
+    /// <summary>agent.profile (AG-0b): its batch passes Object Explorer's lint for every band with only its own literals, reads the
+    /// 2022 server-state permissions only from band 16, and Agent XPs by configuration id; the method is a SQL Server-only read on
+    /// the metadata lane that checks ids and members before the connection; a server with no Agent answers NOT_SUPPORTED without
+    /// connecting, a failed connection is a value, and msdb refusing the login is a profile with no role.</summary>
+    private static async Task ProfileAsync(Action<bool, string> check)
+    {
+        var failures = AgentProfileSql.Lint().Where(item => item.Problems.Count > 0).Select(item => item.Band + ": " + string.Join(", ", item.Problems)).ToList();
+        var old = AgentProfileSql.Render(new SqlRender(15));
+        var current = AgentProfileSql.Render(new SqlRender(16));
+        check(failures.Count == 0 && AgentProfileSql.Lint().Count() == ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1
+            && !old.Contains("SECURITY STATE", StringComparison.Ordinal) && !old.Contains("PERFORMANCE STATE", StringComparison.Ordinal)
+            && current.Contains("N'VIEW SERVER SECURITY STATE'", StringComparison.Ordinal) && current.Contains("N'VIEW SERVER PERFORMANCE STATE'", StringComparison.Ordinal)
+            && current.Contains("c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = 16384", StringComparison.Ordinal) && !current.Contains("Agent XPs", StringComparison.Ordinal)
+            && !current.Contains("EXEC", StringComparison.OrdinalIgnoreCase),
+            "agent.profile's batch passes CatalogSql.Lint for every band with its own literals, reads the 2022 server-state permissions from band 16 only, and Agent XPs by id as value_in_use: " + string.Join(" | ", failures));
+        check(CatalogSql.Lint(current + "SELECT N'x';", new SqlRender(16), false, false, AgentProfileSql.Literals).Contains("has the literal N'x'")
+            && CatalogSql.Lint(current, new SqlRender(16), false, false).Any(problem => problem.StartsWith("has the literal N'sysadmin'", StringComparison.Ordinal)),
+            "agent.profile's literals are an exact set: another literal is refused, and the set is the batch's own, not Object Explorer's");
+
+        using (var sql = new SqlService())
+        {
+            async Task<string> Code(string body)
+            {
+                try { await sql.DispatchAsync("agent.profile", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
+            var codes = new[]
+            {
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\"}"),
+                await Code("{\"connectionId\":\"x\",\"requestId\":\"" + Guid.NewGuid() + "\"}"),
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"y\"}"),
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"extra\":1}")
+            };
+            check(codes.SequenceEqual(["NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]) && SqlService.MethodNames.Contains("agent.profile") && sql.Methods.Contains("agent.profile")
+                && sql.LaneOf("agent.profile") == RequestLane.Metadata && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
+                && Providers.Of("agent.profile").SequenceEqual([Providers.SqlServer]),
+                "agent.profile is a SQL Server-only read on the metadata lane that checks its ids and members before the connection: " + string.Join(", ", codes));
+        }
+
+        AgentProfileArgs Args() => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString());
+        foreach (var (edition, words) in new[] { (4, "SQL Server Express"), (5, "Azure SQL Database") })
+        {
+            var host = new ExplorerChecks.FakeHost(16, edition);
+            using var service = new ExplorerService(host);
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: { Code: "NOT_SUPPORTED", Retryable: false } } && result.Error.Message.Contains(words, StringComparison.Ordinal) && host.Connections == 0,
+                "agent.profile on " + words + " answers NOT_SUPPORTED without connecting: " + result.Error?.Message);
+        }
+        var unreachable = new ExplorerChecks.FakeHost();
+        using (var service = new ExplorerService(unreachable))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && unreachable.Connections == 1 && service.RunningCount == 0,
+                "agent.profile that cannot reach the server answers an error value, not an exception, and unregisters: " + result.Error?.Code);
+        }
+        check(AgentProfileSql.NoMsdb("windows", 3) is { MsdbAccess: false, Sysadmin: false, UserRole: false, ReaderRole: false, OperatorRole: false, AgentXps: null, DatabaseMailXps: null },
+            "msdb refusing the login (916) is a profile with msdb access off, no role and the server options unread");
     }
 
     private static void Catalog(Action<bool, string> check)
