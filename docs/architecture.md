@@ -304,14 +304,14 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     grid swaps in. A new table object is a new grid, unless its owner keeps the view state (`state`) and the columns are the
     same: then it is swapped into the same view (a live chart's table re-sampled each tick), so a drag or resize under way goes on. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
     built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
-    with its own source (view `live`, `LiveOutput`); a `card` has no Save. Its strip says what the bounds left out (rows
+    with its own source (view `live`, `LiveOutput`); a `card` has no Save, and a `fit` page (a list in a scrolling column) is
+    sized to its rows as a card is but keeps Save. A kept view state's selection is held to a new table's rows and columns. Its strip says what the bounds left out (rows
     past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
     and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
     mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
-    A `page` grid inside a document's sections (Table and Database Properties, `PropertiesGrid`) is `fit`: as tall as its
-    rows up to `maxRows`, with room for its strip and for a scroll bar only under wide columns, as a card is, since the
-    sections column scrolls as one. Its table is memoized on the model, so editing the draft keeps its selection.
+    Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
+    the draft keeps a grid's selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
   (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
   (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the

@@ -74,10 +74,10 @@ describe('Properties grid', () => {
   const workbench = { ...workbenchFixture(), platform: 'win32' } as unknown as Workbench
   const draw = (table: LocalTableData, label = 'Database files') => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(PropertiesGrid, { table, label, empty: 'None.', suggestedName: 'AppData files' }) }))
   /** The fitted frame's height: header, rows, any strip and the border (no scroll bar until the columns are wider than it). */
-  const heightOf = (markup: string) => Number(/data-local-fit="true" style="height:(\d+)px;flex:none"/.exec(markup)?.[1])
+  const heightOf = (markup: string) => Number(/data-local-fit="" style="height:(\d+)px;flex:none"/.exec(markup)?.[1])
   it('draws a fitted page grid named for its list, as tall as its rows up to a window of them', () => {
     const markup = draw(filesTable(databaseModel()))
-    expect(markup).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit="true"/)
+    expect(markup).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit=""/)
     expect(markup).toMatch(/role="grid"[^>]*aria-label="Database files"|aria-label="Database files"[^>]*role="grid"/)
     expect(heightOf(markup)).toBe(22 + 2 * 20 + 2)
     const many = { columns: [{ name: 'Name' }], rows: Array.from({ length: 40 }, (_, row) => [`r${row}`]) }

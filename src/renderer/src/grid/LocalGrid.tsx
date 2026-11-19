@@ -14,6 +14,7 @@ import { localDescriptor, LocalSource, sortOrder, type LocalSortKey } from './lo
 import { beginCopy, latestCopy } from './copy-generation'
 import { scrollbarSize } from './scrollbar'
 import { copyPlan } from './selection'
+import { remapSelection } from './swap'
 import { cycleSortKeys, sortKeysBy } from './sort-keys'
 
 /**
@@ -36,8 +37,8 @@ export interface LocalGridProps {
   readonly sortable?: boolean
   /** A card's tallest height in rows (12 by default), and a fitted page's. */
   readonly maxRows?: number
-  /** A page as tall as its rows, as a card is (up to `maxRows`, with room for its scroll bar and strip), for a page whose
-   *  column scrolls as one (Properties' sections), where filling the area would leave the grid no height. */
+  /** A page as tall as its rows up to `maxRows`, as a card is, with room for its strip and a wide grid's scroll bar: a
+   *  list among other content in a scrolling column (an SSIS properties list), where there is no area to fill. Keeps Save. */
   readonly fit?: boolean
   /** Scroll, widths and selection, kept by the owner across remounts; the grid keeps its own otherwise. */
   readonly state?: GridViewState
@@ -95,6 +96,10 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   /** The keys the current source was sorted by. */
   const sourceKeys = useRef(keys)
   const mount = (create: (spec: GridSpec) => GridView) => {
+    // A kept state can come back over a table with fewer rows or columns (remounted after an owner's Refresh, or a table
+    // with other columns; one with the same columns swaps in below): its selection is held to them, or Copy would copy
+    // rows that are gone and keys would move from there.
+    if (own.selection) own.selection = remapSelection(own.selection, row => row, rows, columns)
     const source = sourceRef.current = new LocalSource(bound, sortOrder(bound, keys), bound.cutCells, bound.cut)
     sourceKeys.current = keys
     // The card keeps the last view's width until this one reports its own on its first frame (GridView always does), so a
@@ -188,11 +193,11 @@ function LocalGridBody({ table, label, preset, empty, suggestedName, sortable = 
   const dropped = bound.droppedColumns > 0 ? `Showing the first ${formatCount(columns)} ${plural(columns, 'column')}.` : undefined
   const truncated = [bound.truncatedRows > 0 ? `Showing the first ${formatCount(rows)} ${plural(rows, 'row')}.` : undefined, dropped, cut].filter(Boolean).join(' ') || undefined
   const strip = notice ? { text: notice.text, ...notice.error ? { error: true } : {} } : truncated ? { text: truncated } : undefined
-  // A card (or a fitted page) is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar
-  // under columns wider than it and for its strip.
+  // A card is as tall as its header and rows, up to `maxRows`, with room for the platform's scroll bar under columns wider
+  // than it and for its strip.
   const height = preset === 'card' || fit ? g.headerHeight + (rows === 0 ? cardEmpty : Math.min(rows, maxRows) * g.rowHeight + (wide ? scrollbarSize() : 0)) + (strip ? g.stripHeight : 0) + 2 : undefined
   return <GridShell mountKey={`local|${state ? columnsKey : instanceKey(bound)}|${instanceKey(own)}|${sortable ? 'sortable' : 'fixed'}|${label}`} mount={mount} onApi={onApi} contents="rows"
-    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': 'true' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
+    frameProps={{ className: 'local-grid', 'data-local-grid': preset, ...fit ? { 'data-local-fit': '' } : {}, ...height !== undefined ? { style: { height, flex: 'none' } } : {} }}
     rootProps={{ 'aria-label': label, 'data-output-view': 'live' }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => setKeys(current => cycleSortKeys(current, column, add, maxSortKeys, descending => ({ column, descending })))}
     // An empty table says so in the surface's words over the header, where a results grid says why its rows are gone.

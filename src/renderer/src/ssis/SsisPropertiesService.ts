@@ -8,6 +8,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import { initialFrameState, type FrameState } from '../kit/document-frame'
+import type { GridViewState } from '../results/ResultsService'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
@@ -37,6 +38,9 @@ export interface SsisPropertiesState {
   /** When the shown model was read (epoch ms). */
   readonly loadedAt?: number
   readonly frame: FrameState
+  /** Each list's grid view (scroll, widths, selection, sort), by list: the document's own, kept across tab switches and
+   *  Refresh, and gone with its tab. Mutated by the grids, never part of a snapshot comparison. */
+  readonly lists: Map<string, GridViewState>
 }
 export interface SsisPropertiesSnapshot { readonly documents: Readonly<Record<string, SsisPropertiesState>> }
 
@@ -106,7 +110,7 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
     this.targetBindings.bind(document.id, connection.id)
     this.put({
       id: document.id, kind, target, connectionId: connection.id, server: connection.server, serverLabel: connection.displayName || connection.server, loading: false, gone: false,
-      disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections)
+      disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections), lists: new Map()
     })
     void this.describe(document.id)
     return document.id
