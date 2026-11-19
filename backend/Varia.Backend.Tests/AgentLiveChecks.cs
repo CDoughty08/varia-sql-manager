@@ -183,6 +183,26 @@ internal static class AgentLiveChecks
             check(folder is { Error: null, Nodes: [{ Label: var label, Icon: "agent-job", HasChildren: false, Ref.Object: { Kind: "agentJob", Name: var name, Database: null } } row0] } && label == job && name == job
                 && row0.Detail?.StartsWith("Owner ", StringComparison.Ordinal) == true,
                 "Object Explorer's Jobs folder lists the scratch job by name (filtered to it) with its owner, as an agentJob ref named alone: " + JsonSerializer.Serialize(folder));
+            // Search Objects indexes it only behind the release gate: shut, the build reads nothing from msdb and skips nothing.
+            async Task<(ObjectIndexStatus Index, List<ObjectSearchHit> Hits)> Indexed(bool gate)
+            {
+                service.Search.AgentEnabled = gate;
+                var built = await service.Search.IndexAsync(new(info.Id, Guid.NewGuid().ToString(), false), CancellationToken.None);
+                var found = (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
+                    new ObjectSearchArgs(info.Id, Guid.NewGuid().ToString(), job, WholeWord: true, In: "names"), json), json);
+                return (built.Status, found.Hits);
+            }
+            try
+            {
+                // Shut first: the gate never changes while the backend runs, and a shut build leaves the Agent slot as it was.
+                var shut = await Indexed(false);
+                var open = await Indexed(true);
+                check(open.Index.Skipped.All(skip => skip.Database != "msdb") && open.Hits is [{ Object: { Kind: "agentJob", Database: null } hit, Folder: "agentJobs", Modified: not null }] && hit.Name == job
+                    && shut.Index.Skipped.All(skip => skip.Database != "msdb") && shut.Hits.All(item => !item.Object.Kind.StartsWith("agent", StringComparison.Ordinal)),
+                    "Search Objects finds the scratch job as an agentJob with its modify date behind the release gate, and reads no Agent objects with it shut: "
+                    + JsonSerializer.Serialize(open.Hits) + " " + JsonSerializer.Serialize(shut.Hits) + " " + JsonSerializer.Serialize(open.Index.Skipped));
+            }
+            finally { service.Search.AgentEnabled = Varia.Backend.Agent.AgentGate.Enabled; }
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }
@@ -217,6 +237,17 @@ internal static class AgentLiveChecks
                 && errors.Select(error => error.Statement + " " + error.Code).SequenceEqual(["errorLogs PERMISSION_DENIED", "serviceState PERMISSION_DENIED"]),
                 "a SQLAgentUserRole login reads its own jobs (none) and Agent's properties, and is refused xp_enumerrorlogs and xp_servicecontrol as PERMISSION_DENIED values: "
                 + made.Error + mapped.Error + " " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code + " " + error.Number)));
+
+            // Search Objects' Agent batch under each role: a User reads jobs alone, an Operator alerts and operators too, and a
+            // login in no Agent role (msdb's guest) reads nothing and fails nothing, so its index skips nothing.
+            var user = await SearchCodes();
+            var promoted = await sql("ALTER ROLE SQLAgentOperatorRole ADD MEMBER " + Bracket(login) + ";", "msdb");
+            var operatorCodes = await SearchCodes();
+            var dropped = await sql("DROP USER " + Bracket(login) + ";", "msdb");
+            var none = await SearchCodes();
+            check(user == "jobs" && promoted.Status == "completed" && operatorCodes == "jobs,named" && dropped.Status == "completed" && none == "",
+                "Search Objects' Agent batch reads only what each role may: a SQLAgentUserRole login its jobs' set alone, a SQLAgentOperatorRole login alerts and operators too, "
+                + "and a login in no Agent role no set and no error: " + user + " | " + operatorCodes + " | " + none + " " + promoted.Error + dropped.Error);
         }
         finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
 
@@ -224,6 +255,25 @@ internal static class AgentLiveChecks
         {
             await using var command = new SqlCommand(text, connection);
             await command.ExecuteNonQueryAsync();
+        }
+
+        // The result sets the batch sends as the login: "jobs" for the jobs' set, "named" for the alerts and operators', or the error.
+        async Task<string> SearchCodes()
+        {
+            var sets = new List<string>();
+            await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
+            try
+            {
+                await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
+                command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = Varia.Backend.Search.ObjectSearchSql.Agent });
+                await using var read = await command.ExecuteReaderAsync();
+                do
+                    if (read.FieldCount > 0) sets.Add(read.FieldCount == 3 ? "jobs" : "named");
+                while (await read.NextResultAsync());
+            }
+            catch (SqlException error) { sets.Add("error " + error.Number); }
+            finally { await Run("REVERT;"); }
+            return string.Join(",", sets);
         }
     }
 
@@ -277,8 +327,8 @@ internal static class AgentLiveChecks
         }
         var logs = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentErrorLogs"));
         check(logs is { Error: null, Nodes: [{ Ref.Object: { Kind: "agentErrorLog", Name: "0" } } current, ..] } && current.Label.StartsWith("Current - ", StringComparison.Ordinal)
-            || server.Linux && logs.Error?.Code == "NOT_SUPPORTED",
-            "Error Logs lists Current (archive 0) first, then the archives (SQL Server 2022 on Linux offers no list): " + string.Join(", ", logs.Nodes.Select(item => item.Label)) + " " + logs.Error?.Message);
+            || server.Linux && logs is { Error: null, Nodes: [{ Label: "Current", Ref.Object: { Kind: "agentErrorLog", Name: "0" } }] },
+            "Error Logs lists Current (archive 0) first, then the archives; where SQL Server on Linux offers no list, Current alone: " + string.Join(", ", logs.Nodes.Select(item => item.Label)) + " " + logs.Error?.Message);
         var operators = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentOperators"));
         check(operators.Error is null, "Operators lists without error: " + operators.Error?.Message);
         if (server.EngineEdition != 8 && !server.Linux)

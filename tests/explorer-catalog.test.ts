@@ -177,14 +177,14 @@ describe('Object Explorer catalogue', () => {
     expect([...usedSubtypes].sort()).toEqual([...nodeSubtypes].sort())
     expect(nodeKinds.filter(kind => kindSpecs[kind].historyLookup)).toEqual(['table'])
     const ssisKinds = ['ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment']
-    // Script As for Agent objects comes with AG-4; nothing inserts them.
+    // Script As for Agent objects comes with AG-4; jobs, alerts, operators and proxies insert their name unquoted (raw).
     const agentKinds = ['agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog']
     expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds, ...agentKinds])
     // Schema-scoped objects insert [schema].[name]; the rest a one-part name, except parameters, the server and return values.
     for (const kind of nodeKinds) expect(kindSpecs[kind].insert === 'twoPart', kind).toBe(kindSpecs[kind].scope === 'schemaObject')
-    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds, ...agentKinds])
+    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds, 'agent', 'agentJobActivity', 'agentProxySubsystem', 'agentErrorLog'])
     expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('ssis'))).toEqual(ssisKinds)
-    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter'])
+    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxy'])
   })
   it('groups by schema exactly the folders of schema-scoped objects below Tables, Views, Synonyms and Programmability', () => {
     const placed = folderIds.filter(id => schemaPlacement(id) !== undefined)

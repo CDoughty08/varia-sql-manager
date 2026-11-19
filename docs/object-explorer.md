@@ -204,8 +204,10 @@ SQLAgentUserRole Jobs and Job Activity Monitor (a User sees only its own jobs, a
 Logs are sysadmin's alone: msdb lets no Agent role read the proxy tables, and the error logs come from xp_enumerrorlogs. A
 login in none of the roles gets PERMISSION_DENIED naming them; with Agent stopped or Agent XPs off the node lists nothing and
 says why (AGENT_DISABLED). The node's chips say the Agent service's state when it is not running and the jobs running, and its
-sublabel says Agent XPs disabled while that option is 0 (Live status). Search Objects finds jobs, alerts and operators, and
-Ctrl+Q reveals them below the node. The platform gates come from the Agent catalogue:
+sublabel says Agent XPs disabled while that option is 0 (Live status). Where xp_enumerrorlogs returns no list (SQL Server on
+Linux), Error Logs lists Current alone. Search Objects finds the jobs the login may read, operators and, where the Alerts folder
+is served, alerts; Ctrl+Q reveals them below the node, and with the gate off the index reads nothing from msdb. Copy Name copies
+a job, alert, operator or proxy name unquoted, as the msdb procedures take it. The platform gates come from the Agent catalogue:
 
 | Node | Id | Served on |
 | --- | --- | --- |
@@ -283,11 +285,11 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
 | `agent` | SQL Server Agent | `server` | `agent` | — | No | — |
 | `agentJobActivity` | Job Activity Monitor | `server` | `agent-activity` | — | No | — |
-| `agentJob` | Job | `serverObject` | `agent-job` | — | No | — |
-| `agentAlert` | Alert | `serverObject` | `bell` | — | No | — |
-| `agentOperator` | Operator | `serverObject` | `agent-operator` | — | No | — |
+| `agentJob` | Job | `serverObject` | `agent-job` | — | No | the name as is (`@name`) |
+| `agentAlert` | Alert | `serverObject` | `bell` | — | No | the name as is (`@name`) |
+| `agentOperator` | Operator | `serverObject` | `agent-operator` | — | No | the name as is (`@name`) |
 | `agentProxySubsystem` | Proxy Subsystem | `serverObject` | `folder` | — | No | — |
-| `agentProxy` | Proxy | `serverObject` | `agent-proxy` | — | No | — |
+| `agentProxy` | Proxy | `serverObject` | `agent-proxy` | — | No | the name as is (`@name`) |
 | `agentErrorLog` | Error Log | `serverObject` | `output` | — | No | — |
 
 ## Node identity

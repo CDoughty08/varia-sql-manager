@@ -117,8 +117,8 @@ describe('node identity', () => {
       server: undefined, returnValue: undefined, parameter: '@n',
       // SSIS Catalog objects are not SQL objects: dragging them inserts nothing.
       ssisCatalog: undefined, ssisFolder: undefined, ssisProject: undefined, ssisPackage: undefined, ssisEnvironment: undefined,
-      // Nor do SQL Server Agent's: none is a name a query uses as it stands.
-      agent: undefined, agentJobActivity: undefined, agentJob: undefined, agentAlert: undefined, agentOperator: undefined, agentProxySubsystem: undefined, agentProxy: undefined, agentErrorLog: undefined
+      // SQL Server Agent's named objects insert their name unquoted, as msdb's procedures take it (@job_name = N'…'); its other rows nothing.
+      agent: undefined, agentJobActivity: undefined, agentJob: 'n', agentAlert: 'n', agentOperator: 'n', agentProxySubsystem: undefined, agentProxy: 'n', agentErrorLog: undefined
     }
     for (const kind of nodeKinds) {
       const style = kindSpecs[kind].insert

@@ -124,14 +124,23 @@ internal sealed partial class ExplorerService
         var context = new RowContext(catalog, profile, null, request.Object);
         var gate = gates.GetOrAdd(request.ConnectionId, _ => new SemaphoreSlim(Options.PerConnection));
         await gate.WaitAsync(token);
+        // The listing's own budget once it holds its slots, as every other listing has (AgentReader sets no command timeout).
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         try
         {
             await total.WaitAsync(token);
             try
             {
+                budget.CancelAfter(Options.Budget);
                 await using var connection = host.Connection(request.ConnectionId, null);
-                await host.OpenAsync(connection, token);
-                var (results, errors) = await new AgentReader().ReadAsync(connection, CatalogSql.Prologue, [AgentSql.ErrorLogs], (_, _) => null, token);
+                await host.OpenAsync(connection, budget.Token);
+                var (results, errors) = await new AgentReader().ReadAsync(connection, CatalogSql.Prologue, [AgentSql.ErrorLogs], (_, _) => null, budget.Token);
+                // Where xp_enumerrorlogs returns no list (SQL Server on Linux), the current log still exists: Current alone.
+                if (errors is [{ Code: "NOT_SUPPORTED" }])
+                {
+                    nodes.Add(AgentListings.ErrorLog(context, 0, null));
+                    return new(nodes, 0, Total: nodes.Count);
+                }
                 if (errors.Count > 0) return new(nodes, 0, Error: AgentListings.From(errors[0]));
                 var logs = results[AgentSql.ErrorLogs.Id];
                 foreach (var row in logs.Rows.Select(row => (Archive: Convert.ToInt32(logs.Value(row, "Archive #"), CultureInfo.InvariantCulture), Date: logs.Value(row, "Date"))).OrderBy(row => row.Archive))
@@ -140,6 +149,11 @@ internal sealed partial class ExplorerService
                 return new(nodes, 0, Total: nodes.Count);
             }
             finally { total.Release(); }
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && budget.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            return new(nodes, 0, Error: new("TIMEOUT", "Listing SQL Server Agent's error logs took longer than "
+                + Math.Ceiling(Options.Budget.TotalSeconds).ToString(CultureInfo.InvariantCulture) + " seconds. Refresh to retry.", true));
         }
         catch (SqlException error) when (!token.IsCancellationRequested) { return new(nodes, 0, Error: ExplorerErrors.From(error, ErrorPhase.Statement, Subject(request), null)); }
         catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { return new(nodes, 0, Error: ExplorerErrors.SignIn(error)); }

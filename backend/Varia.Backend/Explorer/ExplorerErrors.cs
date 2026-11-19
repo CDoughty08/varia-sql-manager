@@ -11,8 +11,7 @@ internal enum ErrorPhase { Scope, Statement }
 internal static class ExplorerErrors
 {
     public const int MaxMessage = 512;
-    /// <summary>Platform-neutral: neither Create nor From knows the platform, so it names both ways to turn the option on; the
-    /// renderer words the node's own explanation per platform.</summary>
+    /// <summary>Platform-neutral: neither Create nor From knows the platform, so it names both ways to turn the option on.</summary>
     public const string AgentDisabled = "SQL Server Agent is stopped or its Agent XPs option is 0. Start SQL Server Agent (or turn Agent XPs on with sp_configure, or mssql-conf on Linux), then Refresh.";
     private static readonly int[] Permission = [229, 230, 262, 297, 300];
     private static readonly int[] NoAccess = [916, 4060];

@@ -370,8 +370,8 @@ to 256 with an ellipsis (never inside a surrogate pair); main checks the same bo
 
 **Object Explorer cancellation** is the `varia:explorer-cancel` channel; there is no backend method. Catalog failures
 (permission, access, missing object, lock, the 40 s budget, lost connection) are `result.error` values, not envelope
-errors. SQL Server Agent's node and listings answer `AGENT_DISABLED` (retryable) while Agent is stopped or its `Agent XPs`
-option is 0 (error 15281), and a login with no Agent role `PERMISSION_DENIED` with an Agent sentence. A database row carries `database: { state: int, userAccess: int, readOnly: bool, standby: bool }` from
+errors. SQL Server Agent's node answers `AGENT_DISABLED` (retryable) while its `Agent XPs` option is 0, as does any Agent read
+that meets error 15281, and a login with no Agent role `PERMISSION_DENIED` with an Agent sentence. A database row carries `database: { state: int, userAccess: int, readOnly: bool, standby: bool }` from
 `sys.databases`; a newer live status sample wins (`currentDatabaseRuntime`), a row-capped one only for its rows. A login
 row carries `connectDenied: true` when CONNECT SQL is denied to it; its `status` stays `disabled` when also disabled.
 `connections.connect` answers `providerId` (`sqlserver`; absent from an older backend means SQL Server) and `linux: bool` when the server's profile was read (`explorerServerLinux`) and

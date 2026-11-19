@@ -19,7 +19,7 @@ describe('menu targets', () => {
       { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeNameless: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -30,6 +30,11 @@ describe('menu targets', () => {
     const principal = (kind: 'login' | 'user') => ({ id: 4, lost: false, kind, connectionId: 'c', label: 'p', ref: { type: 'object', object: kind === 'login' ? { kind, name: 'p' } : { kind, database: 'd', name: 'p' } } } as const)
     expect(targetKeys({ kind: 'explorer', node: principal('login') }).explorerNodePeekable).toBe(true)
     expect(targetKeys({ kind: 'explorer', node: principal('user') }).explorerNodePeekable).toBe(false)
+    // Copy Name shows only for a node with a name to copy: an Agent job has one, an Agent error log (a numbered file) none.
+    const agentRow = (kind: 'agentJob' | 'agentErrorLog') => ({ id: 5, lost: false, kind, connectionId: 'c', label: 'a', ref: { type: 'object', object: { kind, name: kind === 'agentJob' ? 'Nightly' : '0' } } } as const)
+    expect(targetKeys({ kind: 'explorer', node: principal('login') }).explorerNodeNameless).toBe(false)
+    expect(targetKeys({ kind: 'explorer', node: agentRow('agentJob') }).explorerNodeNameless).toBe(false)
+    expect(targetKeys({ kind: 'explorer', node: agentRow('agentErrorLog') }).explorerNodeNameless).toBe(true)
     expect(targetKeys({ kind: 'dockTab', pane: 'editor', floating: false, popout: false }).paneFloating).toBe(false)
     expect(targetKeys({ kind: 'dockTab', pane: 'results', floating: false, popout: true }).panePopout).toBe(true)
     // A document tab in a floating editor group offers Dock rather than Float.

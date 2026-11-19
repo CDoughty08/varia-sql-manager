@@ -30,6 +30,7 @@ internal static class SearchChecks
         Kinds(check);
         Packing(check);
         Reader(check).GetAwaiter().GetResult();
+        AgentRows(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
         SearchCostChecks.Run(check);
@@ -551,6 +552,30 @@ internal static class SearchChecks
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool))], parameters));
         }
         return new DataTableReader([.. sets]);
+    }
+
+    /// <summary>The Agent batch's rows by code: jobs with their modify date, alerts only where the platform serves the Alerts folder,
+    /// operators, and nothing for an unknown code; a login msdb lets read no jobs sends the alerts and operators as the only set.</summary>
+    private static async Task AgentRows(Action<bool, string> check)
+    {
+        var at = new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        DataTable Jobs() => Rows([("code", typeof(string)), ("name", typeof(string)), ("modified", typeof(DateTime))], ["AJ", "Nightly", at], ["AJ", "Undated", null]);
+        DataTable Named() => Rows([("code", typeof(string)), ("name", typeof(string))], ["AA", "Severity 17"], ["AO", "DBA team"], ["ZZ", "unknown"]);
+        async Task<List<IndexedObject>> Read(bool alerts, params DataTable[] sets) =>
+            [.. (await new DatabaseReader("msdb", new ObjectIndexLimits(), new StringPool(new IndexBudget(1 << 20))).ReadAgentAsync(new DataTableReader(sets), alerts, CancellationToken.None))!.Table.Rows()];
+        var windows = await Read(true, Jobs(), Named());
+        var linux = await Read(false, Jobs(), Named());
+        var noJobs = await Read(true, Named());
+        check(windows.Select(item => item.Kind + ":" + item.Name).Order(StringComparer.Ordinal).SequenceEqual(["agentAlert:Severity 17", "agentJob:Nightly", "agentJob:Undated", "agentOperator:DBA team"])
+            && windows.Single(item => item.Name == "Nightly") is { Folder: "agentJobs", Schema: null, Modified: var modified } && modified == at && windows.Single(item => item.Name == "Undated").Modified is null
+            && windows.Single(item => item.Name == "Severity 17").Folder == "agentAlerts" && windows.Single(item => item.Name == "DBA team").Folder == "agentOperators",
+            "the Agent read keeps jobs with their modify date, alerts and operators in their folders, and drops an unknown code");
+        check(linux.All(item => item.Kind != "agentAlert") && linux.Count == 3 && noJobs.Select(item => item.Kind).Order(StringComparer.Ordinal).SequenceEqual(["agentAlert", "agentOperator"]),
+            "where the platform has no Alerts folder the Agent read drops alerts, and a login with no jobs set still reads alerts and operators");
+        check(ObjectSearchSql.Agent.StartsWith("IF HAS_PERMS_BY_NAME(N'dbo.sysjobs_view', N'OBJECT', N'SELECT') = 1 SELECT 'AJ'", StringComparison.Ordinal),
+            "the Agent batch reads jobs only where msdb lets the login read sysjobs_view, so a login in no Agent role skips nothing");
+        using var sql = new SqlService();
+        check(sql.Search.AgentEnabled == Varia.Backend.Agent.AgentGate.Enabled, "Search Objects' Agent read follows the release gate by default");
     }
 
     private static async Task Reader(Action<bool, string> check)

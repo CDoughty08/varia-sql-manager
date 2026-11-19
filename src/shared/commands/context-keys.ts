@@ -197,6 +197,7 @@ export const contextKeys = {
   explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
   explorerNodeDependencies: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
+  explorerNodeNameless: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden.' },
   explorerNodeStatus: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...nodeStatuses],
     description: "The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none."

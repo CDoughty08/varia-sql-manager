@@ -61,7 +61,7 @@ internal static class LiveErrors
 
     /// <summary>A missing SSISDB catalog (CATALOG_MISSING) or a missing object the view follows (NOT_FOUND, such as an execution
     /// that was cleaned up) will not come back by retrying either.</summary>
-    /// <para>AGENT_DISABLED stops the probe too: its view's Agent XPs signal restarts it with a refresh once the option reads 1.</para>
+    /// <para>AGENT_DISABLED stops the probe too, until its view is opened again.</para>
     public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND" or "AUTH_IDENTITY" or "AGENT_DISABLED";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>

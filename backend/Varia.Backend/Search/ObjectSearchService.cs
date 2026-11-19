@@ -82,6 +82,8 @@ internal sealed class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
+    /// <summary>SQL Server Agent's release gate: shut, an index build reads nothing from msdb (checks open it per service).</summary>
+    public bool AgentEnabled { get; set; } = Varia.Backend.Agent.AgentGate.Enabled;
     /// <summary>The memory every connection's index holds (the checks read it).</summary>
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
@@ -119,7 +121,7 @@ internal sealed class ObjectSearchService : IDisposable
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
-            if (explorer.Agent is not null && await ReadAgentAsync(args.ConnectionId, state, source.Token) is { } agentSkip)
+            if (AgentEnabled && explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Resource, resourceSkip);
@@ -411,7 +413,7 @@ internal sealed class ObjectSearchService : IDisposable
 
     /// <summary>Reads SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>) in msdb into the index's Agent slot. The reason
     /// it could not, reported as msdb, as a value: only Agent kinds are then left out.</summary>
-    private async Task<ObjectIndexSkip?> ReadAgentAsync(string connectionId, State state, CancellationToken token)
+    private async Task<ObjectIndexSkip?> ReadAgentAsync(string connectionId, State state, bool alerts, CancellationToken token)
     {
         const string Msdb = "msdb";
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -427,7 +429,7 @@ internal sealed class ObjectSearchService : IDisposable
             command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ModuleCall;
             command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = Msdb });
             command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ObjectSearchSql.Agent });
-            var index = await ReadBatchAsync(command, rows => reader.ReadAgentAsync(rows, budgetSource.Token), state.Index.PutAgent, budgetSource.Token);
+            var index = await ReadBatchAsync(command, rows => reader.ReadAgentAsync(rows, alerts, budgetSource.Token), state.Index.PutAgent, budgetSource.Token);
             return index is null ? new(Msdb, "TOO_LARGE", "SQL Server Agent's objects do not fit in the index's memory (" + Size + " across every connection).") : null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
@@ -795,20 +797,24 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         }
     }
 
-    /// <summary>SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>): the jobs, then the alerts and operators by code
-    /// when msdb lets the login read them (no result set otherwise). Their refs name no database. Null when they do not fit.</summary>
-    public async Task<DatabaseIndex?> ReadAgentAsync(DbDataReader reader, CancellationToken token)
+    /// <summary>SQL Server Agent's objects (<see cref="ObjectSearchSql.Agent"/>) by each row's code: jobs with their modify date,
+    /// alerts and operators by name. Alerts only where the platform serves the Alerts folder (<paramref name="alerts"/>), so
+    /// every hit can be revealed. Their refs name no database. Null when they do not fit.</summary>
+    public async Task<DatabaseIndex?> ReadAgentAsync(DbDataReader reader, bool alerts, CancellationToken token)
     {
         try
         {
-            while (await reader.ReadAsync(token)) Add(new("agentJob", "agentJobs", null, Intern(reader.GetString(0)), Modified: reader.IsDBNull(1) ? null : reader.GetDateTime(1)));
-            while (await reader.NextResultAsync(token))
+            do
                 while (await reader.ReadAsync(token))
                 {
                     var code = reader.GetString(0);
+                    if (AgentNamed(code) is not var (kind, folder) || kind == "agentAlert" && !alerts) continue;
+                    // In column order: the index reads with CommandBehavior.SequentialAccess.
                     var name = Intern(reader.GetString(1));
-                    if (AgentNamed(code) is var (kind, folder)) Add(new(kind, folder, null, name));
+                    var modified = code == "AJ" && !reader.IsDBNull(2) ? reader.GetDateTime(2) : (DateTime?)null;
+                    Add(new(kind, folder, null, name, Modified: modified));
                 }
+            while (await reader.NextResultAsync(token));
             return Partial();
         }
         catch (TooLarge)
@@ -821,6 +827,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>The kind and folder of the Agent batch's named-object code.</summary>
     internal static (string Kind, string Folder)? AgentNamed(string code) => code switch
     {
+        "AJ" => ("agentJob", "agentJobs"),
         "AA" => ("agentAlert", "agentAlerts"),
         "AO" => ("agentOperator", "agentOperators"),
         _ => null

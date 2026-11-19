@@ -54,16 +54,16 @@ internal static class ObjectSearchSql
 
     /// <summary>
     /// SQL Server Agent's named objects, run in msdb through <see cref="ModuleCall"/> where Agent runs, apart from the server batch
-    /// so a refusal skips only Agent kinds: the jobs the login may see (sysjobs_view filters by role, and every Agent role may read
-    /// it), then, only where msdb lets the login read them (SQLAgentOperatorRole or sysadmin), the alerts and operators by a
-    /// two-letter code. A login msdb grants neither reads no second result set. Proxies, proxy subsystems and error logs are not
+    /// so a refusal skips only Agent kinds. Each row starts with a two-letter code. Only where msdb lets the login read them: the
+    /// jobs it may see (sysjobs_view filters by role; a login in no Agent role may not read it, and gets no jobs rather than an
+    /// error), then the alerts and operators (SQLAgentOperatorRole or sysadmin). Proxies, proxy subsystems and error logs are not
     /// indexed: subsystems and archives are groupings rather than named objects, and proxies list below each subsystem they serve.
     /// </summary>
-    public const string Agent = "SELECT j.name, j.date_modified FROM dbo.sysjobs_view AS j;\n"
+    public const string Agent = "IF HAS_PERMS_BY_NAME(N'dbo.sysjobs_view', N'OBJECT', N'SELECT') = 1 SELECT 'AJ', j.name, j.date_modified FROM dbo.sysjobs_view AS j;\n"
         + "IF HAS_PERMS_BY_NAME(N'dbo.sysalerts', N'OBJECT', N'SELECT') = 1 AND HAS_PERMS_BY_NAME(N'dbo.sysoperators', N'OBJECT', N'SELECT') = 1"
         + " SELECT 'AA', a.name FROM dbo.sysalerts AS a UNION ALL SELECT 'AO', o.name FROM dbo.sysoperators AS o;\n";
     /// <summary>The Agent batch's literals.</summary>
-    public static readonly IReadOnlySet<string> AgentLiterals = new HashSet<string>(StringComparer.Ordinal) { "N'dbo.sysalerts'", "N'dbo.sysoperators'", "N'OBJECT'", "N'SELECT'" };
+    public static readonly IReadOnlySet<string> AgentLiterals = new HashSet<string>(StringComparer.Ordinal) { "N'dbo.sysjobs_view'", "N'dbo.sysalerts'", "N'dbo.sysoperators'", "N'OBJECT'", "N'SELECT'" };
 
     /// <summary>
     /// One database's batch, in its order:

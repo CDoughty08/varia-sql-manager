@@ -714,7 +714,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `4_tasks` | **T**asks › | Submenu: Object Explorer context menu › Tasks | `explorerNode == 'database' && !explorerServerLost` |
-| `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
+| `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `6_state` | Disa**b**le | `explorer.disable` | `explorerActionDisable != '' && explorerNode != 'background'` |
 | `6_state` | Ena**b**le | `explorer.enable` | `explorerActionEnable != '' && explorerNode != 'background'` |
 | `6_state` | **U**nlock… | `explorer.unlock` | `explorerActionUnlock != '' && explorerNode != 'background'` |
@@ -1053,7 +1053,7 @@ Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `peek.copyProperties` | Always |
 
-## Context keys (167)
+## Context keys (168)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1213,6 +1213,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerNodePeekable` | boolean | target | The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
 | `explorerNodeDependencies` | boolean | target | The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
+| `explorerNodeNameless` | boolean | target | The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden. |
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
