@@ -821,7 +821,7 @@ internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool
 internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
 /// <summary>agent.profile (src/shared/agent/profile.ts): one login's SQL Server Agent facts on one server.</summary>
 internal sealed record AgentProfileArgs(string ConnectionId, string RequestId);
-/// <summary>AgentProfile in src/shared/agent/profile.ts; AgentXps and DatabaseMailXps are absent when msdb refused the login.</summary>
+/// <summary>AgentProfile in src/shared/agent/profile.ts; AgentXps and DatabaseMailXps are absent when unreadable: msdb refused the login and the server-scope read failed too.</summary>
 internal sealed record AgentProfileDto(string Platform, int EngineEdition, bool MsdbAccess, bool Sysadmin, bool UserRole, bool ReaderRole, bool OperatorRole, bool PurgeHistory,
     bool ServerServices, bool Sessions, bool AlterAnyCredential, bool Clustered, bool? AgentXps, bool? DatabaseMailXps, bool DatabaseMail);
 internal sealed record AgentProfileResult(AgentProfileDto? Profile, long ElapsedMs, ExplorerError? Error = null);

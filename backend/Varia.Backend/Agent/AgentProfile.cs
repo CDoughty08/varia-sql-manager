@@ -8,7 +8,8 @@ namespace Varia.Backend.Agent
     /// roles and the permissions and server options the Agent surfaces branch on. It runs in msdb through Object Explorer's
     /// scope wrapper (<c>msdb.sys.sp_executesql</c>, so <c>IS_ROLEMEMBER</c> resolves msdb's roles), passes
     /// <see cref="Explorer.CatalogSql.Lint"/> with its own exact literals, and reads <c>Agent XPs</c> as <c>value_in_use</c> by
-    /// <c>configuration_id</c>, never by name.</summary>
+    /// <c>configuration_id</c>, never by name. Where msdb refuses the login, its server-scope variant (<see cref="Render"/> without
+    /// msdb) reads the server facts alone, under the same lint.</summary>
     internal static class AgentProfileSql
     {
         /// <summary>The literals the batch holds: role and permission names, the two msdb procedures and the server property.</summary>
