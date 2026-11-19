@@ -606,9 +606,6 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   if (place.maximized || (placement?.maximized && process.env.VARIA_SMOKE_TEST !== '1')) window.maximize()
   if (windowStateKept) windowTracker.track(window, placed?.x !== undefined && placed.y !== undefined ? { x: placed.x, y: placed.y, width: placed.width, height: placed.height } : undefined)
   if (testSeams && placement) Object.assign(globalThis, { __variaWindowPlacement: placement })
-  // Smoke runs on a virtual display show the window, inactive: Linux sometimes ran no animation frames in a never-shown one
-  // (scripts/fixtures/xvfb.mjs).
-  if (testSeams && process.env.VARIA_TEST_SHOW_WINDOW === '1') window.showInactive()
   if (process.platform !== 'darwin') {
     // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)

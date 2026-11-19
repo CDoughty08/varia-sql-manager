@@ -1,11 +1,16 @@
-/**
- * Whether this process runs under xvfb-run, which points XAUTHORITY into its own `xvfb-run.XXXXXX` temporary folder.
- *
- * Smoke windows stay hidden so a desktop's own pointer and focus never reach them, but Chromium on Linux sometimes stops
- * running a never-shown window's animation frames altogether: Dockview then never places its panels and the editor stays
- * hidden (CI's launch report read "animationFrame": "none within 2 s"). A virtual display has no pointer and no user, so
- * there the window is shown, inactive (VARIA_TEST_SHOW_WINDOW, a test seam main honours only in an unpackaged smoke run).
- */
+/** Whether this process runs under xvfb-run, which points XAUTHORITY into its own `xvfb-run.XXXXXX` temporary folder. */
 export function underXvfb(env = process.env, platform = process.platform) {
   return platform === 'linux' && /(^|\/)xvfb-run\.[^/]+\/Xauthority$/.test(env.XAUTHORITY ?? '')
+}
+
+const gpuSwitch = '--disable-gpu'
+
+/**
+ * An Electron launch's arguments: under xvfb, with `--disable-gpu`. A virtual display has no GPU, so Chromium's first GPU
+ * process failed to start on almost every CI launch and was replaced by a software one. Rarely (2 of about 6,700 launches
+ * under load) the failed process never exited and nothing replaced it, so the window ran no animation frames and the editor
+ * stayed hidden. Starting in software never runs that process.
+ */
+export function xvfbArgs(args, env = process.env, platform = process.platform) {
+  return underXvfb(env, platform) && !args.includes(gpuSwitch) ? [...args, gpuSwitch] : args
 }

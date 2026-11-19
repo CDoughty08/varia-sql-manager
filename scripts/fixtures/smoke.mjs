@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { _electron, expect as baseExpect } from '@playwright/test'
 import { holdForEntry } from '../machine-lock.mjs'
 import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
-import { underXvfb } from './xvfb.mjs'
+import { xvfbArgs } from './xvfb.mjs'
 
 ignoreCrashedTargetReplies()
 
@@ -192,17 +192,15 @@ async function startProfile(application) {
  */
 export const electron = {
   async launch({ motion = false, ...options } = {}) {
-    // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
-    // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
-    const args = options.args ?? []
     // Hot exit (Restore open queries on startup) would close without the save prompts many suites answer, and reopen their
     // queries in the next launch on the same profile; only a suite that sets VARIA_TEST_HOT_EXIT=1 gets it.
     const env = { ...(options.env ?? process.env) }
     env.VARIA_TEST_HOT_EXIT ??= '0'
     // Varia plays animations whatever the system asks unless the user opts in; the emulated reduced motion applies only with this.
     if (!motion) env.VARIA_TEST_FOLLOW_SYSTEM_MOTION ??= '1'
-    // On a virtual display the window is shown, inactive: hidden, Linux sometimes ran none of its animation frames (xvfb.mjs).
-    if (underXvfb(env)) env.VARIA_TEST_SHOW_WINDOW ??= '1'
+    const args = xvfbArgs(options.args ?? [], env)
+    // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
+    // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
     const application = trackElectronProcess(await _electron.launch({ ...options, env, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] }))
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
     refreshMotionOnEmulate(application)
