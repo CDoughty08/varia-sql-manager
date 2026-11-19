@@ -2401,12 +2401,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .ssis-properties > div { display: contents; }
 .ssis-properties dt { color: var(--varia-descriptionForeground); }
 .ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.ssis-properties-table { overflow-x: auto; }
-/* Fixed layout and one-line rows: the list draws only the rows near the view (PropertiesList.tsx), so columns must not
-   change width as rows come and go, and every row must be as tall as the spacers assume. */
-.ssis-properties-table .object-dialog-grid { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
-.ssis-properties-table .ssis-properties-spacer td { padding: 0; border: 0; }
-.ssis-properties-empty, .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+/* A list is a page LocalGrid with a height of its own (properties-view.tsx), since the section column scrolls. */
+.ssis-properties-grid { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--varia-panel-border); }
+.ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
 /* A narrow document puts its section list across the top, and its verbs under the title. */
 @container (max-width: 640px) {

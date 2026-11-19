@@ -346,6 +346,8 @@ as in SSMS. None of them changes the catalog yet. docs/commands.md lists the com
 A properties document is a read-only document tab named as SSMS names the dialog ("Folder Properties - Finance"), with one
 section per page. Opening an object that has a tab shows that tab and reads it again, and Refresh (F5 in the document,
 `ssis.refreshProperties`) reads it again while the last model stays on screen. A sensitive value always shows as `********`.
+Each list (packages, parameters, references, variables) is a results grid: cell and row selection, Copy and Copy with
+Headers, header sort, column resize and Save Results As, with the results grid's keys and menu. They write what the list shows, so a sensitive value copies and saves as `********`.
 
 | Document | Title | Reads (view) | Sections |
 | --- | --- | --- | --- |
