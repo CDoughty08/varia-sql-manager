@@ -1268,7 +1268,7 @@ try {
   expect(await page.evaluate(request => window.varia.showContextMenu(request), forged)).toEqual({ ok: false, error: 'Native context menus are not in use.' })
   expect(failures).toEqual([])
   await application.close()
-  application = await electron.launch({ ...launchOptions, env: { ...env, VARIA_SMOKE_MENU_STYLE: 'native', VARIA_TEST_SHOW_WINDOW: '0' } })
+  application = await electron.launch({ ...launchOptions, env: { ...env, VARIA_SMOKE_MENU_STYLE: 'native' } })
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
@@ -1389,8 +1389,7 @@ try {
     expect((await page.evaluate(request => window.varia.showContextMenu(request), { ...forged, ...change })).ok, JSON.stringify(change)).toBe(false)
   }
   for (const call of [() => window.varia.runRole('openExternal'), () => window.varia.revealSqlFile('x')]) expect((await page.evaluate(call)).ok).toBe(false)
-  // Nor does an idle page get one: main shows a menu only in the focused window (this launch keeps it hidden, even under
-  // xvfb, so it never is) or
+  // Nor does an idle page get one: main shows a menu only in the focused window (the hidden smoke window never is) or
   // just after a click, tap, or key press in it, so a background page cannot put Paste where the user is working.
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false)
   await page.waitForTimeout(1500)
