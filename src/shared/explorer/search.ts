@@ -125,7 +125,8 @@ export function searchTypeKinds(types: readonly SearchType[]): SearchKind[] | un
 export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
 export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
-export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string }
+/** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). */
+export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string; readonly agent?: boolean }
 /** none: never built; building: a build is reading; ready: the last build ended. `indexed` counts the databases read so far. */
 export interface ObjectIndexStatus {
   readonly state: 'none' | 'building' | 'ready'

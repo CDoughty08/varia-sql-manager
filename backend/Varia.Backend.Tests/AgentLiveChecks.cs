@@ -241,10 +241,18 @@ internal static class AgentLiveChecks
             // Search Objects' Agent batch under each role: a User reads jobs alone, an Operator alerts and operators too, and a
             // login in no Agent role (msdb's guest) reads nothing and fails nothing, so its index skips nothing.
             var user = await SearchCodes();
+            var userAccess = await Access();
             var promoted = await sql("ALTER ROLE SQLAgentOperatorRole ADD MEMBER " + Bracket(login) + ";", "msdb");
             var operatorCodes = await SearchCodes();
+            var operatorAccess = await Access();
             var dropped = await sql("DROP USER " + Bracket(login) + ";", "msdb");
             var none = await SearchCodes();
+            var noneAccess = await Access();
+            // The Agent node's access step reads the roles in msdb (IS_ROLEMEMBER is NULL in master): Agent XPs, sysadmin, then
+            // Operator, Reader and User, nested membership counting (Operator is in Reader, Reader in User).
+            check(userAccess == "1,0,0,0,1" && operatorAccess == "1,0,1,1,1" && noneAccess == "1,0,0,0,0",
+                "the Agent node's access step reads a SQLAgentUserRole login as User, a SQLAgentOperatorRole login as Operator (with the roles it nests in), and a login in no role as none: "
+                + userAccess + " | " + operatorAccess + " | " + noneAccess);
             check(user == "jobs" && promoted.Status == "completed" && operatorCodes == "jobs,named" && dropped.Status == "completed" && none == "",
                 "Search Objects' Agent batch reads only what each role may: a SQLAgentUserRole login its jobs' set alone, a SQLAgentOperatorRole login alerts and operators too, "
                 + "and a login in no Agent role no set and no error: " + user + " | " + operatorCodes + " | " + none + " " + promoted.Error + dropped.Error);
@@ -255,6 +263,22 @@ internal static class AgentLiveChecks
         {
             await using var command = new SqlCommand(text, connection);
             await command.ExecuteNonQueryAsync();
+        }
+
+        // The access step's row as the login: Agent XPs, sysadmin, Operator, Reader, User, or the error.
+        async Task<string> Access()
+        {
+            await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
+            try
+            {
+                await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
+                command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = AgentListings.Access });
+                await using var read = await command.ExecuteReaderAsync();
+                if (!await read.ReadAsync()) return "no row";
+                return string.Join(",", Enumerable.Range(0, 5).Select(column => Convert.ToInt32(read.GetValue(column), System.Globalization.CultureInfo.InvariantCulture)));
+            }
+            catch (SqlException error) { return "error " + error.Number; }
+            finally { await Run("REVERT;"); }
         }
 
         // The result sets the batch sends as the login: "jobs" for the jobs' set, "named" for the alerts and operators', or the error.

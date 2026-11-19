@@ -1113,6 +1113,11 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary(undefined, status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped')
     expect(indexSummary(undefined, status({ definitions: false, indexed: 1 }))).toBe('Index: 40 objects (names only) in 1 database')
     expect(indexSummary(undefined, status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · server objects skipped')
+    // SQL Server Agent's objects, read in msdb, are their own gap: msdb itself was indexed, and a skipped msdb counts once.
+    expect(indexSummary(undefined, status({ skipped: [{ database: 'msdb', code: 'TIMEOUT', message: 'm', agent: true }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · SQL Server Agent objects skipped')
+    expect(indexSummary(undefined, status({ skipped: [{ database: 'msdb', code: 'NO_DB_ACCESS', message: 'm' }, { database: 'msdb', code: 'NO_DB_ACCESS', message: 'm', agent: true }] })))
+      .toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped · SQL Server Agent objects skipped')
+    expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: 'msdb', code: 'TOO_LARGE', message: 'm', agent: true }] }) })).toBe('SQL Server Agent objects skipped')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
     // Build index is offered for the servers with no index and none building.

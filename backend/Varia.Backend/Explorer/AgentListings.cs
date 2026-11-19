@@ -107,7 +107,7 @@ internal sealed partial class ExplorerService
         var result = await RunAsync(request.ConnectionId, AgentListings.Msdb, "SQL Server Agent", profile, QueryScope.Database, AgentListings.Access,
             new Values(null, null, null, false, 1, null, null, null, null, null, null, null), async (_, reader) =>
             {
-                if (!await reader.ReadAsync(token)) return new ExplorerChildrenResult([], 0, Error: ExplorerErrors.Create("SQL_ERROR", "SQL Server Agent", null, 0, "The Agent access read returned no row."));
+                if (!await reader.ReadAsync(token)) return new ExplorerChildrenResult([], 0, Error: new("SQL_ERROR", "The SQL Server Agent access read returned no row. Refresh to retry.", true));
                 if (Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture) != 1) return new([], 0, Error: AgentListings.Disabled);
                 role = reader.GetBoolean(1) ? AgentListings.Role.Sysadmin : reader.GetBoolean(2) ? AgentListings.Role.Operator : reader.GetBoolean(3) ? AgentListings.Role.Reader
                     : reader.GetBoolean(4) ? AgentListings.Role.User : AgentListings.Role.None;
@@ -132,9 +132,10 @@ internal sealed partial class ExplorerService
             try
             {
                 budget.CancelAfter(Options.Budget);
+                if (Options.TestDelay is { } delay) await Task.Delay(delay, budget.Token);
                 await using var connection = host.Connection(request.ConnectionId, null);
                 await host.OpenAsync(connection, budget.Token);
-                var (results, errors) = await new AgentReader().ReadAsync(connection, CatalogSql.Prologue, [AgentSql.ErrorLogs], (_, _) => null, budget.Token);
+                var (results, errors) = await (Options.AgentReader ?? new AgentReader()).ReadAsync(connection, CatalogSql.Prologue, [AgentSql.ErrorLogs], (_, _) => null, budget.Token);
                 // Where xp_enumerrorlogs returns no list (SQL Server on Linux), the current log still exists: Current alone.
                 if (errors is [{ Code: "NOT_SUPPORTED" }])
                 {

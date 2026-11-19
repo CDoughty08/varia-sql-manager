@@ -49,6 +49,8 @@ internal sealed class ExplorerOptions
     public TimeSpan? PeekMappingBudget { get; set; }
     /// <summary>Replaces agent.profile's budget from the Agent catalogue (timeout checks).</summary>
     public TimeSpan? AgentProfileBudget { get; set; }
+    /// <summary>Replaces the reader the Error Logs listing runs xp_enumerrorlogs through (offline checks).</summary>
+    public Varia.Backend.Agent.AgentReader? AgentReader { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant

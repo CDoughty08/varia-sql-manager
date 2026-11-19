@@ -800,6 +800,22 @@ internal static class ExplorerChecks
             check(agentNode is { Nodes.Count: 0, Error: { Code: "CONNECTION_LOST" or "SQL_ERROR" or "TIMEOUT" } } && agentHost.Connections == 1,
                 "listing the Agent node runs its access step first, on one connection, and lists nothing when it fails: " + agentNode.Error?.Code);
         }
+        // Error Logs: past the explorer budget a TIMEOUT value; where xp_enumerrorlogs returns no list (Linux), Current alone.
+        using (var slow = new ExplorerService(new FakeHost(), new ExplorerOptions { Budget = TimeSpan.FromMilliseconds(200), TestDelay = TimeSpan.FromSeconds(5) }))
+        {
+            var logsWatch = System.Diagnostics.Stopwatch.StartNew();
+            var logs = await slow.ChildrenAsync(Args(Folder(new ObjectRefDto("agent"), "agentErrorLogs")), CancellationToken.None);
+            check(logs is { Nodes.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } } && logsWatch.ElapsedMilliseconds < 4000,
+                "Error Logs past the explorer budget answers a retryable TIMEOUT value: " + logs.Error?.Code + " in " + logsWatch.ElapsedMilliseconds + " ms");
+        }
+        var listless = new FakeHost { Opening = (_, _) => Task.CompletedTask };
+        var unlisted = new Varia.Backend.Agent.AgentReader { TestRun = (_, _, _) => throw new Varia.Backend.Agent.AgentShapeException("NOT_SUPPORTED", "no list") };
+        using (var linuxLogs = new ExplorerService(listless, new ExplorerOptions { AgentReader = unlisted }))
+        {
+            var logs = await linuxLogs.ChildrenAsync(Args(Folder(new ObjectRefDto("agent"), "agentErrorLogs")), CancellationToken.None);
+            check(logs is { Error: null, Total: 1, Nodes: [{ Label: "Current", Ref.Object: { Kind: "agentErrorLog", Name: "0" } }] },
+                "Error Logs lists Current alone where xp_enumerrorlogs returns no list: " + string.Join(", ", logs.Nodes.Select(node => node.Label)) + " " + logs.Error?.Message);
+        }
         using (var express = new ExplorerService(new FakeHost(16, 4)))
         {
             check(!(await express.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Any(node => node.Ref.Object?.Kind == "agent"), "Express lists no SQL Server Agent node");

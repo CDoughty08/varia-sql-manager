@@ -430,18 +430,18 @@ internal sealed class ObjectSearchService : IDisposable
             command.Parameters.Add(new SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = Msdb });
             command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = ObjectSearchSql.Agent });
             var index = await ReadBatchAsync(command, rows => reader.ReadAgentAsync(rows, alerts, budgetSource.Token), state.Index.PutAgent, budgetSource.Token);
-            return index is null ? new(Msdb, "TOO_LARGE", "SQL Server Agent's objects do not fit in the index's memory (" + Size + " across every connection).") : null;
+            return index is null ? new(Msdb, "TOO_LARGE", "SQL Server Agent's objects do not fit in the index's memory (" + Size + " across every connection).", Agent: true) : null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
         {
             reader.Abandon();
-            return new(Msdb, "TIMEOUT", "Reading SQL Server Agent's objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.");
+            return new(Msdb, "TIMEOUT", "Reading SQL Server Agent's objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.", Agent: true);
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
             KeepPartial(reader, state.Index.Agent is not null, state.Index.PutAgent);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, "SQL Server Agent", Msdb);
-            return new(Msdb, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
+            return new(Msdb, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message, Agent: true);
         }
         catch
         {
@@ -507,7 +507,7 @@ internal sealed class SkipList(int capacity)
 {
     public const int Server = -2;
     public const int Resource = -1;
-    /// <summary>SQL Server Agent's objects, read after the server's.</summary>
+    /// <summary>SQL Server Agent's objects (read after the server's), listed first: a skip orders by this, not by when it was read.</summary>
     public const int Agent = -3;
     private readonly List<(int Order, ObjectIndexSkip Skip)> items = [];
     private int databases;
