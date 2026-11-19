@@ -8,7 +8,7 @@ import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetails
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { peekSpecs } from '../src/shared/explorer/peek'
-import { colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { Columns, colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -128,6 +128,14 @@ describe('Search Objects details pane', () => {
     const usage = peekSpecs.index.groups.find(group => group.id === 'usage')!
     expect(render(index, 'index', { indexType: 'Nonclustered' }, ['usage'])).toContain(usage.refused)
     expect(render(index, 'index', { indexType: 'Nonclustered', userSeeks: 3 })).not.toContain(usage.refused)
+  })
+
+  it('announces a failed Peek read once: Properties alerts, Columns only repeats the words', () => {
+    const hit: ObjectSearchHit = { object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' }
+    const details = { id: 1, key: 'k', connectionId, hit, kind: 'table' as const, facts: { status: 'error' as const, message: 'Query timeout expired.' }, definition: { status: 'none' as const } }
+    const markup = renderToStaticMarkup(createElement('div', null, createElement(Properties, { details }), createElement(Columns, { details })))
+    expect(markup.split('Query timeout expired.')).toHaveLength(3)
+    expect(markup.split('role="alert"')).toHaveLength(2)
   })
 
   it('reads a trigger\'s facts and text through Peek, as the tree peeks it', async () => {

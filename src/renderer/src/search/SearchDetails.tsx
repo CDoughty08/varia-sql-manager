@@ -165,11 +165,11 @@ function Definition({ details, part }: { readonly details: Details; readonly par
   </>
 }
 
-/** A table's or view's columns: Peek's Columns list, which came with its properties, in a card grid as Peek shows it. */
-function Columns({ details }: { readonly details: Details }) {
+/** A table's or view's columns: Peek's Columns list, which came with its properties, in a card grid as Peek shows it. Properties above already announces a failed read, so its words here are not a second alert. */
+export function Columns({ details }: { readonly details: Details }) {
   const facts = details.facts, list = details.lists?.columns
   if (!facts || facts.status === 'loading') return <p className="peek-note">Loading the columns…</p>
-  if (facts.status === 'error') return <p className="peek-note error" role="alert">{facts.message}</p>
+  if (facts.status === 'error') return <p className="peek-note error">{facts.message}</p>
   return <div className="search-details-columns">
     <PeekListGrid id="columns" list={list} preset="card" objectName={displayText(details.hit.label)} />
     {list?.truncated && <p className="peek-note">There are more columns than the pane lists.</p>}
