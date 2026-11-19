@@ -126,9 +126,21 @@ internal static class LiveSchedulerChecks
         ("full-width quoted password hash", "SELECT TOP (1) l.\"ｐassword_hash\" FROM sys.sql_logins AS l ORDER BY l.name;"),
         ("read committed hint", "SELECT TOP (1) o.name FROM sys.objects AS o WITH (READCOMMITTED) ORDER BY o.name;"),
         ("hash index scan", "SELECT h.total_bucket_count FROM sys.dm_db_xtp_hash_index_stats AS h;"),
+        // Functions whose own definitions do a refused thing: the lint matches names, so it refuses the wrapper by name.
+        ("compiles a literal naming a linked server", "SELECT d.name FROM sys.dm_exec_describe_first_result_set(N'SELECT a FROM s.d.dbo.t', NULL, 0) AS d;"),
+        ("ledger digests from a url", "SELECT TOP (1) d.digest FROM sys.fn_ledger_retrieve_digests_from_url(N'https://h/x') AS d ORDER BY d.digest;"),
+        ("referenced entities", "SELECT r.referenced_entity_name FROM sys.dm_sql_referenced_entities(N'dbo.p', N'OBJECT') AS r;"),
+        ("my permissions", "SELECT p.permission_name FROM sys.fn_my_permissions(N'dbo.t', N'OBJECT') AS p;"),
+        ("database access", "SELECT HAS_DBACCESS(N'msdb') AS a;"),
+        ("certificate private key", "SELECT CERTPRIVATEKEY(c.certificate_id, N'x') AS k FROM sys.certificates AS c;"),
+        ("decrypt by key", "SELECT DECRYPTBYKEYAUTOCERT(CERT_ID(N'c'), NULL, 0x00) AS v;"),
+        ("full-text keywords", "SELECT k.keyword FROM sys.dm_fts_index_keywords(1, 1) AS k;"),
+        ("buffer pool walk", "SELECT COUNT(*) AS n FROM sys.dm_os_buffer_descriptors AS b;"),
+        ("file exists", "SELECT f.file_exists FROM sys.dm_os_file_exists(N'C:\\x') AS f;"),
+        ("page allocations", "SELECT a.allocated_page_page_id FROM sys.dm_db_database_page_allocations(1, NULL, NULL, NULL, N'DETAILED') AS a;"),
         ("trace flag hint","SELECT COUNT(*) AS n FROM sys.objects OPTION (QUERYTRACEON 8649);"),
         ("memory grant hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (MIN_GRANT_PERCENT = 100);"),
-        ("fetch from a cursor","SELECT 1 AS a; FETCH NEXT FROM c;"),
+        ("fetch from a cursor", "SELECT 1 AS a; FETCH NEXT FROM c;"),
         ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")
     ];
 

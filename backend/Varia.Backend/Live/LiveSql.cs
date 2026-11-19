@@ -315,8 +315,14 @@ internal static partial class LiveSql
     /// <summary>Functions that read the server's files, any path a UNC share included, which reaches another host as OPENROWSET
     /// would; the log or backups, which fn_dump_dblog reads through a scheduler it leaves behind; every page of an index or
     /// database; or the live event stream, which never ends.</summary>
-    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations|dm_db_xtp_hash_index_stats)\b",RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations|dm_db_xtp_hash_index_stats|dm_fts_index_keywords\w*|dm_os_buffer_descriptors|fn_ledger_retrieve_digests_from_url)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ServerFiles();
+    /// <summary>System functions that do inside what the lint refuses outside: compile SQL from a literal (which may name a linked
+    /// server or OPENQUERY the lint never sees), resolve names through OBJECT_ID, DB_ID and kin, or read a secret.</summary>
+    [GeneratedRegex(@"\b(dm_exec_describe_first_result_set\w*|dm_sql_referenced_entities|dm_sql_referencing_entities|fn_my_permissions|fn_listextendedproperty|fn_isrolemember|fn_hadr_\w+|fn_cdc_\w+|HAS_DBACCESS|CERTPRIVATEKEY|DECRYPTBY\w+|fn_repldecrypt\w*)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Wrappers();
     /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
     /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
     [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
@@ -386,6 +392,7 @@ internal static partial class LiveSql
         if (names.Contains('#')) problems.Add("uses a temporary table");
         if (names.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
         foreach (Match match in ServerFiles().Matches(names)) problems.Add("reads server files through " + match.Value);
+        foreach (Match match in Wrappers().Matches(names)) problems.Add("calls " + match.Value + ", which does what the lint refuses");
         foreach (Match match in Forbidden().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
         // The statement after the prologue (whose SET options are the prologue's own): no number glued to a word, and no
         // statement kind but a read's.
