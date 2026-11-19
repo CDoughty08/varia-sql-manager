@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { VariaApi } from '../src/shared/contracts'
+import type { ResultColumn, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { gesturesFor } from '../src/renderer/src/core/gestures'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
@@ -66,8 +66,9 @@ function fixture(queryNames: readonly (string | undefined)[] = []) {
   // Titled as PivotService titles it: by Result 3's name, with its number when another result has that name.
   const made = results.getSnapshot().t1.sets
   const pivot = results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', ...rows }), `Pivot of ${distinctName(made[2], made)}`, ['1:3'])!
-  // Titled as CompareService titles it: by the two results' names, old first.
-  const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows }), comparisonName(...comparedNames(made[0], made[1], made)), ['1:1', '1:2'])!
+  // Titled as CompareService titles it: by the two results' names, old first. A comparison's marker, row numbers and tone are a hidden suffix after its data columns.
+  const suffix = (['mark', 'leftRow', 'rightRow', 'tone'] as const).map((role): ResultColumn => ({ name: role, dataType: 'nvarchar', wire: 'text', nullable: true, role }))
+  const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff', ...rows, columns: [...descriptor(901).columns, ...suffix] }), comparisonName(...comparedNames(made[0], made[1], made)), ['1:1', '1:2'])!
   const [one, two, three] = results.getSnapshot().t1.sets.map(set => set.key)
   const listeners = new Set<() => void>()
   let search: Record<string, Partial<TabSearch>> = {}
@@ -1027,6 +1028,12 @@ describe('named results as tabs', () => {
     act(() => { resultTabs()[1].click() })
     draw()
     expect(document.querySelector('.rt-facts')!.textContent).not.toMatch(/Result/)
+    // A comparison's facts count only its data columns, never its hidden suffix.
+    act(() => { resultTabs()[3].click() })
+    draw()
+    expect(document.querySelector('.rt-facts')!.textContent).toMatch(/· 2 columns/)
+    act(() => { resultTabs()[1].click() })
+    draw()
     act(() => { resultTabs()[2].click() })
     draw()
     expect(all('[data-tab-row="view"]')[0].getAttribute('aria-label')).toBe('Views of Totals (Result 3)')

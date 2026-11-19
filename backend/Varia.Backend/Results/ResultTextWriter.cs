@@ -72,9 +72,11 @@ internal sealed class ResultTextWriter
     public long TruncatedCells { get; private set; }
     private ReadOnlySpan<byte> Eol => options.Crlf ? "\r\n"u8 : "\n"u8;
 
-    /// <summary>A column that is never text to copy or save: a live table's row tone (role tone), which the grid shows as the
-    /// row's colour. Copy and Save leave it out of their columns, headers and JSON keys alike.</summary>
-    public static bool Hidden(ResultColumn column) => column.Role == "tone";
+    /// <summary>A column that is not data: a live table's or a diff's row tone (role tone), which the grid shows as the row's
+    /// colour, and a diff's hidden suffix (roles old, mark, leftRow, rightRow), which it draws in the row header. Copy, search,
+    /// sort, filters and profiles leave them out; only Save of a diff writes the marker and row numbers (ResultJobs). The
+    /// renderer's isHiddenColumn tests the same roles.</summary>
+    public static bool Hidden(ResultColumn column) => column.Role is "old" or "mark" or "leftRow" or "rightRow" or "tone";
 
     private static ValueKind Kind(ResultColumn column)
     {

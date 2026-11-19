@@ -61,6 +61,7 @@ internal static class RowIdentity
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
         var rows = (int)total;
         var hasher = new CellHasher(set.Columns, set.Wires);
+        if (set.Kind == "diff" && set.DiffInputs is { } inputs) return Entries(set, hasher, pages, inputs, rows, token, rooms);
         // One array and one working set serve every pass, so Auto's candidates and fallback hold no more than WorkingBytes and the ids.
         var ids = new long[rows];
         var working = new Working(rows);
@@ -79,6 +80,61 @@ internal static class RowIdentity
         }
         var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, working, rooms);
         return (-1, rowsUnique, rowsApproximate, ids);
+    }
+
+    /// <summary>A diff's row identities (row and auto alike): each entry's (input result id, 1-based row) pairs for the sides
+    /// it has, read from its leftRow and rightRow columns and ordered by input result id, not by old and new, so an entry
+    /// keeps its identity through a layout switch or a swap of the same two inputs. Both halves of a changed entry share it.
+    /// Unique counts entries: two adjacent rows sharing an identity are one entry's halves, not repeated rows.</summary>
+    private static (int Column, bool Unique, bool Approximate, long[] Ids) Entries(ResultSetBuffer set, CellHasher hasher, StoredPage[] pages, (uint Left, uint Right) inputs, int rows,
+        CancellationToken token, PageRooms? rooms)
+    {
+        int leftColumn = -1, rightColumn = -1;
+        for (var c = 0; c < set.Columns.Count; c++)
+        {
+            if (set.Columns[c].Role == "leftRow") leftColumn = c;
+            else if (set.Columns[c].Role == "rightRow") rightColumn = c;
+        }
+        if (leftColumn < 0 || rightColumn < 0) throw new InvalidOperationException("A diff has its row number columns.");
+        var leftFirst = inputs.Left < inputs.Right;
+        var ids = new long[rows];
+        EachPage(hasher, pages, rows, token, (_, page, view) =>
+        {
+            var first = (int)page.FirstRow;
+            for (var r = 0; r < page.Rows; r++)
+            {
+                long left = Number(view, leftColumn, r), right = Number(view, rightColumn, r);
+                ids[first + r] = leftFirst ? EntryId(inputs.Left, left, inputs.Right, right) : EntryId(inputs.Right, right, inputs.Left, left);
+            }
+        }, rooms);
+        token.ThrowIfCancellationRequested();
+        // Equal identities side by side in stored order are halves; any other repeat (a hash collision) is not unique.
+        long halves = 0;
+        for (var i = 1; i < rows; i++) if (ids[i] == ids[i - 1]) halves++;
+        var sorted = (long[])ids.Clone();
+        Array.Sort(sorted);
+        long repeats = 0;
+        for (var i = 1; i < rows; i++) if (sorted[i] == sorted[i - 1]) repeats++;
+        return (-1, repeats == halves, false, ids);
+    }
+
+    /// <summary>A 1-based row number cell (bigint text), or 0 for NULL.</summary>
+    private static long Number(PageView view, int column, int row) =>
+        !view.IsNull(column, row) && System.Buffers.Text.Utf8Parser.TryParse(view.Span(column, row), out long value, out _) ? value : 0;
+
+    /// <summary>An entry's identity from its (input, row) pairs, the lower input id first; row 0 for a side it has none.</summary>
+    internal static long EntryId(uint firstInput, long firstRow, uint secondInput, long secondRow)
+    {
+        static ulong Mix(ulong z)
+        {
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9UL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebUL;
+            return z ^ (z >> 31);
+        }
+        var hash = Mix(((ulong)firstInput << 32) ^ secondInput);
+        hash = Mix(hash ^ (ulong)firstRow);
+        hash = Mix(hash ^ ((ulong)secondRow * 0x9e3779b97f4a7c15UL));
+        return (long)hash & Mask;
     }
 
     /// <summary>The fewest rows a thread hashing a result reads; a smaller result is hashed on one.</summary>

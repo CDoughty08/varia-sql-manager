@@ -33,6 +33,7 @@ internal static class DiffChecks
         Halves(check);
         Sizes(check);
         Host(check);
+        Suffix(check);
         Refusals(check);
         LowMemorySteps(check);
     }
@@ -166,15 +167,15 @@ internal static class DiffChecks
         var (left, right) = Pair(store, [Row("1")], [Row("2")], columns, columns);
         var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
         var tones = Text(Unified(store, left, right, model)).Select(row => row.Split('|')[^1]).ToArray();
-        check(tones is ["removed 4-153", "added 4-153"], "a row's tone lists a run of adjacent differing columns as a range: " + string.Join(" / ", tones));
+        check(tones is ["removed 1-150", "added 1-150"], "a row's tone lists a run of adjacent differing columns as a range: " + string.Join(" / ", tones));
         // Runs of either kind, and a tone too long for what the grid reads of a cell, cut at a whole entry.
         var builder = new StringBuilder();
-        check(UnifiedDiff.Tone(builder, "same", [0, 1, ~2, ~3, 5]) == "same 3-4 ~5-6 8", "a soft run is listed apart from a changed one");
+        check(UnifiedDiff.Tone(builder, "same", [0, 1, ~2, ~3, 5]) == "same 0-1 ~2-3 5", "a soft run is listed apart from a changed one, by pair index (the data column's index)");
         var scattered = Enumerable.Range(0, 2000).Where(c => c % 2 == 0).ToArray();
         var cut = UnifiedDiff.Tone(builder, "removed", scattered);
         var tokens = cut.Split(' ');
         check(cut.Length <= UnifiedDiff.MaxToneChars && UnifiedDiff.MaxToneChars < 512 && tokens[^1] == "…" && tokens[1..^1].All(token => int.TryParse(token, out _))
-            && int.Parse(tokens[^2], System.Globalization.CultureInfo.InvariantCulture) == scattered[tokens.Length - 3] + 3,
+            && int.Parse(tokens[^2], System.Globalization.CultureInfo.InvariantCulture) == scattered[tokens.Length - 3],
             "a tone longer than the grid reads of a cell stops at a whole entry and ends with an ellipsis: " + cut.Length + " characters");
     }
 
@@ -196,7 +197,7 @@ internal static class DiffChecks
             if (unified is null) continue;
             UnifiedDiff.Write(unified, left, left.SealedSnapshot(), right, right.SealedSnapshot(), model, -1, CancellationToken.None);
             var rows = Text(unified);
-            if (rows.Count % 2 != 0 || rows.Where((row, at) => row.StartsWith(at % 2 == 0 ? UnifiedDiff.Removed : UnifiedDiff.Added, StringComparison.Ordinal)).Count() != rows.Count) split.Add(budget);
+            if (rows.Count % 2 != 0 || rows.Where((row, at) => row.Split('|')[^4] == (at % 2 == 0 ? UnifiedDiff.Removed : UnifiedDiff.Added)).Count() != rows.Count) split.Add(budget);
             if (rows.Count < 800 && unified.Truncated == TruncationReason.None) split.Add(-budget);
         }
         check(split.Count == 0, "a full budget stops a diff before a changed row's two halves, never between them, and says it was truncated: " + string.Join(",", split));
@@ -237,17 +238,18 @@ internal static class DiffChecks
         var rows = Text(unified);
         var expected = new[]
         {
-            " |2|1|2|PEAR|2.0|same ~4",
-            "−|3|NULL|3|plum|3.00|removed",
-            "−|1|NULL|1|apple|1.50|removed 5",
-            "+|NULL|2|1|apple|1.75|added 5",
-            "+|NULL|3|5|kiwi|5.00|added",
-            "−|4|NULL|4|fig|4.00|removed 5",
-            "+|NULL|4|4|fig|NULL|added 5",
-            " |5|5|6|lime|6.00|NULL"
+            "2|PEAR|2.0| |2|1|same ~1",
+            "3|plum|3.00|−|3|NULL|removed",
+            "1|apple|1.50|−|1|2|removed 2",
+            "1|apple|1.75|+|1|2|added 2",
+            "5|kiwi|5.00|+|NULL|3|added",
+            "4|fig|4.00|−|4|4|removed 2",
+            "4|fig|NULL|+|4|4|added 2",
+            "6|lime|6.00| |5|5|NULL"
         };
-        check(unified.IsComplete && rows.SequenceEqual(expected) && unified.Columns[^1].Role == "tone" && string.Join(",", unified.Columns.Select(column => column.Name)) == "Change,R1,R2,ItemId,Name,Price,",
-            "the unified result shows a change as its old row (−) then its new one (+), with row numbers and the differing cells in the hidden tone: " + string.Join(" / ", rows));
+        check(unified.IsComplete && rows.SequenceEqual(expected) && string.Join(",", unified.Columns.Select(column => column.Name)) == "ItemId,Name,Price,Change,Old row,New row,"
+            && string.Join(",", unified.Columns.Select(column => column.Role ?? "-")) == "-,-,-,mark,leftRow,rightRow,tone",
+            "the unified result shows a change as its old row (−) then its new one (+), each half with both row numbers, the data columns first and the marker, row numbers and tone (cells by pair index) a hidden suffix: " + string.Join(" / ", rows));
     }
 
     private const string? NULL = null;
@@ -461,6 +463,127 @@ internal static class DiffChecks
         try { small.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = a.ResultId, right = b.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
         check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && Held.Bytes(tight) == used, "a diff the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
+    }
+
+    /// <summary>A diff's hidden suffix (marker, row numbers, tone) is not data: every column input that names it is refused;
+    /// Save writes the marker and row numbers first, Copy never; the diff records its inputs, and results.identify tells its
+    /// rows apart by entry, (input, row) pairs ordered by input result id, so both halves share one identity, a swap of the
+    /// same inputs keeps it, and the halves are not counted as repeated rows.</summary>
+    private static void Suffix(Action<bool, string> check)
+    {
+        check(new[] { "old", "mark", "leftRow", "rightRow", "tone" }.All(role => ResultTextWriter.Hidden(new ResultColumn("c", "int", "text", Role: role)))
+            && new[] { "xml", "json", "plan", "udt", "vector", null }.All(role => !ResultTextWriter.Hidden(new ResultColumn("c", "nvarchar", "text", Role: role))),
+            "the hidden roles are exactly old, mark, leftRow, rightRow and tone; xml, json, plan, udt and vector columns are data");
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store);
+        var (left, right) = Pair(store, [["1", "a", "1"], ["2", "b", "2"], ["4", "d", "4"]], [["1", "a", "1"], ["2", "b", "3"], ["3", "c", "3"]]);
+        T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        string? Code(string method, object args)
+        {
+            try { Call<object>(method, args); return null; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId, context = -1 });
+        var id = diff.Descriptor.ResultId;
+        var set = store.Find(id)!;
+        check(set.DiffInputs == (left.ResultId, right.ResultId), "a diff records its two input result ids when written");
+        // A compared value at the row limit leaves the hidden marker and tone stored whole after it.
+        var (bigLeft, bigRight) = Pair(store, [["1", new string('x', PageBuilder.MaxRowBytes + 10), "1"]], [["1", new string('y', PageBuilder.MaxRowBytes + 10), "1"]]);
+        var big = store.Find(Call<ResultsDiffResult>("results.diff", new { left = bigLeft.ResultId, right = bigRight.ResultId, context = -1 }).Descriptor.ResultId)!;
+        var suffix = new List<string>();
+        foreach (var page in big.SealedSnapshot())
+        {
+            var view = PageView.Parse(PinnedPage.Body(page), big.Wires.Count);
+            for (var r = 0; r < page.Rows; r++)
+            {
+                var cells = new string[2];
+                for (var i = 0; i < 2; i++)
+                {
+                    var c = i == 0 ? 3 : 6;
+                    cells[i] = (view.IsTruncated(c, r) ? "cut " : "") + Encoding.UTF8.GetString(view.Span(c, r));
+                }
+                suffix.Add(string.Join("|", cells));
+            }
+        }
+        check(suffix.Count == 2 && suffix[0].StartsWith("−|removed ", StringComparison.Ordinal) && suffix[1].StartsWith("+|added ", StringComparison.Ordinal) && !suffix.Any(text => text.Contains("cut ", StringComparison.Ordinal)),
+            $"a diff row whose data reaches the 8 MiB row limit still stores its marker and tone whole: {string.Join(" / ", suffix)}");
+        // The reservation covers the row numbers too: data at the limit, nine-digit numbers and a short tone still fit whole.
+        var limit = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text]);
+        limit.BeginRow();
+        limit.ReserveRowBytes(UnifiedDiff.SuffixBytes("+", "added 2"));
+        limit.AppendText(new string('z', PageBuilder.MaxRowBytes));
+        limit.ReserveRowBytes(0);
+        limit.AppendText("+");
+        limit.EndFormatted(CellFormat.WriteInteger(limit.BeginFormatted(), 999_999_999));
+        limit.EndFormatted(CellFormat.WriteInteger(limit.BeginFormatted(), 999_999_999));
+        limit.AppendText("added 2");
+        limit.CommitRow();
+        var limited = PageView.Parse(limit.Seal(), 5);
+        check(limited.IsTruncated(0, 0) && !limited.IsTruncated(4, 0) && Encoding.UTF8.GetString(limited.Span(4, 0)) == "added 2" && Encoding.UTF8.GetString(limited.Span(1, 0)) == "+",
+            "a diff row's reservation leaves room for its marker, both row numbers at their widest and its tone after data at the row limit");
+        // Data columns 0-2, then mark 3, leftRow 4, rightRow 5, tone 6.
+        var refused = new List<string>();
+        foreach (var hidden in new[] { 3, 4, 5, 6 })
+        {
+            var codes = new[]
+            {
+                Code("results.view", new { resultId = id, sort = new[] { new { column = hidden, descending = false, mode = "value" } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "in", column = hidden, rows = new[] { 0 } } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "notIn", column = hidden, rows = new[] { 0 } } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "between", column = hidden, rows = new[] { 0, 1 } } } }),
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "duplicates", columns = new[] { 0, hidden } } } }),
+                // No value list 999 exists, so only the column check answers INVALID_PARAMS (the list's would be VIEW_NOT_FOUND).
+                Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "groups", column = hidden, snapshotId = 999u } } }),
+                Code("results.distinct", new { resultId = id, column = hidden }),
+                Code("results.profile", new { resultId = id, columns = new[] { hidden } }),
+                Code("results.identify", new { resultId = id, by = "column", column = hidden })
+            };
+            if (codes.Any(code => code != "INVALID_PARAMS")) refused.Add(hidden + ": " + string.Join(",", codes));
+        }
+        check(refused.Count == 0, "sort keys, filters, duplicates columns, distinct values, profiles and identify refuse a hidden column: " + string.Join(" | ", refused));
+        check(Code("results.view", new { resultId = id, sort = new[] { new { column = 2, descending = false, mode = "value" } } }) is null, "a diff's data columns still sort");
+        check(new[] { "in", "notIn" }.All(op => Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op, column = 2, rows = new[] { 0 } } } }) is null)
+            && Code("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "between", column = 2, rows = new[] { 0, 1 } } } }) is null,
+            "a diff's data columns still filter by in, notIn and between, so the hidden refusals above are the columns'");
+        check(Code("results.identify", new { resultId = id, by = "column", column = 0 }) == "INVALID_PARAMS", "results.identify refuses by column on a diff: entry identity is its only identity");
+        // Outside a diff, where by column is allowed, identify still refuses a hidden (tone) column and takes a data one.
+        var toned = Fill(store, left.Budget, 7, [["1", "a", "same"], ["2", "b", "same"]], [Columns[0], Columns[1], new ResultColumn("", "nvarchar(500)", "text", Role: "tone")]);
+        check(Code("results.identify", new { resultId = toned.ResultId, by = "column", column = 2 }) == "INVALID_PARAMS" && Code("results.identify", new { resultId = toned.ResultId, by = "column", column = 0 }) is null,
+            "results.identify by column refuses a toned result's hidden tone column and takes its data column");
+        var auto = Call<ResultsIdentifyResult>("results.identify", new { resultId = id, by = "auto" });
+        var ids = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = id, firstRow = 0, count = 16 }).Ids;
+        // Rows: =1, ~2 (− and +), −4 (after the row it followed), +3.
+        check(auto is { Column: -1, Unique: true, Rows: 5 } && ids.Length == 5 && ids[1] == ids[2] && ids.Distinct().Count() == 4,
+            "a diff's auto identity is per entry (column -1): both halves of a changed entry share it, and they are not counted as repeated rows: " + string.Join(",", ids));
+        check(ids[1] == RowIdentity.EntryId(left.ResultId, 2, right.ResultId, 2) && ids[3] == RowIdentity.EntryId(left.ResultId, 3, right.ResultId, 0),
+            "an entry's identity hashes its (input, row) pairs, the lower input id first");
+        var swapped = Call<ResultsDiffResult>("results.diff", new { left = right.ResultId, right = left.ResultId, context = -1 });
+        Call<ResultsIdentifyResult>("results.identify", new { resultId = swapped.Descriptor.ResultId, by = "row" });
+        var swappedIds = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = swapped.Descriptor.ResultId, firstRow = 0, count = 16 }).Ids;
+        check(swappedIds.Order().Distinct().SequenceEqual(ids.Order().Distinct()), "an entry keeps its identity when the inputs are swapped (row identity too), so a highlight stays on one entry");
+        var changes = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId, context = 0 });
+        Call<ResultsIdentifyResult>("results.identify", new { resultId = changes.Descriptor.ResultId, by = "auto" });
+        var changeIds = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = changes.Descriptor.ResultId, firstRow = 0, count = 16 }).Ids;
+        check(changeIds.All(ids.Contains) && changeIds.Length == 4, "an entry keeps its identity with less context");
+
+        var folder = Directory.CreateTempSubdirectory("varia-diff-save");
+        try
+        {
+            var jobs = new ResultJobs(store);
+            var path = Path.Combine(folder.FullName, "diff.csv");
+            jobs.ExportAsync(new ResultsExportArgs(id, path, "csv", true, "empty", Guid.NewGuid().ToString("N")), null).GetAwaiter().GetResult();
+            var lines = File.ReadAllLines(path);
+            check(lines.Length == 6 && lines[0] == "Change,Old row,New row,ItemId,Name,Price" && lines[2] == "−,2,2,2,b,2" && lines[3] == "+,2,2,2,b,3" && lines[4] == "−,3,,4,d,4" && lines[5] == "+,,3,3,c,3",
+                "Save of a diff writes Change, Old row and New row first, decided by the backend: " + string.Join(" / ", lines));
+            string? transposed;
+            try { jobs.ExportAsync(new ResultsExportArgs(id, path, "csv", true, "empty", Guid.NewGuid().ToString("N"), Transposed: true), null).GetAwaiter().GetResult(); transposed = null; }
+            catch (RequestException error) { transposed = error.Code; }
+            check(transposed == "INVALID_PARAMS", "a transposed export of a diff is refused");
+            var copied = Encoding.UTF8.GetString(TextChecks.Copy(jobs, new ResultsCopyArgs(id, [new([[0, 4]], [[0, 6]])], true, "lf", 1 << 20)).GetAwaiter().GetResult().Text);
+            check(copied.StartsWith("ItemId\tName\tPrice\n1\ta\t1\n", StringComparison.Ordinal) && !copied.Contains('−') && !copied.Contains("added", StringComparison.Ordinal),
+                "Copy of a diff writes shown values only, never the marker, row numbers or tone: " + copied.Replace("\n", " / ", StringComparison.Ordinal));
+        }
+        finally { folder.Delete(true); }
     }
 
     /// <summary>A diff is a derived set, stored whole or not at all: one the budget or low system memory cuts short is refused

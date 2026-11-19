@@ -5,10 +5,10 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, entryName, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, entryName, entryNumber, filteredColumns, groupOf, pivotOutOfDate, queryName, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
-import { compareDetails, compareSources, compareText } from '../results/CompareService'
+import { compareDetails, compareSources, compareText, type CompareInfo } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
 import { formatBytes, formatCount } from '../results/status'
@@ -16,6 +16,8 @@ import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridS
 import { gridOperation, operationNoun } from '../results/operations'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
+import type { DiffSides } from './diff-gutter'
+import { visibleColumnCount } from './hidden-columns'
 
 /** The name a grid's accessible label starts with for a Pivot or a comparison: its own ("Differences: Result 1 → Result 3"),
  *  never "Result N of M" by the number Varia gave it (D8). Undefined for an original result, which keeps "Result N of M". */
@@ -41,6 +43,13 @@ export interface ResultGridProps {
   onFocus(key: EntryKey): void
   /** Whether the set's columns are wider than its grid (it needs a horizontal scroll bar), for sizing the stack to its rows. */
   onWide?(key: EntryKey, wide: boolean): void
+}
+
+/** What a comparison's gutter calls its inputs (the names they were compared under) and the larger one's row count. */
+export function diffSidesOf(info: Pick<CompareInfo, 'left' | 'right' | 'leftNumber' | 'rightNumber' | 'leftName' | 'rightName' | 'inputRows'>, sets: readonly Pick<ResultSetEntry, 'key' | 'handle'>[]): DiffSides {
+  // Frozen when compared, so closing an input leaves the numbers room; the open inputs answer for an older comparison.
+  const rows = (key: EntryKey) => sets.find(set => set.key === key)?.handle.getSnapshot().rowsStored ?? 0
+  return { old: info.leftName ?? entryNumber({ number: info.leftNumber }), new: info.rightName ?? entryNumber({ number: info.rightNumber }), rows: Math.max(info.inputRows ?? 0, rows(info.left), rows(info.right)) }
 }
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
@@ -136,9 +145,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
       entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, ...label ? { label } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
+      ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []) } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
-        results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
+        results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, visibleColumnCount(entry.descriptor)))
         results.selectionChanged()
       },
       onFirstCell: () => results.selectionChanged(),

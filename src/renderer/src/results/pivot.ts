@@ -5,6 +5,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { PivotSpec } from './ResultClient'
 import { formatCount, plural } from './status'
 import { pivotName } from './ResultsService'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 /** The aggregates in the panel's order, with their names (as a spreadsheet's value field settings name them). */
 export const pivotAggregates: readonly { readonly aggregate: PivotAggregate; readonly label: string }[] = [
@@ -44,7 +45,7 @@ export const emptyDraft: PivotDraft = { rows: [], values: [{ aggregate: 'count' 
 
 /** Columns a pivot may use: every column but a diff's tone. */
 export function pivotColumns(columns: readonly ResultColumn[]): number[] {
-  return columns.flatMap((column, index) => column.role === 'tone' ? [] : [index])
+  return columns.flatMap((column, index) => isHiddenColumn(column) ? [] : [index])
 }
 
 /** The draft kept to what `columns` allows: columns that exist and are not hidden, distinct row columns, a column group that
