@@ -17,7 +17,8 @@ describe('Electron launches on a virtual display', () => {
 
   /**
    * The source with every string, template, comment and regex literal blanked to spaces (same length, newlines kept), so
-   * parentheses and names inside them neither count nor match. A `/` starts a regex where an expression may begin.
+   * parentheses and names inside them neither count nor match; null if a string is left open. A `/` divides only after a
+   * value (a name that is not a keyword, `)` or `]`), and starts a regex anywhere else.
    */
   function blank(source: string) {
     const out = [...source]
@@ -27,7 +28,9 @@ describe('Electron launches on a virtual display', () => {
       const char = source[index], next = source[index + 1]
       if (quotes.has(char)) {
         let close = index + 1
-        for (; close < source.length && source[close] !== char; close++) if (source[close] === '\\') close++
+        // A quote or double quote ends with its line (JS allows no raw newline there); left open, the file is unreadable.
+        for (; close < source.length && source[close] !== char && (char === '`' || source[close] !== '\n'); close++) if (source[close] === '\\') close++
+        if (source[close] !== char) return null
         clear(index + 1, close)
         index = close + 1
       } else if (char === '/' && next === '/') {
@@ -39,7 +42,7 @@ describe('Electron launches on a virtual display', () => {
         const stop = close === -1 ? source.length : close + 2
         clear(index, stop)
         index = stop
-      } else if (char === '/' && /(?:^|[(,=:[!&|?{};]|\breturn)\s*$/.test(source.slice(Math.max(0, index - 12), index))) {
+      } else if (char === '/' && !/(?:[)\]]|(?<![\w$])(?!(?:return|typeof|case|in|of|await|yield|throw|void|delete|new|instanceof)\s*$)[\w$]+)\s*$/.test(source.slice(Math.max(0, index - 40), index))) {
         let close = index + 1, inClass = false
         for (; close < source.length && (inClass || source[close] !== '/') && source[close] !== '\n'; close++) {
           if (source[close] === '\\') close++
@@ -63,19 +66,28 @@ describe('Electron launches on a virtual display', () => {
     return null
   }
 
-  /** One script's calls that start a process itself: not through the smoke fixture, and not a bare tool name (taskkill, ps). */
-  function launchCalls(source: string) {
+  /**
+   * One script's calls that start a process itself: not through the smoke fixture, not a bare tool name (taskkill, ps), and
+   * not marked on its line with `// not the app: <reason>`. Each says whether it is switched: xvfbArgs( in the call, or a
+   * name the script set from xvfbArgs(. A script that cannot be read is one unswitched entry, so it fails loudly.
+   */
+  function launchCalls(source: string): { call: string, text: string | null, switched: boolean }[] {
     const code = blank(source)
+    if (code === null) return [{ call: '(a string left open: the script could not be read)', text: null, switched: false }]
     // The fixture's launcher, under whatever name it is imported, adds the switch itself (checked separately).
     const fixtureImport = source.match(/import \{([^}]*)\} from '\.\/(?:fixtures\/)?smoke\.mjs'/)?.[1].match(/\belectron\b(?:\s+as\s+([\w$]+))?/)
     const fixtureLaunch = fixtureImport ? `${fixtureImport[1] ?? 'electron'}.launch` : null
+    const switchedNames = [...code.matchAll(/(?:const|let)\s+([\w$]+)\s*=\s*xvfbArgs\(/g)].map(match => match[1])
     return [...code.matchAll(start)].flatMap(match => {
       if (match[1] === fixtureLaunch) return []
       const open = match.index + match[0].length - 1
+      const line = source.slice(source.lastIndexOf('\n', open) + 1, source.indexOf('\n', open) === -1 ? source.length : source.indexOf('\n', open))
+      if (/\/\/ not the app: \S/.test(line)) return []
       const text = callText(code, open)
       // A string literal of a bare program name (no path, no interpolation) is a tool, not the app.
       if (text && /^\(\s*(?:'[\w.-]+'|"[\w.-]+"|`[\w.-]+`)\s*[,)]/.test(source.slice(open, open + text.length)) && !/^\(\s*['"`](?:electron|varia)/i.test(source.slice(open))) return []
-      return [{ call: match[1], text }]
+      const switched = !!text && (text.includes('xvfbArgs(') || switchedNames.some(name => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text)))
+      return [{ call: match[1], text, switched }]
     })
   }
   const fromFixture = /import \{[^}]*\belectron\b[^}]*\} from '\.\/(?:fixtures\/)?smoke\.mjs'/
@@ -85,7 +97,7 @@ describe('Electron launches on a virtual display', () => {
    * fixture, or one that imports child_process (exec, an alias, promisify(execFile)), must import it.
    */
   const missesImport = (source: string) => !importsSwitch.test(source) && (!fromFixture.test(source) || childProcess.test(source))
-  const unswitchedCalls = (source: string) => launchCalls(source).filter(({ text }) => !text?.includes('xvfbArgs(')).map(({ call, text }) => call + (text ?? '(… never closes').split('\n')[0])
+  const unswitchedCalls = (source: string) => launchCalls(source).filter(({ switched }) => !switched).map(({ call, text }) => call + (text ?? '(… never closes').split('\n')[0])
 
   it('knows xvfb-run by the XAUTHORITY it sets, on Linux only', () => {
     expect(underXvfb(xvfb, 'linux')).toBe(true)
@@ -152,8 +164,17 @@ describe('Electron launches on a virtual display', () => {
     for (const source of unswitched) expect(unswitchedCalls(source), source).not.toEqual([])
     // A parenthesis in a string does not let one call borrow the next one's switch.
     expect(unswitchedCalls('spawn(electronPath, [\'.\', \'--x=(\'])\nspawn(electronPath, xvfbArgs([\'.\']))')).toHaveLength(1)
-    // Nor does one in a regex literal.
+    // Nor does one in a regex literal, wherever an expression starts (after => too), even with a quote inside it.
     expect(unswitchedCalls('step(async () => {\n  spawn(electronPath, [name.replace(/\\(/g, \'\')])\n  spawn(electronPath, xvfbArgs([\'.\']))\n})')).toHaveLength(1)
+    expect(unswitchedCalls('spawn(electronPath, xvfbArgs([\'.\']))\nconst quoted = names.filter(name => /\'/.test(name))\nconst third = spawn(electronPath, [\'.\', second])')).toHaveLength(1)
+    expect(unswitchedCalls('const kind = typeof /"/\nspawn(electronPath, [\'.\'])\nspawn(electronPath, xvfbArgs([\'.\']))')).toHaveLength(1)
+    // Division stays division, and an open string fails the script rather than hiding what follows.
+    expect(unswitchedCalls('const half = total / 2, rate = (a + b) / count\nspawn(electronPath, xvfbArgs([\'.\']))')).toEqual([])
+    expect(unswitchedCalls('const broken = \'unterminated\nspawn(electronPath, xvfbArgs([\'.\']))')).toHaveLength(1)
+    // A name set from xvfbArgs counts; a non-app child marked with its reason is not the app.
+    expect(unswitchedCalls('const args = xvfbArgs([\'.\', file])\nspawn(electronPath, args)')).toEqual([])
+    expect(unswitchedCalls('spawn(process.execPath, [helper]) // not the app: the fake backend\'s Node helper')).toEqual([])
+    expect(unswitchedCalls('spawn(process.execPath, [helper])')).toHaveLength(1)
     const switched = [
       'cp.spawn(electronPath, xvfbArgs([\'.\']))',
       'await electron.launch({ args: xvfbArgs([\'.\']), env })',
