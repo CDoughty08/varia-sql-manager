@@ -30,8 +30,8 @@ checks impersonated a scratch SQL login (`EXECUTE AS LOGIN`) that was a member o
   and `@@ERROR` 0. The text says StartService for a Stop too, and a Start of the running service fails the same way, so
   error 5 comes before any state check (1056 is never reached). `N'QueryState'` works and answers `Running.`. Below
   sysadmin, `xp_servicecontrol` and `xp_enumerrorlogs` are refused with 229.
-- **Agent XPs off.** With `Agent XPs` set to 0 while Agent ran, `sp_help_job` (with and without arguments) did **not**
-  raise 15281: it returned every job with `current_execution_status` 4 (Idle). `sp_help_jobactivity`,
+- **Agent XPs off.** With `Agent XPs` set to 0 while Agent ran, `sp_help_job` (with and without arguments, and through
+  SqlClient and `AgentReader` under every caller's prologue) did **not** raise 15281: it returned every job with `current_execution_status` 4 (Idle). `sp_help_jobactivity`,
   `sp_help_jobhistory @mode = N'FULL'`, `sp_help_jobstep`, `sp_help_jobschedule`, `sp_help_schedule`, `sp_help_category`,
   `sp_help_operator`, `sp_help_alert`, `sp_help_proxy`, `sp_help_jobs_in_schedule`, `sp_enum_sqlagent_subsystems`,
   `xp_enumerrorlogs 2`, `xp_readerrorlog` and `QueryState` also answered. Only `sp_get_sqlagent_properties` and
@@ -244,7 +244,7 @@ Alert types and notification methods:
 | --- | --- |
 | `1` | SQL Server event alert |
 | `2` | SQL Server performance condition alert |
-| `3` | WMI event alert |
+| `4` | WMI event alert |
 
 | Code | Meaning |
 | --- | --- |

@@ -142,11 +142,12 @@ export const notifyLevels: readonly CodeLabel[] = [
   { code: 2, label: 'When the job fails' },
   { code: 3, label: 'When the job completes' }
 ]
-/** `sp_help_alert`'s `type`. */
+/** `sp_help_alert`'s `type`: 1 without a performance condition, 4 for a WMI alert (`event_id` 8), else 2. SMO's 3 (non-SQL
+ *  Server event) never comes from msdb. */
 export const alertTypes: readonly CodeLabel[] = [
   { code: 1, label: 'SQL Server event alert' },
   { code: 2, label: 'SQL Server performance condition alert' },
-  { code: 3, label: 'WMI event alert' }
+  { code: 4, label: 'WMI event alert' }
 ]
 /** `sysnotifications.notification_method` bits. */
 export const notificationMethods: readonly CodeLabel[] = [

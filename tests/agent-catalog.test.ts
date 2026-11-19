@@ -28,6 +28,7 @@ describe('Agent catalogue', () => {
     for (const status of runningExecutionStatuses) expect(executionStatuses.map(row => row.code)).toContain(status)
     expect(frequencyTypes.map(row => row.code)).toEqual([1, 4, 8, 16, 32, 64, 128])
     expect(subdayTypes.map(row => row.code)).toEqual([1, 2, 4, 8])
+    expect(alertTypes.map(row => row.code)).toEqual([1, 2, 4])
     expect(relativeIntervals.map(row => row.code)).toEqual([1, 2, 4, 8, 16])
     expect(weekDays.reduce((bits, row) => bits | row.code, 0)).toBe(127)
     expect(relativeDays.map(row => row.code)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
