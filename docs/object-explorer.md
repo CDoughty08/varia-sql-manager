@@ -404,10 +404,10 @@ Peek tab the list fills the tab and Save Results As saves it.
 A column's row shows its name, type (as the tree writes it), nullability, key (PK, FK), identity seed and increment, computed
 expression and default, and **Definition**, its declaration as T-SQL built by the backend: the name through `QUOTENAME`, the
 type as Script As writes it (sizes, `max`, a user type schema-qualified), `COLLATE` only where it is not the database's,
-`SPARSE`, `MASKED WITH (FUNCTION = ...)`, `IDENTITY(seed,increment)`, a period column's `GENERATED ALWAYS AS ROW START` (or `END`)
+`FILESTREAM`, `SPARSE`, `MASKED WITH (FUNCTION = ...)`, `IDENTITY(seed,increment)` (with `NOT FOR REPLICATION`), a period column's `GENERATED ALWAYS AS ROW START` (or `END`)
 and a ledger column's `GENERATED ALWAYS AS TRANSACTION_ID` or `SEQUENCE_NUMBER` `START` (or `END`), with `HIDDEN`, `ROWGUIDCOL`,
 `NULL` or `NOT NULL`, and `DEFAULT (expression)` without the constraint's name; a computed column reads `AS (expression)`, with
-`PERSISTED`. A parameter's reads `@OrderId int = 0 OUTPUT` (`READONLY` for a table type; a T-SQL module's defaults come from
+`PERSISTED`. A parameter's reads `@OrderId int = 0 OUTPUT` (`READONLY` for a table type, `NOT NULL` for a natively compiled module's; a T-SQL module's defaults come from
 its header, so an encrypted one shows none). Copying the Definition column gives a table's column lines for a `CREATE TABLE`, and
 a module's parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header. Constraints (keys, checks), Always Encrypted's
 `ENCRYPTED WITH` and a vector's base type other than the default are left to Script As.

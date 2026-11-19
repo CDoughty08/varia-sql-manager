@@ -310,6 +310,10 @@ internal static partial class PeekChecks
             && sequence is [.., "[ledger_end_sequence_number] bigint GENERATED ALWAYS AS SEQUENCE_NUMBER END HIDDEN NULL"]
             && masked is [.., "[Email] varchar(100) MASKED WITH (FUNCTION = N'partial(1, \"X''X\", 0)') NULL"],
             "a ledger table's generated columns and a masked column are declared: " + Show(ledger) + " " + Show(sequence) + " " + Show(masked));
+        var stream = PeekSql.ListRow("columns", Column("Doc", "varbinary", raw => { raw["maxLength"] = (short)-1; raw["filestream"] = true; }));
+        var replicated = PeekSql.ListRow("columns", Column("R", "int", raw => { raw["identity"] = true; raw["seed"] = "1"; raw["increment"] = "1"; raw["notForReplication"] = true; raw["nullable"] = false; }));
+        check(stream is [.., "[Doc] varbinary(max) FILESTREAM NULL"] && replicated is [.., "[R] int IDENTITY(1,1) NOT FOR REPLICATION NOT NULL"],
+            "a FILESTREAM column and an identity NOT FOR REPLICATION are declared: " + Show(stream) + " " + Show(replicated));
         check(PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)) == "'01:02:03.4000000'" && PeekSql.Literal(new DateTime(2024, 1, 2, 3, 4, 5)) == "'2024-01-02T03:04:05'",
             "a CLR default's time and date are written as quoted literals: " + PeekSql.Literal(new TimeSpan(0, 1, 2, 3, 400)));
 
@@ -320,7 +324,7 @@ internal static partial class PeekChecks
                 ["name"] = name, ["type"] = type, ["quotedType"] = "[" + type + "]", ["quotedTypeSchema"] = "[sys]", ["userDefined"] = false, ["assemblyType"] = false, ["tableType"] = false,
                 ["typeSchema"] = "sys", ["baseType"] = null, ["maxLength"] = (short)4, ["precision"] = (byte)10, ["scale"] = (byte)0, ["output"] = false, ["readOnly"] = false, ["hasDefault"] = false,
                 ["defaultValue"] = null, ["xmlDocument"] = false, ["quotedXmlSchema"] = null, ["quotedXmlCollection"] = null, ["xmlSchema"] = null, ["xmlCollection"] = null, ["cursor"] = false,
-                ["moduleType"] = module
+                ["moduleType"] = module, ["nullable"] = true
             };
             more?.Invoke(raw);
             return raw;
@@ -338,6 +342,11 @@ internal static partial class PeekChecks
         var unread = PeekSql.ListRow("parameters", Parameter("@a", "int", "P "), null);
         check(clr is [.., "N'it''s'", "@s nvarchar(max) = N'it''s'"] && clrNull is [.., "NULL", "@n int = NULL"] && unread is [.., null, "@a int"],
             "a CLR module's default comes from sys.parameters as a literal, and an unread header gives none: " + Show(clr) + " " + Show(clrNull) + " " + Show(unread));
+        // A natively compiled module's NOT NULL parameter; a table-valued or cursor one is never declared NOT NULL.
+        var native = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @p int NOT NULL = 1 WITH NATIVE_COMPILATION, SCHEMABINDING AS BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'us_english') END");
+        var notNull = PeekSql.ListRow("parameters", Parameter("@p", "int", "P ", raw => raw["nullable"] = false), native);
+        var table = PeekSql.ListRow("parameters", Parameter("@t", "Rows", "P ", raw => { raw["userDefined"] = true; raw["tableType"] = true; raw["readOnly"] = true; raw["nullable"] = false; raw["quotedTypeSchema"] = "[dbo]"; }), null);
+        check(notNull is [.., "1", "@p int NOT NULL = 1"] && table is [.., "@t [dbo].[Rows] READONLY"], "a native module's NOT NULL parameter is declared so: " + Show(notNull) + " " + Show(table));
     }
 
     private static List<string> Pages(string text, int size)

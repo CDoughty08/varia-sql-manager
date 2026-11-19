@@ -83,7 +83,8 @@ internal static class ModuleHeader
                 current = Next();
                 var start = current.Start;
                 if (IsSymbol("-") || IsSymbol("+") || IsSymbol("$")) current = Next();
-                Expect(current.Kind is Kind.String or Kind.Number or Kind.Word);
+                // A "quoted" default is a string under QUOTED_IDENTIFIER OFF; either way its text is kept as written.
+                Expect(current.Kind is Kind.String or Kind.Number or Kind.Word or Kind.Quoted);
                 defaults[name] = text[start..current.End];
                 current = Next();
             }

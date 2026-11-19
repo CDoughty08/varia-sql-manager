@@ -223,10 +223,10 @@ internal static class PeekSql
     internal static readonly HashSet<string> Composed = new(StringComparer.Ordinal) { "columns", "parameters" };
     /// <summary>The Columns and Parameters lists' column aliases, declared before <see cref="Lists"/>, which reads them as it starts.</summary>
     private static readonly string[] ColumnParts = ["name", "quotedName", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "baseType", "maxLength", "precision", "scale",
-        "nullable", "identity", "seed", "increment", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden", "mask",
+        "nullable", "identity", "seed", "increment", "notForReplication", "filestream", "computed", "computedText", "persisted", "defaultText", "collation", "sparse", "columnSet", "rowGuid", "generated", "hidden", "mask",
         "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "vectorDimensions", "primaryKey", "foreignKey"];
     private static readonly string[] ParameterParts = ["name", "type", "quotedType", "quotedTypeSchema", "userDefined", "assemblyType", "tableType", "typeSchema", "baseType", "maxLength",
-        "precision", "scale", "output", "readOnly", "hasDefault", "defaultValue", "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "cursor", "moduleType"];
+        "precision", "scale", "output", "readOnly", "hasDefault", "defaultValue", "xmlDocument", "quotedXmlSchema", "quotedXmlCollection", "xmlSchema", "xmlCollection", "cursor", "moduleType", "nullable"];
 
     /// <summary>The lists' statements for a kind and band, each at most @take rows in a fixed order, with their column aliases:
     /// the parts <see cref="ListRow"/> makes the list's columns from.</summary>
@@ -258,7 +258,7 @@ internal static class PeekSql
     private static string ColumnsList(string kind, SqlRender r) => "SELECT TOP (@take) c.name AS [name], QUOTENAME(c.name) AS [quotedName], ty.name AS [type], "
         + "QUOTENAME(ty.name) AS [quotedType], QUOTENAME(tys.name) AS [quotedTypeSchema], ty.is_user_defined AS [userDefined], ty.is_assembly_type AS [assemblyType], "
         + "bt.name AS [baseType], c.max_length AS [maxLength], c.precision AS [precision], c.scale AS [scale], c.is_nullable AS [nullable], c.is_identity AS [identity], "
-        + "CONVERT(nvarchar(64), idc.seed_value) AS [seed], CONVERT(nvarchar(64), idc.increment_value) AS [increment], c.is_computed AS [computed], LEFT(cc.definition, 4001) AS [computedText], cc.is_persisted AS [persisted], "
+        + "CONVERT(nvarchar(64), idc.seed_value) AS [seed], CONVERT(nvarchar(64), idc.increment_value) AS [increment], idc.is_not_for_replication AS [notForReplication], c.is_filestream AS [filestream], c.is_computed AS [computed], LEFT(cc.definition, 4001) AS [computedText], cc.is_persisted AS [persisted], "
         + "LEFT(dc.definition, 4001) AS [defaultText], CASE WHEN c.collation_name COLLATE Latin1_General_100_BIN2 <> d.collation_name COLLATE Latin1_General_100_BIN2 THEN c.collation_name END AS [collation], c.is_sparse AS [sparse], "
         + "c.is_column_set AS [columnSet], c.is_rowguidcol AS [rowGuid], " + r.Col(13, "c.generated_always_type", "CONVERT(tinyint, 0)") + " AS [generated], "
         + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " AS [hidden], "
@@ -284,7 +284,7 @@ internal static class PeekSql
         + "ty.is_user_defined AS [userDefined], ty.is_assembly_type AS [assemblyType], ty.is_table_type AS [tableType], tys.name AS [typeSchema], bt.name AS [baseType], "
         + "p.max_length AS [maxLength], p.precision AS [precision], p.scale AS [scale], p.is_output AS [output], p.is_readonly AS [readOnly], p.has_default_value AS [hasDefault], "
         + "p.default_value AS [defaultValue], p.is_xml_document AS [xmlDocument], QUOTENAME(xss.name) AS [quotedXmlSchema], QUOTENAME(xs.name) AS [quotedXmlCollection], "
-        + "xss.name AS [xmlSchema], xs.name AS [xmlCollection], p.is_cursor_ref AS [cursor], o.type AS [moduleType] "
+        + "xss.name AS [xmlSchema], xs.name AS [xmlCollection], p.is_cursor_ref AS [cursor], o.type AS [moduleType], p.is_nullable AS [nullable] "
         + "FROM sys.all_parameters AS p JOIN sys.all_objects AS o ON o.object_id = p.object_id JOIN sys.types AS ty ON ty.user_type_id = p.user_type_id "
         + "JOIN sys.schemas AS tys ON tys.schema_id = ty.schema_id "
         + "LEFT JOIN sys.types AS bt ON ty.is_user_defined = 1 AND ty.is_assembly_type = 0 AND ty.is_table_type = 0 AND bt.user_type_id = ty.system_type_id "
@@ -622,7 +622,7 @@ internal static class PeekSql
 
     /// <summary>A column's declaration as CREATE TABLE writes it, <c>[OrderDate] datetime2(3) NOT NULL DEFAULT (sysutcdatetime())</c>:
     /// the name through QUOTENAME, the type as Script As writes it (sizes, max, user types schema-qualified, an XML column's schema
-    /// collection), COLLATE only where it is not the database's, SPARSE, IDENTITY(seed,increment), a period column's GENERATED
+    /// collection), FILESTREAM, COLLATE only where it is not the database's, SPARSE, IDENTITY(seed,increment) [NOT FOR REPLICATION], a period column's GENERATED
     /// ALWAYS (and a ledger column's) and HIDDEN, MASKED WITH its masking function, ROWGUIDCOL, NULL or NOT NULL, and the default without its constraint's name; a computed column as
     /// <c>AS (expression)</c> with PERSISTED; a column set as XML COLUMN_SET FOR ALL_SPARSE_COLUMNS. Constraints over columns
     /// (keys, checks) are left to Script As.</summary>
@@ -639,11 +639,13 @@ internal static class PeekSql
         }
         text.Append(' ').Append(TypeSql(raw, cursor: false));
         if (Bool(raw["columnSet"]) == true) return text.Append(" COLUMN_SET FOR ALL_SPARSE_COLUMNS").ToString();
+        if (Bool(raw.GetValueOrDefault("filestream")) == true) text.Append(" FILESTREAM");
         if (raw["collation"] is string collation) text.Append(" COLLATE ").Append(collation);
         if (Bool(raw["sparse"]) == true) text.Append(" SPARSE");
         // sys.masked_columns keeps the function as a literal holds it, its quotes already doubled: partial(1, "X''X", 0).
         if (raw.GetValueOrDefault("mask") is string mask) text.Append(" MASKED WITH (FUNCTION = N'").Append(mask).Append("')");
-        if (seed is not null && increment is not null) text.Append(" IDENTITY(").Append(seed).Append(',').Append(increment).Append(')');
+        if (seed is not null && increment is not null)
+            text.Append(" IDENTITY(").Append(seed).Append(',').Append(increment).Append(')').Append(Bool(raw.GetValueOrDefault("notForReplication")) == true ? " NOT FOR REPLICATION" : "");
         var generated = Int(raw["generated"]);
         if (Generated(generated) is { } always) text.Append(" GENERATED ALWAYS AS ").Append(always).Append(Bool(raw["hidden"]) == true ? " HIDDEN" : "");
         if (Bool(raw["rowGuid"]) == true) text.Append(" ROWGUIDCOL");
@@ -675,6 +677,8 @@ internal static class PeekSql
         var clr = raw["moduleType"] is string type && ClrModules.Contains(type.TrimEnd());
         var defaultText = clr ? (Bool(raw["hasDefault"]) == true ? Literal(raw["defaultValue"]) ?? "NULL" : null) : defaults?.GetValueOrDefault(name);
         var definition = new StringBuilder(name).Append(' ').Append(TypeSql(raw, cursor));
+        // Only a natively compiled module's parameters can be NOT NULL; sys.parameters reports every other one nullable.
+        if (Bool(raw.GetValueOrDefault("nullable")) == false && !cursor && Bool(raw["readOnly"]) != true) definition.Append(" NOT NULL");
         if (defaultText is not null) definition.Append(" = ").Append(defaultText);
         if (output) definition.Append(" OUTPUT");
         if (Bool(raw["readOnly"]) == true) definition.Append(" READONLY");
