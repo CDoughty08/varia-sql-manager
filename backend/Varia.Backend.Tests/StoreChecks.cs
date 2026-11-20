@@ -618,6 +618,7 @@ internal static class StoreChecks
     private static void MemoryBudgetReports(Action<bool, string> check)
     {
         var reports = new List<(long Used, long Limit, long Seq)>();
+        var details = new List<(int Texts, long NameBytes, long RecordBytes)>();
         var store = new ResultStore(1L << 30, 1L << 29);
         long resultsUsed = -1;
         using var service = new SqlService(store, publish: value =>
@@ -631,6 +632,8 @@ internal static class StoreChecks
             }
             lock (reports)
             {
+                var detail = report.GetProperty("detail");
+                details.Add((detail.GetProperty("texts").GetInt32(), detail.GetProperty("nameBytes").GetInt64(), detail.GetProperty("recordBytes").GetInt64()));
                 reports.Add((used, report.GetProperty("globalBytes").GetInt64(), report.GetProperty("seq").GetInt64()));
                 return reports.Count != 1;
             }
@@ -649,6 +652,9 @@ internal static class StoreChecks
         lock (reports)
             check(reports.SequenceEqual([(0L, limit, 1L), (0L, limit, 1L), (StringPool.Cost("dbo.Orders"), limit, 2L), (0L, limit, 3L)]),
                 "explorer.index.memory reports the shared index budget, retries refused samples, and reports bytes released");
+        lock (reports)
+            check(details.SequenceEqual([(0, 0L, 0L), (0, 0L, 0L), (1, StringPool.Cost("dbo.Orders"), 0L), (0, 0L, 0L)]),
+                "explorer.index.memory carries what the index holds, read as each event goes out");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

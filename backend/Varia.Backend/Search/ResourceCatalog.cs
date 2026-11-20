@@ -46,6 +46,9 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     /// <summary>Sets held (the checks read it).</summary>
     public int Sets { get { lock (gate) return sets.Count; } }
 
+    /// <summary>The sets read and charged to the budget, each once however many connections hold it (the Memory panel's Nerd metrics).</summary>
+    public List<ResourceSet> Held { get { lock (gate) return [.. sets.Values.Select(entry => entry.Shared).OfType<ResourceSet>()]; } }
+
     /// <summary>The set for <paramref name="key"/>, read by <paramref name="read"/> only when no connection holds it (or is reading
     /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
     /// cancelled only when every caller waiting for it has stopped (<paramref name="token"/>); a read past its limit throws

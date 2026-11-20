@@ -120,7 +120,7 @@ Every frame is a 16-byte little-endian header followed by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq, detail }` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -886,7 +886,7 @@ authoritative; a query's events after it are ignored.
 | type | Emitted |
 | --- | --- |
 | `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
-| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample and changes in the shared index budget's use. Own sequence |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use, and a finished build or search (whose time `detail` carries). Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
 generation, keeps the latest per feature, and replays both when a results port opens.
@@ -903,6 +903,22 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
 | `heap` | After the last GC (`GC.GetGCMemoryInfo`): `committedBytes`, `freeBytes` |
+
+`explorer.index.memory`'s `detail` (`indexMemoryDetailSchema`, `IndexMemoryDetail`, worked out by `IndexMemoryReport`) is what
+every connection's Search Objects index holds, for the same panel. It is read only when an event goes out, never by a search:
+one walk of the held tables, each counted once (a shared resource set once, however many connections show it). Main forwards
+it to the page as the report's `index`.
+
+| Field | Meaning |
+| --- | --- |
+| `connections`, `objects` | Connections with an index, and the objects their held tables list |
+| `texts`, `references` | The shared pool's distinct names and definitions, and the references reads and resource sets hold to them |
+| `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
+| `definitionTexts`, `packedTexts` | The distinct definitions behind them, and how many are zstd frames (`PackedText`) |
+| `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
+| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and records of reads still running. They add up to `usedBytes` while no build runs |
+| `cut`, `childrenLeftOut` | Definitions left out or cut short; databases indexed without their children (`CHILDREN_LEFT_OUT`) |
+| `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 
 ## Result pages
 

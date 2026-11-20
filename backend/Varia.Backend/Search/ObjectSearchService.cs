@@ -90,6 +90,32 @@ internal sealed class ObjectSearchService : IDisposable
     internal ResourceCatalog Resources => resources;
     /// <summary>The names and definitions every connection shares (the checks read it).</summary>
     internal StringPool Pool => pool;
+    /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
+    /// that the budget's figure does not show.</summary>
+    private long lastBuildMs = -1, lastSearchMs = -1, finished;
+    public long Finished => Interlocked.Read(ref finished);
+
+    /// <summary>What every connection's index holds (<see cref="IndexMemoryReport"/>), for the Memory panel's Nerd metrics: read
+    /// only when an explorer.index.memory event goes out.</summary>
+    internal IndexMemoryDetail MemoryDetail()
+    {
+        var connections = new List<(ConnectionIndex, int)>();
+        foreach (var state in states.Values)
+        {
+            int leftOut;
+            lock (state.Gate) leftOut = state.Skipped.ToList().Count(skip => skip.Code == ChildrenLeftOut);
+            connections.Add((state.Index, leftOut));
+        }
+        var build = Interlocked.Read(ref lastBuildMs);
+        var search = Interlocked.Read(ref lastSearchMs);
+        return IndexMemoryReport.Detail(budget, pool, connections, resources.Held, build < 0 ? null : build, search < 0 ? null : search);
+    }
+
+    private void Finish(ref long last, long ms)
+    {
+        Interlocked.Exchange(ref last, ms);
+        Interlocked.Increment(ref finished);
+    }
 
     public async Task<ObjectIndexResult> IndexAsync(ObjectIndexArgs args, CancellationToken token, Action<object>? progress = null)
     {
@@ -137,6 +163,7 @@ internal sealed class ObjectSearchService : IDisposable
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
             }
+            Finish(ref lastBuildMs, watch.ElapsedMilliseconds);
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
@@ -170,7 +197,12 @@ internal sealed class ObjectSearchService : IDisposable
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
-        try { return IndexSearch.Run(state.Index, query, matcher, Limits, status, token); }
+        try
+        {
+            var result = IndexSearch.Run(state.Index, query, matcher, Limits, status, token);
+            Finish(ref lastSearchMs, result.ElapsedMs);
+            return result;
+        }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
 

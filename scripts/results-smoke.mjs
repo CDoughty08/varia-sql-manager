@@ -1768,6 +1768,10 @@ try {
   await expect(biggest).toHaveCount(1)
   await expect(biggest.first()).toContainText(/ · Result \d+.*Raw$/)
   await expect(memoryDetails).toContainText('Compression off')
+  // Below the results' part, the Search Indexer's: the connected server's definitions, packed, and what that saved.
+  const indexMetrics = memoryDetails.getByRole('region', { name: 'Search Indexer metrics', exact: true })
+  await expect(indexMetrics.getByRole('img', { name: /^Budget used: [1-9]\d* MB\. Records [1-9]\d* MB, Names [1-9]\d* MB, Definitions [1-9]\d* MB$/ })).toBeVisible()
+  await expect(indexMetrics).toContainText(/Packed40%.*Ratio7\.00×zstd frames.*Saved[1-9][\d,]*MB/)
   await page.keyboard.press('Space')
   await expect(nerd).toHaveAttribute('aria-expanded', 'false')
   await page.mouse.click(5, 80)

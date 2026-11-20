@@ -19,6 +19,7 @@ internal static class SearchPackedChecks
         Reads(check).GetAwaiter().GetResult();
         Refused(check);
         Resources(check).GetAwaiter().GetResult();
+        Detail(check).GetAwaiter().GetResult();
         Searches(check);
         Stops(check);
         Matching(check);
@@ -327,6 +328,57 @@ internal static class SearchPackedChecks
         check(pool.Count == 5 && other.Table.Definition(0) == same, "letting one set go keeps the packed text the other holds");
         catalog.Release(other);
         check(catalog.Sets == 0 && pool.Count == 0 && budget.Used == 0, "with no set left, every packed system definition is given back");
+    }
+
+    /// <summary>The Memory panel's index detail (<see cref="IndexMemoryReport"/>) adds up: distinct packed and string definitions
+    /// make the definitions held, the packed bytes are the frames' charges, records, names and definitions are the budget's use,
+    /// a shared resource set counts once, a read not yet held shows as reading, and a disconnect leaves nothing.</summary>
+    private static async Task Detail(Action<bool, string> check)
+    {
+        var budget = new IndexBudget(1L << 30);
+        var pool = new StringPool(budget);
+        var catalog = new ResourceCatalog(pool);
+        var first = new ConnectionIndex(budget, catalog, pool);
+        var second = new ConnectionIndex(budget, catalog, pool);
+        var shared = Module("usp_Shared");
+        DatabaseIndex Read(string database, params (string, string)[] procedures) =>
+            new DatabaseReader(database, new ObjectIndexLimits(), pool).ReadAsync(Batch(procedures), true, CancellationToken.None, children: false).GetAwaiter().GetResult()!;
+        // Sales: two long modules, a short one and the long plan guide; Archive: the shared module, the same short text and guide.
+        var sales = Read("Sales", ("usp_Shared", shared), ("usp_Own", Module("usp_Own", 90)), ("usp_Short", "SELECT 1"));
+        var archive = Read("Archive", ("usp_Shared", shared), ("usp_Also", "SELECT 1"));
+        first.Put(sales);
+        second.Put(archive);
+        var key = new ResourceKey("16.0.4135.4", 3, 2, DateTime.UnixEpoch, 42, true);
+        ObjectTable System() => ObjectTable.Of([
+            new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_long", Definition: Module("sp_long"), System: true),
+            new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_short", Definition: "SELECT 2", System: true)]);
+        var set = await catalog.AcquireAsync(key, _ => Task.FromResult(System()));
+        first.PutResource(set);
+        second.PutResource(await catalog.AcquireAsync(key, _ => Task.FromResult(System())));
+        var detail = IndexMemoryReport.Detail(budget, pool, [(first, 0), (second, 1)], catalog.Held, 12, 3);
+        var tables = new[] { sales.Table, archive.Table, set.Table };
+        var held = tables.SelectMany(table => Enumerable.Range(0, table.Count).Select(table.StoredDefinition)).OfType<object>().Distinct(ReferenceEqualityComparer.Instance).ToList();
+        var packed = held.OfType<PackedText>().ToList();
+        check(detail is { Connections: 2, Objects: 9, Definitions: 9, PackedDefinitions: 6, DefinitionTexts: 6, PackedTexts: 4, Cut: 0, ChildrenLeftOut: 1, LastBuildMs: 12, LastSearchMs: 3 }
+            && detail.PackedTexts + held.Count(text => text is string) == detail.DefinitionTexts,
+            "the index detail counts each held table once and its distinct packed and string definitions add up to those held: " + detail);
+        check(detail.PackedBytes == packed.Sum(text => text.Bytes) && detail.PackedTextBytes == packed.Sum(text => IndexMemory.StringBytes(text.Length))
+            && detail.PackedTextBytes > 3 * detail.PackedBytes, "the packed definitions' bytes are their frames' charges, against the strings they replaced");
+        check(detail.RecordBytes == sales.Bytes + archive.Bytes + set.Bytes && detail.DefinitionBytes == held.Sum(text => StringPool.Cost(text))
+            && detail.RecordBytes + detail.NameBytes + detail.DefinitionBytes == budget.Used && detail.ReadingBytes == 0,
+            "records, names and definitions add up to the index budget's use");
+        check(detail.Texts == pool.Count && detail.References == sales.Pooled.Length + archive.Pooled.Length + set.Table.Texts.Count(text => text is not null),
+            "the pool's distinct texts and references are reported, a shared set's once");
+        var late = Read("Late", ("usp_Late", Module("usp_Late")));
+        var reading = IndexMemoryReport.Detail(budget, pool, [(first, 0), (second, 0)], catalog.Held);
+        check(reading.ReadingBytes == late.Bytes && reading.RecordBytes + reading.NameBytes + reading.DefinitionBytes + reading.ReadingBytes == budget.Used
+            && reading.LastBuildMs is null && reading.LastSearchMs is null, "a read's records not yet held show as reading, and the parts still add up");
+        first.Put(late);
+        first.Dispose();
+        second.Dispose();
+        var empty = IndexMemoryReport.Detail(budget, pool, [], catalog.Held);
+        check(empty is { Objects: 0, Texts: 0, References: 0, DefinitionTexts: 0, RecordBytes: 0, NameBytes: 0, DefinitionBytes: 0, ReadingBytes: 0 } && budget.Used == 0,
+            "with every connection gone, the index detail is empty");
     }
 
     /// <summary>The span matcher finds what the string calls it replaced found (Regex.Match(string, start), string.IndexOf from a

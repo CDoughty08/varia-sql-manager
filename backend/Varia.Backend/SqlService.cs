@@ -105,6 +105,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly Func<object, bool>? publish;
     private readonly Timer? memoryTimer;
     private readonly object memoryGate = new();
+    /// <summary>The index's memory reports, apart from results': its detail walks the held indexes, which must not hold up a results.close.</summary>
+    private readonly object indexMemoryGate = new();
     private long reportedBytes = -1;
     private long reportedGlobalBytes = -1;
     /// <summary>A summary's budget counted as a report but carries no detail: the next check sends the store's detail once.</summary>
@@ -113,6 +115,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long memorySeq;
     private long reportedIndexBytes = -1;
     private long indexMemorySeq;
+    private long reportedIndexFinished = -1;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -2738,16 +2741,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
     }
 
-    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index.</summary>
+    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index; also after a build or
+    /// search finished, whose time the detail shows. The detail (the Memory panel's Nerd metrics) walks the held indexes, so it is
+    /// read only when an event goes out: at most once a check, never by a search.</summary>
     internal void ReportIndexMemory()
     {
-        lock (memoryGate)
+        lock (indexMemoryGate)
         {
             var used = search.MemoryUsed;
-            if (publish is null || used == reportedIndexBytes) return;
-            if (!publish(new { Type = "explorer.index.memory", UsedBytes = used, GlobalBytes = search.Limits.MemoryBytes, Seq = indexMemorySeq + 1 })) return;
+            var finished = search.Finished;
+            if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
+            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, search.MemoryDetail()))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
+            reportedIndexFinished = finished;
         }
     }
 

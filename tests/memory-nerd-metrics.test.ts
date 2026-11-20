@@ -6,14 +6,14 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import MemoryIndicator from '../src/renderer/src/results/MemoryIndicator'
 import { MemoryUsageService } from '../src/renderer/src/results/memory'
-import { labelText, nerdMetrics, resultNames } from '../src/renderer/src/results/memory-details'
+import { indexNerdMetrics, labelText, nerdMetrics, resultNames } from '../src/renderer/src/results/memory-details'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import { SettingsService } from '../src/renderer/src/settings/SettingsService'
 import { defaultSettings, settingDef } from '../src/shared/settings/catalog'
-import { maxLargestResults, memoryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
-import type { ResultMemoryDetail } from '../src/shared/contracts'
+import { indexMemoryDetailSchema, maxLargestResults, memoryEventSchema, memoryReport, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
+import type { IndexMemoryDetail, ResultMemoryDetail } from '../src/shared/contracts'
 import { settingsApi } from './fixtures/workbench'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -41,6 +41,16 @@ const packed: ResultMemoryDetail = {
   heap: { committedBytes: 2620 * MB, freeBytes: 210 * MB }
 }
 const named = (entry: { resultId: number }) => ({ tab: 'Query', result: `Result ${entry.resultId}` })
+/** Two connected servers' index: 2,400 of 6,000 distinct definitions packed, 42 MB of text held in 6 MB of frames. */
+const indexed: IndexMemoryDetail = {
+  connections: 2, objects: 48210, texts: 31000, references: 52700, definitions: 9400, packedDefinitions: 3100, definitionTexts: 6000, packedTexts: 2400,
+  packedBytes: 6 * MB, packedTextBytes: 42 * MB, cut: 12, childrenLeftOut: 1, recordBytes: 3 * MB, nameBytes: 4 * MB, definitionBytes: 9 * MB, readingBytes: 0,
+  lastBuildMs: 1840, lastSearchMs: 23
+}
+const noIndex: IndexMemoryDetail = {
+  connections: 0, objects: 0, texts: 0, references: 0, definitions: 0, packedDefinitions: 0, definitionTexts: 0, packedTexts: 0,
+  packedBytes: 0, packedTextBytes: 0, cut: 0, childrenLeftOut: 0, recordBytes: 0, nameBytes: 0, definitionBytes: 0, readingBytes: 0
+}
 
 describe('Memory panel Nerd metrics', () => {
   it('shows honest figures while nothing is compressed: no ratio, nothing given back, raw pages only, dashed codec timings', () => {
@@ -130,6 +140,53 @@ describe('Memory panel Nerd metrics', () => {
     expect(service.history.length).toBe(0)
   })
 
+  it('shows what the Search Indexer packed and saved, where its budget goes, and its pool\'s sharing', () => {
+    const model = indexNerdMetrics(indexed)
+    expect(model.aside).toBe('2 connections · 48,210 objects')
+    expect(model.tiles.map(tile => `${tile.value}${tile.unit ?? ''} ${tile.note}`)).toEqual(['40% of 6,000 definitions', '7.00× zstd frames', '36MB 86% of 42 MB'])
+    expect(model.tiles[2].tone).toBe('saved')
+    // The budget by what holds it, on one scale; reads still running show only while there are some.
+    expect([model.bar.label, model.bar.total / MB, model.bar.segments.map(part => [part.part, part.bytes / MB])]).toEqual(['Budget used', 16, [['records', 3], ['names', 4], ['definitions', 9]]])
+    expect(model.bar.segments.reduce((sum, part) => sum + part.share, 0)).toBeCloseTo(1)
+    expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toEqual({
+      'Pooled texts': '31,000', 'Refs per text': '1.7', Definitions: '9,400', 'Left out': '12', 'Without children': '1 database', 'Being read': '—', 'Last build': '1.84 s', 'Last search': '23 ms'
+    })
+    const reading = indexNerdMetrics({ ...indexed, readingBytes: 2 * MB, childrenLeftOut: 3 })
+    expect([reading.bar.segments.at(-1)?.part, reading.bar.total / MB, reading.counters.find(counter => counter.label === 'Being read')?.value,
+      reading.counters.find(counter => counter.label === 'Without children')?.value]).toEqual(['reading', 18, '2 MB', '3 databases'])
+  })
+
+  it('shows dashes, not invented figures, for an index that holds nothing yet', () => {
+    const model = indexNerdMetrics(noIndex)
+    expect(model.aside).toBe('0 connections · 0 objects')
+    expect(model.tiles.map(tile => [tile.value, tile.unit, tile.note, tile.tone])).toEqual([
+      ['—', undefined, 'No definitions held', undefined], ['—', undefined, 'zstd frames', undefined], ['0', 'MB', 'Nothing packed yet', undefined]
+    ])
+    expect(model.bar.segments.map(part => [part.part, part.share])).toEqual([['records', 0], ['names', 0], ['definitions', 0]])
+    expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toMatchObject({ 'Refs per text': '—', 'Last build': '—', 'Last search': '—', 'Without children': '0 databases' })
+  })
+
+  it('accepts the index event with its detail, bounds it, and forwards the detail as the index report', () => {
+    const event = { type: 'explorer.index.memory', usedBytes: 16 * MB, globalBytes: 512 * MB, seq: 4, detail: indexed } as const
+    expect(memoryEventSchema.safeParse(event).success).toBe(true)
+    expect(memoryEventSchema.safeParse({ ...event, detail: undefined }).success).toBe(true)
+    expect([indexMemoryDetailSchema.safeParse({ ...indexed, extra: 1 }).success, indexMemoryDetailSchema.safeParse({ ...indexed, objects: -1 }).success,
+      indexMemoryDetailSchema.safeParse({ ...indexed, cut: 1.5 }).success, memoryEventSchema.safeParse({ type: 'results.memory', usedBytes: 1, globalBytes: 2, seq: 1, detail: indexed }).success]).toEqual([false, false, false, false])
+    const parsed = memoryEventSchema.parse(event)
+    expect(memoryReport(parsed, 3)).toEqual({ feature: 'index', report: { usedBytes: 16 * MB, globalBytes: 512 * MB, seq: 4, generation: 3, index: indexed } })
+    expect(memoryReport(memoryEventSchema.parse({ type: 'results.memory', usedBytes: 1, globalBytes: 2, seq: 1, detail: raw }), 3))
+      .toEqual({ feature: 'results', report: { usedBytes: 1, globalBytes: 2, seq: 1, generation: 3, detail: raw } })
+    const service = new MemoryUsageService({ onMemory: () => ({ dispose: () => {} }) }, 'index')
+    service.update({ usedBytes: 16 * MB, globalBytes: 512 * MB, generation: 3, seq: 4, index: indexed })
+    expect(service.getSnapshot()).toEqual({ usedBytes: 16 * MB, globalBytes: 512 * MB, index: indexed })
+    // A later event with the same budget but a new detail (a search finished) still publishes it.
+    const searched = { ...indexed, lastSearchMs: 5 }
+    service.update({ usedBytes: 16 * MB, globalBytes: 512 * MB, generation: 3, seq: 5, index: searched })
+    expect(service.getSnapshot().index).toBe(searched)
+    service.update({ usedBytes: 0, globalBytes: 0, generation: 4, seq: 0 })
+    expect(service.getSnapshot().index).toBeUndefined()
+  })
+
   it('caps the biggest results at the same count in the backend and the schema', () => {
     const snapshot = readFileSync(resolve(__dirname, '../backend/Varia.Backend/Results/ResultStore.Snapshot.cs'), 'utf8')
     expect(Number(/const int MaxLargest = (\d+);/.exec(snapshot)?.[1])).toBe(maxLargestResults)
@@ -139,12 +196,12 @@ describe('Memory panel Nerd metrics', () => {
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(clean => clean()) })
 
-async function mount(memory: { usedBytes: number; globalBytes: number; detail?: ResultMemoryDetail }, seed: Partial<typeof defaultSettings> = {}) {
+async function mount(memory: { usedBytes: number; globalBytes: number; detail?: ResultMemoryDetail }, seed: Partial<typeof defaultSettings> = {}, index?: IndexMemoryDetail) {
   const host = document.createElement('div')
   document.body.append(host)
   const client = { onMemory: () => ({ dispose: () => {} }) }
   const resultMemory = new MemoryUsageService(client, 'results'), indexMemory = new MemoryUsageService(client, 'index')
-  indexMemory.update({ usedBytes: 92 * MB, globalBytes: 512 * MB, generation: 1, seq: 1 })
+  indexMemory.update({ usedBytes: 92 * MB, globalBytes: 512 * MB, generation: 1, seq: 1, ...index ? { index } : {} })
   resultMemory.update({ ...memory, generation: 1, seq: 1 })
   const api = settingsApi(seed)
   const settings = new SettingsService(api as never, { ...defaultSettings, ...seed })
@@ -245,6 +302,27 @@ describe('Memory panel', () => {
     view.panel().querySelector('.memory-heading')!.dispatchEvent(new Event('pointerdown', { bubbles: true }))
     expect(await arrive(last, null)).toBe(after)
     expect(await arrive(last, null)).toBe(toggle)
+  })
+
+  it('shows the Search Indexer\'s part below the results\' only while Nerd metrics are open, from the latest index event', async () => {
+    const view = await mount({ usedBytes: 300 * MB, globalBytes: 1024 * MB, detail: raw }, {}, indexed)
+    expect(view.panel().querySelector('.memory-index')).toBeNull()
+    await act(async () => { view.toggle().click() })
+    const section = view.panel().querySelector<HTMLElement>('.memory-nerd-body .memory-index')!
+    expect(section.getAttribute('aria-label')).toBe('Search Indexer metrics')
+    // It follows the results' Codec group, the last of theirs.
+    expect(section.previousElementSibling?.classList.contains('memory-nerd-footer')).toBe(true)
+    expect(section.querySelector('h4')!.textContent).toBe('Search Indexer2 connections · 48,210 objects')
+    expect([...section.querySelectorAll('.memory-tile-value')].map(node => node.textContent)).toEqual(['40%', '7.00×', '36MB'])
+    expect(section.querySelector('.memory-bar')!.getAttribute('aria-label')).toBe('Budget used: 16 MB. Records 3 MB, Names 4 MB, Definitions 9 MB')
+    expect(section.querySelector('[aria-label="Search Indexer counters"]')!.textContent).toContain('Last build1.84 s')
+    await act(async () => { view.toggle().click() })
+    expect(view.panel().querySelector('.memory-index')).toBeNull()
+    cleanups.splice(0).reverse().forEach(clean => clean())
+    // A backend that sent no index detail yet: the results' part alone.
+    const plain = await mount({ usedBytes: 300 * MB, globalBytes: 1024 * MB, detail: raw }, { [key]: true })
+    expect(plain.panel().querySelector('.memory-tiles')).not.toBeNull()
+    expect(plain.panel().querySelector('.memory-index')).toBeNull()
   })
 
   it('adds the packed chip and the ring\'s second tone once pages are compressed, alongside a warning or critical level', async () => {
