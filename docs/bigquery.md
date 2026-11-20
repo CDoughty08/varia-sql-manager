@@ -260,7 +260,7 @@ Messages).
 | `SQL_ERROR` | `invalidQuery`, or a job error with no other row | BigQuery's text, with its line and column |
 | `LOCATION_MISMATCH` | A query's dataset is in another location (`notFound`, then `datasets.get` says where) | Names both locations |
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
-| `COST_CAP` | `bytesBilledLimitExceeded` | Names the connection's maximum bytes billed and Google's figure; raise the cap or read less |
+| `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
 
 ## Emulator mode
