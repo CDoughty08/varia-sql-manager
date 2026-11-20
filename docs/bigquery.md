@@ -21,7 +21,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, and Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project). |
+| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -222,7 +222,8 @@ Messages).
     changed, so a remembered connection never undoes a later Don't ask again, and entries with the same settings share
     one choice. It is a preference, not part of which entry the connection is or of its target.
   - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
-    external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
+    a 0-byte estimate for a query that reads tables (right for an empty table or skipped partitions, but external and
+    row-level-security tables also report 0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
     `UNKNOWN`. **Don't warn me about incomplete estimates again** clears
     `queryExecution.bigQuery.incompleteEstimateWarning`.
 

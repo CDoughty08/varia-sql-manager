@@ -305,7 +305,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         if (failure is not RequestException { Code: "NOT_FOUND" } missing) throw failure;
         // A dataset in another location is told apart as Execute tells it; a table or dataset that does not exist is the
         // query's mistake (marked in the editor), while a missing project stays NOT_FOUND.
-        var mapped = await BigQueryErrors.LocationAsync(missing, connection.Client);
+        var mapped = await BigQueryErrors.LocationAsync(missing, connection.Client, token);
         if (mapped.Code == "NOT_FOUND" && NamedObject().Match(mapped.Message) is { Success: true } named) throw new RequestException("SQL_ERROR", named.Value);
         throw mapped;
     }
@@ -324,7 +324,9 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     /// <summary>Google's text for a table, view, routine, model or dataset the query names that does not exist (without the
     /// project hint NOT_FOUND adds).</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^Not found: (?:Table|View|Routine|Model|Dataset) [^\s]{1,1100}(?: was not found in location [A-Za-z\d-]{1,64})?")]
+    // Names may hold spaces and run to 1,024 characters a part, so the name runs to the location clause, NOT_FOUND's hint or
+    // the end.
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Not found: (?:Table|View|Routine|Model|Dataset) .{1,3100}?(?: was not found in location [A-Za-z\d-]{1,64})?(?= Check the project id|\r?\n|$)")]
     private static partial System.Text.RegularExpressions.Regex NamedObject();
 
     /// <summary>The most text a dry run takes, as query.execute does (dryRunLimits in src/shared/bigquery/dry-run.ts).</summary>

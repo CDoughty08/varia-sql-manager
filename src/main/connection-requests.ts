@@ -412,6 +412,13 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
         if (!await deps.connections.setAutoReconnect(options, context.autoReconnect, context.selectedProfileId)) throw new Error('The saved connection is unavailable.')
       } catch { info.historyWarning ??= 'Connected successfully, but the reconnect preference could not be saved.' }
     }
+    // A choice the dialog named (Advanced Properties' cost-prompt box) is saved as a new connection's would be.
+    const bigQueryOptions = (params as ProviderConnectionOptions).provider === 'bigquery' ? params as unknown as BigQueryConnectionOptions : undefined
+    if (context?.mode !== 'background' && bigQueryOptions?.costPrompt !== undefined) {
+      try {
+        if (!await deps.connections.setBigQueryCostPrompt?.(bigQueryOptions, bigQueryOptions.costPrompt)) throw new Error('The saved connection is unavailable.')
+      } catch { info.historyWarning ??= 'Connected successfully, but the cost prompt choice could not be saved.' }
+    }
     const policy = context?.mode === 'background' ? 'preserve' : context?.credentialPolicy ?? (context?.remember === undefined ? 'preserve' : context.remember ? 'remember' : 'forget')
     // BigQuery keeps no password: a reused BigQuery connection only records its reconnect preference.
     if (policy === 'preserve' || (params as ProviderConnectionOptions).provider === 'bigquery' || !canRememberPassword(params.authentication)) return { ok: true, value: info }

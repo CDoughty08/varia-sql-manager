@@ -34,7 +34,7 @@ export const incompleteText: Readonly<Record<IncompleteReason, string>> = {
   script: 'This is a script: BigQuery estimates it only up to its first DDL or control statement (such as CREATE, DECLARE, IF or LOOP), so later statements are not counted.',
   lowerBound: 'BigQuery reports this estimate as a lower bound: the query may process more.',
   unknown: 'BigQuery could not estimate this query accurately.',
-  zeroBytes: 'The query reads tables but the estimate is 0 bytes: external tables and tables with row-level security report no bytes before they run.'
+  zeroBytes: 'The query reads tables but the estimate is 0 bytes. That is right for an empty table, partitions the query skips or a count BigQuery answers from table metadata, but external tables and tables with row-level security also report no bytes before they run.'
 }
 
 /** "1.24 GiB · < $0.01", or bytes alone when prices are off (Query Execution › BigQuery › Cost › Show cost as). */

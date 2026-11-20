@@ -189,6 +189,22 @@ describe('Connection library and history across both engines', () => {
     await expect(library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false, environment: 'Production' })).rejects.toThrow()
   })
 
+  it('keeps the cost-prompt choice with the settings when Save edits an entry to new ones', async () => {
+    const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
+    const alpha = await store.upsert({ options: { ...gcloud(), displayName: 'A' }, saved: true })
+    await store.upsert({ options: { ...gcloud('varia-beta'), displayName: 'B' }, saved: true })
+    await store.setCostPrompt({ options: gcloud(), costPrompt: false })
+    const choice = async (id: string) => (await store.load()).library.profiles.find(profile => profile.id === id)?.options.costPrompt
+    // Edited to varia-beta's settings, the entry takes varia-beta's choice (asks), not varia-alpha's.
+    await store.upsert({ id: alpha.id, options: { ...gcloud('varia-beta'), displayName: 'A' }, saved: true })
+    expect(await choice(alpha.id)).toBeUndefined()
+    // Edited back, it takes the choice entries with those settings share.
+    await store.setCostPrompt({ options: gcloud('varia-beta'), costPrompt: false })
+    const gamma = await store.upsert({ options: { ...gcloud('varia-gamma'), displayName: 'C' }, saved: true })
+    await store.upsert({ id: gamma.id, options: { ...gcloud('varia-beta'), displayName: 'C' }, saved: true })
+    expect(await choice(gamma.id)).toBe(false)
+  })
+
   it('keeps one cost-prompt choice for entries with the same settings', async () => {
     const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
     // Save with an id can edit an entry until its settings equal another's: two entries, one connection.

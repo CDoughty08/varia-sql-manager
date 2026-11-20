@@ -27,13 +27,15 @@ internal static partial class BigQueryErrors
 
     /// <summary>A NOT_FOUND naming a dataset "not found in location X": a dataset in another location (LOCATION_MISMATCH, found
     /// by asking where it is with datasets.get, free) told apart from one that does not exist (the error as it was).</summary>
-    public static async Task<RequestException> LocationAsync(RequestException mapped, Google.Cloud.BigQuery.V2.BigQueryClient client)
+    public static async Task<RequestException> LocationAsync(RequestException mapped, Google.Cloud.BigQuery.V2.BigQueryClient client, CancellationToken token = default)
     {
         if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
         string? actual;
         try
         {
-            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // The request's own deadline or Cancel stops it too, within 10 s at most.
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+            limit.CancelAfter(TimeSpan.FromSeconds(10));
             var found = await client.Service.Datasets.Get(match.Groups["project"].Value, match.Groups["dataset"].Value).ExecuteAsync(limit.Token);
             actual = found.Location;
         }

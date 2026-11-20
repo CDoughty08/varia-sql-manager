@@ -105,8 +105,10 @@ export class BigQueryConnectionStore {
       if (input.id && !profile) throw new Error('This saved connection no longer exists.')
       if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit' }; library.profiles.push(profile) }
       const kept = keepEnvironment && options.environment === undefined ? profile.options.environment : undefined
-      // Options that do not name the cost-prompt choice (a connection typed again) keep the entry's; true is the default.
-      const costPrompt = options.costPrompt ?? profile.options.costPrompt
+      // Options that do not name the cost-prompt choice take the one entries with these settings share (the choice is the
+      // connection's, not the entry's: an entry edited to new settings leaves its old choice behind); true is the default.
+      const shared = library.profiles.some(item => item.options.costPrompt === false && keyOf(item.options) === key) ? false : undefined
+      const costPrompt = options.costPrompt ?? shared
       const { costPrompt: _costPrompt, ...rest } = kept ? { ...options, environment: kept } : options
       profile.options = costPrompt === false ? { ...rest, costPrompt: false } : rest
       // A choice the options name is the connection's: entries with the same settings take it too.

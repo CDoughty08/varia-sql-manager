@@ -81,7 +81,7 @@ internal static partial class BigQueryChecks
             $"a query BigQuery refuses is SQL_ERROR with BigQuery's text and [line:column]: {refused.Code} {refused.Message}");
         harness.Fake.On("POST", BigQueryFake.Jobs, BigQueryFake.Fixture("error-access-denied", 403));
         var denied = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
-        check(denied.Code == "PERMISSION_DENIED", $"a refused dry run maps as other BigQuery errors do: {denied.Code} {denied.Message}");
+        check(denied.Code == "PERMISSION_DENIED" && !denied.Message.Contains("Job User", StringComparison.Ordinal), $"a refused dry run maps as other BigQuery errors do, without the Job User hint: {denied.Code} {denied.Message}");
         // Connecting proved bigquery.jobs.create: a 403 on a dry run is about a table the query reads, so Google's text stays.
         string Refusal(int code, string status, string reason, string message) => new JsonObject
         {
@@ -101,6 +101,21 @@ internal static partial class BigQueryChecks
         var elsewhere = await harness.Call("bigquery.dryRun", Args("SELECT * FROM sales_eu.orders"));
         check(elsewhere.Code == "LOCATION_MISMATCH" && elsewhere.Message.Contains("is in location EU, but the query ran in US", StringComparison.Ordinal),
             $"a dry run against a dataset in another location is LOCATION_MISMATCH, as Execute says: {elsewhere.Code} {elsewhere.Message}");
+        // A table name may hold spaces; the whole name is kept, without NOT_FOUND's project hint.
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Table varia-alpha:sales.my orders was not found in location US")));
+        var spaced = await harness.Call("bigquery.dryRun", Args("SELECT * FROM `sales.my orders`"));
+        check(spaced.Code == "SQL_ERROR" && spaced.Message == "Not found: Table varia-alpha:sales.my orders was not found in location US",
+            $"a missing table whose name holds a space keeps its whole name: {spaced.Code} {spaced.Message}");
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Table varia-alpha:sales.my orders")));
+        var bare = await harness.Call("bigquery.dryRun", Args("SELECT * FROM `sales.my orders`"));
+        check(bare.Code == "SQL_ERROR" && bare.Message == "Not found: Table varia-alpha:sales.my orders",
+            $"a missing table without a location clause is the query's error without the project hint: {bare.Code} {bare.Message}");
+        // A dataset that exists nowhere (datasets.get answers 404) is the query's error too, not a location mismatch.
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Dataset varia-alpha:salez was not found in location US")));
+        harness.Fake.On("GET", BigQueryFake.Datasets, new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Dataset varia-alpha:salez")));
+        var noDataset = await harness.Call("bigquery.dryRun", Args("SELECT * FROM salez.orders"));
+        check(noDataset.Code == "SQL_ERROR" && noDataset.Message == "Not found: Dataset varia-alpha:salez was not found in location US",
+            $"a dry run naming a dataset that does not exist is the query's error: {noDataset.Code} {noDataset.Message}");
         harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Project varia-alpha")));
         var gone = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
         check(gone.Code == "NOT_FOUND", $"a dry run in a project that no longer exists is NOT_FOUND, not a query error: {gone.Code} {gone.Message}");
@@ -120,5 +135,6 @@ internal static partial class BigQueryChecks
         var closed = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
         check(sqlServer.Code == "UNSUPPORTED_PROVIDER" && closed.Code is "UNSUPPORTED_PROVIDER" or "NOT_CONNECTED" && harness.Fake.To(BigQueryFake.Jobs).Count() == jobs,
             $"bigquery.dryRun on a handle that is not BigQuery's, or one closed, dry-runs nothing: {sqlServer.Code} {closed.Code}");
+        Clean(check, harness.Fake, "bigquery.dryRun");
     }
 }

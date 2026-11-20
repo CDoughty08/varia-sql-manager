@@ -55,8 +55,13 @@ export interface CostOptOut {
  */
 export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBigQueryCostPrompt'>, changed: () => void = () => {}): CostOptOut {
   const declined = new Map<string, boolean>()
-  // Choices made here whose write has not landed, or failed: a read of the saved entries does not undo them this session.
-  const local = new Set<string>()
+  // Choices made here whose write has not landed, or failed, by the connection (id and generation) they were made on: a
+  // read of the saved entries does not undo them while it lasts. A reconnect reads the saved entry again, so turning the
+  // prompt back on in Advanced Properties works even after a failed write.
+  const local = new Map<string, string>()
+  // Bumped by each Don't ask again: a read that began before one is older than it and is dropped.
+  const writes = new Map<string, number>()
+  const identity = (connection: LiveConnection) => `${connection.id}:${connection.generation}`
   const key = (connection: LiveConnection) => {
     try { return connection.options.provider === 'bigquery' ? connectionKey(connection.options) : undefined } catch { return undefined }
   }
@@ -66,24 +71,29 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
     async refresh(connection) {
       const entry = key(connection)
       if (entry === undefined) return
+      const made = local.get(entry)
+      if (made !== undefined) { if (made === identity(connection)) return; local.delete(entry) }
+      const write = writes.get(entry) ?? 0
       try {
         const loaded = await api.loadConnectionLibrary()
-        if (!loaded.ok) return
+        if (!loaded.ok || (writes.get(entry) ?? 0) !== write || local.has(entry)) return
         // Entries with the same settings are one connection: the choice applies to them all (the store writes them alike).
         const profiles = loaded.value.bigQuery.profiles.filter(item => { try { return connectionKey(item.options) === entry } catch { return false } })
-        if (!local.has(entry)) set(entry, profiles.some(item => item.options.costPrompt === false))
+        set(entry, profiles.some(item => item.options.costPrompt === false))
       } catch { /* The last choice read stands. */ }
     },
     async dontAsk(connection) {
       const entry = key(connection)
       if (entry === undefined || connection.options.provider !== 'bigquery') return
       set(entry, true)
-      local.add(entry)
+      writes.set(entry, (writes.get(entry) ?? 0) + 1)
+      const made = identity(connection)
+      local.set(entry, made)
       const options: BigQueryConnectionOptions = connection.options
       // Saved where a reconnect finds it; if the write fails, the choice still holds until the app closes.
       let saved = false
       try { const result = await api.setBigQueryCostPrompt({ options, costPrompt: false }); saved = result.ok && result.value } catch { /* As above. */ }
-      if (saved) local.delete(entry)
+      if (saved && local.get(entry) === made) local.delete(entry)
     }
   }
 }
@@ -204,7 +214,12 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     entry.estimated = undefined
     clearTimeout(entry.timer)
     entry.timer = undefined
-    if (!this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) return
+    if (!this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) {
+      // Nothing dry-runs the new text until Execute: the figure or error for the old text no longer stands ("checking"
+      // is Execute's own dry run, which clears itself when its answer is stale).
+      if (this.getSnapshot().get(entry.id)?.phase !== 'checking') this.put(entry.id, undefined)
+      return
+    }
     const schedule = this.deps.schedule ?? ((callback, ms) => setTimeout(callback, ms))
     // A timer cleared since (Execute went first, another edit) does nothing, whatever the scheduler.
     const timer: ReturnType<typeof setTimeout> = schedule(() => { if (entry.timer !== timer) return; entry.timer = undefined; this.diagnose(entry) }, dryRunDebounceMs)
@@ -218,12 +233,19 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const sql = entry.model.getValue()
     if (!sql.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
     if (sql.length > dryRunLimits.characters) { this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
-    entry.running = this.dryRun(entry, sql, { line: 1, column: 1 }).then(() => undefined).finally(() => {
+    this.hold(entry, this.dryRun(entry, sql, { line: 1, column: 1 }))
+  }
+
+  /** Records a dry run as the tab's one in flight (Execute's too), and runs the diagnostics one an edit asked for meanwhile. */
+  private hold(entry: Entry, run: Promise<unknown>): void {
+    const held: Promise<void> = run.then(() => undefined, () => undefined).finally(() => {
+      if (entry.running !== held) return
       entry.running = undefined
       if (!entry.again || this.disposed || this.entries.get(entry.id) !== entry) return
       entry.again = false
       if (this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) this.diagnose(entry)
     })
+    entry.running = held
   }
 
   /** Dry-runs `sql` for the tab and records the outcome when it is still current: the estimate, or BigQuery's error marked
@@ -295,7 +317,11 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     }
     // The revision of the text Execute runs, read before any await: an edit while the dry run is out is newer.
     entry.executed = entry.revision
-    if (!estimate) estimate = await this.dryRun(entry, sql, origin)
+    if (!estimate) {
+      const run = this.dryRun(entry, sql, origin)
+      this.hold(entry, run)
+      estimate = await run
+    }
     if (signal?.aborted) return false
     if (!estimate) return true
     await this.deps.optOut.refresh(connection)

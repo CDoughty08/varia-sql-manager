@@ -309,6 +309,30 @@ describe('the estimate before Execute', () => {
     await f.settle()
     expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(2)
   })
+  it('clears the figure when the text is edited with diagnostics off', async () => {
+    const f = fixture({ 'textEditor.googleSql.dryRunDiagnostics': false })
+    f.replies.push(estimate(20 * GiB))
+    f.setAnswer({ run: false })
+    await f.service.beforeExecute(f.tab.id, 'SELECT 1')
+    expect(f.service.getSnapshot().get(f.tab.id)).toMatchObject({ phase: 'estimate' })
+    f.model.edit('SELECT 2')
+    expect(f.service.getSnapshot().get(f.tab.id)).toBeUndefined()
+  })
+  it("waits for Execute's own dry run before the diagnostics one an edit asks for", async () => {
+    const f = fixture()
+    const run = f.service.beforeExecute(f.tab.id, 'SELECT 1')
+    f.model.edit('SELECT 2')
+    f.tick()
+    await f.settle()
+    expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(1)
+    f.replies.push(estimate(GiB))
+    f.pending.shift()!.resolve(estimate(GiB))
+    expect(await run).toBe(true)
+    await f.settle()
+    await f.settle()
+    expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(2)
+    expect(f.api.bigQueryDryRun).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'SELECT 2' }))
+  })
   it("marks an executed selection's error in the document, from the selection's start", async () => {
     const f = fixture()
     f.model.edit('-- daily\n-- totals\nSELECT 1; SELECT x\nFROM orders')
@@ -373,6 +397,32 @@ describe('the saved prompt choice', () => {
     await fresh.refresh(connection)
     expect(fresh.asks(connection)).toBe(true)
   })
+  it("turns the prompt back on after a reconnect even when Don't ask again could not be saved", async () => {
+    const api = {
+      loadConnectionLibrary: vi.fn(async () => ({ ok: true, value: { bigQuery: { profiles: [{ id: 'p', options, favorite: false }] } } }) as never),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: false as const, error: 'The connection could not be kept in the saved connections.', code: 'INTERNAL' as never }))
+    }
+    const optOut = costOptOut(api)
+    await optOut.dontAsk(connection)
+    await optOut.refresh(connection)
+    expect(optOut.asks(connection)).toBe(false)
+    // Reconnected (Advanced Properties turned the prompt back on and the saved entry asks): the saved entry decides.
+    await optOut.refresh({ ...connection, generation: 2 } as LiveConnection)
+    expect(optOut.asks(connection)).toBe(true)
+  })
+  it("drops a read of the saved entries that began before Don't ask again", async () => {
+    let release!: () => void
+    const api = {
+      loadConnectionLibrary: vi.fn(() => new Promise(resolve => { release = () => resolve({ ok: true, value: { bigQuery: { profiles: [{ id: 'p', options, favorite: false }] } } }) }) as never),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: true as const, value: true }))
+    }
+    const optOut = costOptOut(api)
+    const reading = optOut.refresh(connection)
+    await optOut.dontAsk(connection)
+    release()
+    await reading
+    expect(optOut.asks(connection)).toBe(false)
+  })
   it("holds Don't ask again for the session when it could not be saved", async () => {
     const api = {
       loadConnectionLibrary: vi.fn(async () => ({ ok: true, value: { bigQuery: { profiles: [] } } }) as never),
@@ -393,6 +443,19 @@ describe('the cost prompt', () => {
     await expect(first).resolves.toEqual({ run: false })
     prompts.answer({ run: true })
     await expect(second).resolves.toEqual({ run: true })
+    expect(prompts.getSnapshot().pending).toBeUndefined()
+  })
+  it('closes the open prompt as Cancel when its run is cancelled', async () => {
+    const prompts = new CostPromptService()
+    const request = { prompt: { kind: 'threshold', bytes: 1 }, connection: 'c', thresholdBytes: 0, prices: true } as const
+    const stop = new AbortController()
+    const asking = prompts.ask(request, stop.signal)
+    expect(prompts.getSnapshot().pending).toBeDefined()
+    stop.abort()
+    await expect(asking).resolves.toEqual({ run: false })
+    expect(prompts.getSnapshot().pending).toBeUndefined()
+    // Already cancelled, it never opens.
+    await expect(prompts.ask(request, stop.signal)).resolves.toEqual({ run: false })
     expect(prompts.getSnapshot().pending).toBeUndefined()
   })
 })
