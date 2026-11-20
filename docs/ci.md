@@ -41,8 +41,8 @@ the Measurements below with the new baseline.
   its real SQL Server Agent through the Service Control Manager (docs/sql-server-agent.md). It runs on pull requests that
   change its `paths` (the Agent backend, the job verbs, its live checks, the workflow), daily on main, and by hand, kept
   out of `ci.yml` so every other pull request's validation is unchanged. It is not a required check: a pull request on
-  which it ran merges only when it is green. Measured time: to be recorded from its first runs (most of it the SQL Server
-  install).
+  which it ran merges only when it is green. Measured time: about 230 s wall (SQL Server install 158 s, the two live
+  suites 37 s, setup 30 s).
 - **SQL Tools Service** is a build-time dependency pinned in `build/sqltools-service.json` for every release RID.
   Preparation verifies the official archive's SHA-256 before extraction and keeps upstream notices, the MIT license and
   an inventory of file hashes. Development commands prepare the host's distribution; packaging prepares its exact target

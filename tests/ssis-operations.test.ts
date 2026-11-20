@@ -313,6 +313,18 @@ describe('Integration Services Operations documents', () => {
     await commands.execute('ssis.copyOperations', undefined, 'api')
     expect(service.get(id)?.notice).toMatchObject({ tone: 'error', text: 'Could not copy the rows: This live view stopped; its rows are no longer available.' })
   })
+  it('copies with a header row when the copy column headers setting is on', async () => {
+    const { operations: service, handle, commands, settings } = operations()
+    const id = service.open('c1', 'operations')
+    handle().set({ status: 'live' })
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    service.attachGrid(id, grid as unknown as LiveGrid)
+    await commands.execute('ssis.copyOperations', undefined, 'api')
+    expect(grid.copy).toHaveBeenLastCalledWith(false)
+    await settings.update({ 'queryResults.grid.copyColumnHeaders': true })
+    await commands.execute('ssis.copyOperations', undefined, 'api')
+    expect(grid.copy).toHaveBeenLastCalledWith(true)
+  })
   it('opens from the SSISDB node with its preset, from View on the selection\'s or active document\'s server, and never on a lost one', async () => {
     const fixture = operations()
     const { operations: service, commands, documents, handle } = fixture

@@ -95,17 +95,17 @@ internal static class PackingChecks
     private static void LengthsForm(Action<bool, string> check)
     {
         var pages = new[] { 1, 7, 64, 1000, PageBuilder.MaxRows }.Select(rows => MixedPage(rows)).ToList();
-        var formed = pages.All(page => PageCodec.Pack(page) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page));
+        var formed = pages.All(page => PageCodec.Pack(page, typed: false) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page));
         var room = new byte[pages[^1].Length];
-        PageCodec.UnpackInto(PageCodec.Pack(pages[^1])!, room);
+        PageCodec.UnpackInto(PageCodec.Pack(pages[^1], typed: false)!, room);
         check(formed && room.AsSpan().SequenceEqual(pages[^1]),
             "a sealed page packs in its lengths form and unpacks to its bytes as sealed, alone or into a fused read's room");
         var emptyLast = new[] { 1, 2, 7, 64, 1000, PageBuilder.MaxRows }.Select(rows => MixedPage(rows, emptyLast: true)).ToList();
-        check(emptyLast.All(page => PageCodec.Pack(page) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page)),
+        check(emptyLast.All(page => PageCodec.Pack(page, typed: false) is { } packed && packed[0] == 1 && PageCodec.Unpack(packed, page.Length).AsSpan().SequenceEqual(page)),
             "a page whose last column holds no data packs in its lengths form too, at odd and even row counts");
 
         // A lengths form changed anywhere unpacks to some bytes or fails as unreadable, never with another error.
-        var formed1000 = PageCodec.Pack(pages[3])!;
+        var formed1000 = PageCodec.Pack(pages[3], typed: false)!;
         var formAt = 1;
         while (formed1000[formAt++] >= 0x80) { }
         var form = new byte[pages[3].Length];
@@ -142,11 +142,11 @@ internal static class PackingChecks
             catch (InvalidDataException) { cutFailures++; }
             catch (Exception error) { unexpected.Add(error.GetType().Name); }
         }
-        // A damaged prefix or frame: an unknown marker, a form longer than the page, a page as sealed of the wrong length,
+        // A damaged prefix or frame: an unknown marker (3; 2 is a typed page, TypedFormChecks), a form longer than the page, a page as sealed of the wrong length,
         // a frame cut short.
         byte[][] damaged =
         [
-            [2, .. formed1000.AsSpan(1)],
+            [3, .. formed1000.AsSpan(1)],
             [1, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, .. formed1000.AsSpan(formAt)],
             [0, .. formed1000.AsSpan(1)],
             formed1000[..(formed1000.Length - 8)],
@@ -174,7 +174,7 @@ internal static class PackingChecks
         var sealedPage = numbers.Seal();
         var plain = new byte[sealedPage.Length * 2];
         System.IO.Compression.ZstandardEncoder.TryCompress(sealedPage, plain, out var plainLength, PageCodec.Quality, PageCodec.Window);
-        var asLengths = PageCodec.Pack(sealedPage)!.Length;
+        var asLengths = PageCodec.Pack(sealedPage, typed: false)!.Length;
         check(asLengths < plainLength * 0.8, $"offsets packed as lengths take under four fifths of the page packed as sealed ({asLengths} of {plainLength} bytes)");
 
         // Bytes that are not exactly a sealed page (a byte changed anywhere, a page cut short or doubled) still unpack to

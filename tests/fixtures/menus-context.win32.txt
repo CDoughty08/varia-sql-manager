@@ -361,6 +361,20 @@ explorer.context, for a SQL Server Agent job
   S&tart Job at Step…  -+++
   Sto&p Job  -+++
   ---
+  &Script Job as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &DROP To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    DROP A&nd CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
   Copy N&ame  -+++
   ---
   Disa&ble  -+++

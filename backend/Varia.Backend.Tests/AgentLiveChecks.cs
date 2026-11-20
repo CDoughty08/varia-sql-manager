@@ -85,6 +85,7 @@ internal static class AgentLiveChecks
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
+        await AgentScriptingLiveChecks.RunAsync(check, service, info, json, scratch, Sql);
     }
 
     /// <summary>Object Explorer's Agent node probe (explorer.agentService, AG-1) on a server whose Agent is up: Agent XPs 1 and

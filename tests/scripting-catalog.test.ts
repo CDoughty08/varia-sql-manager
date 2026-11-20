@@ -59,7 +59,8 @@ const b3: readonly (readonly [NodeKind, readonly (NodeSubtype | '')[] | '*', rea
     ['databaseRole', 'Role'], ['applicationRole', 'Application Role'], ['databaseAuditSpecification', 'Database Audit Specification'], ['fullTextCatalog', 'Full-Text Catalog'],
     ['fullTextStoplist', 'Full-Text Stoplist'], ['searchPropertyList', 'Search Property List'], ['partitionScheme', 'Partition Scheme'], ['partitionFunction', 'Partition Function'],
     ['planGuide', 'Plan Guide'], ['login', 'Login'], ['serverRole', 'Server Role'], ['credential', 'Credential'], ['linkedServer', 'Linked Server'], ['backupDevice', 'Backup Device'],
-    ['audit', 'Audit'], ['serverAuditSpecification', 'Server Audit Specification']
+    ['audit', 'Audit'], ['serverAuditSpecification', 'Server Audit Specification'],
+    ['agentJob', 'Job'], ['agentAlert', 'Alert'], ['agentOperator', 'Operator'], ['agentProxy', 'Proxy']
   ] as const).map(([kind, title]) => [kind, '*', undefined, title, createDrop] as const)
 ]
 const later = ['assembly', 'asymmetricKey', 'certificate', 'symmetricKey', 'columnMasterKey', 'columnEncryptionKey', 'cryptographicProvider', 'externalDataSource', 'externalFileFormat']
@@ -78,14 +79,16 @@ const urns: Readonly<Record<string, string>> = {
   fullTextCatalog: 'FullTextCatalog', fullTextStoplist: 'FullTextStopList', searchPropertyList: 'SearchPropertyList', partitionScheme: 'PartitionScheme',
   partitionFunction: 'PartitionFunction', planGuide: 'PlanGuide',
   login: 'Login', serverRole: 'Role', credential: 'Credential', linkedServer: 'LinkedServer', backupDevice: 'BackupDevice', serverTrigger: 'DdlTrigger', audit: 'Audit',
-  serverAuditSpecification: 'ServerAuditSpecification'
+  serverAuditSpecification: 'ServerAuditSpecification',
+  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'ProxyAccount'
 }
 const preflights: Readonly<Record<string, readonly NodeKind[]>> = {
   module: ['view', 'procedure', 'function', 'rule', 'default'], table: ['table'], child: ['key', 'constraint', 'trigger', 'index', 'statistic'], type: ['type', 'tableType'],
   schemaObject: ['synonym', 'sequence', 'xmlSchemaCollection', 'securityPolicy'],
   databaseObject: ['user', 'databaseRole', 'applicationRole', 'schema', 'databaseAuditSpecification', 'databaseTrigger', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme',
     'partitionFunction', 'searchPropertyList', 'planGuide'],
-  database: ['database'], serverObject: ['login', 'serverRole', 'credential', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger']
+  database: ['database'], serverObject: ['login', 'serverRole', 'credential', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger'],
+  agentObject: ['agentJob', 'agentAlert', 'agentOperator', 'agentProxy']
 }
 
 describe('scripting catalogue', () => {
@@ -105,7 +108,7 @@ describe('scripting catalogue', () => {
     }
     expect(unique(scriptVerbs.map(verb => scriptVerbSpecs[verb].mnemonic))).toBe(true)
     expect(unique(scriptDestinations.map(destination => scriptDestinationSpecs[destination].mnemonic))).toBe(true)
-    expect(scriptAsTitleKeys).toHaveLength(39)
+    expect(scriptAsTitleKeys).toHaveLength(43)
     expect(unique(scriptAsTitleKeys)).toBe(true)
     expect(unique(Object.values(scriptAsTitles))).toBe(true)
     expect(Object.keys(scriptObjectTitles)).toEqual([...scriptAsTitleKeys])
@@ -385,7 +388,7 @@ describe('generated scripting files', () => {
     expect(docs).toContain('`table` (`droppedLedger`)')
     expect(docs).toContain('`certificate`')
     expect(docs).toContain('| `login` | none, `sa`, `system`, `sql`, `windowsUser`, `windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | Script Login as |')
-    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog`.')
+    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`.')
     expect(docs).toContain('| `maxScriptChars` | 4,000,000 |')
   })
 })

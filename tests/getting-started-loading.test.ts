@@ -225,7 +225,7 @@ it('sorts numeric ranks consistently while text-sort and copy settings change li
     await act(async () => button('Sort Rank ascending').click())
     for (const mode of ['chars', 'bytes', 'value'] as const) {
       const headers = mode !== 'value'
-      await act(async () => view.fixture.settings.update({ 'queryResults.grid.sortText': mode, 'queryResults.grid.includeColumnHeaders': headers }))
+      await act(async () => view.fixture.settings.update({ 'queryResults.grid.sortText': mode, 'queryResults.grid.copyColumnHeaders': headers }))
       expect(ranks()).toEqual(['10', '20', '30'])
       expect(view.host.textContent).toContain(`Ordinary Copy currently ${headers ? 'includes' : 'omits'} column headers`)
     }

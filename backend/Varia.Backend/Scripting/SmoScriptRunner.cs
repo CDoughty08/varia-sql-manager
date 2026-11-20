@@ -71,7 +71,7 @@ internal sealed class SmoScriptRunner
         // Before any SMO: two jobs' first dependency walks would otherwise fill SMO's static type table together.
         SmoDependencyTypes.Ensure();
         var smo = Server();
-        var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column));
+        var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column, target.Category));
         var dependencies = dto.GenerateDependentObjects && SmoOptionsMapper.Dependencies(target.Row.Urn, target.ParentUrnType, target.Ref.Database is null);
         // The pass that reads definitions: CREATE (DROP And CREATE's second pass too), ALTER or CREATE OR ALTER.
         var reading = SmoOptionsMapper.Passes(verb)[^1];
@@ -116,6 +116,8 @@ internal sealed class SmoScriptRunner
         // whose comments may look like SMO's at both ends.
         if (!HeaderGuard.Closed(batches, module => scripted.Defines(module, dto.ScriptTriggers))) throw new ScriptRefusedException(BrokenComment);
         if (unresolved.Count > 0 && UnresolvedWarning(unresolved, urn) is var notice && !warnings.Contains(notice)) warnings.Add(notice);
+        // First, since the notice shows the first warning: running this script could change who a step runs as.
+        if (target.Kind == "agentJob" && target.SeesProxies == false && batches.Any(StepWithoutProxy) && !warnings.Contains(ProxyWarning)) warnings.Insert(0, ProxyWarning);
         var text = new StringBuilder();
         foreach (var batch in batches)
         {
@@ -285,6 +287,79 @@ internal sealed class SmoScriptRunner
 
     /// <summary>A name's UTF-16 code units as hex, unpaired surrogates included.</summary>
     internal static string Hex(string name) => Convert.ToHexString(MemoryMarshal.AsBytes(name.AsSpan()));
+
+    /// <summary>SMO names a job step's proxy only where msdb's sp_help_proxy shows it to the login, so below sysadmin and
+    /// SQLAgentOperatorRole a step that runs as a proxy the login was not granted is scripted without it.</summary>
+    public const string ProxyWarning = "This script may leave out the proxy that a step runs as: only sysadmin and SQLAgentOperatorRole see every proxy, "
+        + "and a step without @proxy_name runs as the SQL Server Agent service account. Check the steps before running the script.";
+
+    /// <summary>Whether a job batch has a step of a subsystem that can run as a proxy (any but TSQL) that names none. Only
+    /// text outside string literals counts, so a step's name or command cannot pose as a call or a parameter.</summary>
+    internal static bool StepWithoutProxy(string batch)
+    {
+        const string Step = "msdb.dbo.sp_add_jobstep ";
+        string? subsystem = null;
+        bool inStep = false, proxy = false;
+        bool Unproxied() => inStep && subsystem is not null && subsystem != "TSQL" && !proxy;
+        for (var at = 0; at < batch.Length;)
+        {
+            if (batch[at] == '\'')
+            {
+                at = LiteralEnd(batch, at);
+                continue;
+            }
+            // SMO's step headers name the step too, apostrophes and all.
+            if (string.CompareOrdinal(batch, at, "/*", 0, 2) == 0)
+            {
+                var close = batch.IndexOf("*/", at + 2, StringComparison.Ordinal);
+                at = close < 0 ? batch.Length : close + 2;
+                continue;
+            }
+            if (string.CompareOrdinal(batch, at, "--", 0, 2) == 0)
+            {
+                var close = batch.IndexOf('\n', at);
+                at = close < 0 ? batch.Length : close + 1;
+                continue;
+            }
+            if (string.CompareOrdinal(batch, at, Step, 0, Step.Length) == 0)
+            {
+                if (Unproxied()) return true;
+                (inStep, subsystem, proxy) = (true, null, false);
+                at += Step.Length;
+                continue;
+            }
+            if (batch[at] == '@' && inStep)
+            {
+                var end = at + 1;
+                while (end < batch.Length && (char.IsLetterOrDigit(batch[end]) || batch[end] == '_')) end++;
+                var name = batch[(at + 1)..end];
+                if (string.CompareOrdinal(batch, end, "=N'", 0, 3) == 0)
+                {
+                    var close = LiteralEnd(batch, end + 2);
+                    if (name == "subsystem") subsystem = batch[(end + 3)..Math.Max(end + 3, close - 1)].Replace("''", "'", StringComparison.Ordinal);
+                    else if (name == "proxy_name") proxy = true;
+                    at = close;
+                    continue;
+                }
+                at = end;
+                continue;
+            }
+            at++;
+        }
+        return Unproxied();
+
+        // The index after the literal that opens at start (doubled apostrophes stay inside it).
+        static int LiteralEnd(string text, int start)
+        {
+            var at = start + 1;
+            while (at < text.Length)
+            {
+                if (text[at] == '\'' && (at + 1 >= text.Length || text[at + 1] != '\'')) return at + 1;
+                at += text[at] == '\'' ? 2 : 1;
+            }
+            return text.Length;
+        }
+    }
 
     /// <summary>A stored definition with a line the query window reads as GO (valid T-SQL, as a column alias) or as a
     /// SQLCMD command: SSMS scripts it as is too, but whoever runs the script would run the rest as a batch of its own.</summary>

@@ -2,9 +2,9 @@
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
-Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop and Restart, and Search Objects finds jobs, alerts
-and operators; Job Activity Monitor and the job documents arrive in later lanes, behind the same gate until
-0.11.0.
+Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop and Restart; Search Objects finds jobs, alerts
+and operators, and Script As scripts jobs, alerts, operators and proxies. Job Activity Monitor and the job documents arrive
+in later lanes, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -57,6 +57,21 @@ and operators; Job Activity Monitor and the job documents arrive in later lanes,
   Linux server, Managed Instance, a clustered instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
+- **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
+  Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in
+  [docs/scripting.md](scripting.md)). SMO writes the script through `ScriptPipeline` as for every other kind (headers
+  guarded, nothing executed): the msdb procedures SSMS writes (`sp_add_job` with its steps, schedules and target server in
+  one transaction, `sp_add_alert`, `sp_add_operator`, `sp_add_proxy` with its subsystems, which SMO leaves out for a Linux server), after `USE [msdb]`. A proxy's
+  script names its credential, never a secret; an alert's leaves out its notifications, as SSMS's does. The preflight
+  (`agentObject`) reads the object by name from msdb's tables in msdb through the scope wrapper, a job from
+  `sysjobs_view` with its category, since SMO finds a job below `JobServer` by name and category. A login in
+  `SQLAgentUserRole` alone scripts its own jobs (`sysjobs_view` shows it only those); msdb refuses it the alert,
+  operator and proxy tables, which Object Explorer does not list for it either. Below `sysadmin` and
+  `SQLAgentOperatorRole`, SMO names a step's proxy only if msdb shows that proxy to the login, so a job with a step of
+  another subsystem than T-SQL that names no proxy is scripted with a warning to check its steps. A job name that two jobs share (a
+  multi-server job from a master server and a local job) is refused as ambiguous. A cloud database has no Agent to script.
+  As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
+  script.
 
 ## What AG-0 found on a real server
 
@@ -125,7 +140,10 @@ instance or under a domain account (AG-2's Windows workflow), and how history re
 `VARIA_TEST_SQL_AGENT=1` turns on the Agent live suite (docs/testing.md): it waits for Agent to come up, then fails if it
 never does. Scratch Agent objects use the run prefix with a kind tag (`_job`, `_sch`, `_op`, `_al`, `_px`, `_cr`) and are
 swept by `ScratchDatabase.SweepAsync` once their prefix is more than 6 hours old. With `VARIA_TEST_SQL_SCRATCH=1` the
-suite also runs the job verbs on its scratch job through `actions.describe` and `actions.execute`.
+suite also runs the job verbs on its scratch job through `actions.describe` and `actions.execute`. Its Script As checks
+(`AgentScriptingLiveChecks`) script this run's job, operator, alert (Windows) and proxy, compare the job's script with
+SMO's own `Job.Script`, run the job's DROP And CREATE script, and script a `SQLAgentUserRole` login's own job (on Windows,
+its step that runs as a proxy comes without the proxy and with the warning).
 
 The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
 the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
