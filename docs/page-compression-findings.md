@@ -27,8 +27,8 @@ packed) and catalog columns read sixteen times 52 % (58 MiB raw, 2.7 MiB packed)
   at normal priority, oldest page first, so queries storing at once pack on as many threads; one thread for all of them
   fell behind four at once, about 300 pages each, since packing with the Find filter runs near 140 MB/s a thread. It is
   not the workers' gate, which sorts and reads share. Rows arrive at 26 to 51 MB/s from one query (reading alone takes
-  as long: SQL Server and TDS are the bottleneck) and 110 to 200 MB/s from four at
-  once, while a page packs at 320 to 920 MB/s on one thread. The worker trails by at most five pages (the four
+  as long: SQL Server and TDS are the bottleneck) and 110 to 200 MB/s from four at once; a worker packs a page with its
+  Find filter at about 140 MB/s (320 to 920 MB/s for the codec alone), so one a result keeps up. The worker trails by at most five pages (the four
   sealed before the floor are queued with the one that crosses it; 24 once, in a process's first fill) and finishes 2
   to 15 ms after the last row. A fill takes as long as raw: `sys.messages` read four times 4.2 to 6.2 s against 4.2 to
   6.7 s raw, catalog columns 2.0 to 2.1 s both, and four of each at once 5.2 to 5.6 s against 5.1 to 5.4 s and 2.2 s
@@ -38,11 +38,11 @@ packed) and catalog columns read sixteen times 52 % (58 MiB raw, 2.7 MiB packed)
 - **The policy's rules for holds.** A page is never replaced while a pin or lease is held: it stays queued, and the last
   hold to end starts the worker again. A release drops the queue; so does an operation's whole unpack of a complete
   result, a use the policy's delays then govern, and so does a failure while packing (a defect, never the user's: the
-  pages stay raw and readable). Live tables and derived sets are left to the policy.
-- **A refused row waits for it.** While the query's own pages are queued and one of them is not held
-  (`QueryBudget.SealCanPack`), a row the budget refuses waits for their saving as it waits for packing for room
-  ([Room for a query](#room-for-a-query)); with every queued page held (a Copy of a result still loading), it is refused
-  at once.
+  pages stay raw and readable). Live tables are never packed, and derived sets are left to the policy.
+- **A refused row waits for it.** While the query's own pages are queued (`QueryBudget.SealCanPack`), a row the budget
+  refuses waits for their saving as it waits for packing for room ([Room for a query](#room-for-a-query)), through a
+  read's brief pin too, whose end restarts the worker. While a lease holds them (a Copy or Save of a result still
+  loading), it is refused at once.
 - **Reads of a fresh result read packed pages** from its first seconds rather than after the policy's 5 or 30 s. They
   cost what the [measurements](#measurements) show: below a frame for scrolling and random jumps, a sorted grid's slowest
   screens one or two frames on a few cores, and Save about 0.5 s more a GiB.
@@ -117,7 +117,7 @@ wait, 4 waits a row, 30 s in all for the query) while the policy packs at once, 
 gate (`ViewSorter.Gate`, a page an item, sharing threads fairly with sorts and reads). It packs complete, unheld results
 of 1 MiB or more that could make room: any query's for the global budget, only the query's own when its half is full;
 hidden first, then largest, until no query waits. It ignores the idle delays but never takes one an operation unpacked
-and still uses, and the query's own pages queued for packing at seal and not held pack meanwhile. While a row waits, the rows
+and still uses, and the query's own pages queued for packing at seal pack meanwhile unless a lease holds them. While a row waits, the rows
 committed before it are not yet sealed. With nothing to pack, or once the waits run out, the row is refused and the query truncated as before. Stored
 rows are never dropped, and a stop is never undone: stored rows stay a prefix of the rows read.
 

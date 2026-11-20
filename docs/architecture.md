@@ -401,8 +401,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     room, never one an operation unpacked and still uses
     (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
-    The query's own pages queued for packing at seal make room too while one is not held by a pin or lease
-    (`QueryBudget.SealCanPack`): the row waits for them as for the policy. With nothing to pack the row is refused at once. A stop is never undone: stored rows are
+    The query's own pages queued for packing at seal make room too unless a lease holds them
+    (`QueryBudget.SealCanPack`; a read's pin is brief and its end restarts the worker): the row waits for them as for
+    the policy. With nothing to pack the row is refused at once. A stop is never undone: stored rows are
     a prefix of rows read.
   - Reads: a packed page unpacks into a six-page per-result cache (`CachePages`) only while the budget has spare room
     (`TryReserveSpare`), else for that read alone. A view read unpacks its base pages 64 at a time on the workers

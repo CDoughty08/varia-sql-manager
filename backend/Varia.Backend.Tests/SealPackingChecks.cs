@@ -118,8 +118,8 @@ internal static class SealPackingChecks
         late!.Dispose();
         check(Settled(raced) && AllPacked(raced), "and the pin's end packs it");
 
-        // A Copy leases a result still loading past its half: its queued pages cannot pack, so a refused row is refused at
-        // once rather than waiting for room nothing can make.
+        // A Copy leases a result still loading past its half: its queued pages cannot pack until the Copy ends, so a
+        // refused row is refused at once rather than waiting for room nothing can make.
         var small = Store(64L << 20, 12L << 20);
         var copied = Open(small, "copied");
         check(copied.TryLease(), "the fixture: a Copy leases the loading result");
@@ -129,6 +129,20 @@ internal static class SealPackingChecks
             "with every queued page held a refused row stops the query at once: " + waits + " waits, " + waited.Ms + " ms, " + copied.Budget.SealPending + " queued");
         copied.ReleaseLease();
         check(Settled(copied) && AllPacked(copied), "and the lease's end packs what was stored");
+
+        // A read's pin at the refusal is brief: the row waits through it, and the query stores every row once it ends.
+        var read = Store(64L << 20, 12L << 20);
+        var scrolled = Open(read, "scrolled");
+        var held = scrolled.Pin();
+        var ends = Task.Run(() =>
+        {
+            SpinWait.SpinUntil(() => scrolled.RoomWanted > 0, Wait);
+            held.Dispose();
+        });
+        var scrolledWaits = Ingest(read, scrolled, BigRows * 5 / 2);
+        ends.Wait();
+        check(scrolled.Truncated == TruncationReason.None && scrolled.RowsAvailable == BigRows * 5 / 2 && scrolledWaits > 0,
+            "a row refused while a read pins the loading result waits for the pin's end and the query stores every row: " + scrolledWaits + " waits, " + scrolled.RowsAvailable + " rows");
 
         // The same for a lease (a Copy or Save).
         var leased = Open(store, "leased");
