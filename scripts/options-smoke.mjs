@@ -331,6 +331,9 @@ try {
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
   for (const name of ['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan']) await expect(optionsSection(dialog(), name)).toBeVisible()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('checkbox', { name: 'Show outline', exact: true })).toBeChecked()
+  // Copy and Save Results As have their own header settings: copy without by default, save with.
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when copying the results', exact: true })).not.toBeChecked()
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when saving the results', exact: true })).toBeChecked()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true })).toHaveValue('220')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('0 = no limit')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('GiB · 0 = automatic')

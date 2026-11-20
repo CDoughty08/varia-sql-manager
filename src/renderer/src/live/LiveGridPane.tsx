@@ -77,7 +77,7 @@ const indexesOf = (ids: readonly string[], columns: readonly { readonly id: stri
  * first sample the grid area is empty.
  */
 function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind, rows: rowActions }: LiveGridPaneProps) {
-  const { commands } = useWorkbench()
+  const { commands, settings } = useWorkbench()
   const columns = liveProbes[probe]?.tables?.[table]?.columns ?? []
   const [grid, setGrid] = useState<LiveGrid>()
   const [notice, setNotice] = useState<string>()
@@ -104,7 +104,7 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
         // Edit › Copy's copy event: output.copy, as in a results grid, or the grid's own copy without the menu.
         onCopy: headers => {
           if (contextMenu) void commands.execute(headers ? 'output.copyWithHeaders' : 'output.copy', undefined, 'keybinding')
-          else { beginCopy(); void created.copy(!!headers).then(report('copy the rows'), onUnexpectedError) }
+          else { beginCopy(); void created.copy(headers ?? settings.getSnapshot().values['queryResults.grid.copyColumnHeaders']).then(report('copy the rows'), onUnexpectedError) }
         },
         onEscape: () => false,
         toneLabel: tone => latest.current.toneLabel?.(tone)

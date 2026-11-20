@@ -1,6 +1,7 @@
 // Renders docs/settings.md from the settings catalogue; tests/settings-catalog.test.ts keeps the file in sync.
 import { pagePath, settingDefs, settingPages, settingsLimits } from './catalog'
 import type { SettingDef, SettingPage } from './types'
+import { renamedSettings } from './schema'
 
 // `<` outside code spans would start an HTML tag ("Select Top <n> Rows").
 const cell = (value: string) => value.replaceAll('|', '\\|').split('`').map((part, index) => index % 2 ? part : part.replaceAll('<', '&lt;')).join('`')
@@ -108,6 +109,9 @@ ${settingPages.filter(page => page.layout).map(pageSection).join('\n\n')}
 - Migration: when \`settings.json\` does not exist, a \`scripting-options.json\` from an earlier version is imported into
   the \`objectExplorer.scripting.*\` keys and left untouched; it is not read again once \`settings.json\` exists or was
   reset. When the import cannot be written, its values apply for the session and the next start imports again.
+- Renamed settings: a key an earlier version stored under its old name carries its value to each new key the file does
+  not set, and the next write drops the old name. A value the new key cannot hold is dropped without a warning.
+  ${Object.entries(renamedSettings).map(([old, keys]) => code(old) + ' became ' + keys.map(code).join(' and ')).join('; ')}.
 - The color theme stays in \`appearance.json\` (View › Theme); connection profiles keep their own Advanced properties.
 
 ## Limits

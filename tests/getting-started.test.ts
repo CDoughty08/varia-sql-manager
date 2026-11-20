@@ -83,7 +83,7 @@ describe('contextual references', () => {
   it('derives command paths, dynamic titles and setting values from the real catalogs', () => {
     expect(lessonCommand('query.execute', 'win32', defaultSettings)).toEqual({ title: 'Execute', path: 'Query › Execute' })
     expect(lessonCommand('output.copy', 'win32', defaultSettings).path).toBe('Results context menu › Copy')
-    expect(settingValueLabel('queryResults.grid.includeColumnHeaders', { ...defaultSettings, 'queryResults.grid.includeColumnHeaders': true })).toBe('On')
+    expect(settingValueLabel('queryResults.grid.copyColumnHeaders', { ...defaultSettings, 'queryResults.grid.copyColumnHeaders': true })).toBe('On')
   })
 })
 
