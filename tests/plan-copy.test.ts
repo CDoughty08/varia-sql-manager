@@ -69,7 +69,12 @@ describe('plan properties copy', () => {
     getSelection()!.removeAllRanges()
     getSelection()!.addRange(range)
     expect(menu.target(element, fact(element, 'Ordered'))?.facts).toEqual([['Ordered', 'True']])
+    // That word selection is dropped, so a right-click on another fact copies that one, not this one again.
+    expect(getSelection()!.rangeCount).toBe(0)
+    menu.press(element)
+    expect(menu.target(element, fact(element, 'Node ID'))?.facts).toEqual([['Node ID', '3']])
     // Once the press ends, the selection as it is.
+    getSelection()!.addRange(range)
     menu.press(element)
     document.dispatchEvent(new Event('pointerup'))
     expect(menu.target(element, fact(element, 'Ordered'))?.facts).toEqual([['Node ID', '3']])
