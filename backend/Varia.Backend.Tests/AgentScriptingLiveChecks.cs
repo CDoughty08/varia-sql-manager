@@ -149,8 +149,8 @@ internal static class AgentScriptingLiveChecks
     }
 
     /// <summary>A login in SQLAgentUserRole alone, impersonated on a pool connection: its own job scripts through the preflight
-    /// and SMO as the service runs them (docs/agent-plan.md › Script As asks AG-4 to verify it), while msdb refuses it an alert,
-    /// which the preflight reports as a value.</summary>
+    /// and SMO as the service runs them (docs/agent-plan.md › Script As asks AG-4 to verify it), while msdb refuses it an alert:
+    /// the preflight throws 229, which ScriptingService reports as a PERMISSION_DENIED value.</summary>
     private static async Task RoleAsync(Action<bool, string> check, SqlService service, IActionHost host, ConnectionInfo info, ServerProfile profile, ScratchDatabase scratch,
         Func<string, string, Task<SqlRun>> sql, ScriptingOptionsDto defaults, string job, string alert, bool alerts)
     {

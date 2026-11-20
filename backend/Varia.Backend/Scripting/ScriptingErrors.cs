@@ -74,13 +74,13 @@ internal static class ScriptingErrors
         _ => "SQL Server version " + SmoOptionsMapper.Known.First(item => item.Value == version).Number.ToString(CultureInfo.InvariantCulture)
     };
 
+    /// <summary>NOT_SUPPORTED's detail for a job name msdb holds more than once.</summary>
+    public const string AmbiguousJob = "ambiguousJob";
+
     /// <param name="detail">NOT_SUPPORTED from SMO: the target version and SMO's text; NO_DEFINITION: "server" for a
     /// server or database trigger whose hidden definition may be encrypted; TOO_LARGE: "definition" for the module
     /// pre-check; DATABASE_UNAVAILABLE: the state or server text; PERMISSION_DENIED, SMO_ERROR and SQL_ERROR: the
     /// server's or SMO's text, or why Varia refused the script.</param>
-    /// <summary>NOT_SUPPORTED's detail for a job name msdb holds more than once.</summary>
-    public const string AmbiguousJob = "ambiguousJob";
-
     public static ScriptError Create(ScriptingCatalog catalog, string code, ScriptSubject subject, string? detail = null, int number = 0)
     {
         var o = subject.Display;

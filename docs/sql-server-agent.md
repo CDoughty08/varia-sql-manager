@@ -41,7 +41,7 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   `SQLAgentUserRole` alone scripts its own jobs (`sysjobs_view` shows it only those); msdb refuses it the alert,
   operator and proxy tables, which Object Explorer does not list for it either. Below `sysadmin` and
   `SQLAgentOperatorRole`, SMO names a step's proxy only if msdb shows that proxy to the login, so a job with a step of
-  another subsystem than T-SQL is scripted with a warning to check its steps. A job name that two jobs share (a
+  another subsystem than T-SQL that names no proxy is scripted with a warning to check its steps. A job name that two jobs share (a
   multi-server job from a master server and a local job) is refused as ambiguous. A cloud database has no Agent to script.
   As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
   script.
