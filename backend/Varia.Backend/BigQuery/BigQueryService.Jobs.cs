@@ -136,7 +136,8 @@ internal sealed partial class BigQueryService
                 }
                 catch (GoogleApiException lookup) when (lookup.HttpStatusCode == HttpStatusCode.NotFound && attempt < InsertAttempts) { }
                 catch (Exception lookup) when (attempt < InsertAttempts && Transient(lookup, token)) { }
-                catch (Exception) when (attempt >= InsertAttempts) { throw ambiguous ?? error; }
+                // A lookup that fails in a way not retried (a 403, a 400) still leaves the first insert's fate unknown.
+                catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous ?? error; }
                 await Task.Delay(Backoff(attempt), token);
             }
         }

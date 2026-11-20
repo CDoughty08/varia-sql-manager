@@ -147,6 +147,7 @@ internal static class BigQuerySessionChecks
         static JsonObject Gone(string session) => new() { ["reason"] = "invalidQuery", ["message"] = "Session " + session + " has expired and is no longer available." };
 
         public BigQueryFake.Reply InsertReply(BigQueryFake.Request request) => Insert(request);
+        public BigQueryFake.Reply GetReply(BigQueryFake.Request request) => Get(request);
 
         BigQueryFake.Reply Insert(BigQueryFake.Request request)
         {
@@ -655,6 +656,18 @@ internal static class BigQuerySessionChecks
         check(partial.Result is { Status: "failed" } && !Says(partial.Result, "The script completed."),
             $"a script whose child rows fail to read fails, never completes: {partial.Result?.Status} {Texts(partial.Result?.Messages ?? [])}");
 
+        // The same while the script still runs: it is cancelled in BigQuery, and the session waits for it as for a Stop.
+        bq.PollsBeforeDone = 1000;
+        harness.Fake.Fault = request => request.Url.Contains("/queries/child_", StringComparison.Ordinal) ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var running = await harness.Execute(childTab, "SCRIPT two selects");
+        harness.Fake.Fault = null;
+        bq.PollsBeforeDone = 0;
+        var runningId = bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
+        check(running.Result is { Status: "failed" } && await Poll(() => bq.Cancels.Contains(runningId)) && Says(running.Result, "whose results could not be read"),
+            $"a running script whose child rows fail to read is cancelled in BigQuery: {running.Result?.Status} {Texts(running.Result?.Messages ?? [])}");
+        bq.Release(bq.Jobs[runningId]);
+        await harness.Close(childTab);
+
         // An insert whose first attempt may have created the job, then retries that never left: the job may exist, so it holds the session.
         var ambiguousTab = Tab();
         await harness.Execute(ambiguousTab, "SELECT 1");
@@ -685,6 +698,19 @@ internal static class BigQuerySessionChecks
             $"an insert whose first attempt may have reached BigQuery holds the session even when later retries never left: {ambiguous.Result?.Status} {ambiguousState.State}");
         if (ambiguousJob is not null) bq.Release(ambiguousJob);
         await harness.Close(ambiguousTab);
+
+        // The same when the lookup after the first attempt is refused outright (a 403): the job may still exist.
+        var deniedTab = Tab();
+        await harness.Execute(deniedTab, "SELECT 1");
+        ambiguousJob = null;
+        harness.Fake.On("GET", Base + "/jobs/[^/]+", request => ambiguousJob is { } held && request.Url.Contains("/jobs/" + held.Id, StringComparison.Ordinal) && !bq.Jobs[held.Id].Hold.Equals(false)
+            ? new(403, Bq.Error(403, "Exceeded rate limits: too many api requests.", "rateLimitExceeded")) : bq.GetReply(request));
+        var denied = await harness.Execute(deniedTab, "SELECT ambiguous");
+        var deniedState = await harness.State(deniedTab);
+        check(denied.Result is { Status: "failed" } && ambiguousJob is not null && deniedState.State is { Checked: false },
+            $"an insert whose lookup is refused outright still holds the session for the job it may have created: {denied.Result?.Status} {deniedState.State}");
+        if (ambiguousJob is not null) bq.Release(ambiguousJob);
+        await harness.Close(deniedTab);
 
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");

@@ -363,7 +363,14 @@ internal sealed partial class SqlService
         }
         catch (Exception error)
         {
+            // A script failed by a child's rows still runs in BigQuery: it is cancelled, as Stop does, and held until DONE.
+            var childFailed = error is ChildReadFailure;
             if (error is ChildReadFailure read) error = read.InnerException!;
+            if (childFailed && sent && !complete)
+            {
+                bigQuery.CancelJob(connection, project, jobId, location);
+                messages.Add("Varia asked BigQuery to cancel job " + JobName(project, location, jobId) + ", whose results could not be read. Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
+            }
             if (currentSet is not null) currentSet.Incomplete = true;
             // A disconnect that closed the handle under the run (its client disposed) stopped it, as one that cancelled it does.
             if (!token.IsCancellationRequested && bigQuery.Find(args.ConnectionId) != connection) running.Cancel();
@@ -371,7 +378,7 @@ internal sealed partial class SqlService
             // An insert BigQuery refused, or one that never left, created nothing to wait for.
             // A job BigQuery refused at insert is already DONE with its error, and holds nothing either.
             if (sent && !complete && session.Id is not null && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
-                session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested, created);
+                session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested || childFailed, created);
             else if (sessionJob && created && !complete && error is BigQueryJobException)
                 session.Transaction = BigQueryService.Apply(startState, null, failed: true);
             // The job finished, but a Stop or a failed read came before its statements were applied: what it left is unknown.
