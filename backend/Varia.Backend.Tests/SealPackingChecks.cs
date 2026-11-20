@@ -27,9 +27,9 @@ internal static class SealPackingChecks
 
     /// <summary>Stores rows as the query's ingestion does (SqlService), waiting for room when a row is refused
     /// (<see cref="SqlService.WaitAndCommitAsync"/>), and completes the set; returns how many rows waited.</summary>
-    private static int Ingest(ResultStore store, ResultSetBuffer set, long rows)
+    private static int Ingest(ResultStore store, ResultSetBuffer set, long rows, SqlService.RoomWaited? waited = null)
     {
-        var waited = new SqlService.RoomWaited();
+        waited ??= new SqlService.RoomWaited();
         var waits = 0;
         for (long row = 0; row < rows; row++)
         {
@@ -117,6 +117,18 @@ internal static class SealPackingChecks
         store.SealCompressed = null;
         late!.Dispose();
         check(Settled(raced) && AllPacked(raced), "and the pin's end packs it");
+
+        // A Copy leases a result still loading past its half: its queued pages cannot pack, so a refused row is refused at
+        // once rather than waiting for room nothing can make.
+        var small = Store(64L << 20, 12L << 20);
+        var copied = Open(small, "copied");
+        check(copied.TryLease(), "the fixture: a Copy leases the loading result");
+        var waited = new SqlService.RoomWaited();
+        var waits = Ingest(small, copied, BigRows * 5 / 2, waited);
+        check(copied.Truncated == TruncationReason.QueryBudget && copied.Budget.SealPending > 0 && waits == 1 && waited.Ms < ResultStore.RoomWaitMs / 2,
+            "with every queued page held a refused row stops the query at once: " + waits + " waits, " + waited.Ms + " ms, " + copied.Budget.SealPending + " queued");
+        copied.ReleaseLease();
+        check(Settled(copied) && AllPacked(copied), "and the lease's end packs what was stored");
 
         // The same for a lease (a Copy or Save).
         var leased = Open(store, "leased");

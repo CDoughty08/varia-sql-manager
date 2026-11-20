@@ -780,6 +780,7 @@ internal sealed class ResultSetBuffer
         }
         if (queued == 0) return;
         Budget.SealQueued(queued);
+        Budget.Sealing(this);
         StartSealedLocked();
     }
 
@@ -802,6 +803,12 @@ internal sealed class ResultSetBuffer
 
     /// <summary>Whether the queued pages may still be packed: not on a set released, nor on a complete one an operation has
     /// unpacked whole (a use, which the policy's delays then govern), nor once packing is off.</summary>
+    /// <summary>Whether pages are queued for packing at seal that may pack now: none held by a pin or lease.</summary>
+    internal bool SealPackable
+    {
+        get { lock (gate) return sealQueue.Count > 0 && pins == 0 && leases == 0 && SealMayPackLocked(); }
+    }
+
     private bool SealMayPackLocked() => store.Packing != PagePacking.Off && (state == 0 || state == 1 && unpacks == 0);
 
     /// <summary>Packs the oldest queued page outside the lock and replaces it as <see cref="Pack"/> does, never while a pin
