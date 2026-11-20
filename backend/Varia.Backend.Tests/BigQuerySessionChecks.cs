@@ -737,7 +737,7 @@ internal static class BigQuerySessionChecks
         harness.Fake.On("GET", Base + "/jobs/[^/]+", request => ambiguousJob is { } held && request.Url.Contains("/jobs/" + held.Id, StringComparison.Ordinal) && held.Hold && held.Sql == "SELECT retry denied"
             ? new(500, Bq.Error(500, "Backend error.", "backendError"))
             : ambiguousJob is { } conflicted && request.Url.Contains("/jobs/" + conflicted.Id, StringComparison.Ordinal) && conflicted.Hold
-                ? new(403, Bq.Error(403, "Exceeded rate limits: too many api requests.", "rateLimitExceeded")) : bq.GetReply(request));
+                ? BigQueryFake.Fixture("error-not-found", 404) : bq.GetReply(request));
         var retryDenied = await harness.Execute(retryDeniedTab, "SELECT retry denied");
         var retryDeniedState = await harness.State(retryDeniedTab);
         check(retryDenied.Result is { Status: "failed" } && posts >= 2 && retryDeniedState.State is { Checked: false },
@@ -749,10 +749,28 @@ internal static class BigQuerySessionChecks
         ambiguousJob = null;
         var conflict = await harness.Execute(conflictTab, "SELECT conflict");
         var conflictState = await harness.State(conflictTab);
-        check(conflict.Result is { Status: "failed" } && conflictState.State is { Checked: false },
-            $"a 409 whose lookup is refused still holds the session for the job that exists: {conflict.Result?.Status} {conflictState.State}");
+        var conflictSession = ambiguousJob?.Session;
+        var conflictClose = await harness.Close(conflictTab);
+        check(conflict.Result is { Status: "failed" } && conflictState.State is { Checked: false } && conflictClose.Code == "ok" && conflictSession is not null && !bq.Aborts.Contains(conflictSession),
+            $"a 409 whose lookup finds nothing still holds the session for the job that exists, so a close never aborts under it: {conflict.Result?.Status} {conflictState.State} {conflictClose.Code}");
         if (ambiguousJob is not null) bq.Release(ambiguousJob);
-        await harness.Close(conflictTab);
+
+        // A retried insert refused for an expired session still runs again in a new session, after a first attempt lost to a 500.
+        var expiringTab = Tab();
+        await harness.Execute(expiringTab, "SELECT 1");
+        var expiringSession = bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()].Session!;
+        var expiringPosts = 0;
+        harness.Fake.On("POST", Base + "/jobs", request =>
+        {
+            var body = JsonNode.Parse(request.Body)!;
+            if (body["configuration"]!["query"]!["query"]!.GetValue<string>() != "SELECT expiring" || SessionOf(body) != expiringSession) return bq.InsertReply(request);
+            return Interlocked.Increment(ref expiringPosts) == 1 ? new(500, Bq.Error(500, "Backend error.", "backendError"))
+                : new(400, Bq.Error(400, "Session " + expiringSession + " has expired and is no longer available.", "invalidQuery"));
+        });
+        var expiring = await harness.Execute(expiringTab, "SELECT expiring");
+        check(expiring.Result is { Status: "completed" } && expiringPosts >= 2 && Says(expiring.Result, "started a new BigQuery session"),
+            $"an expired-session refusal on a retried insert still runs the query in a new session: {expiring.Result?.Status} {expiringPosts} {Texts(expiring.Result?.Messages ?? [])}");
+        await harness.Close(expiringTab);
 
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");

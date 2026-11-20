@@ -266,8 +266,8 @@ internal sealed partial class BigQueryService
     /// <summary>An insert that created no job: refused outright (a 4xx other than a timeout, a conflict or a rate limit), or
     /// never sent.</summary>
     internal static bool NeverCreated(Exception error) =>
-        NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
-            && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests);
+        error is not BigQueryJobMayExist && (NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
+            && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests));
 
     Job SessionJob(BigQueryTabSession session, string sql, string jobId) => new()
     {

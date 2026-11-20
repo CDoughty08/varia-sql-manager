@@ -113,8 +113,9 @@ internal sealed partial class BigQueryService
     internal async Task<Job> InsertJobAsync(BigQueryConnection connection, Job job, string? dataset, CancellationToken token)
     {
         var reference = job.JobReference;
-        // The first failure after which the job may exist: what the caller hears, since a later attempt that never left the
-        // machine says nothing about that one.
+        // The first failure after which the job may exist (not one that never left, nor a 429, which created nothing). The
+        // caller then hears the last failure wrapped in BigQueryJobMayExist, so its reason shows while no caller reads it as
+        // a job never created.
         Exception? ambiguous = null;
         for (var attempt = 1; ; attempt++)
         {
@@ -129,11 +130,11 @@ internal sealed partial class BigQueryService
                     await LocateAsync(connection, reference, dataset, token);
                     return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
                 }
-                catch (Exception) when (!token.IsCancellationRequested) { throw ambiguous ?? error; }
+                catch (Exception) when (!token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: true); }
             }
             catch (Exception error) when (Transient(error, token))
             {
-                if (!NotSent(error)) ambiguous ??= error;
+                if (!NotSent(error) && error is not GoogleApiException { HttpStatusCode: HttpStatusCode.TooManyRequests }) ambiguous ??= error;
                 // Before sending again, ask whether the first one arrived, where it would run.
                 try
                 {
@@ -143,11 +144,11 @@ internal sealed partial class BigQueryService
                 catch (GoogleApiException lookup) when (lookup.HttpStatusCode == HttpStatusCode.NotFound && attempt < InsertAttempts) { }
                 catch (Exception lookup) when (attempt < InsertAttempts && Transient(lookup, token)) { }
                 // A lookup that fails in a way not retried (a 403, a 400) still leaves the first insert's fate unknown.
-                catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous ?? error; }
+                catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous is null ? error : new BigQueryJobMayExist(error, exists: false); }
                 await Task.Delay(Backoff(attempt), token);
             }
             // A later attempt refused outright (a 403, a 400) says nothing about an earlier one that may have created the job.
-            catch (Exception) when (ambiguous is not null && !token.IsCancellationRequested) { throw ambiguous; }
+            catch (Exception error) when (ambiguous is not null && !token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: false); }
         }
     }
 
@@ -220,4 +221,12 @@ internal sealed partial class BigQueryService
     }
 
     RequestException TooLarge() => new("BACKEND_ERROR", "BigQuery answered with a result page larger than " + BigQueryCost.Bytes(MaxPageBytes) + ", which Varia does not read.");
+}
+
+/// <summary>An insert's failure after which its job may exist (an earlier attempt's answer was lost), or does (a 409). The
+/// message and inner exception are the last failure's, which the error mapping and the session-expiry check read; no caller
+/// reads it as a job never created.</summary>
+internal sealed class BigQueryJobMayExist(Exception inner, bool exists) : Exception(inner.Message, inner)
+{
+    public bool Exists { get; } = exists;
 }

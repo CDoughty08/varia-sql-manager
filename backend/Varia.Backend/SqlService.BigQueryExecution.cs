@@ -378,7 +378,7 @@ internal sealed partial class SqlService
             // An insert BigQuery refused, or one that never left, created nothing to wait for.
             // A job BigQuery refused at insert is already DONE with its error, and holds nothing either.
             if (sent && !complete && session.Id is not null && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
-                session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested || childFailed, created);
+                session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested || childFailed, created || error is BigQueryJobMayExist { Exists: true });
             else if (sessionJob && created && !complete && error is BigQueryJobException)
                 session.Transaction = BigQueryService.Apply(startState, null, failed: true);
             // The job finished, but a Stop or a failed read came before its statements were applied: what it left is unknown.
