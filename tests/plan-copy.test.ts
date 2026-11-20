@@ -9,6 +9,7 @@ import { outlineCopyText, propertiesCopyText } from '../src/renderer/src/plans/p
 import { planPropertiesMenu } from '../src/renderer/src/plans/PlanProperties'
 import type { MenuTarget } from '../src/renderer/src/menus/targets'
 import { defaultSettings } from '../src/shared/settings/catalog'
+import { commandCatalog } from '../src/shared/commands/catalog'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 
 const node = (patch: Partial<PlanNode> = {}): PlanNode => ({ id: 'n1', parentId: null, nodeId: '3', physicalOp: 'Clustered Index Seek', logicalOp: 'Clustered Index Seek', object: '[Sales].[dbo].[Orders].[PK_Orders]',
@@ -109,5 +110,12 @@ describe('plan copy commands', () => {
     expect(await commands.execute('plan.copyPropertyValues', { target }, 'menu')).toBe(true)
     expect(writeClipboardText).toHaveBeenLastCalledWith('3\nTrue')
     expect(commands.isEnabled('plan.copyProperties', { target: { kind: 'planProperties', facts: [] } })).toBe(false)
+  })
+})
+
+describe('the provider of the plan copy commands', () => {
+  // A plan document opens from any query tab (a BigQuery one's Plan history too), so its Copy commands follow the plan, not the active connection's provider.
+  it('serve whichever provider the plan came from', () => {
+    for (const id of ['plan.copyOperator', 'plan.copyProperties', 'plan.copyPropertyValues'] as const) expect(commandCatalog[id].providerContext, id).toBe('own')
   })
 })
