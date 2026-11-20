@@ -9,6 +9,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import { formatPeekValue } from '../explorer/peek-format'
+import { PeekListGrid } from '../explorer/PeekListGrid'
 import { peekMessages } from '../explorer/PeekService'
 import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
@@ -164,14 +165,15 @@ function Definition({ details, part }: { readonly details: Details; readonly par
   </>
 }
 
-function Columns({ details }: { readonly details: Details }) {
-  const columns = details.columns
-  if (!columns || columns.status === 'loading') return <p className="peek-note">Loading the columns…</p>
-  if (columns.status === 'error') return <p className="peek-note error" role="alert">{columns.message}</p>
-  if (!columns.value.length) return <p className="peek-note">No columns.</p>
-  return <ul className="search-details-columns" aria-label="Columns">
-    {columns.value.map((column, index) => <li key={index}><bdi className="search-details-column">{displayText(column.name)}</bdi>{column.detail && <span className="search-details-column-type">{displayText(column.detail)}</span>}</li>)}
-  </ul>
+/** A table's or view's columns: Peek's Columns list, which came with its properties, in a card grid as Peek shows it. Properties above already announces a failed read, so its words here are not a second alert. */
+export function Columns({ details }: { readonly details: Details }) {
+  const facts = details.facts, list = details.lists?.columns
+  if (!facts || facts.status === 'loading') return <p className="peek-note">Loading the columns…</p>
+  if (facts.status === 'error') return <p className="peek-note error">{facts.message}</p>
+  return <div className="search-details-columns">
+    <PeekListGrid id="columns" list={list} preset="card" objectName={displayText(details.hit.label)} />
+    {list?.truncated && <p className="peek-note">There are more columns than the pane lists.</p>}
+  </div>
 }
 
 export function Properties({ details }: { readonly details: Details }) {

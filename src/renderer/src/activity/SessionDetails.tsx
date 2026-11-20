@@ -1,16 +1,17 @@
 // The Details flyout (docs/activity-monitor.md, Session actions): a nonmodal panel beside the monitor for one session,
 // showing the catalogue's sections (Identity and Now, the three texts, waits, transactions, tempdb, and locks on request),
 // with Refresh, Copy and Close. The monitor goes on sampling beside it; Escape or Close cancels a read still running.
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { DetailsSection } from '../../../shared/activity/catalog'
 import type { ActivityDetailsResult } from '../../../shared/activity/schema'
 import { useWorkbench } from '../core/WorkbenchContext'
+import { LocalGrid } from '../grid/LocalGrid'
 import Icon from '../Icon'
 import InlineError from '../kit/InlineError'
 import Skeleton from '../kit/Skeleton'
 import { formatCount } from '../results/status'
 import type { DetailsPanel } from './ActivityMonitorService'
-import { detailsState, detailsText, detailsTextOf, sectionTitle, sessionRows, textNote } from './session-actions'
+import { detailsState, detailsText, detailsTextOf, locksTable, sectionTitle, sessionRows, textNote, transactionsTable, waitsTable } from './session-actions'
 
 export default function SessionDetails({ monitorId, details }: { readonly monitorId: string; readonly details: DetailsPanel }) {
   const { activity } = useWorkbench()
@@ -68,6 +69,10 @@ function Sections({ monitorId, details, result }: { readonly monitorId: string; 
     </section>
   }
   const session = result.session!
+  // A table object is the grid's table: built once per answer, so a re-render (Copy's notice) keeps each grid's selection.
+  const waits = useMemo(() => waitsTable(result.waits ?? []), [result.waits])
+  const transactions = useMemo(() => transactionsTable(result.transactions ?? []), [result.transactions])
+  const locks = useMemo(() => locksTable(result.locks ?? []), [result.locks])
   return <>
     {section('session', <dl className="activity-details-fields">
       {sessionRows(session).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
@@ -81,31 +86,20 @@ function Sections({ monitorId, details, result }: { readonly monitorId: string; 
         {note && <p className="activity-note">{note}</p>}
       </> : undefined, id === 'inputBuffer' ? 'No batch has been sent.' : 'No request is running.')}</div>
     })}
-    {section('waits', result.waits?.length ? <table className="activity-details-table">
-      <thead><tr><th scope="col">Wait type</th><th scope="col">Tasks</th><th scope="col">Wait (ms)</th><th scope="col">Max (ms)</th><th scope="col">Signal (ms)</th></tr></thead>
-      <tbody>{result.waits.map(wait => <tr key={wait.waitType}><th scope="row">{wait.waitType}</th><td>{formatCount(wait.waitingTasks)}</td><td>{formatCount(wait.waitTimeMs)}</td><td>{formatCount(wait.maxWaitTimeMs)}</td><td>{formatCount(wait.signalWaitTimeMs)}</td></tr>)}</tbody>
-    </table> : undefined, 'No waits since the session logged in.')}
-    {section('transactions', result.transactions?.length ? <>
-      <table className="activity-details-table">
-        <thead><tr><th scope="col">ID</th><th scope="col">Name</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Database</th><th scope="col">Log used</th></tr></thead>
-        <tbody>{result.transactions.map((tran, index) => <tr key={`${tran.transactionId}-${tran.database ?? ''}-${index}`}>
-          <th scope="row">{tran.transactionId}</th><td>{tran.name ?? ''}</td><td>{tran.type}</td><td>{tran.state}</td><td>{tran.database ?? ''}</td><td>{tran.logBytesUsed === undefined ? '' : `${formatCount(tran.logBytesUsed)} B`}</td>
-        </tr>)}</tbody>
-      </table>
+    {section('waits', <LocalGrid table={waits} label={sectionTitle('waits')} preset="card" empty="No waits since the session logged in." />)}
+    {section('transactions', <>
+      <LocalGrid table={transactions} label={sectionTitle('transactions')} preset="card" empty="No open transactions." />
       {result.transactionsTruncated && <p className="activity-note">Only the first transactions are listed.</p>}
-    </> : undefined, 'No open transactions.')}
+    </>)}
     {section('tempdb', result.tempdb ? <dl className="activity-details-fields">
       <div><dt>User objects</dt><dd>{formatCount(result.tempdb.userObjectsKb)} KB</dd></div>
       <div><dt>Internal objects</dt><dd>{formatCount(result.tempdb.internalObjectsKb)} KB</dd></div>
     </dl> : undefined, 'No tempdb usage was read.')}
     {section('locks', details.locks === 'loaded'
-      ? result.locks?.length ? <>
-        <table className="activity-details-table">
-          <thead><tr><th scope="col">Resource</th><th scope="col">Database</th><th scope="col">Mode</th><th scope="col">Status</th><th scope="col">Count</th></tr></thead>
-          <tbody>{result.locks.map((lock, index) => <tr key={index}><th scope="row">{lock.resourceType}</th><td>{lock.database ?? lock.databaseId ?? ''}</td><td>{lock.mode}</td><td>{lock.status}</td><td>{formatCount(lock.count)}</td></tr>)}</tbody>
-        </table>
+      ? <>
+        <LocalGrid table={locks} label={sectionTitle('locks')} preset="card" empty="The session holds no locks." />
         {result.locksTruncated && <p className="activity-note">Only the first lock groups are listed.</p>}
-      </> : <p className="activity-note">The session holds no locks.</p>
+      </>
       : <div className="activity-details-load">
         <p className="activity-note">Reading locks is costly on a busy server, so they load only when asked.</p>
         <button type="button" disabled={details.locks === 'loading'} onClick={() => activity.loadLocks(monitorId)}>{details.locks === 'loading' ? 'Loading locks…' : 'Load locks'}</button>

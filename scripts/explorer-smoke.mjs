@@ -1444,9 +1444,18 @@ try {
     await expect(tabHits.nth(1)).toBeFocused()
     await expect(details).toHaveAccessibleName('Details: dbo.table2')
     await expect(details.getByLabel('Definition', { exact: true })).toContainText('CREATE TABLE [dbo].[table2]')
-    // A table's columns are one page of Object Explorer's Columns folder.
+    // A table's columns are Peek's Columns list, which came with its properties (no read of its own), in a card grid with
+    // Peek's columns: Select all and Copy with Headers write it as a results grid copies it.
+    const searchChildren = (await stubCalls('explorer.children')).length
     await details.getByRole('radio', { name: 'Columns', exact: true }).click()
-    await expect(details.getByRole('list', { name: 'Columns', exact: true })).toContainText('Id')
+    const searchColumns = localGrid(details, 'Columns')
+    await expect(searchColumns).toHaveAttribute('aria-label', /^Columns, 1 row, 8 columns/)
+    await gridCell(searchColumns, 0, 0).click()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Control+Shift+C')
+    const searchEol = process.platform === 'win32' ? '\r\n' : '\n'
+    await expect.poll(clipboard).toBe([['Name', 'Type', 'Nullable', 'Key', 'Identity', 'Computed', 'Default', 'Definition'], ['Id', 'int', 'False', 'NULL', 'NULL', 'NULL', 'NULL', '[Id] int NOT NULL']].map(row => row.join('\t')).join(searchEol))
+    expect(await stubCalls('explorer.children')).toHaveLength(searchChildren)
     await details.getByRole('radio', { name: 'Definition', exact: true }).click()
     // The Details pane button hides the pane (and its reads) and shows it again on the selection.
     const toggleDetails = page.locator(part.objectSearchTab).getByRole('button', { name: 'Details pane', exact: true })
