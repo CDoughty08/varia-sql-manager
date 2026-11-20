@@ -81,18 +81,28 @@ internal static class AgentScriptingLiveChecks
             var jobCreate = await Script("agentJob", job, "create");
             var alertCreate = alerts ? await Script("agentAlert", alert, "create") : null;
             var proxyCreate = await Script("agentProxy", proxy, "create");
-            check(jobCreate.Text is { } jobText && jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'' */ --", StringComparison.Ordinal)
-                && HeaderGuard.Safe(jobText)
-                && jobText.Contains("msdb.dbo.sp_add_jobschedule ", StringComparison.Ordinal) && jobText.Contains("N'" + schedule + "'", StringComparison.Ordinal)
-                && jobText.Contains("msdb.dbo.sp_add_jobserver ", StringComparison.Ordinal) && jobText.Contains("BEGIN TRANSACTION", StringComparison.Ordinal)
+            // The subsystems msdb lists for the proxy: SMO grants those it finds in syssubsystems (Linux lists fewer, so the grant
+            // above may not be one of them there).
+            var granted = await sql("SELECT COUNT(*) FROM msdb.dbo.sysproxysubsystem AS ps JOIN msdb.dbo.syssubsystems AS ss ON ss.subsystem_id = ps.subsystem_id "
+                + "JOIN msdb.dbo.sysproxies AS p ON p.proxy_id = ps.proxy_id WHERE p.name = " + Quote(proxy) + ";", "msdb");
+            var jobText = jobCreate.Text ?? "";
+            var parts = new (string Name, bool Ok)[]
+            {
+                ("job step quoted", jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'' */ --", StringComparison.Ordinal)),
+                ("job headers whole", HeaderGuard.Safe(jobText)),
+                ("job schedule", jobText.Contains("msdb.dbo.sp_add_jobschedule ", StringComparison.Ordinal) && jobText.Contains("N'" + schedule + "'", StringComparison.Ordinal)),
+                ("job server in a transaction", jobText.Contains("msdb.dbo.sp_add_jobserver ", StringComparison.Ordinal) && jobText.Contains("BEGIN TRANSACTION", StringComparison.Ordinal)),
                 // SMO scripts an alert's condition and response job, not its notifications (AgentNotify stays off, as in SSMS's Script As).
-                && (alertCreate is null || alertCreate.Text?.Contains("@performance_condition=N'SQLServer:General Statistics|User Connections||>|1000000'", StringComparison.Ordinal) == true
-                    && !alertCreate.Text.Contains("sp_add_notification", StringComparison.Ordinal))
-                && proxyCreate.Text?.Contains("N'" + credential + "'", StringComparison.Ordinal) == true && proxyCreate.Text.Contains("sp_grant_proxy_to_subsystem", StringComparison.Ordinal)
-                && !proxyCreate.Text.Contains("SECRET", StringComparison.OrdinalIgnoreCase),
+                ("alert condition without notifications", alertCreate is null || alertCreate.Text?.Contains("@performance_condition=N'SQLServer:General Statistics|User Connections||>|1000000'", StringComparison.Ordinal) == true
+                    && !alertCreate.Text.Contains("sp_add_notification", StringComparison.Ordinal)),
+                ("proxy credential", proxyCreate.Text?.Contains("N'" + credential + "'", StringComparison.Ordinal) == true),
+                ("proxy subsystems as msdb lists them", (proxyCreate.Text?.Contains("sp_grant_proxy_to_subsystem", StringComparison.Ordinal) == true) == (granted.Scalar is not (null or "0"))),
+                ("no secret", proxyCreate.Text?.Contains("SECRET", StringComparison.OrdinalIgnoreCase) == false)
+            };
+            check(jobCreate.Error is null && proxyCreate.Error is null && parts.All(part => part.Ok),
                 "a job's script holds its step (quotes doubled; a name with */ and a line break leaves every header whole), schedule and target server in SMO's transaction; an alert's its condition without notifications; a proxy's its "
-                + "credential by name and its subsystem, never a secret: " + Excerpt(jobCreate.Text) + " " + Excerpt(alertCreate?.Text) + " " + Excerpt(proxyCreate.Text) + " "
-                + jobCreate.Error?.Message + " " + proxyCreate.Error?.Message);
+                + "credential by name and the subsystems msdb lists for it, never a secret. Failed: " + string.Join(", ", parts.Where(part => !part.Ok).Select(part => part.Name)) + " "
+                + Excerpt(jobCreate.Text) + " " + Excerpt(alertCreate?.Text) + " " + Excerpt(proxyCreate.Text) + " " + jobCreate.Error?.Message + " " + proxyCreate.Error?.Message);
 
             await SmoAsync(check, host, info, defaults, Script, job);
 

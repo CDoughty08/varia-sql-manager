@@ -305,7 +305,8 @@ try {
   // CREATE To, and CREATE To › New Query Editor Window opens the job's script.
   const jobPath = ['server-a', 'SQL Server Agent', 'Jobs', 'Nightly backup']
   await expandExplorerPath(page, ...jobPath.slice(0, -1))
-  await (await explorerRow(page, ...jobPath)).click({ button: 'right', force: true })
+  // The job sits below the tree the earlier steps expanded, so it is scrolled into view first.
+  await (await revealExplorerRow(page, ...jobPath)).click({ button: 'right', force: true })
   expect(await menuItemNames(explorerMenu())).toEqual(['Script Job as', 'Copy Name', 'Refresh'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Job as', exact: true }).click()
   expect(await menuItemNames(menuNamed('Script Job as'))).toEqual(['CREATE To', 'DROP To', 'DROP And CREATE To'])
