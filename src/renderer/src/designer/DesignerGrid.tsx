@@ -5,6 +5,7 @@ import { useWorkbench } from '../core/WorkbenchContext'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { codiconClass } from '../../../shared/icons'
 import Icon from '../Icon'
+import { checkText, useRowCopy, type CopyRows } from '../grid/row-copy'
 import { selectorPress, TableDesignerService, type DesignerColumn, type DesignerState } from './TableDesignerService'
 
 /** Every row has one height, so only the rows in view (and a few more) are rendered. */
@@ -15,6 +16,13 @@ const headers: Readonly<Record<DesignerColumn, string>> = { name: 'Column Name',
 /** SSMS's Data Type list: each listed type with its defaults, and the (MAX) forms. */
 export const typeChoices: readonly string[] = systemTypes.filter(type => !type.unlisted)
   .flatMap(type => [formatTypeText(defaultType(type)), ...type.listMax ? [formatTypeText({ system: type.name, max: true })] : []])
+
+/** Copy's rows: the selected rows, else the current one (not the empty new-column row), as the grid shows them. */
+export function designerCopyRows(state: Pick<DesignerState, 'rows' | 'selected' | 'current'>): CopyRows {
+  const chosen = state.rows.filter(row => state.selected.includes(row.key))
+  const rows = chosen.length ? chosen : state.rows[state.current.row] ? [state.rows[state.current.row]] : []
+  return { columns: columns.map(column => headers[column]), rows: rows.map(row => [row.name, row.typeText, checkText(row.allowNulls)]) }
+}
 
 interface Editing { readonly row: number; readonly column: 'name' | 'type'; readonly text: string }
 
@@ -40,6 +48,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
   const live = useRef<Editing | undefined>(undefined)
   const setEditing = (value: Editing | undefined) => { live.current = value; setEditingState(value) }
   const [view, setView] = useState({ top: 0, height: 400 })
+  const copy = useRowCopy(() => designerCopyRows(state))
   const count = state.rows.length + 1
   const problems = useMemo(() => TableDesignerService.design(state).problems, [state])
   const problemAt = (row: number, column: DesignerColumn) => problems.find(problem => problem.row === row && (column === 'name' ? problem.property === 'name'
@@ -149,7 +158,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
   const activeId = `${id}-cell-${current.row}-${current.column}`
 
   return <div ref={setRoot} className="designer-grid" role="grid" aria-label="Columns" aria-rowcount={count + 1} aria-colcount={4} aria-multiselectable="true" tabIndex={0}
-    data-designer-focus="" aria-activedescendant={editing ? undefined : activeId} onKeyDown={keyDown}>
+    data-designer-focus="" aria-activedescendant={editing ? undefined : activeId} onKeyDown={keyDown} onCopy={copy}>
     <div className="designer-grid-head" role="row" aria-rowindex={1}>
       <span className="designer-selector" role="columnheader" aria-label="Row selector" />
       {columns.map(column => <span key={column} className={`designer-cell designer-${column}`} role="columnheader">{headers[column]}</span>)}

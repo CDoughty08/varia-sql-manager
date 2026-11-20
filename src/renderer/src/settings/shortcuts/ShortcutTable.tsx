@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useDomRowCopy } from '../../grid/row-copy'
 import type { CommandId } from '../../../../shared/commands/catalog'
 import { intrinsicKeys } from '../../../../shared/commands/intrinsic'
 import { keybindingLabel, parseKeySpec, platforms as allPlatforms, type Platform } from '../../../../shared/commands/keybindings'
@@ -46,6 +47,7 @@ function SourceChip({ source, lock }: { readonly source: BindingSource | 'builti
  * A changed row has a dot and its own Reset.
  */
 export default function ShortcutTable({ groups, platform, selected, onSelect, onActivate, onReset, gestures, onShowMouse, builtIn, byPlatform, empty }: Props) {
+  const copyRow = useDomRowCopy()
   const body = useRef<HTMLTableElement>(null)
   const focusNext = useRef(false)
   const order = groups.flatMap(group => group.rows.filter(row => !byPlatform || row.first).map(row => ({ command: row.row.id, index: row.binding ? row.row.bindings.indexOf(row.binding) : -1 })))
@@ -83,7 +85,8 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
       const selection = { command: row.id, index: binding ? row.bindings.indexOf(binding) : -1 }
       const key = selectionKey(selection), isSelected = key === current
       const changed = byPlatform ? row.changed : binding?.source === 'user' || binding?.source === 'removed'
-      const command = <td className="shortcuts-command" title={`${row.title}\n${row.id}`}>
+      // Copy writes a row as shown, its command by title alone and its keys as text (data-copy, grid/row-copy.ts).
+      const command = <td className="shortcuts-command" title={`${row.title}\n${row.id}`} data-copy={row.title}>
         {changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" title="Changed: saved when you choose OK" /> : <span className="shortcuts-nodot" />}
         {match.first ? <><span className="shortcuts-command-title">{row.title}</span><span className="shortcuts-muted shortcuts-command-id">{row.id}</span></> : <span className="shortcuts-muted">{row.title}</span>}
       </td>
@@ -94,9 +97,9 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
       const cells = byPlatform
         ? allPlatforms.map(item => {
           const keys = byPlatform[item].get(row.id)?.bindings.filter(entry => entry.source !== 'removed') ?? []
-          return <td key={item}>{keys.length ? keys.map((entry, index) => <KeyCaps key={index} label={entry.label} source={entry.source} />) : <span className="shortcuts-muted" title="Not bound on this platform">—</span>}</td>
+          return <td key={item} data-copy={keys.map(entry => entry.label.text).join(', ')}>{keys.length ? keys.map((entry, index) => <KeyCaps key={index} label={entry.label} source={entry.source} />) : <span className="shortcuts-muted" title="Not bound on this platform">—</span>}</td>
         })
-        : [<td key="keys">{binding ? <KeyCaps label={binding.label} source={binding.source} /> : <span className="shortcuts-muted">—</span>}</td>,
+        : [<td key="keys" data-copy={binding?.label.text ?? ''}>{binding ? <KeyCaps label={binding.label} source={binding.source} /> : <span className="shortcuts-muted">—</span>}</td>,
           <td key="scope" title={binding?.rule.whenSource ? `When: ${binding.rule.whenSource}` : undefined}>{binding ? binding.scopeTitle : <span className="shortcuts-muted">—</span>}</td>]
       rows.push(<tr key={key} data-row={key} aria-selected={isSelected} tabIndex={isSelected ? 0 : -1} data-locked={row.lock ? true : undefined}
         onClick={() => onSelect(selection)} onFocus={() => { if (!isSelected) onSelect(selection) }}>{command}{cells}{source}</tr>)
@@ -125,7 +128,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
     })
   }
   return <div className="shortcuts-table">
-    <table ref={body} role="grid" aria-label="Shortcuts" aria-rowcount={-1} data-platforms={byPlatform ? true : undefined} onKeyDown={keyDown}>
+    <table onCopy={copyRow} ref={body} role="grid" aria-label="Shortcuts" aria-rowcount={-1} data-platforms={byPlatform ? true : undefined} onKeyDown={keyDown}>
       <thead><tr>{columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
       <tbody>{rows}{!groups.length && !gestures?.length && empty && <tr><td colSpan={columns.length} className="shortcuts-empty">{empty}</td></tr>}</tbody>
     </table>

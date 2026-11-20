@@ -20,6 +20,9 @@ documented behaviour.
   Data Type with its list of types. Shift and Ctrl (⌘ on macOS) with a click on the row selector select several rows; on
   macOS Control+click opens the menu and keeps the selection, as in the results grid. Save and Generate Change Script
   first commit the cell being edited.
+- Ctrl+C (⌘C on macOS) copies the selected rows, else the current one, as a results grid copies: Column Name, Data Type
+  and Allow Nulls (Yes or No), tab-separated, after a header line when Include column headers when copying the results is
+  on. While a cell is edited with text selected, it copies that text.
 - A table name cannot start with # ("A table name cannot start with #: that would make it a temporary table, which the table designer cannot create."): SQL Server would put it
   in tempdb whatever its schema, and SSMS's designer cannot create temporary tables either. Column names must differ as
   the database's catalog collation compares them: trailing spaces never count, and case and accents as the collation

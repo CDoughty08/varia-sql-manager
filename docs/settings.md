@@ -91,7 +91,7 @@ Sections: **Text Editor**.
 
 ### Environment › Shortcuts
 
-Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
+Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Copy on a row copies it (command, shortcut, scope and source). Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
 
 _No settings yet._
 

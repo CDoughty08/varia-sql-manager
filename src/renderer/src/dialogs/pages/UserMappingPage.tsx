@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
+import { useDomRowCopy } from '../../grid/row-copy'
 import { actionLimits } from '../../../../shared/actions/catalog.ts'
 import { loginLimits, loginMessages, loginPropertiesMessages, publicRole, userMappingMessages, type NewLoginDatabase, type NewLoginModel } from '../../../../shared/actions/logins.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
@@ -53,6 +54,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
   /** Login Properties: why a row cannot change (dbo, or not read yet), and whether its user is not read yet. */
   locked(database: string): string | undefined; notRead(database: string): boolean
 }) {
+  const copyRow = useDomRowCopy()
   const { dialogs } = useWorkbench()
   const root = useRef<HTMLDivElement | null>(null)
   const body = useRef<HTMLDivElement | null>(null)
@@ -145,7 +147,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
   const { first, last } = mappingRange(top, height, count)
   const cellId = (index: number, of: UserMappingColumn) => `user-mapping-${index}-${of}`
 
-  return <div ref={root} className="user-mapping-grid" role="grid" aria-labelledby="user-mapping-label" aria-rowcount={count + 1} aria-colcount={userMappingColumns.length} tabIndex={0}
+  return <div onCopy={copyRow} ref={root} className="user-mapping-grid" role="grid" aria-labelledby="user-mapping-label" aria-rowcount={count + 1} aria-colcount={userMappingColumns.length} tabIndex={0}
     aria-activedescendant={editing || row < 0 ? undefined : cellId(row, column)} onKeyDown={keyDown}>
     <div className="user-mapping-head" role="row" aria-rowindex={1}>
       {userMappingColumns.map(of => <span key={of} className="user-mapping-cell" role="columnheader">{headers[of]}</span>)}

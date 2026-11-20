@@ -109,6 +109,16 @@ try {
   await expect(kindIcon(activeDocument(page), 'Table Designer')).toHaveCount(1)
   await expect.poll(() => page.title()).toBe('* server-a.AppData - dbo.Table_1 — Varia SQL Manager')
   console.log('Table designer checks: typing, Tab, Space and the empty last row add columns, and the tab is dirty.')
+  // Ctrl+C copies the selected rows as a results grid copies (tab-separated, no header line by default).
+  const eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const designerClipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await rows().nth(0).getByRole('rowheader').click()
+  await rows().nth(1).getByRole('rowheader').click({ modifiers: ['Shift'] })
+  await grid().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
+  await expect.poll(designerClipboard).toBe(['Id\tint\tNo', 'Name\tnvarchar(50)\tYes'].join(eol))
+  console.log('Table designer checks: Ctrl+C copies the selected columns.')
 
   // 3. The designer menu's Set Primary Key on the first row: the key glyph, and Allow Nulls greyed.
   await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
