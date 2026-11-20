@@ -131,13 +131,14 @@ internal static class ObjectSearchSql
         + "SELECT g.name, g.modify_date" + (definitions ? ", g.query_text" : "") + " FROM sys.plan_guides AS g ORDER BY g.plan_guide_id;\n"
         + (children
             ? Types(userDefined: true)
-                + "SELECT c.object_id, c.name, " + TypedColumns + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
+                + "SELECT c.object_id, c.name, " + TypedColumns(r.VectorDimensions) + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
                 + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
                 + " WHERE " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.object_id, c.column_id;\n"
                 + "SELECT i.object_id, i.name, i.type, i.index_id FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
                 + "SELECT st.object_id, st.name FROM sys.stats AS st ORDER BY st.object_id, st.stats_id;\n"
-                + "SELECT p.object_id, p.name, " + TypedParameters + " FROM sys.parameters AS p ORDER BY p.object_id, p.parameter_id;\n"
+                + "SELECT p.object_id, p.name, " + TypedParameters(r.VectorDimensions) + " FROM sys.parameters AS p ORDER BY p.object_id, p.parameter_id;\n"
                 + "SELECT ic.object_id, ic.index_id, ic.column_id, ic.is_descending_key, ic.is_included_column FROM sys.index_columns AS ic"
+                + " WHERE NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)"
                 + " ORDER BY ic.object_id, ic.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id;\n"
                 + "SELECT kc.object_id, kc.parent_object_id, kc.unique_index_id FROM sys.key_constraints AS kc ORDER BY kc.object_id;\n"
                 + "SELECT fk.constraint_object_id, fk.parent_column_id, fk.referenced_object_id, fk.referenced_column_id FROM sys.foreign_key_columns AS fk"
@@ -156,12 +157,15 @@ internal static class ObjectSearchSql
         + (userDefined ? "" : " WHERE t.is_user_defined = 0") + " ORDER BY t.user_type_id;\n";
 
     /// <summary>A column's type and flags after its object id and name: column_id, user_type_id, max_length, precision, scale,
-    /// nullable, identity, computed, and whether it has a default.</summary>
-    internal const string TypedColumns = "c.column_id, c.user_type_id, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed,"
-        + " CONVERT(bit, CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END)";
+    /// nullable, identity, computed, whether it has a default, and a vector's dimensions (where <paramref name="vector"/> says the
+    /// server has the column; null otherwise).</summary>
+    internal static string TypedColumns(bool vector) => "c.column_id, c.user_type_id, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed,"
+        + " CONVERT(bit, CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END), " + (vector ? "c.vector_dimensions" : "CONVERT(int, NULL)");
 
-    /// <summary>A parameter's direction, ordinal, type and READONLY after its object id and name.</summary>
-    internal const string TypedParameters = "p.is_output, p.parameter_id, p.user_type_id, p.max_length, p.precision, p.scale, p.is_readonly";
+    /// <summary>A parameter's direction, ordinal, type, READONLY and a vector's dimensions (where <paramref name="vector"/> says the
+    /// server has the column; null otherwise) after its object id and name.</summary>
+    internal static string TypedParameters(bool vector) => "p.is_output, p.parameter_id, p.user_type_id, p.max_length, p.precision, p.scale, p.is_readonly, "
+        + (vector ? "p.vector_dimensions" : "CONVERT(int, NULL)");
 
     /// <summary>What identifies the resource database's objects as the login sees them (negative ids, in every database): how many,
     /// the latest change, and a checksum of their ids, names, types, schemas and dates. With the server's version and edition it
@@ -177,8 +181,8 @@ internal static class ObjectSearchSql
         "SELECT o.object_id, s.name, o.name, o.type, o.modify_date FROM sys.all_objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id"
         + " WHERE o.object_id < 0 AND o.type IN (" + ResourceTypes + ") ORDER BY o.object_id;\n"
         + Types(userDefined: false)
-        + "SELECT c.object_id, c.name, " + TypedColumns + " FROM sys.all_columns AS c WHERE c.object_id < 0 ORDER BY c.object_id, c.column_id;\n"
-        + "SELECT p.object_id, p.name, " + TypedParameters + " FROM sys.all_parameters AS p WHERE p.object_id < 0 ORDER BY p.object_id, p.parameter_id;\n"
+        + "SELECT c.object_id, c.name, " + TypedColumns(vector: false) + " FROM sys.all_columns AS c WHERE c.object_id < 0 ORDER BY c.object_id, c.column_id;\n"
+        + "SELECT p.object_id, p.name, " + TypedParameters(vector: false) + " FROM sys.all_parameters AS p WHERE p.object_id < 0 ORDER BY p.object_id, p.parameter_id;\n"
         + (definitions ? "SELECT m.object_id, m.definition FROM sys.all_sql_modules AS m WHERE m.object_id < 0 AND m.definition IS NOT NULL ORDER BY m.object_id;\n" : "");
 
     /// <summary>Problems with every statement the index runs; empty when they pass. Each passes Object Explorer's own lint
@@ -197,6 +201,9 @@ internal static class ObjectSearchSql
                 {
                     texts.Add(Batch(render, definitions, children));
                     problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                    var vector = render with { VectorDimensions = true };
+                    texts.Add(Batch(vector, definitions, children));
+                    problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children), vector, list: false, mayCheckAccess: false).Select(problem => "vector batch " + band + " " + problem));
                 }
                 problems.AddRange(CatalogSql.Lint(ResourceObjects(definitions), render, list: false, mayCheckAccess: false).Select(problem => "resource " + problem));
                 foreach (var box in new[] { false, true })

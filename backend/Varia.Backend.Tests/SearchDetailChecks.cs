@@ -33,6 +33,20 @@ internal static class SearchDetailChecks
         string[] metadata = ["t.system_type_id, t.is_user_defined", "c.user_type_id", "i.index_id", "p.user_type_id", "sys.index_columns AS ic", "sys.key_constraints AS kc", "sys.foreign_key_columns AS fk"];
         check(metadata.All(text => with.Contains(text, StringComparison.Ordinal)) && metadata.All(text => !without.Contains(text, StringComparison.Ordinal)),
             "the batch reads the editor metadata (types, typed columns and parameters, index and key columns, foreign keys) only with the children");
+        // sys.index_columns also lists the partitioning column SQL Server adds to an aligned index (key_ordinal 0, not included),
+        // which is not one of its columns; XML and spatial index columns (key_ordinal 0 too, not partitioning) stay.
+        check(with.Contains("FROM sys.index_columns AS ic WHERE NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)", StringComparison.Ordinal),
+            "an index's columns leave out the partitioning column SQL Server adds to an aligned index");
+        var vector = ObjectSearchSql.Batch(render with { VectorDimensions = true }, false, children: true);
+        check(vector.Contains("c.vector_dimensions", StringComparison.Ordinal) && !with.Contains("vector_dimensions", StringComparison.Ordinal)
+            && !ObjectSearchSql.ResourceObjects(true).Contains("vector_dimensions", StringComparison.Ordinal),
+            "a column's vector dimensions are read only where the server has them");
+        check(vector.Contains("p.vector_dimensions", StringComparison.Ordinal) && !with.Contains("p.vector_dimensions", StringComparison.Ordinal),
+            "a parameter's vector dimensions are read only where the server has them");
+        // The index writes its batch for the server it reads: one with vector dimensions (SQL Server 2025, Azure SQL) reads them.
+        check(ObjectSearchService.IndexRender(new ServerProfile(17, null, 3, null, false, true, true, 16)).VectorDimensions
+            && !ObjectSearchService.IndexRender(new ServerProfile(16, null, 3, null, false, true, false, 16)).VectorDimensions,
+            "the index reads vector dimensions from a server that has them, and not from one that does not");
         check(!with.Contains("p.parameter_id > 0", StringComparison.Ordinal) && ObjectSearchSql.ResourceObjects(false).Contains("p.user_type_id", StringComparison.Ordinal)
             && ObjectSearchSql.ResourceObjects(false).Contains("t.is_user_defined = 0", StringComparison.Ordinal),
             "parameters include a scalar function's return (parameter 0), and the system objects' read types their columns and parameters by the system types");
@@ -66,6 +80,8 @@ internal static class SearchDetailChecks
                 [10, "note", 5, 231, (short)-1, (byte)0, (byte)0, true, false, false, false],
                 [10, "phone", 6, 258, (short)50, (byte)0, (byte)0, true, false, false, false],
                 [10, "owner", 7, 256, (short)256, (byte)0, (byte)0, false, false, false, false],
+                [10, "embedding", 8, 255, (short)20, (byte)0, (byte)0, true, false, false, false, 3],
+                [10, "unsized", 9, 255, (short)20, (byte)0, (byte)0, true, false, false, false, null],
                 [20, "id", 1, 56, (short)4, (byte)10, (byte)0, false, false, false, false],
                 [900, "value", 1, 56, (short)4, (byte)10, (byte)0, false, false, false, false],
                 [998, "hidden_col", 1, 56, (short)4, (byte)10, (byte)0, false, false, false, false]
@@ -80,10 +96,11 @@ internal static class SearchDetailChecks
                 [40, "@rows", true, 2, 56, (short)4, (byte)10, (byte)0, false],
                 [40, "@list", false, 3, 257, (short)-1, (byte)0, (byte)0, true],
                 [41, "", false, 0, 106, (short)9, (byte)18, (byte)2, false],
-                [41, "@x", false, 1, 56, (short)4, (byte)10, (byte)0, false]
+                [41, "@x", false, 1, 56, (short)4, (byte)10, (byte)0, false],
+                [40, "@vec", false, 4, 255, (short)20, (byte)0, (byte)0, false, 3]
             ]
             : [],
-        allTypes: [.. SearchChecks.SystemTypes, [257, "dbo", "List", (byte)243, true, true], [258, "dbo", "Phone", (byte)231, true, false]],
+        allTypes: [.. SearchChecks.SystemTypes, [257, "dbo", "List", (byte)243, true, true], [258, "dbo", "Phone", (byte)231, true, false], [255, "sys", "vector", (byte)165, false, false]],
         indexColumns: [[10, 1, 1, false, false], [10, 2, 2, true, false], [10, 2, 4, false, true], [20, 2, 1, false, false], [900, 1, 1, false, false], [998, 2, 1, false, false]],
         keys: [[30, 10, 1], [32, 20, 2], [33, 900, 1], [999, 10, 1]],
         foreignKeys: [[31, 2, 20, 1], [34, 1, 997, 1], [998, 1, 20, 1]]);
@@ -102,9 +119,9 @@ internal static class SearchDetailChecks
         check(table.Details is { } details && table.Typed(Find("id", "Orders")) is { TypeName: "int", Ordinal: 1, Flags: TypedFlags.Identity, UserDefinedType: false },
             "a column keeps its type, ordinal and flags (an identity column that is not nullable)");
         check(Text(Find("name")) == "nvarchar(50)" && Text(Find("note")) == "nvarchar(max)" && Text(Find("total")) == "decimal(18,2)" && Text(Find("customer_id")) == "int"
-            && Text(Find("owner")) == "sysname" && table.Typed(Find("total"))!.Value.Flags == (TypedFlags.Nullable | TypedFlags.Computed)
+            && Text(Find("owner")) == "sysname" && Text(Find("embedding")) == "vector(3)" && Text(Find("@vec")) == "vector(3)" && Text(Find("unsized")) == "vector" && table.Typed(Find("total"))!.Value.Flags == (TypedFlags.Nullable | TypedFlags.Computed)
             && table.Typed(Find("name"))!.Value.Flags == (TypedFlags.Nullable | TypedFlags.Default),
-            "a column's type reads as a script writes it (characters, not bytes; max; precision and scale; sysname by name), with nullable, computed and default: "
+            "a column's type reads as a script writes it (characters, not bytes; max; precision and scale; a vector's dimensions where the server gave them, a column's or parameter's, never its bytes; sysname by name), with nullable, computed and default: "
             + string.Join(", ", new[] { "name", "note", "total", "owner" }.Select(name => name + " " + Text(Find(name)))));
         check(table.Typed(Find("phone")) is { TypeName: "Phone", TypeSchema: "dbo", UserDefinedType: true, SystemTypeId: 231 } && Text(Find("phone")) == "Phone",
             "an alias type keeps its schema and base type and reads by its name");
@@ -123,7 +140,7 @@ internal static class SearchDetailChecks
         check(table.KeyColumns(Key("fk_orders_customers")) is [{ Column: 2, Referenced: 1 }] && table.Referenced(Key("fk_orders_customers")) == Find("Customers")
             && table.KeyColumns(Key("fk_hidden")) is [{ Column: 1, Referenced: 1 }] && table.Referenced(Key("fk_hidden")) == -1,
             "a foreign key pairs its columns with the referenced table's, and names the table (-1 for one the login cannot see)");
-        check(table.Details!.TypedCount == Enumerable.Range(0, table.Count).Count(at => table.Typed(at) is not null) && table.Details.TypedCount == 14
+        check(table.Details!.TypedCount == Enumerable.Range(0, table.Count).Count(at => table.Typed(at) is not null) && table.Details.TypedCount == 17
             && table.Details.KeyCount == 9 && table.Details.KeyColumns == 7,
             "rows whose object the index does not hold add nothing: " + table.Details.TypedCount + " typed, " + table.Details.KeyCount + " keys, " + table.Details.KeyColumns + " key columns");
         check(budget.Used == index.Bytes + index.Pooled.Sum(StringPool.Cost) && index.Bytes == table.Count * IndexMemory.RecordBytes + index.Pooled.Length * IndexMemory.SlotBytes + table.Details.Bytes,
@@ -158,10 +175,10 @@ internal static class SearchDetailChecks
                 [-100, "sys", "objects", "V", At], [-200, "sys", "fn_hash", "FN", At], [-300, "sys", "sp_who", "P", At]),
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("system", typeof(byte)), ("user", typeof(bool)), ("table", typeof(bool))], SearchChecks.SystemTypes),
             Rows([("id", typeof(int)), ("name", typeof(string)), ("column", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)), ("scale", typeof(byte)),
-                ("nullable", typeof(bool)), ("identity", typeof(bool)), ("computed", typeof(bool)), ("default", typeof(bool))],
-                [-100, "name", 1, 256, (short)256, (byte)0, (byte)0, false, false, false, false], [-100, "object_id", 2, 56, (short)4, (byte)10, (byte)0, false, false, false, false]),
+                ("nullable", typeof(bool)), ("identity", typeof(bool)), ("computed", typeof(bool)), ("default", typeof(bool)), ("dimensions", typeof(int))],
+                [-100, "name", 1, 256, (short)256, (byte)0, (byte)0, false, false, false, false, null], [-100, "object_id", 2, 56, (short)4, (byte)10, (byte)0, false, false, false, false, null]),
             Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool)), ("parameter", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)),
-                ("scale", typeof(byte)), ("readonly", typeof(bool))], [-300, "@loginame", false, 1, 256, (short)256, (byte)0, (byte)0, false])
+                ("scale", typeof(byte)), ("readonly", typeof(bool)), ("dimensions", typeof(int))], [-300, "@loginame", false, 1, 256, (short)256, (byte)0, (byte)0, false, null])
         ]);
         var objects = await DatabaseReader.ReadResourceAsync(reader, false, new ObjectIndexLimits(), CancellationToken.None);
         int Find(string name) => Enumerable.Range(0, objects.Count).Single(at => objects.Name(at) == name);

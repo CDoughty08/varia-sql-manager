@@ -14,7 +14,9 @@ internal enum TypedFlags : byte
     Default = 8,
     Output = 16,
     /// <summary>A table-valued parameter (READONLY).</summary>
-    ReadOnly = 32
+    ReadOnly = 32,
+    /// <summary>The length is a vector's dimensions, which the server reported (not its bytes).</summary>
+    Dimensions = 64
 }
 
 /// <summary>How a key column takes part in its index or key.</summary>
@@ -28,7 +30,7 @@ internal enum KeyColumnFlags : byte
 }
 
 /// <summary>A column's, parameter's or scalar function's return type as the catalog states it: the type (by name, its schema for a
-/// user-defined one, and its ids), its length in bytes (-1 for max), precision and scale, its ordinal (column_id or parameter_id; 0
+/// user-defined one, and its ids), its length in bytes (-1 for max; a vector's dimensions where <see cref="TypedFlags.Dimensions"/> says so), precision and scale, its ordinal (column_id or parameter_id; 0
 /// for a function's return) and its flags.</summary>
 internal readonly record struct TypedDetail(string TypeName, string? TypeSchema, int UserTypeId, byte SystemTypeId, bool UserDefinedType, bool TableType,
     short MaxLength, byte Precision, byte Scale, short Ordinal, TypedFlags Flags)
@@ -39,8 +41,10 @@ internal readonly record struct TypedDetail(string TypeName, string? TypeSchema,
     {
         get
         {
-            if (UserDefinedType || UserTypeId != SystemTypeId) return TypeName;
             static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+            // vector is a system type whose user_type_id (255) is not its system_type_id (165), as an alias's is not.
+            if (!UserDefinedType && TypeName == "vector") return (Flags & TypedFlags.Dimensions) != 0 ? TypeName + "(" + Number(MaxLength) + ")" : TypeName;
+            if (UserDefinedType || UserTypeId != SystemTypeId) return TypeName;
             return TypeName switch
             {
                 "varchar" or "char" or "varbinary" or "binary" => TypeName + "(" + (MaxLength == -1 ? "max" : Number(MaxLength)) + ")",

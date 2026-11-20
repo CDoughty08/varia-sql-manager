@@ -549,9 +549,9 @@ internal static class SearchChecks
         object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null)
     {
         var counted = 0;
-        object?[] Column(object?[] row) => row.Length > 2 ? row : [row[0], row[1], ++counted, 56, (short)4, (byte)10, (byte)0, true, false, false, false];
+        object?[] Column(object?[] row) => row.Length > 11 ? row : row.Length > 2 ? [.. row, null] : [row[0], row[1], ++counted, 56, (short)4, (byte)10, (byte)0, true, false, false, false, null];
         object?[] Index(object?[] row) => row.Length > 3 ? row : [row[0], row[1], row[2], ++counted];
-        object?[] Parameter(object?[] row) => row.Length > 3 ? row : [row[0], row[1], row[2], ++counted, 56, (short)4, (byte)10, (byte)0, false];
+        object?[] Parameter(object?[] row) => row.Length > 9 ? row : row.Length > 3 ? [.. row, null] : [row[0], row[1], row[2], ++counted, 56, (short)4, (byte)10, (byte)0, false, null];
         var sets = new List<DataTable>
         {
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)), ("modified", typeof(DateTime)), ("parent", typeof(int)),
@@ -565,13 +565,13 @@ internal static class SearchChecks
         {
             sets.Add(Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("system", typeof(byte)), ("user", typeof(bool)), ("table", typeof(bool))], allTypes ?? SystemTypes));
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("column", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)), ("scale", typeof(byte)),
-                ("nullable", typeof(bool)), ("identity", typeof(bool)), ("computed", typeof(bool)), ("default", typeof(bool))], [.. columns.Select(Column)]));
+                ("nullable", typeof(bool)), ("identity", typeof(bool)), ("computed", typeof(bool)), ("default", typeof(bool)), ("dimensions", typeof(int))], [.. columns.Select(Column)]));
             counted = 0;
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("type", typeof(byte)), ("index", typeof(int))], [.. indexes.Select(Index)]));
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string))], stats));
             counted = 0;
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool)), ("parameter", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)),
-                ("scale", typeof(byte)), ("readonly", typeof(bool))], [.. parameters.Select(Parameter)]));
+                ("scale", typeof(byte)), ("readonly", typeof(bool)), ("dimensions", typeof(int))], [.. parameters.Select(Parameter)]));
             sets.Add(Rows([("id", typeof(int)), ("index", typeof(int)), ("column", typeof(int)), ("descending", typeof(bool)), ("included", typeof(bool))], indexColumns ?? []));
             sets.Add(Rows([("id", typeof(int)), ("parent", typeof(int)), ("index", typeof(int))], keys ?? []));
             sets.Add(Rows([("id", typeof(int)), ("column", typeof(int)), ("referenced", typeof(int)), ("other", typeof(int))], foreignKeys ?? []));

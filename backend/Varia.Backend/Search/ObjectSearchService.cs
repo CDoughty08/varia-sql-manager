@@ -99,7 +99,7 @@ internal sealed class ObjectSearchService : IDisposable
         var profile = host.Profile(args.ConnectionId);
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
-        var render = new SqlRender(explorer.Band);
+        var render = IndexRender(profile);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
@@ -173,6 +173,9 @@ internal sealed class ObjectSearchService : IDisposable
         try { return IndexSearch.Run(state.Index, query, matcher, Limits, status, token); }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
+
+    /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
+    internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
     internal ConnectionIndex? IndexOf(string connectionId) => states.TryGetValue(connectionId, out var state) ? state.Index : null;
@@ -768,13 +771,17 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             var type = reader.GetInt32(4);
             var (length, precision, scale) = (reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
             var readOnly = !reader.IsDBNull(8) && reader.GetBoolean(8);
-            return (type, length, precision, scale, ordinal, (output ? TypedFlags.Output : 0) | (readOnly ? TypedFlags.ReadOnly : 0));
+            var parameterFlags = (output ? TypedFlags.Output : 0) | (readOnly ? TypedFlags.ReadOnly : 0);
+            if (!reader.IsDBNull(9)) (length, parameterFlags) = (Short(reader.GetInt32(9)), parameterFlags | TypedFlags.Dimensions);
+            return (type, length, precision, scale, ordinal, parameterFlags);
         }
         var column = Short(reader.GetInt32(2));
         var columnType = reader.GetInt32(3);
         var (columnLength, columnPrecision, columnScale) = (reader.GetInt16(4), reader.GetByte(5), reader.GetByte(6));
         var flags = (!reader.IsDBNull(7) && reader.GetBoolean(7) ? TypedFlags.Nullable : 0) | (reader.GetBoolean(8) ? TypedFlags.Identity : 0)
             | (reader.GetBoolean(9) ? TypedFlags.Computed : 0) | (reader.GetBoolean(10) ? TypedFlags.Default : 0);
+        // A vector column's length is its dimensions (TypedDetail.MaxLength): its bytes depend on its base type.
+        if (!reader.IsDBNull(11)) (columnLength, flags) = (Short(reader.GetInt32(11)), flags | TypedFlags.Dimensions);
         return (columnType, columnLength, columnPrecision, columnScale, column, flags);
     }
 
@@ -802,7 +809,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             if (parent < 0 || name.Length == 0) continue;
             var held = Intern(name);
             if (!Lists("column", parent)) continue;
-            var (text, longer) = definition && !reader.IsDBNull(11) ? Text(reader, 11) : (None, false);
+            var (text, longer) = definition && !reader.IsDBNull(12) ? Text(reader, 12) : (None, false);
             var child = Add(new("column", "columns", null, held));
             objects.Attach(child, parent, objects.System(parent));
             if (text is not null) objects.SetDefinition(child, text, longer);
