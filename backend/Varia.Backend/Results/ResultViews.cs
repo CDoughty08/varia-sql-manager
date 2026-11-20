@@ -1971,8 +1971,10 @@ internal static class ViewPages
         var end = Math.Min(view.Rows, firstRow + maxRows);
         if (firstRow >= end) yield break;
         var pin = set.Pin();
-        // A packed result's base pages are unpacked a group at a time, as working memory returned with the group.
+        // A packed result's base pages are unpacked a group at a time, as working memory returned with the group, into rooms
+        // from the store's pool given back with it.
         long held = 0;
+        var rooms = new List<byte[]>();
         try
         {
             // A read of a set released before it began finds no pages (or only a lease's).
@@ -2006,6 +2008,7 @@ internal static class ViewPages
                         parsed.Clear();
                         set.ReturnWork(held);
                         held = 0;
+                        set.ReturnRooms(rooms);
                         var group = new List<int> { index };
                         var seen = new HashSet<int> { index };
                         var horizon = Math.Min(end, position + 1 + (long)UnpackTogether * PageBuilder.MaxRows);
@@ -2013,10 +2016,10 @@ internal static class ViewPages
                             if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
                         if (group.Count > 1)
                         {
-                            if (set.BodiesTogether([.. group.Select(at => pages[at])], out held) is { } bodies)
+                            if (set.BodiesTogether([.. group.Select(at => pages[at])], out held, rooms: rooms) is { } bodies)
                                 for (var g = 0; g < group.Count; g++)
                                 {
-                                    var parse = PageView.Parse(bodies[g], columns);
+                                    var parse = PageView.Parse(bodies[g].AsSpan(0, pages[group[g]].Length), columns);
                                     parsed[group[g]] = (bodies[g], parse.Layout, parse.BlobStart);
                                 }
                             else grouping = false;
@@ -2033,7 +2036,7 @@ internal static class ViewPages
                         parsed[index] = layout;
                     }
                 }
-                Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+                Copy(builder, PageView.At(layout.Body.AsSpan(0, page.Length), layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
                 if (builder.IsFull)
                 {
                     var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
@@ -2044,6 +2047,7 @@ internal static class ViewPages
                         parsed.Clear();
                         set.ReturnWork(held);
                         held = 0;
+                        set.ReturnRooms(rooms);
                     }
                     pin.Dispose();
                     yield return full;
@@ -2057,6 +2061,7 @@ internal static class ViewPages
                 var last = new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
                 set.ReturnWork(held);
                 held = 0;
+                set.ReturnRooms(rooms);
                 pin.Dispose();
                 yield return last;
             }
@@ -2064,6 +2069,7 @@ internal static class ViewPages
         finally
         {
             set.ReturnWork(held);
+            set.ReturnRooms(rooms);
             pin.Dispose();
         }
     }

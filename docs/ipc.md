@@ -2517,7 +2517,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   below real multilingual text's. It also types a 14-letter word a key at a time into
   400,000 cells of the sentences the fold vouches for, narrowed and searching every row each key
   (`node.find.typeAhead*`, about 3.8 times); `--find-bench-messages <server> [language_id]`, run by hand, does the same
-  over `sys.messages` with one SELECT.
+  over `sys.messages` with one SELECT. Its `--room-pool-bench` mode (`RoomPoolBench.cs`) reads 200 random 128-row tiles
+  of a scattered view of 400,000 packed W1 rows and reports the memory a tile allocates and the full collections
+  (`node.roomPool.*`; about 0.2 MB and none with the room pool, 23 to 33 MB and one every tile or two without it).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml

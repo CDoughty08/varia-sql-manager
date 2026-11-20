@@ -7,10 +7,11 @@ namespace Varia.Backend.Results;
 /// into it (<see cref="ResultSetBuffer.Read"/>), reads it and moves on, so the operation holds about one page a worker
 /// rather than the result's bytes as sealed. Each room is the size of the largest packed page, reserved from the result's
 /// budget as working memory when it is first made (refused: <see cref="Rent"/> throws the operation's refusal) and reused
-/// after; every reservation is returned when the rooms are disposed. The rooms ask the system's memory load once for
+/// after; every reservation is returned when the rooms are disposed. A room's bytes are rented from the store's pool
+/// (<see cref="RoomPool"/>), so they may be longer than the page, and go back to it when the rooms are disposed, those of
+/// rooms their readers gave back; a room still out then is left to its reader and dropped. The rooms ask the system's memory load once for
 /// every <see cref="ResultStore.WorkCheckBytes"/> they take together, as one reservation of that size would, so many
-/// small rooms (a diff's page caches) are refused under high load as other working memory is. Each room is an array of
-/// its own, dropped with the rooms, so memory charged only while the operation runs is not kept by a pool after it.</summary>
+/// small rooms (a diff's page caches) are refused under high load as other working memory is.</summary>
 internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Func<Exception> refusal) : IDisposable
 {
     private readonly ConcurrentBag<PageRoom> free = [];
@@ -75,7 +76,7 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
                 throw new ObjectDisposedException(nameof(PageRooms));
             }
             reserved += length;
-            room = new PageRoom(this, GC.AllocateUninitializedArray<byte>(length), new int[layout]);
+            room = new PageRoom(this, set.Rooms.Rent(length), new int[layout]);
             made.Add(room);
         }
         return room;
@@ -93,7 +94,8 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
         {
             if (disposed) return;
             disposed = true;
-            free.Clear();
+            // Only rooms their readers gave back: one still out may be read yet.
+            while (free.TryTake(out var room)) set.Rooms.Return(room.Bytes);
             made.Clear();
             set.ReturnWork(reserved);
             reserved = 0;

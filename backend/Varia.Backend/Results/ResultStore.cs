@@ -218,6 +218,8 @@ internal sealed partial class ResultStore
     internal static bool DefaultFilterCapped { get; set; } = true;
     /// <summary>Whether packing types columns (PageCodec.Typed.cs): always in the product; the benchmarks compare both.</summary>
     internal bool TypedPacking { get; init; } = true;
+    /// <summary>The rooms view reads unpack packed pages into, kept between reads (<see cref="RoomPool"/>).</summary>
+    internal RoomPool Rooms { get; } = new();
 
     private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
