@@ -152,7 +152,7 @@ export function sessionCloseNoteText(name: string, note: SessionCloseNote): stri
   switch (note.code) {
     case 'commitNotApplied': return `${name}: the commit was not applied. BigQuery refused it${note.message ? ` (${note.message})` : ''}, so the session was ended and any open transaction was rolled back.`
     case 'committedBeforeCancel': return `${name}: the stopped job${job} committed a transaction before it stopped. Stopping does not undo work already committed.`
-    case 'outcomeUnknown': return `${name}: Varia could not learn whether job${job} committed. Check the job in BigQuery's job history; the session ends once the job finishes.`
+    case 'outcomeUnknown': return `${name}: ${note.message ? `${note.message} ` : ''}Varia could not learn whether ${job ? `job${job}` : 'the stopped job'} committed. Check the job in BigQuery's job history.`
     case 'abortFailed': return `${name}: Varia could not end the BigQuery session${note.message ? ` (${note.message})` : ''}. Any transaction in it stays open until the session expires, other transactions on its tables fail meanwhile, and its temp tables are billed as storage.`
     case 'sessionExpired': return `${name}: the BigQuery session had expired (24 hours idle or 7 days), so BigQuery rolled back its open transaction.`
   }

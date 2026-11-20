@@ -363,7 +363,8 @@ internal sealed partial class SqlService
             if (!token.IsCancellationRequested && bigQuery.Find(args.ConnectionId) != connection) running.Cancel();
             // A job the session started and Varia stopped, or lost track of, holds the session until it is DONE.
             // An insert BigQuery refused, or one that never left, created nothing to wait for.
-            if (sent && !complete && session.Id is not null && (created || !BigQueryService.NeverCreated(error)))
+            // A job BigQuery refused at insert is already DONE with its error, and holds nothing either.
+            if (sent && !complete && session.Id is not null && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
                 session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested, created);
             else if (sessionJob && created && !complete && error is BigQueryJobException)
                 session.Transaction = BigQueryService.Apply(startState, null, failed: true);

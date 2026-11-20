@@ -210,7 +210,9 @@ internal sealed partial class BigQueryService
         {
             try
             {
-                var (children, complete) = await ChildrenAsync(connection, project, tail.JobId, null, token);
+                // Only a script has children; listing a single statement would need bigquery.jobs.list for nothing.
+                var script = StatementOf(job.Statistics) == "SCRIPT" || job.Statistics?.NumChildJobs > 0;
+                var (children, complete) = script ? await ChildrenAsync(connection, project, tail.JobId, null, token) : ([], true);
                 if (children.Count == 0 && complete) session.Transaction = Apply(session.Transaction, StatementOf(job.Statistics), job.Status?.ErrorResult is not null);
                 else
                 {
@@ -449,17 +451,19 @@ internal sealed partial class BigQueryService
             }
             if (commit && session.Transaction != BigQueryTransaction.None && session.Id is not null)
             {
+                // A stopped script's commit (note) is stated by whatever the commit itself comes to.
                 try
                 {
                     var committed = await CommitAsync(session, abortOnRefusedCommit, token);
-                    if (committed is not null) return committed;
+                    if (committed is not null) return note is null ? committed : committed with { Note = committed.Note! with { Message = Join(note, committed.Note.Message) } };
                 }
                 catch (FallThrough fall)
                 {
                     // A refused commit on an unchecked session ends it, still holding the queue; an end that fails answers
                     // abortFailed, carrying BigQuery's commit message.
-                    return await EndAsync(session, fall.Note, token);
+                    return await EndAsync(session, note is null ? fall.Note : fall.Note with { Message = Join(note, fall.Note.Message) }, token);
                 }
+                catch (RequestException error) when (note is not null) { throw new RequestException(error.Code, Join(note, error.Message)); }
             }
             return await EndAsync(session, note, token);
         }
@@ -485,6 +489,8 @@ internal sealed partial class BigQueryService
         if (expired && tracked && note is null) return new SessionCloseResult(true, Note("sessionExpired"));
         return new SessionCloseResult(true, note);
     }
+
+    static string Join(SessionCloseNote prior, string? message) => message is { Length: > 0 } ? Prior(prior) + " " + message : Prior(prior);
 
     static string Prior(SessionCloseNote note) => note.Code switch
     {
@@ -545,7 +551,9 @@ internal sealed partial class BigQueryService
                     var found = await GetJobAsync(connection, project, jobId, location, limit.Token);
                     if (found.Status?.State == "DONE") done = found;
                 }
-                catch (GoogleApiException error) when (error.HttpStatusCode == HttpStatusCode.NotFound) { }
+                // A 404 is inconclusive, and so is any other failed lookup: the COMMIT may have run, so only the budget ends
+                // the search, as an unknown outcome.
+                catch (Exception) when (!limit.IsCancellationRequested) { }
                 if (done is null) await Task.Delay(DonePoll, limit.Token);
             }
         }
@@ -586,8 +594,11 @@ internal sealed partial class BigQueryService
         }
         var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, null) : BigQueryErrors.Map(error, project) as RequestException
             ?? new RequestException("SQL_ERROR", "BigQuery refused the commit.");
+        // A COMMIT job that timed out or was stopped refused the commit: TIMEOUT stays the code of main's own deadline, whose
+        // outcome is unknown.
+        var code = mapped.Code is "TIMEOUT" or "CANCELLED" ? "SQL_ERROR" : mapped.Code;
         if (retryable || session.Transaction == BigQueryTransaction.Open || !abortOnRefusedCommit)
-            return new RequestException(mapped.Code, "The transaction was not committed, and the query stays open. " + mapped.Message);
+            return new RequestException(code, "The transaction was not committed, and the query stays open. " + mapped.Message);
         // Answered by CloseAsync's end of the session, which may turn this into abortFailed.
         return new FallThrough(Note("commitNotApplied", mapped.Message));
     }

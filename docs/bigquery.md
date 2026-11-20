@@ -232,7 +232,8 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
 - **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
   session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
   quit, where the window stays open. A refusal BigQuery may lift (`backendError`, `rateLimitExceeded`) keeps the tab, and
-  so does a commit whose request never left the machine (`CONNECTION_LOST`); closing again retries. A commit whose
+  so does a commit whose request never left the machine (`CONNECTION_LOST`); closing again retries. A COMMIT job BigQuery
+  stopped for its timeout is a refusal (`SQL_ERROR`); `TIMEOUT` is only main's deadline, whose outcome is unknown. A commit whose
   outcome is unknown (no answer within 25 s, or main's 60 s deadline) closes with `outcomeUnknown` and its job id: the
   session is aborted only once that COMMIT is DONE, or not found after 2 minutes, within 10 minutes and even after
   Disconnect; past that it is left to expire.

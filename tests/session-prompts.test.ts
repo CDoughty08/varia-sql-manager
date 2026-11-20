@@ -131,6 +131,11 @@ describe('session prompts', () => {
     for (const code of codes) expect(sessionCloseNoteText('q.sql', { code, message: 'Boom', jobId: 'job_1' })).toMatch(/^q\.sql: /)
     expect(sessionCloseNoteText('q.sql', { code: 'commitNotApplied', message: 'Boom' })).toContain('(Boom)')
     expect(sessionCloseNoteText('q.sql', { code: 'outcomeUnknown', jobId: 'job_1' })).toContain('job job_1')
+    // A plain close has no job id to name, and ends the session at once.
+    const stopped = sessionCloseNoteText('q.sql', { code: 'outcomeUnknown' })
+    expect(stopped).toContain('whether the stopped job committed')
+    expect(stopped).not.toContain('session ends once')
+    expect(sessionCloseNoteText('q.sql', { code: 'outcomeUnknown', message: 'The stopped job committed a transaction before it stopped.', jobId: 'job_2' })).toContain('q.sql: The stopped job committed a transaction before it stopped. Varia could not learn whether job job_2 committed.')
     expect([...quitStoppingNotes].sort()).toEqual(['abortFailed', 'committedBeforeCancel', 'outcomeUnknown'])
     expect(bigQueryCommitTimeout).toContain('could not learn whether the commit took effect')
   })

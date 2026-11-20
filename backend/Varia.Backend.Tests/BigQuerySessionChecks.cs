@@ -609,6 +609,40 @@ internal static class BigQuerySessionChecks
             $"a job that finished but whose final read failed leaves the transaction unknown, not untouched: {unread.Result?.Status} {unreadState.State}");
         await harness.Close(readTab, "rollback");
 
+        // A COMMIT whose answer was lost and whose lookups keep failing: an unknown outcome, never an unmapped error.
+        bq.CommitReply = job => new(500, Bq.Error(500, "Backend error.", "backendError"));
+        harness.Fake.Fault = request => request.Method == "GET" && bq.Jobs.Values.Any(job => job.Sql == BigQuerySql.Commit && request.Url.Contains("/jobs/" + job.Id, StringComparison.Ordinal))
+            ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var budget2 = harness.BigQuery.CommitLimit;
+        harness.BigQuery.CommitLimit = TimeSpan.FromMilliseconds(500);
+        var blindTab = await Open(false);
+        (string Code, SessionCloseResult? Result, string Message) blind;
+        try { blind = await harness.Close(blindTab, "commit"); }
+        catch (Exception error) { blind = ("thrown " + error.GetType().Name, null, ""); }
+        harness.Fake.Fault = null;
+        bq.CommitReply = null;
+        harness.BigQuery.CommitLimit = budget2;
+        check(blind is { Code: "ok", Result.Note.Code: "outcomeUnknown" } && (await harness.State(blindTab)).Code == "SESSION_CLOSED",
+            $"a commit whose lookups keep failing closes with an unknown outcome: {blind.Code} {blind.Result}");
+
+        // A COMMIT job BigQuery stopped for its timeout refused the commit: not main's TIMEOUT, whose outcome is unknown.
+        bq.CommitError = Failure("timeout", "Query exceeded the job timeout.");
+        var timedTab = await Open(false);
+        var timed = await harness.Close(timedTab, "commit");
+        bq.CommitError = null;
+        check(timed.Code == "SQL_ERROR" && timed.Message.StartsWith("The transaction was not committed, and the query stays open.", StringComparison.Ordinal),
+            $"a COMMIT job that timed out is refused with SQL_ERROR, never TIMEOUT: {timed.Code} {timed.Message}");
+        await harness.Close(timedTab, "rollback");
+
+        // A query BigQuery refuses at insert is DONE already: the session is not held, and its transaction is untouched.
+        var refusedTab = Tab();
+        await harness.Execute(refusedTab, "SELECT 1");
+        await harness.Execute(refusedTab, "SELECT e.session FROM events e");
+        var refusedState = await harness.State(refusedTab);
+        var afterRefusal = await harness.Execute(refusedTab, "SELECT 1");
+        check(refusedState.State is { Checked: true, TransactionCount: 0 } && !Says(afterRefusal.Result, "Waiting for BigQuery job"),
+            $"a query refused at insert leaves the session checked and free: {refusedState.State} {Texts(afterRefusal.Result?.Messages ?? [])}");
+
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");
         var failTab = await Open(false);
@@ -770,6 +804,47 @@ internal static class BigQuerySessionChecks
         check(both is { Code: "ok", Result.Note: { Code: "abortFailed" } bothNote } && bothNote.Message!.StartsWith("The stopped job committed a transaction before it stopped.", StringComparison.Ordinal)
             && bothNote.Message.Contains("Access Denied", StringComparison.Ordinal),
             $"a failed end after a stopped script committed answers abortFailed and still says the job committed: {both.Code} {both.Result}");
+
+        // A stopped script that committed and then began again: the refused commit that keeps the tab still says it committed.
+        bq.Scripts["SCRIPT commits then begins"] = [("BEGIN_TRANSACTION", null), ("INSERT", null), ("COMMIT_TRANSACTION", null), ("BEGIN_TRANSACTION", null), ("UPDATE", null)];
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var againTab = Tab();
+        bq.HoldQueries = false;
+        await harness.Execute(againTab, "SELECT 1");
+        bq.HoldQueries = true;
+        var againArgs = harness.Query(againTab, "SCRIPT commits then begins");
+        var againRun = harness.Call("query.execute", againArgs);
+        await Task.WhenAny(bq.Polling.Task, againRun).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = againArgs["queryId"]!.GetValue<string>() });
+        await againRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()]);
+        bq.CommitError = Failure("invalidQuery", "Transaction is aborted due to concurrent update against table t.");
+        var keptRefusal = await harness.Close(againTab, "commit");
+        bq.CommitError = null;
+        check(keptRefusal.Code != "ok" && keptRefusal.Message.StartsWith("The stopped job committed a transaction before it stopped. The transaction was not committed", StringComparison.Ordinal),
+            $"a refused commit after a stopped script committed still says the script committed: {keptRefusal.Code} {keptRefusal.Message}");
+        await harness.Close(againTab, "rollback");
+
+        // A stopped single statement is settled without jobs.list, so the Job User role keeps a checked transaction.
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var plainTab = Tab();
+        bq.HoldQueries = false;
+        await harness.Execute(plainTab, "SELECT 1");
+        bq.HoldQueries = true;
+        var plainArgs = harness.Query(plainTab, "SELECT slow");
+        var plainRun = harness.Call("query.execute", plainArgs);
+        await Task.WhenAny(bq.Polling.Task, plainRun).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = plainArgs["queryId"]!.GetValue<string>() });
+        await plainRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.HoldQueries = false;
+        bq.Release(bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()]);
+        bq.ListDenied = true;
+        await harness.Execute(plainTab, "SELECT 1");
+        bq.ListDenied = false;
+        var plainState = await harness.State(plainTab);
+        check(plainState.State is { Checked: true }, $"settling a stopped single statement needs no jobs.list: {plainState.State}");
+        await harness.Close(plainTab);
+        bq.HoldQueries = true;
 
         // The next execution waits for the stopped job's DONE.
         bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
