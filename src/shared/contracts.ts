@@ -397,13 +397,24 @@ export interface ResultsFindRowsResult { positions: number[]; marks: number[]; t
 /** results.diff: compares two complete results of the same query, `left` the earlier and `right` the later, and stores
  *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
  *  all); `exact`: text compared character for character instead of by collation. */
-export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number }
-/** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (absent when whole
- *  rows did: the backend leaves out a null member); counts by kind, `soft` the values equal only by collation; `leftOnly`
- *  and `rightOnly` the columns not compared. */
+export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number; match?: DiffMatch }
+/** How results.diff matches rows: `auto` (absent: the first unique key column, else whole rows), `position` (the n-th row
+ *  with the n-th), `rows` (whole rows) or `columns` (a composite key of 1 to `limits.diff.maxKeyColumns` distinct pair
+ *  indexes; NULL matches NULL, and a key that repeats pairs in order, flagged `dup`). */
+export type DiffMatch = { mode: 'auto' } | { mode: 'position' } | { mode: 'rows' } | { mode: 'columns'; columns: number[] }
+export type DiffMatchMode = DiffMatch['mode']
+/** What matched rows: `auto` with its key column's name, `rows` (asked, or when auto found no key), `position`, or
+ *  `columns` with the key columns' names. */
+export interface DiffMatchUsed { mode: DiffMatchMode; columns: string[] }
+/** `descriptor` is the diff's result (kind `diff`); `match` what matched rows; counts by kind, `soft` the values equal only
+ *  by collation; `leftOnly` and `rightOnly` the columns not compared; `repeated` the entries whose key repeats, `possible`
+ *  the removed and added row pairs that look alike (`possibleSkipped`: too many unmatched rows to look); `nothingPaired`
+ *  that both inputs have rows and none matched; `columnChanges` each pair's changed and soft cells; `trailingHidden` the
+ *  unchanged entries left out after the last stored row. */
 export interface ResultsDiffResult {
-  descriptor: ResultDescriptor; key?: string; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
-  leftOnly: string[]; rightOnly: string[]
+  descriptor: ResultDescriptor; match: DiffMatchUsed; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
+  leftOnly: string[]; rightOnly: string[]; repeated: number; possible: number; possibleSkipped: boolean; nothingPaired: boolean
+  columnChanges: { changed: number; soft: number }[]; trailingHidden: number
 }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
  *  SUM, AVG, MIN or MAX. */
@@ -540,7 +551,7 @@ export interface ExplorerNode {
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
 // NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL'] as const
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL', 'AGENT_DISABLED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }

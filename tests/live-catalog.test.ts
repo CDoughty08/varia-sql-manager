@@ -119,13 +119,16 @@ describe('live catalogue', () => {
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] })
     // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
     // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
-    expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'] })
+    expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'explorer.agentService'] })
     expect(liveProbes['explorer.databases']).toMatchObject({ intervalMs: { default: 5000, min: 2000 }, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
     expect(liveProbes['explorer.databases'].permission).toBeUndefined()
     expect(liveProbes['explorer.progress']).toMatchObject({ permission: 'serverState', tables: [{ id: 'progress', key: ['name'] }] })
     expect(liveProbes['explorer.agent']).toMatchObject({ gates: { editions: [1, 2, 3, 8] }, series: [{ id: 'runningJobs', counter: 'gauge' }] })
     expect(liveProbes['explorer.agent'].permission).toBeUndefined()
     expect(liveProbes['explorer.availability']).toMatchObject({ permission: 'serverState', gates: { editions: [2, 3] }, tables: [{ id: 'groups', key: ['name'] }] })
+    // SQL Server Agent's node (AG-1): Agent XPs needs no permission, so neither does the probe; it reads the service only with server state.
+    expect(liveProbes['explorer.agentService']).toMatchObject({ gates: { minMajor: 13, editions: [1, 2, 3, 8] }, status: ['agentXps', 'serviceState', 'startupType'] })
+    expect(liveProbes['explorer.agentService'].permission).toBeUndefined()
     // SSIS Operations: the catalog's own pool and prologue, 2 s by default (owner decision 12), settable from 1 to 60 s, one
     // snapshot table keyed by operation id whose selected row lingers, its tone column last.
     expect(liveSources['ssis.operations']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.operations.list'] })

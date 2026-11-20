@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { ResultColumn } from '../src/shared/contracts'
 import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { GridData } from '../src/renderer/src/grid/data'
-import { diffGutter } from '../src/renderer/src/grid/diff-gutter'
+import { diffGutter, toneFlagsOf } from '../src/renderer/src/grid/diff-gutter'
 import { diffSuffixOf, hiddenRoles, isHiddenColumn, visibleColumnCount } from '../src/renderer/src/grid/hidden-columns'
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
 import { diffSidesOf } from '../src/renderer/src/grid/ResultGrid'
@@ -63,13 +63,31 @@ describe('hidden result columns', () => {
 describe('comparison gutter', () => {
   const sides = { old: 'Sample Query', new: 'Awesome Query' }
   it('draws each row\'s mark and its number in its own input, and names both rows', () => {
-    expect(diffGutter(' ', '3', '4', sides)).toEqual({ mark: '', number: '4', name: 'Unchanged; row 3 in Sample Query, row 4 in Awesome Query' })
-    expect(diffGutter('+', null, '7', sides)).toEqual({ mark: '+', number: '7', name: 'Added; row 7 in Awesome Query' })
-    expect(diffGutter('−', '5', null, sides)).toEqual({ mark: '−', number: '5', name: 'Removed; row 5 in Sample Query' })
+    expect(diffGutter(' ', '3', '4', sides)).toEqual({ mark: '', number: '4', flag: '', name: 'Unchanged; row 3 in Sample Query, row 4 in Awesome Query' })
+    expect(diffGutter('+', null, '7', sides)).toEqual({ mark: '+', number: '7', flag: '', name: 'Added; row 7 in Awesome Query' })
+    expect(diffGutter('−', '5', null, sides)).toEqual({ mark: '−', number: '5', flag: '', name: 'Removed; row 5 in Sample Query' })
     // Both halves of a changed entry carry both rows; each draws its own side's.
-    expect(diffGutter('−', '2', '9', sides)).toEqual({ mark: '−', number: '2', name: 'Changed, old values; row 2 in Sample Query, row 9 in Awesome Query' })
-    expect(diffGutter('+', '2', '9', sides)).toEqual({ mark: '+', number: '9', name: 'Changed, new values; row 2 in Sample Query, row 9 in Awesome Query' })
+    expect(diffGutter('−', '2', '9', sides)).toEqual({ mark: '−', number: '2', flag: '', name: 'Changed, old values; row 2 in Sample Query, row 9 in Awesome Query' })
+    expect(diffGutter('+', '2', '9', sides)).toEqual({ mark: '+', number: '9', flag: '', name: 'Changed, new values; row 2 in Sample Query, row 9 in Awesome Query' })
     expect(diffGutter(' ', '1204', '12000').name).toBe('Unchanged; row 1,204 in the old result, row 12,000 in the new result')
+  })
+  it('draws ≈ for a repeated key, else ? for a possible match, and names the flags and a cut row', () => {
+    expect(diffGutter('−', '3', '4', sides, 'changedOld dup 2')).toEqual({ mark: '−', number: '3', flag: '≈', name: 'Changed, old values, repeated key; row 3 in Sample Query, row 4 in Awesome Query' })
+    expect(diffGutter('−', '5', null, sides, 'removed poss=12')).toEqual({ mark: '−', number: '5', flag: '?', name: 'Removed, possible match with row 12 in Awesome Query; row 5 in Sample Query' })
+    expect(diffGutter('+', null, '12', sides, 'added poss=5 gap=3')).toEqual({ mark: '+', number: '12', flag: '?', name: 'Added, possible match with row 5 in Sample Query; row 12 in Awesome Query' })
+    // Both: ≈ is drawn and both are named.
+    expect(diffGutter('+', null, '12', sides, 'added dup poss=5')).toMatchObject({ flag: '≈', name: 'Added, repeated key, possible match with row 5 in Sample Query; row 12 in Awesome Query' })
+    // A gap is not named here (it comes with the dashed rule), nor drawn.
+    expect(diffGutter(' ', '1', '1', sides, 'same gap=312')).toEqual({ mark: '', number: '1', flag: '', name: 'Unchanged; row 1 in Sample Query, row 1 in Awesome Query' })
+    expect(diffGutter('+', '2', '9', sides, 'changedNew 0 2 4 …').name).toBe('Changed, new values; row 2 in Sample Query, row 9 in Awesome Query. More changes in this row are not listed')
+  })
+  it('reads a tone\'s flags, ignoring unknown ones and stopping at the cells', () => {
+    expect(toneFlagsOf('removed dup poss=7 gap=2')).toEqual({ repeated: true, partner: 7, cut: false })
+    expect(toneFlagsOf('changedOld future=3 dup 4 5')).toEqual({ repeated: true, cut: false })
+    expect(toneFlagsOf('changedOld 4 dup')).toEqual({ repeated: false, cut: false })
+    expect(toneFlagsOf('added poss=0')).toEqual({ repeated: false, cut: false })
+    expect(toneFlagsOf('changedNew 1 3 …')).toEqual({ repeated: false, cut: true })
+    expect(toneFlagsOf(null)).toEqual({ repeated: false, cut: false })
   })
   it('names a comparison\'s inputs as they were compared, and sizes the number for the larger', () => {
     // The handles' counts, not the descriptors' (an entry keeps the one it opened with, before any row was stored).

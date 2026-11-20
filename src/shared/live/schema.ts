@@ -92,7 +92,9 @@ export const liveErrorCodes = [
   'BLOCKED', 'TIMEOUT', 'PERMISSION_DENIED', 'NOT_SUPPORTED', 'DATABASE_UNAVAILABLE', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_ENTRA', 'AUTH_IDENTITY',
   'BUDGET', 'BUSY', 'CATALOG_MISSING', 'NOT_FOUND', 'LOGIN_FAILED',
   // The connection's engine has no such source.
-  'UNSUPPORTED_PROVIDER'
+  'UNSUPPORTED_PROVIDER',
+  // SQL Server Agent is stopped or its Agent XPs option is 0 (error 15281).
+  'AGENT_DISABLED'
 ] as const
 export type LiveErrorCode = typeof liveErrorCodes[number]
 export interface LiveProbeError {

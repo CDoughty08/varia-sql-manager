@@ -65,6 +65,8 @@ internal static class AgentLiveChecks
         var host = (IActionHost)service;
         var profile = host.Profile(info.Id);
         await ProfileAsync(check, service, info, json, profile, Sql);
+        await TreeAsync(check, service, info, json, profile);
+        await ServiceAsync(check, Sql);
         await using var connection = host.Connection(info.Id);
         await host.OpenAsync(connection, CancellationToken.None);
         var reader = new AgentReader();
@@ -80,8 +82,22 @@ internal static class AgentLiveChecks
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         // A killed earlier run's job, login user or other Agent object goes first, so this suite alone keeps a shared server clean.
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
-        await JobAsync(check, connection, reader, scratch, Sql);
+        await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
+    }
+
+    /// <summary>Object Explorer's Agent node probe (explorer.agentService, AG-1) on a server whose Agent is up: Agent XPs 1 and
+    /// running (4), with the startup type where sys.dm_server_services lists Agent (Windows; the check says whether this server's
+    /// DMV does, so the Linux container's answer is in CI's log) and the session fallback otherwise.</summary>
+    private static async Task ServiceAsync(Action<bool, string> check, Func<string, string, Task<SqlRun>> sql)
+    {
+        var probe = await sql(LiveSql.For(LiveSql.AgentServiceProbe, LiveSql.MaxBand)!.Body, "master");
+        var dmv = await sql("SELECT COUNT(*) FROM sys.dm_server_services AS s WHERE s.servicename LIKE N'SQL Server Agent%';", "master");
+        var listed = dmv.Sets is [[[var count, ..], ..], ..] && count is not null and not "0";
+        var row = probe.Sets is [[var first, ..], ..] ? first : null;
+        check(probe.Status == "completed" && row is [var xps, var state, var startup] && xps == "1" && state == "4" && (!listed || startup is "2" or "3" or "4"),
+            "explorer.agentService reads Agent XPs 1 and running (4) on a server whose Agent is up, with a startup type where sys.dm_server_services lists Agent (it "
+            + (listed ? "does" : "does not, so the session fallback answers") + " here): " + (row is null ? probe.Error : string.Join(",", row.Select(cell => cell ?? "NULL"))));
     }
 
     /// <summary>Every statement that needs no job, under each caller's prologue: each answers with its declared columns or
@@ -121,7 +137,8 @@ internal static class AgentLiveChecks
     }
 
     /// <summary>A scratch job of this run's own runs once; msdb's procedures then read its row, its activity and its history.</summary>
-    private static async Task JobAsync(Action<bool, string> check, SqlConnection connection, AgentReader reader, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql)
+    private static async Task JobAsync(Action<bool, string> check, SqlConnection connection, AgentReader reader, ScratchDatabase scratch, Func<string, string, Task<SqlRun>> sql,
+        SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
         var job = scratch.AgentObject("job");
         var created = await sql("DECLARE @id uniqueidentifier;\n"
@@ -160,6 +177,32 @@ internal static class AgentLiveChecks
                 && rows["activity"].Rows.Any(activity => activity[2] is DateTime),
                 "a scratch job run once reads back through msdb's procedures: its history's job outcome (step 0) Succeeded with one step row, its row's last outcome Succeeded, and its activity's start time: "
                 + started.Error + " " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code)));
+            // Object Explorer's Jobs folder lists it by name, filtered, with its owner; its ref names it alone.
+            var folder = await Children(service, info, json, new NodeRefDto("folder", Owner: new ObjectRefDto("agent"), Folder: "agentJobs"),
+                new ExplorerFilterDto(Name: new TextFilterDto("equals", job)));
+            check(folder is { Error: null, Nodes: [{ Label: var label, Icon: "agent-job", HasChildren: false, Ref.Object: { Kind: "agentJob", Name: var name, Database: null } } row0] } && label == job && name == job
+                && row0.Detail?.StartsWith("Owner ", StringComparison.Ordinal) == true,
+                "Object Explorer's Jobs folder lists the scratch job by name (filtered to it) with its owner, as an agentJob ref named alone: " + JsonSerializer.Serialize(folder));
+            // Search Objects indexes it only behind the release gate: shut, the build reads nothing from msdb and skips nothing.
+            async Task<(ObjectIndexStatus Index, List<ObjectSearchHit> Hits)> Indexed(bool gate)
+            {
+                service.Search.AgentEnabled = gate;
+                var built = await service.Search.IndexAsync(new(info.Id, Guid.NewGuid().ToString(), false), CancellationToken.None);
+                var found = (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
+                    new ObjectSearchArgs(info.Id, Guid.NewGuid().ToString(), job, WholeWord: true, In: "names"), json), json);
+                return (built.Status, found.Hits);
+            }
+            try
+            {
+                // Shut first: the gate never changes while the backend runs, and a shut build leaves the Agent slot as it was.
+                var shut = await Indexed(false);
+                var open = await Indexed(true);
+                check(open.Index.Skipped.All(skip => skip.Database != "msdb") && open.Hits is [{ Object: { Kind: "agentJob", Database: null } hit, Folder: "agentJobs", Modified: not null }] && hit.Name == job
+                    && shut.Index.Skipped.All(skip => skip.Database != "msdb") && shut.Hits.All(item => !item.Object.Kind.StartsWith("agent", StringComparison.Ordinal)),
+                    "Search Objects finds the scratch job as an agentJob with its modify date behind the release gate, and reads no Agent objects with it shut: "
+                    + JsonSerializer.Serialize(open.Hits) + " " + JsonSerializer.Serialize(shut.Hits) + " " + JsonSerializer.Serialize(open.Index.Skipped));
+            }
+            finally { service.Search.AgentEnabled = Varia.Backend.Agent.AgentGate.Enabled; }
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }
@@ -200,6 +243,25 @@ internal static class AgentLiveChecks
                 && errors.Select(error => error.Statement + " " + error.Code).SequenceEqual(["errorLogs PERMISSION_DENIED", "serviceState PERMISSION_DENIED"]),
                 "a SQLAgentUserRole login reads its own jobs (none) and Agent's properties, and is refused xp_enumerrorlogs and xp_servicecontrol as PERMISSION_DENIED values: "
                 + made.Error + mapped.Error + " " + string.Join(", ", errors.Select(error => error.Statement + " " + error.Code + " " + error.Number)));
+
+            // Search Objects' Agent batch under each role: a User reads jobs alone, an Operator alerts and operators too, and a
+            // login in no Agent role (msdb's guest) reads nothing and fails nothing, so its index skips nothing.
+            var user = await SearchCodes();
+            var userAccess = await Access();
+            var promoted = await sql("ALTER ROLE SQLAgentOperatorRole ADD MEMBER " + Bracket(login) + ";", "msdb");
+            var operatorCodes = await SearchCodes();
+            var operatorAccess = await Access();
+            var dropped = await sql("DROP USER " + Bracket(login) + ";", "msdb");
+            var none = await SearchCodes();
+            var noneAccess = await Access();
+            // The Agent node's access step reads the roles in msdb (IS_ROLEMEMBER is NULL in master): Agent XPs, sysadmin, then
+            // Operator, Reader and User, nested membership counting (Operator is in Reader, Reader in User).
+            check(userAccess == "1,0,0,0,1" && operatorAccess == "1,0,1,1,1" && noneAccess == "1,0,0,0,0",
+                "the Agent node's access step reads a SQLAgentUserRole login as User, a SQLAgentOperatorRole login as Operator (with the roles it nests in), and a login in no role as none: "
+                + userAccess + " | " + operatorAccess + " | " + noneAccess);
+            check(user == "jobs" && promoted.Status == "completed" && operatorCodes == "jobs,named" && dropped.Status == "completed" && none == "",
+                "Search Objects' Agent batch reads only what each role may: a SQLAgentUserRole login its jobs' set alone, a SQLAgentOperatorRole login alerts and operators too, "
+                + "and a login in no Agent role no set and no error: " + user + " | " + operatorCodes + " | " + none + " " + promoted.Error + dropped.Error);
         }
         finally { await sql("IF USER_ID(" + Quote(login) + ") IS NOT NULL DROP USER " + Bracket(login) + ";", "msdb"); }
 
@@ -207,6 +269,41 @@ internal static class AgentLiveChecks
         {
             await using var command = new SqlCommand(text, connection);
             await command.ExecuteNonQueryAsync();
+        }
+
+        // The access step's row as the login: Agent XPs, sysadmin, Operator, Reader, User, or the error.
+        async Task<string> Access()
+        {
+            await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
+            try
+            {
+                await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
+                command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = AgentListings.Access });
+                await using var read = await command.ExecuteReaderAsync();
+                if (!await read.ReadAsync()) return "no row";
+                return string.Join(",", Enumerable.Range(0, 5).Select(column => Convert.ToInt32(read.GetValue(column), System.Globalization.CultureInfo.InvariantCulture)));
+            }
+            catch (SqlException error) { return "error " + error.Number; }
+            finally { await Run("REVERT;"); }
+        }
+
+        // The result sets the batch sends as the login: "jobs" for the jobs' set, "named" for the alerts and operators', or the error.
+        async Task<string> SearchCodes()
+        {
+            var sets = new List<string>();
+            await Run("EXECUTE AS LOGIN = " + Quote(login) + ";");
+            try
+            {
+                await using var command = new SqlCommand("EXEC msdb.sys.sp_executesql @stmt;", connection);
+                command.Parameters.Add(new SqlParameter("@stmt", System.Data.SqlDbType.NVarChar, -1) { Value = Varia.Backend.Search.ObjectSearchSql.Agent });
+                await using var read = await command.ExecuteReaderAsync();
+                do
+                    if (read.FieldCount > 0) sets.Add(read.FieldCount == 3 ? "jobs" : "named");
+                while (await read.NextResultAsync());
+            }
+            catch (SqlException error) { sets.Add("error " + error.Number); }
+            finally { await Run("REVERT;"); }
+            return string.Join(",", sets);
         }
     }
 
@@ -244,6 +341,51 @@ internal static class AgentLiveChecks
             check(code == "CANCELLED" && service.Explorer.RunningCount == 0, "a disconnect cancels a running agent.profile (CANCELLED, not TIMEOUT), and it unregisters: " + code);
         }
         finally { options.TestDelay = null; options.AgentProfileBudget = null; }
+    }
+
+    private static async Task<ExplorerChildrenResult> Children(SqlService service, ConnectionInfo info, JsonSerializerOptions json, NodeRefDto node, ExplorerFilterDto? filter = null) =>
+        (ExplorerChildrenResult)await service.DispatchAsync("explorer.children", JsonSerializer.SerializeToElement(
+            new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), node, Filter: filter), json), json);
+
+    /// <summary>Object Explorer's SQL Server Agent node as sysadmin (AG-1): the server lists it last; it lists Jobs, Job Activity
+    /// Monitor, then the platform's other folders; Proxies lists one row per subsystem but TSQL and then Unassigned Proxies; Error
+    /// Logs lists Current (archive 0) first, or Current alone where the server offers no list (SQL Server on Linux); Operators and the
+    /// unassigned proxies list without error.</summary>
+    private static async Task TreeAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, ServerProfile server)
+    {
+        var agent = new ObjectRefDto("agent");
+        var root = await Children(service, info, json, new NodeRefDto("object", new ObjectRefDto("server")));
+        check(root is { Error: null } && root.Nodes.LastOrDefault() is { Label: "SQL Server Agent", Icon: "agent", HasChildren: true, Ref.Object: { Kind: "agent", Name: null } },
+            "the server lists the SQL Server Agent node after its folders: " + string.Join(", ", root.Nodes.Select(node => node.Label)));
+        var node = await Children(service, info, json, new NodeRefDto("object", agent));
+        var labels = string.Join(",", node.Nodes.Select(item => item.Label));
+        var expected = server.EngineEdition == 8 ? "Jobs,Job Activity Monitor,Operators,Error Logs" : server.Linux ? "Jobs,Job Activity Monitor,Operators,Proxies,Error Logs"
+            : "Jobs,Job Activity Monitor,Alerts,Operators,Proxies,Error Logs";
+        check(node.Error is null && labels == expected && node.Nodes[1] is { HasChildren: false, Ref.Object.Kind: "agentJobActivity" },
+            "as sysadmin the Agent node lists its folders in SSMS order with the Job Activity Monitor leaf second: " + labels + " " + node.Error?.Message);
+        if (server.EngineEdition != 8)
+        {
+            var proxies = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentProxies"));
+            var subsystems = proxies.Nodes.Where(item => item.Ref.Object?.Kind == "agentProxySubsystem").ToList();
+            check(proxies.Error is null && subsystems.Count > 0 && subsystems.All(item => item.Ref.Object!.Name != "TSQL" && item.HasChildren)
+                && subsystems.Any(item => item.Label == "Operating system (CmdExec)" && item.Ref.Object!.Name == "CmdExec")
+                && proxies.Nodes[^1] is { Label: "Unassigned Proxies", Ref: { Type: "folder", Folder: "agentUnassignedProxies" } },
+                "Proxies lists one row per subsystem but TSQL, labelled as SSMS's step types, then Unassigned Proxies: " + string.Join(", ", proxies.Nodes.Select(item => item.Label)) + " " + proxies.Error?.Message);
+            var cmd = await Children(service, info, json, new NodeRefDto("object", new ObjectRefDto("agentProxySubsystem", Name: "CmdExec")));
+            var unassigned = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentUnassignedProxies"));
+            check(cmd.Error is null && unassigned.Error is null, "a subsystem row and Unassigned Proxies list their proxies: " + cmd.Error?.Message + unassigned.Error?.Message);
+        }
+        var logs = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentErrorLogs"));
+        check(logs is { Error: null, Nodes: [{ Ref.Object: { Kind: "agentErrorLog", Name: "0" } } current, ..] } && current.Label.StartsWith("Current - ", StringComparison.Ordinal)
+            || server.Linux && logs is { Error: null, Nodes: [{ Label: "Current", Ref.Object: { Kind: "agentErrorLog", Name: "0" } }] },
+            "Error Logs lists Current (archive 0) first, then the archives; where SQL Server on Linux offers no list, Current alone: " + string.Join(", ", logs.Nodes.Select(item => item.Label)) + " " + logs.Error?.Message);
+        var operators = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentOperators"));
+        check(operators.Error is null, "Operators lists without error: " + operators.Error?.Message);
+        if (server.EngineEdition != 8 && !server.Linux)
+        {
+            var alerts = await Children(service, info, json, new NodeRefDto("folder", Owner: agent, Folder: "agentAlerts"));
+            check(alerts.Error is null, "Alerts lists without error: " + alerts.Error?.Message);
+        }
     }
 
     private static string Quote(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";

@@ -8,7 +8,7 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes,
+  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
@@ -39,6 +39,7 @@ describe('object search contracts', () => {
     expect(service).toContain(`public const int DefaultLimit = ${objectSearchLimits.defaultHits};`)
     expect(service).toContain(`public const int MaxSkipped = ${objectSearchLimits.skipped};`)
     expect(service).toContain(`Kinds = [${searchKinds.map(kind => `"${kind}"`).join(', ')}]`)
+    expect(service).toContain(`Unindexed = [${unindexedKinds.map(kind => `"${kind}"`).join(', ')}]`)
     expect(service).toContain(`public const int MaxKinds = ${objectSearchLimits.kinds};`)
     const fuzzy = csharp('FuzzyName.cs')
     expect(fuzzy).toContain(`public const int MaxWords = ${objectSearchLimits.fuzzyWords};`)
@@ -54,7 +55,7 @@ describe('object search contracts', () => {
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
-    const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis'))
+    const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis') && !(unindexedKinds as readonly string[]).includes(kind))
     expect([...searchKinds].sort()).toEqual([...listed].sort())
     expect(searchKinds.length).toBeLessThanOrEqual(objectSearchLimits.kinds)
     // The type filters name every kind the index holds exactly once, so a kind can neither be unreachable nor in two chips.
@@ -164,7 +165,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; agentEnabled?: boolean } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -192,7 +193,7 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean } =
       run: () => { const callbacks = [...queue.values()]; queue.clear(); callbacks.forEach(callback => callback()) } }
   })()
   let ids = 0
-  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids })
+  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids, agentEnabled: settings.agentEnabled ?? true })
   return { service, api, calls, pendingIndex, pendingSearch, connections, timers, registered, emit: (value: ObjectIndexProgress) => progress?.(value), hasListener: () => !!progress }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -362,6 +363,19 @@ describe('ObjectSearchService', () => {
     expect(calls.search[3]).toMatchObject({ text: 'orders', kinds: ['schema', 'column'] })
     service.setQuery(id, { types: [] })
     expect(calls.search[4]).not.toHaveProperty('kinds')
+  })
+
+  it('searches SQL Server Agent\'s kinds only behind the Agent release gate (AG-1)', () => {
+    const { service, calls, connections, timers } = harness({ agentEnabled: false })
+    connections.set([connection('a')])
+    const id = service.open('a')!
+    service.setQuery(id, { text: 'nightly' })
+    timers.run()
+    // Every kind but Agent's when none is chosen; Other without its Agent kinds when it is.
+    expect(calls.search[0].kinds).toEqual(searchKinds.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
+    service.setQuery(id, { types: ['other'] })
+    expect(calls.search[1].kinds).toEqual(searchTypeKinds(['other'])!.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
+    expect(searchTypeKinds(['other'])).toEqual(expect.arrayContaining([...agentSearchKinds]))
   })
 
   it('walks the hits with Enter: searching at once when the answer is not in, wrapping round, and starting over on a new answer', async () => {
@@ -777,6 +791,11 @@ describe('ObjectSearchService', () => {
     const fn: ObjectSearchHit = { object: { kind: 'function', database: 'master', schema: 'dbo', name: 'f' }, folder: 'scalarValuedFunctions', label: 'dbo.f' }
     const master = { kind: 'database', name: 'master' }
     expect(revealPaths(fn)[0]).toEqual([databases, system, { type: 'object', object: master }, ...['programmability', 'functions', 'scalarValuedFunctions'].map(folder => ({ type: 'folder', owner: master, folder })), { type: 'object', object: fn.object }])
+    // An Agent job is below the SQL Server Agent node, in its Jobs folder (AG-1); a login stays in Security › Logins.
+    const job: ObjectSearchHit = { object: { kind: 'agentJob', name: 'Nightly' }, folder: 'agentJobs', label: 'Nightly' }
+    expect(revealPaths(job)).toEqual([[{ type: 'object', object: { kind: 'agent' } }, { type: 'folder', owner: { kind: 'agent' }, folder: 'agentJobs' }, { type: 'object', object: job.object }]])
+    const login: ObjectSearchHit = { object: { kind: 'login', name: 'sa' }, folder: 'logins', label: 'sa' }
+    expect(revealPaths(login)).toEqual([[{ type: 'folder', owner: server, folder: 'serverSecurity' }, { type: 'folder', owner: server, folder: 'logins' }, { type: 'object', object: login.object }]])
     const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'view', schema: 'dbo', name: 'V' } }, folder: 'tableTriggers', label: 'dbo.V.t' }
     const view = { kind: 'view', database: 'Sales', schema: 'dbo', name: 'V' }
     expect(revealPaths(trigger)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'views' }, { type: 'object', object: view }, { type: 'folder', owner: view, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }])
@@ -1102,6 +1121,11 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary(undefined, status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped')
     expect(indexSummary(undefined, status({ definitions: false, indexed: 1 }))).toBe('Index: 40 objects (names only) in 1 database')
     expect(indexSummary(undefined, status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · server objects skipped')
+    // SQL Server Agent's objects, read in msdb, are their own gap: msdb itself was indexed, and a skipped msdb counts once.
+    expect(indexSummary(undefined, status({ skipped: [{ database: 'msdb', code: 'TIMEOUT', message: 'm', agent: true }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · SQL Server Agent objects skipped')
+    expect(indexSummary(undefined, status({ skipped: [{ database: 'msdb', code: 'NO_DB_ACCESS', message: 'm' }, { database: 'msdb', code: 'NO_DB_ACCESS', message: 'm', agent: true }] })))
+      .toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped · SQL Server Agent objects skipped')
+    expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: 'msdb', code: 'TOO_LARGE', message: 'm', agent: true }] }) })).toBe('SQL Server Agent objects skipped')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
     // Build index is offered for the servers with no index and none building.

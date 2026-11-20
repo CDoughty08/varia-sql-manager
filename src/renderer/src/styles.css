@@ -1208,7 +1208,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The active search match's row keeps its underline beside the bar. */
 .rg[data-gutter='diff'] .rg-rn.cur:is(.tone-added, .tone-changedNew) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
 .rg[data-gutter='diff'] .rg-rn.cur:is(.tone-removed, .tone-changedOld) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
-.rg-dm { flex: none; font-weight: 600; }
+.rg-dm { flex: none; font-weight: 600; margin-right: auto; }
+/* A comparison row's flag after its number: ≈ repeated key, ? possible match. */
+.rg-df { flex: none; min-width: 1ch; color: var(--varia-warningForeground); }
 .rg-rn.tone-added { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); }
 .rg-rn.tone-removed { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); }
 /* Highlighted rows (grid/highlights.ts): a translucent layer over each cell (below) and over the row's number. */

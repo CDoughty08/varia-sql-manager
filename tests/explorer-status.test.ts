@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ResultDescriptor } from '../src/shared/contracts'
 import { statusChipKinds } from '../src/shared/explorer/catalog'
-import { databaseChips, serverChips, statusChipDocs } from '../src/shared/explorer/status'
+import { agentChips, agentXpsSublabel, databaseChips, serverChips, statusChipDocs } from '../src/shared/explorer/status'
 import { liveProbes, liveSources } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -69,9 +69,21 @@ describe('Object Explorer status chips', () => {
     expect(many.title.split('\n')).toHaveLength(12)
     expect(many.title.endsWith('and 2 more')).toBe(true)
   })
+  it('turns SQL Server Agent\'s service state, Agent XPs and running jobs into the Agent node\'s chips and sublabel (AG-1)', () => {
+    // Running, or a state the login may not read, shows no state chip; Agent shows state only, with no Start or Stop.
+    expect(agentChips(undefined, undefined)).toEqual({ chips: [] })
+    expect(agentChips({ xps: 1, state: 4, startup: 2 }, 0)).toEqual({ chips: [] })
+    expect(agentChips({ xps: 1 }, undefined)).toEqual({ chips: [] })
+    expect(agentChips({ xps: 0, state: 1 }, undefined)).toEqual({ chips: [expect.objectContaining({ id: 'service', label: 'STOPPED', tone: 'warning', words: 'Stopped' })], sublabel: agentXpsSublabel })
+    expect(agentChips({ xps: 1, state: 2 }, undefined).chips.map(chip => chip.label)).toEqual(['STARTING'])
+    expect(agentChips({ xps: 1, state: 7 }, undefined).chips[0]).toMatchObject({ label: 'PAUSED', tone: 'warning' })
+    expect(agentChips({ xps: 1, state: 4 }, 2).chips).toEqual([expect.objectContaining({ id: 'jobs', tone: 'running', label: '2 jobs running', words: '2 jobs running' })])
+    expect(agentChips({ xps: 1, state: 4 }, 1).chips[0].label).toBe('1 job running')
+    expect(statusChipDocs.filter(doc => doc.kind === 'agent').map(doc => doc.chip)).toEqual(['STOPPED', 'STARTING', 'STOPPING', 'RESUMING', 'PAUSING', 'PAUSED', 'n jobs running'])
+  })
   it('declares its kinds and probes in the explorer catalogue, from the explorer live source, and documents every chip', () => {
-    expect(Object.keys(statusChipKinds)).toEqual(['server', 'database'])
-    expect([...statusChipKinds.database, ...statusChipKinds.server].sort()).toEqual([...liveSources.explorer.probes].sort())
+    expect(Object.keys(statusChipKinds)).toEqual(['server', 'database', 'agent'])
+    expect([...new Set([...statusChipKinds.database, ...statusChipKinds.server, ...statusChipKinds.agent])].sort()).toEqual([...liveSources.explorer.probes].sort())
     for (const probe of liveSources.explorer.probes) expect(liveProbes[probe as keyof typeof liveProbes].source).toBe('explorer')
     expect(statusChipDocs.filter(doc => doc.kind === 'database').map(doc => doc.chip)).toEqual(['RESTORING n %', 'RECOVERING n %', 'RECOVERY PENDING', 'SUSPECT', 'EMERGENCY', 'OFFLINE', 'COPYING', 'READ-ONLY / STANDBY', 'SINGLE USER / RESTRICTED USER'])
   })
@@ -182,6 +194,35 @@ describe('ExplorerStatusService', () => {
     connections.markLostBefore(2)
     expect(streamOf(first).cancelled).toBe(true)
     expect(status.getSnapshot().servers.size).toBe(0)
+  })
+
+  it('samples the Agent node\'s probe only behind the release gate, each probe once, and shows its chips and sublabel (AG-1)', async () => {
+    status.dispose()
+    status = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => callback(), agent: true })
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    expect(fake.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'explorer.agentService'])
+    open(fake)
+    const agentNode = { parent: 1, kind: 'agent', ref: { type: 'object', object: { kind: 'agent' } } } as never
+    fake.onEvent(tick([
+      { probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [0] },
+      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 3 }] }
+    ]), 10)
+    await settle()
+    const stopped = status.server(first)!
+    expect(stopped.agentService).toEqual({ xps: 0, state: 1, startup: 3 })
+    expect(rowStatus(stopped, agentNode)).toMatchObject({ words: 'Stopped, Agent XPs disabled', sublabel: 'Agent XPs disabled' })
+    expect(rowStatus(stopped, agentNode)?.chips.map(chip => chip.label)).toEqual(['STOPPED'])
+    // Running with jobs: the jobs chip; a state the login may not read (no serviceState) shows no state chip.
+    fake.onEvent(tick([
+      { probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [2] },
+      { probe: 'explorer.agentService', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }] }
+    ]), 10)
+    await settle()
+    const running = status.server(first)!
+    expect(running.agentService).toEqual({ xps: 1 })
+    expect(rowStatus(running, agentNode)).toMatchObject({ words: '2 jobs running' })
+    expect(rowStatus(running, agentNode)?.sublabel).toBeUndefined()
   })
 
   it('shows chips from the probes\' rows only while they sample, and online for databases the probe does not list', async () => {

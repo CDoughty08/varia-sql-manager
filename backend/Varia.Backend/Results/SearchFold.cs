@@ -26,7 +26,8 @@ internal sealed class SearchFold
         1051, 1052, 1053, 1055, 1058, 1060, 1061, 1062, 1063, 1066, 1068, 1087, 2052, 2070, 3082
     ];
 
-    // About 400 KB a fold, kept for the process: a search builds one for its column's culture and options, so a session holds
+    // About 400 KB a fold, kept for the process: a search, or packing a page with a column in the culture (its Find filter,
+    // PageFilter), builds one for the column's culture and options, so a session holds
     // a handful (at most 35 cultures times 16 option sets, about 220 MB, if every one were searched).
     private static readonly ConcurrentDictionary<(int Lcid, CompareOptions Options), Lazy<Task<SearchFold>>> folds = new();
 
@@ -38,6 +39,27 @@ internal sealed class SearchFold
     {
         if (Array.IndexOf(Verified, lcid) < 0) return null;
         var build = Lazy(lcid, options).Value;
+        return build.IsCompletedSuccessfully ? build.Result : null;
+    }
+
+    /// <summary>Sets a fold's build (the checks): null forgets it, as if never built, and a failed task stands for a build
+    /// that failed.</summary>
+    internal static void Seed(int lcid, CompareOptions options, Task<SearchFold>? build)
+    {
+        if (build is null) folds.TryRemove((lcid, options), out _);
+        else folds[(lcid, options)] = new Lazy<Task<SearchFold>>(() => build);
+    }
+
+    /// <summary>The fold for a culture and options, waiting for its build, or null for a culture that is not verified (a
+    /// page's Find filter, built off the search, on the packer's thread).</summary>
+    public static SearchFold? Awaited(int lcid, CompareOptions options)
+    {
+        if (Array.IndexOf(Verified, lcid) < 0) return null;
+        var build = Lazy(lcid, options).Value;
+        // A build that failed (out of memory) stays failed: no fold, as For answers, never an exception on the packer.
+        if (!build.IsCompleted)
+            try { build.Wait(); }
+            catch (AggregateException) { }
         return build.IsCompletedSuccessfully ? build.Result : null;
     }
 
