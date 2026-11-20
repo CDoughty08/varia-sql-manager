@@ -220,12 +220,12 @@ describe('BigQuery location switch (decision 18)', () => {
       confirmLocationSwitch: vi.fn<QueryService['confirmLocationSwitch']>(async () => true)
     }
     const files = { clearError: vi.fn(), reportError: vi.fn() }
-    const connection = { id: 'bq', server: 'demo', database: '', serverVersion: '', commandTimeout: 0, generation: 1, providerId: 'bigquery' }
+    const connection = { id: 'bq', server: 'demo', database: '', serverVersion: '', commandTimeout: 0, generation: 1, providerId: 'bigquery', options: { provider: 'bigquery', project: 'demo', authentication: 'applicationDefault' } as { provider: 'bigquery'; project: string; authentication: string; location?: string } }
     const locations: Record<string, string> = { sales_us: 'US', sales_eu: 'EU' }
     const targets = new TargetService(docs.documents, queries, { get: () => connection as never }, files, undefined, (_id, dataset) => locations[dataset])
     const tab = docs.documents.create('q.sql', 'SELECT 1', 'sales_us', 'bq')
     queries.confirmSessions.mockImplementation(async () => new Map([[tab.id, 'commit' as const]]))
-    return { ...docs, queries, files, targets, tab }
+    return { ...docs, queries, files, targets, tab, connection }
   }
   it('asks before a dataset in another location ends the session, then ends it as answered and shows its note', async () => {
     const f = bigQueryFixture('US')
@@ -262,6 +262,19 @@ describe('BigQuery location switch (decision 18)', () => {
     f.targets.changeDatabase(f.tab.id, 'sales_eu')
     await vi.waitFor(() => expect(f.files.reportError).toHaveBeenCalledWith('The transaction was not committed, and the query stays open.'))
     expect(f.documents.get(f.tab.id)?.database).toBe('sales_us')
+  })
+  it('asks nothing on a connection with a fixed location, whose sessions never move', () => {
+    const f = bigQueryFixture('US')
+    f.connection.options.location = 'US'
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    expect(f.documents.get(f.tab.id)?.database).toBe('sales_eu')
+    expect(f.queries.confirmLocationSwitch).not.toHaveBeenCalled()
+  })
+  it('asks again when the same dataset is chosen again, as the location-mismatch advice says', async () => {
+    const f = bigQueryFixture('US')
+    f.documents.update(f.tab.id, { database: 'sales_eu' })
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    await vi.waitFor(() => expect(f.queries.confirmLocationSwitch).toHaveBeenCalledExactlyOnceWith(f.tab.id, { dataset: 'sales_eu', from: 'US', to: 'EU' }))
   })
   it('says the dataset was not changed while another document task runs, rather than dropping the choice', async () => {
     const f = bigQueryFixture('US')

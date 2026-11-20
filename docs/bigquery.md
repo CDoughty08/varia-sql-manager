@@ -212,15 +212,15 @@ network failure, must reach DONE before the next one runs, and Messages says the
 refused, or whose request never left the machine, holds nothing; nor does one cut off in flight that jobs.get never finds.
 
 - **Location.** A session lives in one location. A tab's first job runs in its dataset's location when the connection's
-  location is Automatic (`datasets.get`, cached), else the connection's. Choosing a dataset in another location asks
-  "Switch this tab to EU?": Switch ends the session (asking first about a running query and an open transaction, as a
+  location is Automatic (`datasets.get`, cached), else the connection's, where every session then stays. On an Automatic
+  connection, choosing a dataset in another location (or the same one again) asks "Switch this tab to EU?": Switch ends the session (asking first about a running query and an open transaction, as a
   close does) and the next Execute starts one in the new location; Don't Switch keeps the dataset and session. A query
   sent with such a dataset anyway is refused with `LOCATION_MISMATCH`. Temp tables in a session are billed as storage
   until the session ends.
 - **Transactions.** The backend tracks the session's transaction from the statement types of its jobs, top-level and
   child: `BEGIN TRANSACTION` opens it, a successful `COMMIT` or `ROLLBACK` closes it, and a statement failing inside it
   makes it unknown (BigQuery names no reason, so message text is never read for this), as does a script whose children
-  could not all be listed. `query.session.state` answers from this, with no request to BigQuery: open is
+  could not all be listed or a finished job's statements could not all be read. `query.session.state` answers from this, with no request to BigQuery: open is
   `{ transactionCount: 1, checked: true }`, unknown or a stopped job not yet DONE is `checked: false`, and a running query
   answers `SESSION_BUSY`.
 - **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
@@ -238,10 +238,13 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
   Disconnect; past that it is left to expire.
 - **Notes.** A close answers a note when something needs saying: `commitNotApplied`, `committedBeforeCancel` (a stopped
   script had already committed), `outcomeUnknown`, `abortFailed` (the session could not be ended, so its transaction stays
-  open until it expires and its temp tables are billed meanwhile) or `sessionExpired`. It shows in the tab's Messages
+  open until it expires and its temp tables are billed meanwhile; it outranks, and states, the note it would have carried)
+  or `sessionExpired`. A note whose tab stays open, because it was edited during the close or a later tab stopped a quit,
+  still shows in its Messages. It shows in the tab's Messages
   when the tab stays, else as a notification; quit stops for `outcomeUnknown`, `committedBeforeCancel` and
   `abortFailed` so they are read, and quitting again proceeds.
-- **Expiry.** BigQuery ends a session after 24 hours idle or 7 days. A query refused for an expired session runs once more
+- **Expiry.** BigQuery ends a session after 24 hours idle or 7 days. A refusal counts as expiry only when its message names
+  the session or opens with one, never an error about a column or table called session. A query refused for an expired session runs once more
   in a new one (the refused job ran nothing), and Messages says its temp tables, variables and any open transaction are
   gone. Closing an expired session succeeds at once, with `sessionExpired` when a transaction was tracked; a commit
   answers `SESSION_LOST`, saying nothing was committed.

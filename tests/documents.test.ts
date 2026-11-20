@@ -411,6 +411,18 @@ describe('query documents', () => {
     expect(documents.getSnapshot().busy).toBe(false)
     expect(model(tab.id).disposed).toBe(false)
   })
+  it('shows the close note in the query that stays when it changed while its session ended', async () => {
+    const { documents, api, model } = documentFixture()
+    const note = vi.fn(), tab = documents.create('query.sql', 'SELECT 1', 'sales')
+    documents.sessionHooks = { message: vi.fn(), bigQuery: () => true, note }
+    const pending = deferred<Awaited<ReturnType<typeof api.closeQuerySession>>>()
+    api.closeQuerySession.mockReturnValueOnce(pending.promise)
+    const closing = documents.runTask(() => documents.close(tab.id, 'commit'))
+    model(tab.id).edit('SELECT 2')
+    pending.resolve({ ok: true, value: { closed: true, note: { code: 'commitNotApplied', message: 'No transaction is active.' } } })
+    await expect(closing).rejects.toThrow('query changed while closing')
+    expect(note).toHaveBeenCalledExactlyOnceWith(tab.id, { code: 'commitNotApplied', message: 'No transaction is active.' })
+  })
   it('executes any nonempty selection with its source line and otherwise uses the whole model', () => {
     const { documents } = documentFixture()
     documents.create('query.sql', '-- heading\nSELECT 1;\nSELECT 2;', 'master')

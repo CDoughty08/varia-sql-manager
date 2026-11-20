@@ -238,12 +238,12 @@ internal sealed partial class BigQueryService
 
     /// <summary>Whether a failure says the session is gone (expired after 24 hours idle or 7 days, or ended). BigQuery names
     /// no reason for it, so its message is read here and only here.</summary>
-    internal static bool SessionGone(Exception error)
+    internal static bool SessionGone(Exception error, string? sessionId)
     {
         for (var current = error; current is not null; current = current.InnerException)
         {
-            if (current is BigQueryJobException job) return BigQueryErrors.IsSessionGone(job.Result.Message);
-            if (current is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500) return BigQueryErrors.IsSessionGone(api.Error?.Message ?? api.Message);
+            if (current is BigQueryJobException job) return BigQueryErrors.IsSessionGone(job.Result.Message, sessionId);
+            if (current is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500) return BigQueryErrors.IsSessionGone(api.Error?.Message ?? api.Message, sessionId);
         }
         return false;
     }
@@ -315,7 +315,7 @@ internal sealed partial class BigQueryService
             if (BigQueryJobException.Of(done) is { } failed) throw failed;
             return (true, false, null);
         }
-        catch (Exception error) when (SessionGone(error)) { return (true, true, null); }
+        catch (Exception error) when (SessionGone(error, sessionId)) { return (true, true, null); }
         catch (Exception error) when (!token.IsCancellationRequested)
         {
             var mapped = error is BigQueryJobException failed ? BigQueryErrors.Job(failed.Result, failed.Errors, project, null) : BigQueryErrors.Map(error, project) as RequestException;
@@ -458,8 +458,7 @@ internal sealed partial class BigQueryService
                 {
                     // A refused commit on an unchecked session ends it, still holding the queue; an end that fails answers
                     // abortFailed, carrying BigQuery's commit message.
-                    var ended = await EndAsync(session, fall.Note, token);
-                    return ended.Note?.Code == "abortFailed" ? new SessionCloseResult(true, Note("abortFailed", fall.Note.Message)) : ended;
+                    return await EndAsync(session, fall.Note, token);
                 }
             }
             return await EndAsync(session, note, token);
@@ -481,10 +480,19 @@ internal sealed partial class BigQueryService
         if (session.Id is not { } id) return new SessionCloseResult(true, note);
         var tracked = session.Transaction != BigQueryTransaction.None;
         var (ended, expired, error) = await AbortAsync(session.Connection, id, session.Location, token);
-        if (!ended) return new SessionCloseResult(true, note?.Code == "outcomeUnknown" ? note : Note("abortFailed", error, note?.JobId));
+        // A failed end outranks the note it carried, whose fact leads its message, since the session then stays open.
+        if (!ended) return new SessionCloseResult(true, Note("abortFailed", note is null ? error : Prior(note) + " " + error, note?.JobId));
         if (expired && tracked && note is null) return new SessionCloseResult(true, Note("sessionExpired"));
         return new SessionCloseResult(true, note);
     }
+
+    static string Prior(SessionCloseNote note) => note.Code switch
+    {
+        "commitNotApplied" => "The transaction was not committed: " + note.Message,
+        "committedBeforeCancel" => "The stopped job committed a transaction before it stopped.",
+        "outcomeUnknown" => "Varia could not learn whether the stopped job committed.",
+        _ => ""
+    };
 
     /// <summary>
     /// COMMIT TRANSACTION in the session (docs/bigquery.md, Sessions). Answers null when the commit succeeded and the
@@ -571,7 +579,7 @@ internal sealed partial class BigQueryService
     /// applied (abortFailed with BigQuery's message when that end fails too).</summary>
     Exception Refused(BigQueryTabSession session, Exception error, bool retryable, bool abortOnRefusedCommit, string project)
     {
-        if (SessionGone(error))
+        if (SessionGone(error, session.Id))
         {
             Forget(session);
             return new RequestException("SESSION_LOST", ExpiredCommit);

@@ -29,8 +29,16 @@ internal static partial class BigQueryErrors
     [GeneratedRegex(@"\bsession\b[^\n]{0,200}?\b(?:expired|has expired|not found|was not found|terminated|is not active|no longer (?:exists|active|valid)|does not exist|was aborted|has ended)", RegexOptions.IgnoreCase)]
     private static partial Regex SessionGoneText();
 
-    /// <summary>Whether BigQuery's message says a session is gone (docs/bigquery.md, Sessions).</summary>
-    public static bool IsSessionGone(string? message) => message is { Length: > 0 and <= 16384 } && SessionGoneText().IsMatch(message);
+    // The message is about a session itself: it opens with one, not with a name, table or field that happens to be called session.
+    [GeneratedRegex(@"^\s*(?:Not found:\s*)?(?:The\s+|BigQuery\s+)?session\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SessionSubject();
+
+    /// <summary>Whether BigQuery's message says a session is gone (docs/bigquery.md, Sessions): the message names the session
+    /// (<paramref name="sessionId"/>) or opens with one, so an analysis error about a column or table named session never
+    /// counts.</summary>
+    public static bool IsSessionGone(string? message, string? sessionId = null) =>
+        message is { Length: > 0 and <= 16384 } && SessionGoneText().IsMatch(message)
+            && (sessionId is { Length: >= 8 } && message.Contains(sessionId, StringComparison.Ordinal) || SessionSubject().IsMatch(message));
 
     public static string Sanitize(string? text) => EntraFailures.Sanitize(GoogleToken().Replace(text ?? "", "<token>"));
 

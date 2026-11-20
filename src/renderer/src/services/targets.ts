@@ -80,8 +80,11 @@ export class TargetService {
    *  query's session ends the session (decision 18): `switchLocation` asks first, and Don't Switch keeps the dataset. */
   changeDatabase(tabId: string, database: string): void {
     const document = this.documents.get(tabId), connectionId = document?.connectionId
-    const from = this.queries.sessionLocation?.(tabId), to = connectionId ? this.datasetLocation?.(connectionId, database) : undefined
-    if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase() || document.database === database) { this.update(tabId, { database }); return }
+    // A connection with a fixed location runs every session there (TabLocationAsync), so only Automatic ones switch.
+    const options = connectionId ? this.connections.get(connectionId)?.options : undefined, fixed = options?.provider === 'bigquery' && !!options.location
+    const from = this.queries.sessionLocation?.(tabId), to = connectionId && !fixed ? this.datasetLocation?.(connectionId, database) : undefined
+    // Choosing the same dataset again still switches, as LOCATION_MISMATCH's advice says.
+    if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
     // The switch is a document task, so it cannot start beside another one; say so rather than drop the choice.
     if (this.documents.getSnapshot().busy) { this.files.reportError(`The dataset was not changed: wait for the current task to finish, then choose ${database} again.`); return }
     void this.switchLocation(tabId, connectionId, database, from, to)

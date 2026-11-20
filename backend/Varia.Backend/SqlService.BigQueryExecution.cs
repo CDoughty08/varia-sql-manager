@@ -118,6 +118,8 @@ internal sealed partial class SqlService
         // The job ran in a session (it carried the id, or created the session), so its statements count for the transaction.
         var sessionJob = false;
         var startState = BigQueryTransaction.None;
+        // The finished job's statements were applied to the session's transaction.
+        var tracked = false;
         BigQueryJobSummary? summary = null;
         // A script's children read so far (DONE, in statement order), how many succeeded, and the rows their DML changed.
         var readChildren = new HashSet<string>(StringComparer.Ordinal);
@@ -192,9 +194,9 @@ internal sealed partial class SqlService
             {
                 // The session's last job (stopped, or cut off by the network) must reach DONE first; Stop cancels it.
                 messages.Add("Waiting for BigQuery job " + JobName(project, tail.Location, tail.JobId) + " to finish: this tab's BigQuery session runs one job at a time.");
+                // Every Stop asks again: an earlier jobs.cancel may have failed, or gone out before BigQuery created the job.
                 using var stopTail = token.Register(() =>
                 {
-                    if (tail.Cancelled) return;
                     tail.Cancelled = true;
                     bigQuery.CancelJob(connection, project, tail.JobId, tail.Location);
                 });
@@ -229,7 +231,7 @@ internal sealed partial class SqlService
                 try
                 {
                     var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
-                    if (sessionJob && BigQueryJobException.Of(inserted) is { } gone && BigQueryService.SessionGone(gone)) throw gone;
+                    if (sessionJob && BigQueryJobException.Of(inserted) is { } gone && BigQueryService.SessionGone(gone, session.Id)) throw gone;
                     created = true;
                     location = KnownLocation(inserted.JobReference?.Location) ?? location;
                     BigQueryService.CaptureSession(session, inserted, location);
@@ -241,7 +243,7 @@ internal sealed partial class SqlService
                 }
                 // The session expired (24 hours idle or 7 days): the refused job ran nothing, so the query runs once more in a
                 // new session, and Messages says what was lost.
-                catch (Exception error) when (attempt == 1 && sessionJob && !created && BigQueryService.SessionGone(error) && !token.IsCancellationRequested)
+                catch (Exception error) when (attempt == 1 && sessionJob && !created && BigQueryService.SessionGone(error, session.Id) && !token.IsCancellationRequested)
                 {
                     session.Id = null;
                     session.Location = null;
@@ -298,6 +300,7 @@ internal sealed partial class SqlService
                         session.Transaction = children.Aggregate(startState, (state, child) => BigQueryService.Apply(state, child.StatementType, child.Error is not null || !child.Done));
                     else session.Transaction = BigQueryTransaction.Unknown;
                 }
+                tracked = true;
                 events.Job(JobEvent(project, jobId, location, "done", startState));
                 if (jobFailed is not null)
                 {
@@ -364,6 +367,9 @@ internal sealed partial class SqlService
                 session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested, created);
             else if (sessionJob && created && !complete && error is BigQueryJobException)
                 session.Transaction = BigQueryService.Apply(startState, null, failed: true);
+            // The job finished, but a Stop or a failed read came before its statements were applied: what it left is unknown.
+            else if (sessionJob && complete && !tracked)
+                session.Transaction = BigQueryTransaction.Unknown;
             // Whatever a cancelled call threw, the run was stopped.
             if (token.IsCancellationRequested)
             {
@@ -453,7 +459,7 @@ internal sealed partial class SqlService
         {
             if (datasetLocation is not null && !string.Equals(datasetLocation, sessionLocation, StringComparison.OrdinalIgnoreCase))
                 throw new RequestException("LOCATION_MISMATCH", "Dataset " + dataset + " is in location " + datasetLocation + ", but this tab's BigQuery session is in " + sessionLocation
-                    + ". Choose the dataset again in the tab's Dataset box to switch the tab to " + datasetLocation + ", which ends its session.");
+                    + ". Choose the dataset again with Query › Change Database… to switch the tab to " + datasetLocation + ", which ends its session.");
             return sessionLocation;
         }
         return datasetLocation ?? connection.Location;

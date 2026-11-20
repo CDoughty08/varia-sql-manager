@@ -585,7 +585,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** What ending a BigQuery session needs from the rest of the workbench: a Messages line for a query that stays, and
    *  whether a query is on BigQuery. Set once the workbench is built. */
-  sessionHooks?: { readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean }
+  sessionHooks?: { readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void }
   // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
   /** Resolves to the BigQuery close's note, for the caller to show once the query has closed. */
   async close(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
@@ -596,7 +596,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     // Only a query has a session to end.
     const note = isQueryDocument(this.get(id)) ? await this.endSession(id, transaction, options) : undefined
     if (this.disposed || this.entries.get(id) !== entry) return note
-    if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    if (version !== entry.model.getVersionId()) {
+      // The session has ended all the same, so what became of it shows in the query that stays.
+      if (note) this.sessionHooks?.note?.(id, note)
+      throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    }
     this.closeText(id, entry)
     return note
   }

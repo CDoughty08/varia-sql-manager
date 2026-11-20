@@ -531,6 +531,17 @@ describe('file commands', () => {
     await files.closeWindow(async () => {})
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
+  it('still shows a quit note it collected when a later query refuses its close', async () => {
+    const { documents, queries, api, files } = fixture()
+    const [first] = documents.getSnapshot().documents, second = documents.create('second.sql', '', 'master')
+    queries.confirmSessions.mockImplementation(async () => new Map([[first.id, 'commit'], [second.id, 'commit']]))
+    api.closeQuerySession.mockResolvedValueOnce({ ok: true, value: { closed: true, note: { code: 'outcomeUnknown', jobId: 'job_7' } } })
+      .mockResolvedValueOnce({ ok: false, error: 'The transaction was not committed, and the query stays open.', code: 'SQL_ERROR' })
+    await files.closeWindow(async () => {})
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(files.getSnapshot().error).toContain('The transaction was not committed')
+    expect(queries.sessionNote).toHaveBeenCalledExactlyOnceWith(first.id, { code: 'outcomeUnknown', jobId: 'job_7' })
+  })
   it('quits past a note that needs no reading, and shows a close note once the query has closed', async () => {
     const { documents, queries, api, files } = fixture()
     const [first] = documents.getSnapshot().documents

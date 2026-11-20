@@ -372,6 +372,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
   documents.sessionHooks = {
     message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
+    note: (id, note) => { queries.sessionNote(id, note) },
     bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
   }
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)

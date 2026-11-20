@@ -372,11 +372,17 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       // A BigQuery commit refused at quit keeps the window (abortOnRefusedCommit false), since a closing app could show no
       // note; a commit or session end whose note matters stops the quit so it can be read, and quitting again proceeds.
       const stopping: [string, SessionCloseNote][] = []
-      for (const [id, transaction] of plan) {
-        if (!this.documents.get(id)) continue
-        const note = await this.documents.endSession(id, transaction, { abortOnRefusedCommit: false })
-        if (note && quitStoppingNotes.has(note.code)) stopping.push([id, note])
-        else if (note) this.queries.sessionNote?.(id, note)
+      try {
+        for (const [id, transaction] of plan) {
+          if (!this.documents.get(id)) continue
+          const note = await this.documents.endSession(id, transaction, { abortOnRefusedCommit: false })
+          if (note && quitStoppingNotes.has(note.code)) stopping.push([id, note])
+          else if (note) this.queries.sessionNote?.(id, note)
+        }
+      } catch (error) {
+        // A later query's failure stops the quit too; the notes already collected still show.
+        for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
+        throw error
       }
       if (this.disposed) return
       if (stopping.length) {

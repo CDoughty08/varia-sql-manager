@@ -57,6 +57,8 @@ internal static class BigQuerySessionChecks
         public readonly Dictionary<string, (string Statement, JsonNode? Error)[]> Scripts = new(StringComparer.Ordinal);
         public readonly Dictionary<string, JsonNode> Failures = new(StringComparer.Ordinal);
         public readonly HashSet<string> Expired = new(StringComparer.Ordinal);
+        /// <summary>Queries whose failure jobs.insert already answers (DONE with the error), as BigQuery does for most analysis errors.</summary>
+        public readonly HashSet<string> FailAtInsert = new(StringComparer.Ordinal);
         /// <summary>The next user queries stay RUNNING until released (Stop, JOB_RUNNING).</summary>
         public bool HoldQueries;
         public bool KeepRunningAfterCancel;
@@ -133,6 +135,7 @@ internal static class BigQuerySessionChecks
             {
                 job.Statement = Statements.GetValueOrDefault(job.Sql, "SELECT");
                 job.Error = Failures.GetValueOrDefault(job.Sql)?.DeepClone();
+                if (job.Error is not null && FailAtInsert.Contains(job.Sql)) job.State = "DONE";
                 job.Polls = PollsBeforeDone;
                 job.Hold = HoldQueries;
                 job.KeepRunning = KeepRunningAfterCancel;
@@ -371,6 +374,10 @@ internal static class BigQuerySessionChecks
             && !BigQueryErrors.IsSessionGone("Not found: Table varia-alpha:sales.sessions was not found in location US") && !BigQueryErrors.IsSessionGone("Transaction is aborted due to concurrent update")
             && !BigQueryErrors.IsSessionGone(null),
             "only a message saying the session is gone counts as an expired session");
+        check(!BigQueryErrors.IsSessionGone("Name session not found inside e at [1:10]") && !BigQueryErrors.IsSessionGone("Not found: Table varia-alpha:sales.session was not found in location US")
+            && !BigQueryErrors.IsSessionGone("Field name session does not exist in STRUCT<a INT64> at [1:8]")
+            && BigQueryErrors.IsSessionGone("Cannot run the query: session CgwKCnZhcmlh has expired.", "CgwKCnZhcmlh") && !BigQueryErrors.IsSessionGone("Cannot run the query: session CgwKCnZhcmlh has expired."),
+            "an analysis error about a name, table or field called session is not an expired session; a message naming the session's id is");
     }
 
     /// <summary>BigQuery's [line:column] positions are the submitted text's; Varia adds the selection's first line and, on
@@ -576,6 +583,32 @@ internal static class BigQuerySessionChecks
         check(looked is { Code: "ok", Result.Note: null } && bq.Commits.Count(body => SessionOf(body) is not null) >= 1,
             $"a commit answered with a 5xx is looked up by its id and counts once it is DONE: {looked.Code} {looked.Message}");
 
+        // A column called session that does not exist is an ordinary error: the session and its transaction stay.
+        bq.Failures["SELECT e.session FROM events e"] = Failure("invalidQuery", "Name session not found inside e at [1:10]");
+        bq.FailAtInsert.Add("SELECT e.session FROM events e");
+        var namedTab = await Open(false);
+        var creates = bq.UserInserts.Count(body => body["configuration"]!["query"]!["createSession"]?.GetValue<bool>() == true);
+        var named = await harness.Execute(namedTab, "SELECT e.session FROM events e");
+        var namedState = await harness.State(namedTab);
+        check(named.Result is { Status: "failed" } && !Says(named.Result, "started a new BigQuery session") && namedState.State is { Checked: false }
+            && bq.UserInserts.Count(body => body["configuration"]!["query"]!["createSession"]?.GetValue<bool>() == true) == creates,
+            $"an error about a column named session keeps the session and leaves its transaction unknown: {Texts(named.Result?.Messages ?? [])} {namedState.State}");
+        await harness.Close(namedTab, "rollback");
+
+        // A BEGIN whose job reached DONE but whose final read failed: it may have opened the transaction, so it is unknown.
+        var readTab = Tab();
+        await harness.Execute(readTab, "SELECT 1");
+        var readSession = bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()].Session;
+        harness.Fake.Fault = request => request.Method == "GET" && !request.Url.Contains("/queries/", StringComparison.Ordinal)
+            && bq.Jobs.Values.Any(job => job.Session == readSession && job.Sql == "BEGIN TRANSACTION" && request.Url.Contains("/jobs/" + job.Id, StringComparison.Ordinal))
+            ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var unread = await harness.Execute(readTab, "BEGIN TRANSACTION");
+        harness.Fake.Fault = null;
+        var unreadState = await harness.State(readTab);
+        check(unread.Result is { Status: "failed" } && unreadState.State is { Checked: false },
+            $"a job that finished but whose final read failed leaves the transaction unknown, not untouched: {unread.Result?.Status} {unreadState.State}");
+        await harness.Close(readTab, "rollback");
+
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");
         var failTab = await Open(false);
@@ -719,6 +752,25 @@ internal static class BigQuerySessionChecks
         check(committed is { Code: "ok", Result: { Closed: true, Note: { Code: "committedBeforeCancel" } } } && committed.Result.Note.JobId == scriptJob.Id,
             $"closing after a stopped script committed says so: {committed.Code} {committed.Result}");
 
+        // The same, but the session's end fails: abortFailed, still saying the stopped job committed.
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failTab = Tab();
+        bq.HoldQueries = false;
+        await harness.Execute(failTab, "SELECT 1");
+        bq.HoldQueries = true;
+        var failArgs = harness.Query(failTab, "SCRIPT commits");
+        var failing = harness.Call("query.execute", failArgs);
+        await Task.WhenAny(bq.Polling.Task, failing).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = failArgs["queryId"]!.GetValue<string>() });
+        await failing.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()]);
+        bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha.");
+        var both = await harness.Close(failTab, "rollback");
+        bq.AbortError = null;
+        check(both is { Code: "ok", Result.Note: { Code: "abortFailed" } bothNote } && bothNote.Message!.StartsWith("The stopped job committed a transaction before it stopped.", StringComparison.Ordinal)
+            && bothNote.Message.Contains("Access Denied", StringComparison.Ordinal),
+            $"a failed end after a stopped script committed answers abortFailed and still says the job committed: {both.Code} {both.Result}");
+
         // The next execution waits for the stopped job's DONE.
         bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var waitTab = Tab();
@@ -731,7 +783,17 @@ internal static class BigQuerySessionChecks
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = slowArgs["queryId"]!.GetValue<string>() });
         await slow.WaitAsync(TimeSpan.FromSeconds(30));
         bq.HoldQueries = false;
-        bq.Release(bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()]);
+        var stoppedId = bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
+        await Poll(() => bq.Cancels.Contains(stoppedId));
+        // Stopping the run that waits for it asks BigQuery to cancel the stopped job again.
+        var gets = harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal));
+        var waitingArgs = harness.Query(waitTab, "SELECT 1");
+        var waiting = harness.Call("query.execute", waitingArgs);
+        await Poll(() => harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal)) > gets);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = waitingArgs["queryId"]!.GetValue<string>() });
+        await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+        check(await Poll(() => bq.Cancels.Count(id => id == stoppedId) >= 2), $"a second Stop sends jobs.cancel again for the job the tab waits for: {bq.Cancels.Count(id => id == stoppedId)}");
+        bq.Release(bq.Jobs[stoppedId]);
         var next = await harness.Execute(waitTab, "SELECT 1");
         check(next is { Code: "ok", Result.Status: "completed" } && Says(next.Result, "Waiting for BigQuery job") && Says(next.Result, "runs one job at a time"),
             $"the next execution in a tab waits for its stopped job to finish: {next.Code} {Texts(next.Result?.Messages ?? [])}");
