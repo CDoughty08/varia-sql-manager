@@ -712,6 +712,48 @@ internal static class BigQuerySessionChecks
         if (ambiguousJob is not null) bq.Release(ambiguousJob);
         await harness.Close(deniedTab);
 
+        // A retry refused outright after an attempt that may have created the job, and a 409 whose lookup is refused: both hold.
+        var retryDeniedTab = Tab();
+        await harness.Execute(retryDeniedTab, "SELECT 1");
+        ambiguousJob = null;
+        var posts = 0;
+        harness.Fake.On("POST", Base + "/jobs", request =>
+        {
+            var body = JsonNode.Parse(request.Body)!;
+            var sql = body["configuration"]!["query"]!["query"]!.GetValue<string>();
+            if (sql == "SELECT retry denied")
+            {
+                if (Interlocked.Increment(ref posts) == 1) { ambiguousJob = bq.Create(body); ambiguousJob.Hold = true; return new(500, Bq.Error(500, "Backend error.", "backendError")); }
+                return new(403, Bq.Error(403, "Exceeded rate limits: too many api requests.", "rateLimitExceeded"));
+            }
+            if (sql == "SELECT conflict")
+            {
+                ambiguousJob = bq.Create(body);
+                ambiguousJob.Hold = true;
+                return new(409, Bq.Error(409, "Already Exists: Job varia-alpha:US." + ambiguousJob.Id, "duplicate"));
+            }
+            return bq.InsertReply(request);
+        });
+        harness.Fake.On("GET", Base + "/jobs/[^/]+", request => ambiguousJob is { } held && request.Url.Contains("/jobs/" + held.Id, StringComparison.Ordinal) && held.Hold && held.Sql == "SELECT retry denied"
+            ? new(500, Bq.Error(500, "Backend error.", "backendError"))
+            : ambiguousJob is { } conflicted && request.Url.Contains("/jobs/" + conflicted.Id, StringComparison.Ordinal) && conflicted.Hold
+                ? new(403, Bq.Error(403, "Exceeded rate limits: too many api requests.", "rateLimitExceeded")) : bq.GetReply(request));
+        var retryDenied = await harness.Execute(retryDeniedTab, "SELECT retry denied");
+        var retryDeniedState = await harness.State(retryDeniedTab);
+        check(retryDenied.Result is { Status: "failed" } && posts >= 2 && retryDeniedState.State is { Checked: false },
+            $"a retry refused outright after an attempt that may have created the job still holds the session: {retryDenied.Result?.Status} {posts} {retryDeniedState.State}");
+        if (ambiguousJob is not null) bq.Release(ambiguousJob);
+        await harness.Close(retryDeniedTab);
+        var conflictTab = Tab();
+        await harness.Execute(conflictTab, "SELECT 1");
+        ambiguousJob = null;
+        var conflict = await harness.Execute(conflictTab, "SELECT conflict");
+        var conflictState = await harness.State(conflictTab);
+        check(conflict.Result is { Status: "failed" } && conflictState.State is { Checked: false },
+            $"a 409 whose lookup is refused still holds the session for the job that exists: {conflict.Result?.Status} {conflictState.State}");
+        if (ambiguousJob is not null) bq.Release(ambiguousJob);
+        await harness.Close(conflictTab);
+
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");
         var failTab = await Open(false);

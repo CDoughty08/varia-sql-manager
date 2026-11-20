@@ -122,8 +122,14 @@ internal sealed partial class BigQueryService
             // The id is this request's own, so the job is the one an earlier attempt (or the library's own retry of it) created.
             catch (GoogleApiException error) when (error.HttpStatusCode == HttpStatusCode.Conflict)
             {
-                await LocateAsync(connection, reference, dataset, token);
-                return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
+                // The job exists: a lookup that fails says nothing against that, so the caller hears the 409 (or the earlier
+                // failure), which no caller reads as a job never created.
+                try
+                {
+                    await LocateAsync(connection, reference, dataset, token);
+                    return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
+                }
+                catch (Exception) when (!token.IsCancellationRequested) { throw ambiguous ?? error; }
             }
             catch (Exception error) when (Transient(error, token))
             {
@@ -140,6 +146,8 @@ internal sealed partial class BigQueryService
                 catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous ?? error; }
                 await Task.Delay(Backoff(attempt), token);
             }
+            // A later attempt refused outright (a 403, a 400) says nothing about an earlier one that may have created the job.
+            catch (Exception) when (ambiguous is not null && !token.IsCancellationRequested) { throw ambiguous; }
         }
     }
 
