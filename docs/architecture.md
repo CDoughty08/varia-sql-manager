@@ -485,6 +485,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 
 Every path: constant text, values as parameters, names only through server-side `QUOTENAME`, checked by its offline
 lint, on its own pool or connection with a fixed prologue (the actual-plan collector has none, below). Never log names, SQL, values or messages.
+Metadata built-ins stay out of every read: they ignore READ UNCOMMITTED, so behind another session's uncommitted DDL they
+wait out LOCK_TIMEOUT and fail with 1222, and `HAS_PERMS_BY_NAME` waits and then answers 0 without an error. The lints
+check names as SQL Server resolves them (`CatalogSql.Uses` and `SecretUses`: bracketed or quoted names unwrapped, comments
+and spaces before a parenthesis ignored, nothing outside printable ASCII), and a lint with a word list of writes also
+refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELETE` as `1` and `DELETE`).
 
 - **Object Explorer.** Structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters,
   version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and

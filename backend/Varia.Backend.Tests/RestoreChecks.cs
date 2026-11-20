@@ -60,7 +60,9 @@ internal static class RestoreChecks
             "SELECT TOP (@take) bs.name FROM msdb.dbo.backupset AS bs WHERE bs.database_name = N'x' ORDER BY bs.name;", "SELECT bs.name FROM msdb.dbo.backupset AS bs;",
             "SELECT TOP (@take) DB_NAME(bs.database_id) FROM sys.databases AS bs ORDER BY 1;", "EXEC msdb.dbo.sp_delete_database_backuphistory @db;", "SELECT TOP (@take) b.x FROM #b AS b ORDER BY b.x;",
             "SELECT TOP (10) bs.name FROM msdb.dbo.backupset AS bs ORDER BY bs.name;", "SELECT TOP (@take) bs.name FROM msdb.dbo.backupset AS bs WHERE bs.name = @other ORDER BY bs.name;",
-            "SELECT TOP (@take) LOGINPROPERTY(name, 'x') FROM sys.sql_logins ORDER BY 1;"
+            "SELECT TOP (@take) LOGINPROPERTY(name, 'x') FROM sys.sql_logins ORDER BY 1;",
+            "SELECT TOP (@take) bs.name FROM msdb.dbo.backupset AS bs ORDER BY bs.name; SELECT 1DELETE FROM msdb.dbo.backupset;",
+            "SELECT TOP (@take) bs.name FROM msdb.dbo.backupset AS bs WHERE bs.database_name = DB_NAME () ORDER BY bs.name;"
         }.Where(text => RestoreSql.LintCatalog(text).Count == 0).ToList();
         check(catalogRefused.Count == 0, "the restore catalog lint refuses literals, listings without TOP (@take) and ORDER BY, metadata functions, procedures, temporary tables, unknown parameters and secrets: " + string.Join(" | ", catalogRefused));
 

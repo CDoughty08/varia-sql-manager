@@ -446,7 +446,8 @@ internal static partial class ActivitySql
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
-    /// <summary>Metadata built-ins ignore the isolation level and LOCK_TIMEOUT; the others read or change state no sample may.</summary>
+    /// <summary>Metadata built-ins ignore the isolation level (behind uncommitted DDL they wait out LOCK_TIMEOUT and fail with 1222;
+    /// <see cref="CatalogSql.Builtins"/>); the others read or change state no sample may.</summary>
     internal static IReadOnlyList<string> ForbiddenTokens => Forbidden;
     private static readonly string[] Forbidden =
     [
@@ -496,10 +497,11 @@ internal static partial class ActivitySql
         var code = Regex.Replace(LiteralPattern().Replace(text, "''"), @"--[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline);
         var capabilities = statement == Capabilities;
         // Only the capability probe asks what the login may do, and only Details' on-demand locks statement reads sys.dm_tran_locks.
-        foreach (var token in Forbidden)
-            if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(capabilities && CapabilityTokens.Contains(token)) && !(token == "dm_tran_locks" && IsLocks(statement)))
+        foreach (var token in CatalogSql.Uses(code, Forbidden))
+            if (!(capabilities && CapabilityTokens.Contains(token)) && !(token == "dm_tran_locks" && IsLocks(statement)))
                 problems.Add("uses " + token);
         problems.AddRange(CatalogSql.SecretUses(code));
+        problems.AddRange(CatalogSql.GluedNumbers(code));
         if (code.Contains('#')) problems.Add("names a temporary object");
         // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it. @kill_text appears only
         // where it is declared and run, so no assignment (SELECT @kill_text = ...) can feed EXEC other text.
