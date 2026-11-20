@@ -349,6 +349,20 @@ internal static partial class BigQueryExecutionChecks
         var columns = restSet is null || arrowSet is null ? "" : string.Join(",", restSet.Columns.Zip(arrowSet.Columns, (a, b) => a == b ? "" : a.Name).Where(name => name.Length > 0));
         check(restRows.Count == 600 && arrowRows.Count == 600 && differences.Count == 0 && columns == "" && restSet?.RowsRead == arrowSet?.RowsRead,
             $"REST and Arrow reads of the same rows give byte-identical cells for every type: {restRows.Count} {arrowRows.Count} {string.Join("; ", differences)} {columns}");
+        check(storage.Asked == Apache.Arrow.Ipc.CompressionCodecType.Zstd && storage.Sessions.Single().ReadSession.ReadOptions.ArrowSerializationOptions.BufferCompression
+            == Google.Cloud.BigQuery.Storage.V1.ArrowSerializationOptions.Types.CompressionCodec.Zstd, "the read session asks for Zstandard buffer compression");
+        // Batches sent uncompressed (an endpoint that ignores the option) or with LZ4 read the same as the Zstandard ones.
+        foreach (var (name, ignore, codec) in new[] { ("uncompressed", true, (Apache.Arrow.Ipc.CompressionCodecType?)null), ("LZ4", false, Apache.Arrow.Ipc.CompressionCodecType.Lz4Frame) })
+        {
+            var other = new BigQueryStorageFake(GoldenArrowSchema(), batches) { IgnoreCompression = ignore, Compression = codec };
+            using var harness = StorageHarness(new Jobs { Schema = GoldenSchema(), Rows = rest, Destination = Destination }, other);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT * FROM t ORDER BY i");
+            var rows = result?.ResultSets.SingleOrDefault() is { } set ? harness.Rows(set) : [];
+            var same = code == "ok" && other.Sessions.Count == 1 && rows.Count == arrowRows.Count
+                && rows.Zip(arrowRows).All(pair => pair.First.Zip(pair.Second).All(cell => cell.First.Text == cell.Second.Text && cell.First.Flags == cell.Second.Flags));
+            check(same, $"{name} batches read the same cells as Zstandard ones: {code} {rows.Count}");
+        }
         string?[] expected = ["-9223372036854775808", "1.5E+20", "12345678.9", "-12345678901234567890.12345678901234567890123456789012345678", "true", "héllo \"q\"\n", "0xDEADBEEF",
             "2026-11-15", "09:30:00.123456", "2026-11-15T09:30:00.5", "2026-11-15 09:30:00.123456 UTC", "1-2 3 4:5:6.789", "[2026-01-01, 2026-12-31)",
             "[2026-11-15 09:30:00.000000 UTC, UNBOUNDED)", "POINT(1 2)", "{\"k\":[1,2]}", "{\"a\":\"7\",\"b\":[\"a\\\"b\",\"c\"]}", "[\"1\",\"2\"]", "[{\"x\":\"NaN\",\"t\":\"1970-01-01 00:00:00.000000 UTC\"}]"];
@@ -374,7 +388,7 @@ internal static partial class BigQueryExecutionChecks
             var rows = set is null ? [] : harness.Rows(set);
             var numbers = rows.Select(row => long.Parse(row[0].Text!, Inv)).Order().ToList();
             check(code == "ok" && request is { Parent: "projects/varia-emulator", MaxStreamCount: BigQueryService.MaxStreams } && request.ReadSession.Table == "projects/varia-emulator/datasets/_anon0123/tables/anon_result_1"
-                && request.ReadSession.DataFormat == Google.Cloud.BigQuery.Storage.V1.DataFormat.Arrow && request.ReadSession.ReadOptions is null && storage.Reads.Count == 4,
+                && request.ReadSession.DataFormat == Google.Cloud.BigQuery.Storage.V1.DataFormat.Arrow && request.ReadSession.ReadOptions.SelectedFields.Count == 0 && storage.Reads.Count == 4,
                 $"an unordered result is read in Arrow from its destination table on up to four streams, billed to the connection's project: {code} {message} {request} {storage.Reads.Count}");
             check(set is { RowsRead: 5000, RowsStored: 5000, Truncated: null, Incomplete: false } && numbers.SequenceEqual(Enumerable.Range(0, 5000).Select(i => (long)i)) && Says(result, "(5000 rows affected)"),
                 $"the streams' rows are all stored once, appended as they come: {set?.RowsRead} {set?.RowsStored} {numbers.Count}");
@@ -836,7 +850,8 @@ internal static partial class BigQueryExecutionChecks
                 await harness.Execute("SELECT n, s FROM t");
                 stored = roomy.UsedBytes;
             }
-            var charge = 2L * BigQueryStorageFake.BatchBytes(storage.Batches[0]).Length;
+            // A Zstandard batch's charge: its message, the decoded copy of it, and the buffers it decompresses into.
+            var charge = 2L * BigQueryStorageFake.BatchBytes(storage.Batches[0], Apache.Arrow.Ipc.CompressionCodecType.Zstd).Length + ArrowColumnPlan.DecodedBytes(storage.Batches[0]);
             var tight = new ResultStore(1L << 32, stored + 5 * charge);
             using (var harness = StorageHarness(jobs, storage, tight))
             {
@@ -844,6 +859,34 @@ internal static partial class BigQueryExecutionChecks
                 var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
                 check(code == "ok" && result?.ResultSets.Single() is { RowsStored: 100_000, Truncated: null },
                     $"batches waiting for the reader hold no budget: a budget of the result and five batches stores it whole: {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated}");
+            }
+        }
+
+        // A compressed batch's decoded buffers are charged while it is stored: a budget that holds its message but not what it
+        // decompresses into stops the read at the budget (an uncompressed batch, read in place, is not charged twice).
+        {
+            var (jobs, storage) = Numbers(20_000, 10_000);
+            var wire = BigQueryStorageFake.BatchBytes(storage.Batches[0], Apache.Arrow.Ipc.CompressionCodecType.Zstd).Length;
+            var plain = BigQueryStorageFake.BatchBytes(storage.Batches[0]).Length;
+            var decoded = ArrowColumnPlan.DecodedBytes(storage.Batches[0]);
+            var limit = 2L * wire + decoded / 2;
+            check(decoded > 2L * wire, $"the numbers batch compresses well enough for the check: {wire} {decoded}");
+            var tight = new ResultStore(1L << 32, limit);
+            using (var harness = StorageHarness(jobs, storage, tight))
+            {
+                await harness.ConnectAsync();
+                var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+                check(code == "ok" && result?.ResultSets.Single() is { RowsStored: 0, Truncated: "queryBudget" } && tight.UsedBytes < 2L * wire,
+                    $"a compressed batch whose decoded buffers do not fit the budget stops the read at the budget and gives every charge back (the empty set's own bytes stay): {code} {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated} {tight.UsedBytes}");
+            }
+            storage.IgnoreCompression = true;
+            var roomy = new ResultStore(1L << 32, 2L * plain + 4L * 1024 * 1024);
+            using (var harness = StorageHarness(jobs, storage, roomy))
+            {
+                await harness.ConnectAsync();
+                var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+                check(code == "ok" && result?.ResultSets.Single().RowsStored > 0,
+                    $"an uncompressed batch is read in place and charged once: {code} {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated}");
             }
         }
     }

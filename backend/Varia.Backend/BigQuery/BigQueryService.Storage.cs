@@ -57,11 +57,13 @@ internal sealed partial class BigQueryService
             },
             MaxStreamCount = StreamCount(environment, ordered)
         };
-        if (plan.TruncatedColumns)
+        // Zstandard buffers: a fifth to two fifths of the bytes for little CPU (docs/bigquery.md, Throughput). The reader reads
+        // uncompressed batches too, which an endpoint that ignores the option sends.
+        request.ReadSession.ReadOptions = new ReadSession.Types.TableReadOptions
         {
-            request.ReadSession.ReadOptions = new ReadSession.Types.TableReadOptions();
-            request.ReadSession.ReadOptions.SelectedFields.AddRange(plan.Fields.Select(field => field.Name));
-        }
+            ArrowSerializationOptions = new ArrowSerializationOptions { BufferCompression = ArrowSerializationOptions.Types.CompressionCodec.Zstd }
+        };
+        if (plan.TruncatedColumns) request.ReadSession.ReadOptions.SelectedFields.AddRange(plan.Fields.Select(field => field.Name));
         var client = connection.Storage(environment.StorageClient);
         ReadSession session;
         for (var attempt = 1; ; attempt++)

@@ -89,6 +89,7 @@ internal sealed partial class SqlService
         long counted = 0;
         long storedRows = 0;
         var storing = true;
+        long extra = 0;
         try
         {
             await foreach (var chunk in queue.Reader.ReadAllAsync(stop.Token))
@@ -103,6 +104,20 @@ internal sealed partial class SqlService
                         break;
                     }
                     using var batch = session.Plan.Decode(chunk.Batch.Span);
+                    // A compressed batch decodes into new buffers the chunk's charge does not cover (an uncompressed one is read
+                    // in place): they are charged while the batch is stored, and a refusal stops the read as the stream's would.
+                    var decoded = ArrowColumnPlan.DecodedBytes(batch);
+                    if (decoded > chunk.Batch.Length)
+                    {
+                        if (!store.TryReserve(budget, decoded, true, out var refusal))
+                        {
+                            set.Skip(refusal);
+                            budget.Stop(refusal);
+                            storing = false;
+                            break;
+                        }
+                        extra = decoded;
+                    }
                     for (var row = 0; row < batch.Length; row++)
                     {
                         token.ThrowIfCancellationRequested();
@@ -125,7 +140,8 @@ internal sealed partial class SqlService
                 }
                 finally
                 {
-                    store.Return(budget, chunk.Charge);
+                    store.Return(budget, chunk.Charge + extra);
+                    extra = 0;
                     slots.Release();
                 }
                 events.RowsChanged();

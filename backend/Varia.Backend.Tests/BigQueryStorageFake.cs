@@ -35,6 +35,16 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
     public Schema? SessionSchema { get; set; }
     /// <summary>Sends each batch as a whole stream (schema, batch, end), as the emulator does.</summary>
     public bool WholeStreams { get; set; }
+    /// <summary>Compresses each batch's buffers with this codec, whatever the session asked; null sends what it asked.</summary>
+    public Apache.Arrow.Ipc.CompressionCodecType? Compression { get; set; }
+    /// <summary>Sends uncompressed batches whatever the session asked, as an endpoint that ignores the option does.</summary>
+    public bool IgnoreCompression { get; set; }
+    /// <summary>The buffer compression the last session asked for.</summary>
+    public Apache.Arrow.Ipc.CompressionCodecType? Asked { get; private set; }
+    /// <summary>Bytes of record batches answered, for the benchmark.</summary>
+    public long SentBytes;
+    /// <summary>Serialized batches, so encoding (and compressing) is not part of a read's time after the first.</summary>
+    readonly ConcurrentDictionary<(int Batch, CompressionCodecType? Compression, bool Whole), byte[]> serialized = new();
     public int Disposed;
     int streams;
 
@@ -50,11 +60,14 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
         return stream.ToArray()[..^8];
     }
 
-    public static byte[] BatchBytes(RecordBatch batch)
+    static IpcOptions Options(CompressionCodecType? compression) => compression is null ? new IpcOptions()
+        : new IpcOptions { CompressionCodec = compression, CompressionCodecFactory = new Apache.Arrow.Compression.CompressionCodecFactory() };
+
+    public static byte[] BatchBytes(RecordBatch batch, CompressionCodecType? compression = null)
     {
         var schemaLength = SchemaBytes(batch.Schema).Length;
         using var stream = new MemoryStream();
-        using (var writer = new ArrowStreamWriter(stream, batch.Schema, leaveOpen: true))
+        using (var writer = new ArrowStreamWriter(stream, batch.Schema, leaveOpen: true, Options(compression)))
         {
             writer.WriteRecordBatch(batch);
             writer.WriteEnd();
@@ -62,10 +75,10 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
         return stream.ToArray()[schemaLength..^8];
     }
 
-    public static byte[] StreamBytes(RecordBatch batch)
+    public static byte[] StreamBytes(RecordBatch batch, CompressionCodecType? compression = null)
     {
         using var stream = new MemoryStream();
-        using (var writer = new ArrowStreamWriter(stream, batch.Schema, leaveOpen: true))
+        using (var writer = new ArrowStreamWriter(stream, batch.Schema, leaveOpen: true, Options(compression)))
         {
             writer.WriteRecordBatch(batch);
             writer.WriteEnd();
@@ -76,6 +89,12 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
     public Task<ReadSession> CreateReadSessionAsync(CreateReadSessionRequest request, CancellationToken token)
     {
         Sessions.Enqueue(request);
+        Asked = request.ReadSession.ReadOptions?.ArrowSerializationOptions?.BufferCompression switch
+        {
+            ArrowSerializationOptions.Types.CompressionCodec.Zstd => CompressionCodecType.Zstd,
+            ArrowSerializationOptions.Types.CompressionCodec.Lz4Frame => CompressionCodecType.Lz4Frame,
+            _ => null
+        };
         if (SessionFault?.Invoke(request) is { } fault) return Task.FromException<ReadSession>(fault);
         var asked = request.MaxStreamCount <= 0 ? 1000 : request.MaxStreamCount;
         streams = Math.Max(batches.Count == 0 ? 0 : 1, Math.Min(Math.Min(asked, MaxStreams), batches.Count));
@@ -109,10 +128,13 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
             token.ThrowIfCancellationRequested();
             if (ReadFault?.Invoke(request, answered) is { } fault) throw fault;
             answered++;
+            var codec = Compression ?? (IgnoreCompression ? null : Asked);
+            var bytes = serialized.GetOrAdd((k, codec, WholeStreams), key => key.Whole ? StreamBytes(batches[key.Batch], key.Compression) : BatchBytes(batches[key.Batch], key.Compression));
+            Interlocked.Add(ref SentBytes, bytes.Length);
             yield return new ReadRowsResponse
             {
                 RowCount = batch.Length,
-                ArrowRecordBatch = new ArrowRecordBatch { SerializedRecordBatch = ByteString.CopyFrom(WholeStreams ? StreamBytes(batch) : BatchBytes(batch)) }
+                ArrowRecordBatch = new ArrowRecordBatch { SerializedRecordBatch = ByteString.CopyFrom(bytes) }
             };
         }
     }

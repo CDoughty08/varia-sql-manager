@@ -59,7 +59,8 @@ replace it with a fake.
   Google's libraries are Apache-2.0 and BSD-3-Clause.
 - **Size.** The win-x64 self-contained ReadyToRun backend grows by 4.6 MB (1.9 MB compressed) with the REST client.
   Adding the Storage Read API and Arrow (`Google.Cloud.BigQuery.Storage.V1` 3.20.0 with gRPC, `Apache.Arrow` 23.0.0, for
-  Storage Read) adds 5.4 MB more (2.2 MB compressed).
+  Storage Read) adds 5.4 MB more (2.2 MB compressed); `Apache.Arrow.Compression` 23.0.0 (Zstandard through
+  `ZstdSharp.Port`, which brings K4os's LZ4) adds about 0.6 MB of assemblies.
 
 ## Authentication
 
@@ -204,10 +205,15 @@ type.
   queries) decides the order: a top-level `ORDER BY` (or pipe syntax's `GROUP BY k DESC`) reads one stream in order;
   anything else asks for up to four, appended as their batches come. When unsure it reads one stream, which is only
   slower. Each stream is read on its own task; each batch is charged to the query's budget (twice its size) before it
-  is queued, at most two batches are charged but not yet stored (so the budget holds as much as REST's; each other stream
+  is queued, and a compressed batch's decoded buffers are charged too while its rows are stored (a refusal stops the
+  read at the budget), at most two batches are charged but not yet stored (so the budget holds as much as REST's; each other stream
   holds at most the one batch it received while it waits), and one reader
   appends rows, so the store keeps one writer. A stream that fails transiently is read again from its offset; one that
   fails for good fails the query at once, with REST's error (an expired sign-in is `AUTH_EXPIRED`).
+- **Compression.** The session asks for Zstandard buffer compression: in the offline benchmark it sends a fifth to two
+  fifths of the uncompressed bytes for at most about 15% more decoding time, against LZ4's 55% for the same time
+  (Throughput below). The reader also reads LZ4 and uncompressed batches, which an endpoint that ignores the option
+  sends.
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
   connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
   in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
@@ -294,9 +300,17 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
 
   Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
-  REST and through Storage Read (four streams and one) against the offline fakes, so it measures decoding and storing,
-  not the network. It is run by hand, prints medians and has no floors. On a 2026 desktop, 500,000 rows of INT64 and
-  STRING: REST about 0.6 million rows a second (including the fake's JSON), Arrow 6 to 9 million.
+  REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
+  it measures decoding and storing, not the network, and prints the Arrow bytes each sent. It is run by hand, prints
+  medians and has no floors. On a 2026 desktop, 500,000 rows:
+
+  | Table | REST | Arrow | Arrow, LZ4 | Arrow, Zstandard |
+  | --- | --- | --- | --- | --- |
+  | numbers (INT64 counter, short strings) | 0.78 M rows/s | 10.7 M rows/s, 11.0 MB | 9.7 M, 6.1 MB | 9.1 M, 2.2 MB |
+  | mixed (ids, amounts, countries, emails, text, flags) | 0.17 M rows/s | 0.36 M rows/s, 45.7 MB | 0.37 M, 26.1 MB | 0.37 M, 17.5 MB |
+
+  Downloading and decoding overlap, so a read takes about the longer of the two: at 100 Mbit/s the mixed table takes
+  about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s decoding bounds it either way.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
   cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.

@@ -5,6 +5,11 @@
     "license": "Apache-2.0"
   },
   {
+    "id": "Apache.Arrow.Compression",
+    "version": "23.0.0",
+    "license": "Apache-2.0"
+  },
+  {
     "id": "Apache.Arrow.Scalars",
     "version": "23.0.0",
     "license": "Apache-2.0"
@@ -93,6 +98,21 @@
     "id": "Grpc.Net.Common",
     "version": "2.71.0",
     "license": "Apache-2.0"
+  },
+  {
+    "id": "K4os.Compression.LZ4",
+    "version": "1.3.8",
+    "license": "https://github.com/MiloszKrajewski/K4os.Compression.LZ4/blob/master/LICENSE?raw=true"
+  },
+  {
+    "id": "K4os.Compression.LZ4.Streams",
+    "version": "1.3.8",
+    "license": "https://github.com/MiloszKrajewski/K4os.Compression.LZ4/blob/master/LICENSE?raw=true"
+  },
+  {
+    "id": "K4os.Hash.xxHash",
+    "version": "1.0.8",
+    "license": "https://raw.githubusercontent.com/MiloszKrajewski/K4os.Hash.xxHash/master/LICENSE"
   },
   {
     "id": "Microsoft.Bcl.AsyncInterfaces",
@@ -257,6 +277,11 @@
   {
     "id": "System.Windows.Extensions",
     "version": "8.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "ZstdSharp.Port",
+    "version": "0.8.8",
     "license": "MIT"
   }
 ]

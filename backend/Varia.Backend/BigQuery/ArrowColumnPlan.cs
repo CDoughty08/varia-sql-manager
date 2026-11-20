@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using Apache.Arrow;
+using Apache.Arrow.Compression;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Varia.Backend.Results;
@@ -22,6 +23,8 @@ namespace Varia.Backend.BigQuery;
 internal sealed class ArrowColumnPlan
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
+    /// <summary>Decompresses buffers sent with LZ4 frame or Zstandard compression.</summary>
+    private static readonly CompressionCodecFactory Codecs = new();
     private readonly BigQueryColumnPlan plan;
     private readonly IReadOnlyList<BigQueryField> fields;
     private readonly byte[] schema;
@@ -64,10 +67,29 @@ internal sealed class ArrowColumnPlan
         if (message.Length < length) message = new byte[length];
         if (!own) schema.CopyTo(message, 0);
         batch.CopyTo(message.AsSpan(length - batch.Length));
-        using var reader = new ArrowStreamReader(message.AsMemory(0, length));
+        using var reader = new ArrowStreamReader(message.AsMemory(0, length), Codecs);
         var decoded = reader.ReadNextRecordBatch() ?? throw new InvalidDataException("BigQuery answered a record batch Varia cannot read.");
         if (decoded.ColumnCount != fields.Count) { decoded.Dispose(); throw new InvalidDataException("BigQuery answered a record batch Varia cannot read."); }
         return decoded;
+    }
+
+    /// <summary>The bytes of a decoded batch's buffers (children and dictionaries included): what decompressing it allocated,
+    /// when it was compressed.</summary>
+    internal static long DecodedBytes(RecordBatch batch)
+    {
+        long total = 0;
+        foreach (var array in batch.Arrays) total += Bytes(array.Data);
+        return total;
+
+        static long Bytes(ArrayData data)
+        {
+            long sum = 0;
+            // A decoded array may have no children (or no buffers) array at all.
+            foreach (var buffer in data.Buffers ?? []) sum += buffer.Length;
+            foreach (var child in data.Children ?? []) sum += Bytes(child);
+            if (data.Dictionary is { } dictionary) sum += Bytes(dictionary);
+            return sum;
+        }
     }
 
     /// <summary>Whether an IPC message is a schema (Arrow's Message flatbuffer: continuation marker, metadata length, then the
