@@ -45,7 +45,7 @@ describe('catalogue providers', () => {
       expect(new Set(entry.providers).size, entry.name).toBe(entry.providers.length)
       for (const provider of entry.providers) expect(providerIds, entry.name).toContain(provider)
     }
-    expect(commandProviders('query.execute')).toEqual(['sqlserver'])
+    expect(commandProviders('query.estimatePlan')).toEqual(['sqlserver'])
     expect(commandProviders('activity.open')).toEqual(['sqlserver'])
     expect(providersOf(liveSources[Object.keys(liveSources)[0] as keyof typeof liveSources])).toEqual(['sqlserver'])
     for (const key of providerKeys) expect(contextKeyValues(key)).toEqual(['', 'sqlserver', 'bigquery'])
@@ -71,8 +71,8 @@ describe('catalogue providers', () => {
   })
 
   it('declares both engines on the provider-neutral commands and keeps the SQL Server ones to SQL Server', () => {
-    const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll']
-    const sqlServer: CommandId[] = ['query.execute', 'query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.goToDefinition', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.refresh', 'explorer.scriptAs', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
+    const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll']
+    const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.goToDefinition', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.refresh', 'explorer.scriptAs', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
     for (const id of both) expect(commandProviders(id), id).toEqual(['sqlserver', 'bigquery'])
     for (const id of sqlServer) expect(commandProviders(id), id).toEqual(['sqlserver'])
     expect(providersOf(submenus['edit.advanced'])).toEqual(['sqlserver', 'bigquery'])
@@ -88,7 +88,7 @@ describe('catalogue providers', () => {
 
   it('checks a command against the active document, or the Explorer selection for a command that acts on it', () => {
     const keys = (activeDocumentProvider: '' | ProviderId, explorerSelectionProvider: '' | ProviderId) => ({ activeDocumentProvider, explorerSelectionProvider })
-    expect(commandProviderKey('query.execute')).toBe('activeDocumentProvider')
+    expect(commandProviderKey('query.estimatePlan')).toBe('activeDocumentProvider')
     expect(commandProviderKey('explorer.refresh')).toBe('explorerSelectionProvider')
     // A command of another category acts on the active document from the toolbar, keys and palette, and on the object its
     // menu was opened for from Object Explorer's or a search result's menu.
@@ -98,25 +98,28 @@ describe('catalogue providers', () => {
     }
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'), true)).toBe(true)
-    expect(commandAllowsProvider('connection.disconnect', keys('sqlserver', 'bigquery'), true)).toBe(false)
-    expect(commandAllowsProvider('query.execute', keys('sqlserver', ''))).toBe(true)
-    expect(commandAllowsProvider('query.execute', keys('bigquery', 'sqlserver'))).toBe(false)
-    expect(commandAllowsProvider('query.execute', keys('', 'bigquery'))).toBe(true)
+    expect(commandAllowsProvider('activity.open', keys('sqlserver', 'bigquery'), true)).toBe(false)
+    // Disconnect, New Query and the dataset box serve a BigQuery connection too (BQ-2).
+    for (const id of ['connection.disconnect', 'connection.reconnect', 'explorer.newQuery', 'query.changeDatabase', 'query.disconnect'] as const) expect(commandAllowsProvider(id, keys('bigquery', 'bigquery'), true), id).toBe(true)
+    expect(commandAllowsProvider('query.estimatePlan', keys('sqlserver', ''))).toBe(true)
+    expect(commandAllowsProvider('query.estimatePlan', keys('bigquery', 'sqlserver'))).toBe(false)
+    expect(commandAllowsProvider('query.estimatePlan', keys('', 'bigquery'))).toBe(true)
+    expect(commandAllowsProvider('query.execute', keys('bigquery', ''))).toBe(true)
     expect(commandAllowsProvider('explorer.refresh', keys('sqlserver', 'bigquery'))).toBe(false)
     expect(commandAllowsProvider('explorer.collapseAll', keys('', 'bigquery'))).toBe(true)
     expect(commandAllowsProvider('output.copy', keys('bigquery', ''))).toBe(true)
   })
 
   it('CommandService refuses a command for another engine, and SQL Server keeps every command', async () => {
-    let state = contextRecord('win32', { activeDocumentProvider: 'sqlserver', hasActiveDocument: true, activeDocumentIsQuery: true, backendReady: true })
+    let state = contextRecord('win32', { activeDocumentProvider: 'sqlserver', hasActiveDocument: true, activeDocumentIsQuery: true, activeDocumentConnected: true, backendReady: true })
     const commands = new CommandService({ state: () => state })
     const ran: string[] = []
-    for (const id of ['query.execute', 'edit.undo'] as const) commands.register(id, { run: () => { ran.push(id) } })
-    expect(commands.isEnabled('query.execute') && commands.isEnabled('edit.undo')).toBe(true)
+    for (const id of ['query.estimatePlan', 'edit.undo'] as const) commands.register(id, { run: () => { ran.push(id) } })
+    expect(commands.isEnabled('query.estimatePlan') && commands.isEnabled('edit.undo')).toBe(true)
     state = contextRecord('win32', { ...state, activeDocumentProvider: 'bigquery' })
-    expect(commands.isEnabled('query.execute')).toBe(false)
+    expect(commands.isEnabled('query.estimatePlan')).toBe(false)
     expect(commands.isEnabled('edit.undo')).toBe(true)
-    await expect(commands.execute('query.execute', undefined, 'keybinding')).resolves.toBe(false)
+    await expect(commands.execute('query.estimatePlan', undefined, 'keybinding')).resolves.toBe(false)
     expect(ran).toEqual([])
     // On a SQL Server node (its menu, row buttons or jump menu, selected or not), a command acts on the node whatever the active
     // document and the selection are; from the toolbar, on the document; from the empty area's menu, as from the toolbar.

@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (28)
+## Varia's icons (29)
 
 | Id | Use |
 | --- | --- |
@@ -36,6 +36,7 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `ssis-environment` | Integration Services environments (planned). |
 | `transpose` | Transpose: the results toolbar's Transpose button and the Transpose commands. |
 | `pivot` | Pivot: the results toolbar's Pivot toggle and the Pivot command. |
+| `bigquery` | BigQuery connections: saved and recent connections in Connect, and BigQuery servers. |
 | `fuzzy-match` | The Fuzzy Match toggle in Search Objects (an approximately-equal sign). |
 | `agent` | SQL Server Agent: Object Explorer's Agent node (a clock that comes round again). |
 | `agent-activity` | SQL Server Agent: Job Activity Monitor. |

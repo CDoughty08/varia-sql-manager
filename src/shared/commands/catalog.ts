@@ -282,7 +282,7 @@ export const commandCatalog = {
     menus: [{ menu: 'view', group: '1_layout', order: 3, mnemonic: 'r' }, { menu: 'window', group: '3_layout', order: 3, title: 'Reset Window Layout', mnemonic: 'r' }]
   },
   'query.execute': {
-    title: 'Execute', category: 'Query', icon: 'play', keywords: ['run', 'go'], methods: ['query.execute'],
+    title: 'Execute', category: 'Query', icon: 'play', keywords: ['run', 'go'], methods: ['query.execute'], providers: both,
     // A remembered offline query opens the explicit Connect dialog first; its handler rechecks the exact target lifecycle.
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected || backendReady)',
     unavailableHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.',
@@ -353,7 +353,7 @@ export const commandCatalog = {
     ]
   },
   'connection.disconnect': {
-    title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    title: 'Disconnect from Server…', category: 'Connection', icon: 'debug-disconnect', precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
     // A server node's menu (and Object Explorer's toolbar, for the selected node's server) disconnects that server without asking which.
     menus: [
       { menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' },
@@ -362,14 +362,14 @@ export const commandCatalog = {
   },
   'connection.disconnectAndRemove': {
     title: 'Disconnect and Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnect', 'remove', 'explorer'],
-    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
     menus: [{ menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost" }]
   },
   // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
   // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
   'connection.environment': {
     title: 'Set Connection Environment…', category: 'Connection', icon: 'tag', keywords: ['environment', 'production', 'prod', 'staging', 'test', 'development', 'label', 'tag'],
-    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
     menus: [
       { menu: 'query.connection', group: '2_change', order: 2, title: 'Environment…' },
       { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
@@ -378,7 +378,7 @@ export const commandCatalog = {
   // An offline server's menu reconnects that target; elsewhere, the active query's target or one the user picks.
   'connection.reconnect': {
     title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['disconnected', 'lost', 'restart'], precondition: '(hasLostConnection || activeConnectionLost) && backendReady',
-    unavailableHint: 'No server is disconnected.',
+    unavailableHint: 'No server is disconnected.', providers: both,
     menus: [
       { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
       { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }
@@ -464,7 +464,7 @@ export const commandCatalog = {
     title: 'Group by Schema', category: 'Object Explorer', icon: 'symbol-namespace', keywords: ['schema', 'group', 'folders', 'tree'], toggled: 'explorerGroupBySchema'
   },
   'explorer.newQuery': {
-    title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
+    title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.', providers: both,
     menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
@@ -545,19 +545,19 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) || explorerFolderInsertable" }]
   },
   'query.changeConnection': {
-    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy',
+    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy', providers: both,
     menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
   },
   'query.disconnect': {
-    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
+    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', providers: both,
     unavailableHint: 'This query is not connected.', menus: [{ menu: 'query.connection', group: '1_connect', order: 2, mnemonic: 'd' }]
   },
   'query.disconnectAll': {
-    title: 'Disconnect All Queries', category: 'Query', precondition: 'anyDocumentConnected && !documentBusy', unavailableHint: 'No query is connected.',
+    title: 'Disconnect All Queries', category: 'Query', precondition: 'anyDocumentConnected && !documentBusy', unavailableHint: 'No query is connected.', providers: both,
     menus: [{ menu: 'query.connection', group: '1_connect', order: 3, mnemonic: 'a' }]
   },
   'query.changeDatabase': {
-    title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'], methods: ['databases.list'],
+    title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'], methods: ['databases.list'], providers: both,
     precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
     // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
     keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '0_connection', order: 2, mnemonic: 'd' }]

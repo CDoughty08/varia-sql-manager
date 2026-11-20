@@ -1,13 +1,13 @@
-import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
-import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, isBigQueryTarget, isSqlServerTarget, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
+import type { BigQueryConnectionOptions, ConnectionInfo, ConnectionOptions, ProviderConnectionOptions } from '../../../shared/contracts'
+import { connectionAuthenticationSchema, connectionDetailsSchema, isBigQueryTarget, targetOptionsOf, targetServerName, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason, type ConnectionTargetOptions } from '../../../shared/connection-targets'
 import { SnapshotStore } from '../core/store'
 import { ConnectionTargetService, type ConnectionCompletion, type ConnectionCredentialIntent, type ConnectionOperation } from './connection-targets'
 import type { ConnectionBindingsChanged } from '../../../shared/connection-bindings'
-import { isLiveConnection } from './connection-availability'
+import { isBigQueryConnection, isLiveConnection } from './connection-availability'
 
 /** Connection settings without the password, which the renderer never keeps: a reconnect asks for it again, unless main
  *  remembers one for the same credentials (Remember password) and fills it in itself. */
-export type SavedOptions = Omit<ConnectionOptions, 'password'>
+export type SavedOptions = Omit<ConnectionOptions, 'password'> | BigQueryConnectionOptions
 /** A connection Object Explorer shows. `lost` means its backend generation ended; only Reconnect replaces it. */
 export interface LiveConnection extends ConnectionInfo {
   readonly options: SavedOptions
@@ -30,7 +30,8 @@ export interface ConnectionAssociationHandoff {
   yieldTo(cancel: () => void): () => void
 }
 
-function withoutPassword(options: ConnectionOptions): SavedOptions {
+function withoutPassword(options: ProviderConnectionOptions): SavedOptions {
+  if (options.provider === 'bigquery') return { ...options }
   const saved: ConnectionOptions = { ...options }
   delete saved.password
   return saved
@@ -58,6 +59,9 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   live(): LiveConnection[] { return this.getSnapshot().filter(connection => this.isLive(connection.id)) }
   /** The connection is still there and was not lost with its backend generation. */
   isLive(id: string): boolean { return isLiveConnection(this.get(id)) }
+  /** Live SQL Server connections: what SQL Server's own tools (Activity Monitor, Search Objects, Integration Services) act on. */
+  liveSqlServer(): LiveConnection[] { return this.live().filter(connection => !isBigQueryConnection(connection)) }
+  isLiveSqlServer(id: string): boolean { const connection = this.get(id); return isLiveConnection(connection) && !isBigQueryConnection(connection) }
   bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
   /**
    * Refuses a checkpoint while query affinity is still being handed over. `final`: the close or reload is going ahead now,
@@ -138,15 +142,15 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     if (accepted.length) this.refresh()
     return accepted.length > 0
   }
-  add(info: ConnectionInfo, options: ConnectionOptions): void {
+  add(info: ConnectionInfo, options: ProviderConnectionOptions): void {
     if (this.getSnapshot().some(connection => connection.id === info.id && connection.generation === info.generation)) return
     this.legacy = [...this.legacy, { ...this.entry(info, options), targetId: crypto.randomUUID(), inExplorer: true }]
     this.refresh()
   }
-  beginConnect(options: ConnectionOptions, generation: number, targetId: string = crypto.randomUUID(), details = detailsOf(options), credentialIntent: ConnectionCredentialIntent = 'preserve'): ConnectionAttempt | undefined {
+  beginConnect(options: ProviderConnectionOptions, generation: number, targetId: string = crypto.randomUUID(), details = detailsOf(options), credentialIntent: ConnectionCredentialIntent = 'preserve'): ConnectionAttempt | undefined {
     this.markLostBefore(generation)
     const registry = this.connectionTargets, created = !registry.get(targetId)
-    if (created && !registry.add({ id: targetId, options: connectionTargetOptions(options), details, inExplorer: true, resumeWanted: true })) return undefined
+    if (created && !registry.add({ id: targetId, options: targetOptionsOf(options), details, inExplorer: true, resumeWanted: true })) return undefined
     const operation = registry.beginConnect(targetId, generation, crypto.randomUUID(), credentialIntent)
     if (!operation && created) { registry.removeFromExplorer(targetId); registry.pruneUnreferenced(new Set(registry.getSnapshot().filter(target => target.id !== targetId).map(target => target.id))) }
     return operation ? { operation, created, targetEpochs: new Map(this.targetEpochs) } : undefined
@@ -164,7 +168,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     if (attempt.created) { registry.removeFromExplorer(operation.targetId); registry.pruneUnreferenced(new Set(registry.getSnapshot().filter(target => target.id !== operation.targetId).map(target => target.id))) }
   }
   /** Adopts only a main-verified target receipt; settings or a form's requested user never establish equivalence. */
-  accept(info: ConnectionInfo, _options: ConnectionOptions, targetId: string, authentication: ConnectionAuthentication, attempt?: ConnectionAttempt): ConnectionCompletion {
+  accept(info: ConnectionInfo, _options: ProviderConnectionOptions, targetId: string, authentication: ConnectionAuthentication, attempt?: ConnectionAttempt): ConnectionCompletion {
     if (info.generation < this.liveGeneration) return { status: 'stale', dispose: { id: info.id, generation: info.generation } }
     this.markLostBefore(info.generation)
     const registry = this.connectionTargets
@@ -207,7 +211,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     return result
   }
   /** After a reconnect, the new connection takes the lost one's place in Object Explorer. */
-  replace(oldId: string, info: ConnectionInfo, options: ConnectionOptions): void {
+  replace(oldId: string, info: ConnectionInfo, options: ProviderConnectionOptions): void {
     const entry = { ...this.entry(info, options), targetId: this.get(oldId)?.targetId ?? crypto.randomUUID(), inExplorer: true }, current = this.legacy
     this.legacy = current.some(connection => connection.id === oldId) ? current.map(connection => connection.id === oldId ? entry : connection) : [...current, entry]
     this.refresh()
@@ -275,15 +279,15 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
       this.refresh()
     }
   }
-  private entry(info: ConnectionInfo, options: ConnectionOptions): LiveConnection {
+  private entry(info: ConnectionInfo, options: ProviderConnectionOptions): LiveConnection {
     // An answer can arrive after the push that ended its generation.
     return { ...info, options: withoutPassword(options), ...info.generation < this.liveGeneration ? { lost: true } : {} }
   }
   private refresh(): void {
     const targets = this.connectionTargets.getSnapshot(), ids = new Set(targets.map(target => target.id))
     for (const id of this.targetStates.keys()) if (!ids.has(id)) { this.targetStates.delete(id); this.targetEpochs.delete(id); this.metadata.delete(id) }
-    // BigQuery targets stay in the workspace untouched; the workbench opens them from the BigQuery lanes on.
-    const adopted = targets.filter(isSqlServerTarget).map(target => {
+    // Either engine: a BigQuery target names its project where SQL Server's names the server, and its dataset as the database.
+    const adopted = targets.map(target => {
       const { details: _details, ...state } = target, encoded = JSON.stringify(state)
       if (this.targetStates.get(target.id) !== encoded) { this.targetStates.set(target.id, encoded); this.targetEpochs.set(target.id, ++this.targetRevision) }
       const info = this.metadata.get(target.id) ?? this.legacy.find(connection => connection.targetId === target.id), lifecycle = target.lifecycle
@@ -291,9 +295,10 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
       const { autoReconnect: _autoReconnect, ...presentation } = target.details
       return {
         ...info, id: live ? lifecycle.handle.id : info?.id ?? target.id, generation: live ? lifecycle.handle.generation : info?.generation ?? this.liveGeneration,
-        server: info?.server ?? target.options.server, database: info?.database ?? target.options.database, serverVersion: info?.serverVersion ?? '',
+        server: info?.server ?? targetServerName(target.options), database: info?.database ?? (isBigQueryTarget(target.options) ? target.options.dataset ?? '' : target.options.database), serverVersion: info?.serverVersion ?? '',
+        ...isBigQueryTarget(target.options) ? { providerId: 'bigquery' as const } : {},
         displayName: target.details.displayName, color: target.details.color, environment: target.details.environment,
-        login: info?.login ?? target.options.username, options: { ...target.options, ...presentation }, targetId: target.id, inExplorer: target.inExplorer, lifecycle,
+        login: info?.login ?? (isBigQueryTarget(target.options) ? undefined : target.options.username), options: optionsWith(target.options, presentation), targetId: target.id, inExplorer: target.inExplorer, lifecycle,
         ...live ? {} : { lost: true as const }
       }
     })
@@ -302,6 +307,12 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   dispose(): void { for (const finish of [...this.associationHandoffs.values()]) finish(); this.unsubscribe(); this.clearListeners(); this.metadata.clear(); this.legacyDetails.clear(); this.targetEpochs.clear(); this.targetStates.clear(); this.legacy = []; this.publish([]) }
 }
 
+/** A target's settings with its labels, as the connection's options (BigQuery's extra projects as a plain list). */
+export function optionsWith(options: ConnectionTargetOptions, presentation: Partial<Pick<ConnectionDetails, 'displayName' | 'color' | 'environment'>>): SavedOptions {
+  if (!isBigQueryTarget(options)) return { ...options, ...presentation }
+  const { extraProjects, ...rest } = options
+  return { ...rest, ...extraProjects ? { extraProjects: [...extraProjects] } : {}, ...presentation }
+}
 export function detailsOf(options: SavedOptions, autoReconnect: ConnectionDetails['autoReconnect'] = 'inherit'): ConnectionDetails {
   return connectionDetailsSchema.parse({ displayName: options.displayName, color: options.color, environment: options.environment, autoReconnect })
 }

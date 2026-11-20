@@ -72,7 +72,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.
   'connections.connect': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : params.provider === 'bigquery' ? 45_000 : params.advanced?.connectTimeout === 0 ? 0 : ((params.advanced?.connectTimeout ?? 15) + 30) * 1000 + signIn(params), sensitive: true, ...both },
-  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true },
+  // BigQuery: the project's datasets (the dialog's Default dataset), signed in with main's credential like connect.
+  'connections.databases': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.nonInteractive ? 15_000 : 45_000 + signIn(params), sensitive: true, ...both },
   'connections.discover': metadata,
   'connections.preview': { ...control, lane: 'metadata', sensitive: true },
   'connections.disconnect': { ...control, ...both, deadlineMs: 30_000 },
@@ -81,10 +82,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
-  'databases.list': metadata,
+  // A BigQuery handle lists its billing project's datasets (a query tab's Dataset box).
+  'databases.list': { ...metadata, ...both },
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
-  'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000 },
+  'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
   'query.session.close': { ...control, ...both, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
@@ -204,6 +206,16 @@ export function requestProvider(method: BackendMethod, params: unknown, provider
 }
 /** Whether `method` may be sent for a request of `provider` (undefined: main cannot tell, and C# checks). */
 export function methodAllows(method: BackendMethod, provider: ProviderId | undefined): boolean { return provider === undefined || methodProviders(method).includes(provider) }
+
+/** Whether a request's options mean anything to its connection's engine: query.execute's SQL Server options (stop on
+ *  error, actual and live plans, client statistics) are not BigQuery's, and a dataset is not SQL Server's. C# checks again
+ *  (SqlService.ExecuteAsync). */
+export function optionsAllow(method: BackendMethod, provider: ProviderId | undefined, params: unknown): boolean {
+  if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
+  const options = params as Partial<BackendMethods['query.execute']['params']>
+  if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
+  return options.dataset === undefined
+}
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */
 export function deadlineFor<M extends BackendMethod>(method: M, params: BackendMethods[M]['params']): { deadlineMs: number; backstopMs: number } {

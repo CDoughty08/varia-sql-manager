@@ -110,3 +110,11 @@ internal static partial class BigQueryLimits
         if (token is not null && (token.Length is 0 or > PageToken || token.Any(char.IsControl))) Invalid("The page token is not valid.");
     }
 }
+
+/// <summary>
+/// A BigQuery query's job, on its query.execute result: its fully qualified id and, once BigQuery reported them, its
+/// statement type and statistics (bytes processed and billed, cache hit, slot milliseconds). The status bar prices the
+/// bytes (docs/bigquery.md, Cost); figures BigQuery did not report are left out.
+/// </summary>
+internal sealed record BigQueryJobSummary(string Project, string JobId, string? Location = null, string? StatementType = null, long? BytesProcessed = null,
+    long? BytesBilled = null, bool? CacheHit = null, long? SlotMs = null);

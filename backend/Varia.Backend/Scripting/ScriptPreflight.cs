@@ -248,9 +248,9 @@ internal static partial class ScriptPreflight
         var problems = new List<string>();
         if (!vector && text.Contains("vector_dimensions", StringComparison.Ordinal)) problems.Add("uses vector_dimensions without the probe flag");
         var stripped = EncryptedCall().Replace(text, "");
-        foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(stripped, CatalogSql.Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
-        if (!serverScope && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
+        if (!serverScope && CatalogSql.Uses(text, ["HAS_DBACCESS("]).Any()) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
         foreach (Match literal in LiteralPattern().Matches(text))
             if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);

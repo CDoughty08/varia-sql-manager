@@ -84,6 +84,13 @@ internal static class SsisChecks
         {
             ("SELECT OBJECT_ID(N'catalog.folders');", false, "uses OBJECT_ID("),
             ("SELECT DB_NAME();", false, "uses DB_NAME("),
+            ("SELECT DB_NAME ();", false, "uses DB_NAME("),
+            ("SELECT DB_NAME/**/();", false, "uses DB_NAME("),
+            // T-SQL ends a number where its digits end: each of these runs the DELETE, EXEC or INSERT the word list would miss.
+            ("SELECT 1DELETE FROM [catalog].[folders];", false, "glues a word to the number 1DELETE"),
+            ("SELECT f.name FROM [catalog].[folders] AS f WHERE f.folder_id = 1e1DELETE FROM [catalog].[folders];", false, "glues a word to the number 1e1DELETE"),
+            ("SELECT $1EXEC [catalog].[start_execution] @execution_id = @id;", false, "glues a word to the number 1EXEC"),
+            ("SELECT 0x1INSERT [catalog].[folders] (name) VALUES (@name);", false, "glues a word to the number 0x1INSERT"),
             ("SELECT COL_LENGTH(N'catalog.executions', N'executed_count');", false, "uses COL_LENGTH("),
             ("SELECT CAST(o.start_time AS datetime) FROM [catalog].[operations] AS o;", false, "converts a datetimeoffset to datetime, which drops its offset"),
             ("SELECT CONVERT(datetime, o.start_time) FROM [catalog].[operations] AS o;", false, "converts a datetimeoffset to datetime, which drops its offset"),

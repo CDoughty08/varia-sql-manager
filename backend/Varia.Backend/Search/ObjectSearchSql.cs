@@ -6,7 +6,7 @@ namespace Varia.Backend.Search;
 /// The object index's constant SQL: one listing of the databases to index and one server batch, read on the server's connection,
 /// and one batch per database, run in it through <c>QUOTENAME(@db).sys.sp_executesql</c> (or directly on a connection already in
 /// it, on Azure SQL Database). Catalog views only, joined for names; no metadata built-ins (they ignore the isolation level and
-/// lock timeout), no values in the text. SQL Server's metadata visibility leaves out what the login may not see, and
+/// wait out the lock timeout behind uncommitted DDL), no values in the text. SQL Server's metadata visibility leaves out what the login may not see, and
 /// sys.sql_modules shows a NULL definition where it may not VIEW DEFINITION, so the index holds only what Object Explorer and
 /// Script As could show. Every kind Object Explorer lists is indexed, but the SSIS Catalog's (read from SSISDB on its own pool).
 /// </summary>

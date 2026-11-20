@@ -3,6 +3,7 @@ import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plan
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
+import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -89,7 +90,7 @@ export interface ConnectionOptions {
 
 /**
  * BigQuery's branch of the connection options union (src/shared/connections.ts has its rules). `keyFile` is an opaque
- * reference (a pick token or the saved profile's id): only main knows the path, and main sends the backend the file's
+ * reference (the token main's picker returned, which a saved entry keeps): only main knows the path, and main sends the backend the file's
  * content instead (BigQueryCredentialMaterial).
  */
 export interface BigQueryConnectionOptions {
@@ -152,7 +153,8 @@ export interface ConnectionInfo {
   bindingRevision?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
-export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
+/** A database, or for BigQuery a dataset with its location (absent when BigQuery names none). */
+export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean; location?: string }
 /** A table's columns in order; `truncated` means it has more than the 4,096 returned. */
 export interface TableColumns { columns: { name: string; dataType: string }[]; truncated: boolean }
 export interface BackendHealth {
@@ -165,7 +167,10 @@ export interface BackendHealth {
 export interface QueryOptions {
   connectionId: string
   sessionId: string
-  database: string
+  /** SQL Server's database, required there; a BigQuery query ignores it and uses `dataset`. */
+  database?: string
+  /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
+  dataset?: string
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
@@ -280,6 +285,21 @@ export interface QueryResult {
   login?: string
   /** Per-script provider counters. Absent unless requested; separate from elapsedMs and rendering. */
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
+  /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
+  job?: BigQueryJobSummary
+}
+/** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
+ *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
+export interface BigQueryJobSummary {
+  project: string
+  jobId: string
+  location?: string
+  /** BigQuery's statement type, such as SELECT, INSERT, CREATE_TABLE or SCRIPT. */
+  statementType?: string
+  bytesProcessed?: number
+  bytesBilled?: number
+  cacheHit?: boolean
+  slotMs?: number
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
@@ -552,7 +572,7 @@ export interface RpcMethods {
   'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ProviderConnectionOptions; result: ConnectionInfo }
-  'connections.databases': { params: ConnectionOptions; result: DatabaseInfo[] }
+  'connections.databases': { params: ProviderConnectionOptions; result: DatabaseInfo[] }
   'connections.discover': { params: { scope: 'local' | 'network' }; result: { servers: DiscoveredServer[]; warning?: string } }
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
@@ -674,7 +694,7 @@ export interface DebugMethods {
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
 export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, BigQueryMainMethods, DebugMethods {
   'connections.connect': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: ConnectionInfo }
-  'connections.databases': { params: ConnectionOptions & { nonInteractive?: boolean }; result: DatabaseInfo[] }
+  'connections.databases': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: DatabaseInfo[] }
 }
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
@@ -783,8 +803,9 @@ export interface VariaApi {
   health(): Promise<ApiResult<BackendHealth>>
   /** `context` names the history entry whose remembered password main may use (when Password is empty), whether to
    *  remember the password once connected, and the `requestId` that cancelConnectionRequests stops it by. */
-  connect(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
-  discoverDatabases(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
+  connect(options: ProviderConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
+  /** Load databases, or for BigQuery the project's datasets (with their locations). */
+  discoverDatabases(options: ProviderConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
   /** The Connect dialog's Stop: cancels connects and Load databases by their `requestId`s (1–16), including a Microsoft
    *  Entra sign-in waiting for the web browser; `cancelled` counts those still running. They answer `CANCELLED`. */
   cancelConnectionRequests(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
@@ -797,14 +818,21 @@ export interface VariaApi {
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
-  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string }>>
+  /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
-  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionSaveView>>
-  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
+  /** A BigQuery profile answers with BigQuery's library too (`bigQuery`); a SQL Server one leaves it out (unchanged). */
+  saveConnectionProfile(profile: ConnectionProfileInput | BigQueryProfileInput): Promise<ApiResult<ConnectionSaveView & { bigQuery?: BigQueryLibraryView }>>
+  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }>>
   /** Set Connection Environment: main changes only the label of the entry the options name (saving it again when it left
    *  history) and returns the library it wrote. */
-  setConnectionEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
+  setConnectionEnvironment(input: ConnectionEnvironmentInput | { options: BigQueryConnectionOptions; environment?: string }): Promise<ApiResult<ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }>>
+  /** connections.pickKeyFile: main's open dialog for a service account key or federation configuration. Resolves the
+   *  reference to name it by and its file name (never the path), or null when the user cancelled. */
+  pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
+  /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
+  confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>

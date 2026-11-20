@@ -114,7 +114,7 @@ internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false)
 /// connect (credential, identity pin, the probe), disconnect, and the pre-connect methods. SqlService routes a handle here
 /// by its provider after the provider check.
 /// </summary>
-internal sealed class BigQueryService(BigQueryEnvironment environment) : IDisposable
+internal sealed partial class BigQueryService(BigQueryEnvironment environment) : IDisposable
 {
     public const string ApplicationName = "VariaSqlManager";
     /// <summary>The connect probe (docs/bigquery-plan.md, SQL the backend runs): a free dry run that proves bigquery.jobs.create.</summary>
@@ -167,7 +167,7 @@ internal sealed class BigQueryService(BigQueryEnvironment environment) : IDispos
             return new(id, options.Project, options.Dataset ?? "", "BigQuery", options.DisplayName, options.Color, Login: principal.Account,
                 PrincipalId: principal.PrincipalId, ProviderId: Providers.BigQuery);
         }
-        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, ProbePermission, KindOf(options.Authentication), token); }
+        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, ProbePermission, KindOf(options.Authentication), token: token); }
         finally { client?.Dispose(); }
     }
 

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
-import { autogrowthText, fileTypeLabel, notApplicable, optionDef, type DatabaseOptionDef } from '../../../shared/actions/database.ts'
-import type { DatabaseFilegroup, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
+import { optionDef, type DatabaseOptionDef } from '../../../shared/actions/database.ts'
+import type { DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { draftValue, greyNotes, modelValue, optionChoices, optionGroups, optionState, ownerState, setOption, type DatabaseDraft } from '../dialogs/database-properties'
@@ -15,6 +15,8 @@ import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, shownModel, switchStates } from './fields'
+import { filegroupLists, filegroupsTable, filesTable } from './grids'
+import PropertiesGrid from './PropertiesGrid'
 import { propertiesMessages, type DatabasePropertiesService, type PropertiesState } from './DatabasePropertiesService'
 
 /** The DOM id prefix of a document's fields, so two open documents never share one. */
@@ -71,6 +73,8 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
   const owner = ownerState(model, state.target), id = fieldId(state.id, 'owner'), disabled = !editable || owner.disabled
   const note = owner.note && owner.note !== model.readOnlyReason && owner.note !== greyNotes.readOnlyDatabase ? owner.note : undefined
   const changed = draft.owner !== (model.general.owner ?? ''), text = { note, error: errors.get('owner') }
+  // The model, not the draft: typing an owner keeps the grid's selection and scroll.
+  const files = useMemo(() => filesTable(model), [model])
   return <div className="properties-files">
     <h3 className="properties-group-title">Database</h3>
     <FactList facts={[{ label: 'Database name', value: displayText(model.general.name) }, { label: 'Use full-text indexing', value: 'Always on (since SQL Server 2008)' }]} />
@@ -83,16 +87,8 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
         <button type="button" className="property-browse" aria-label="Browse for the owner" title="Browse for the owner" disabled={disabled || model.logins.length === 0} onClick={() => setChoosing(true)}>…</button>
       </span>
     </PropertyField>
-    <h3 className="properties-group-title" id={`${state.id}-files-grid`}>Database files</h3>
-    <div className="properties-table">
-      <table className="object-dialog-grid" aria-labelledby={`${state.id}-files-grid`}>
-        <thead><tr><th scope="col">Logical Name</th><th scope="col" data-wrap="never">File Type</th><th scope="col">Filegroup</th><th scope="col" data-wrap="never">Size (MB)</th><th scope="col">Autogrowth / Maxsize</th><th scope="col">Path</th><th scope="col">File Name</th></tr></thead>
-        <tbody>{model.files.map(file => <tr key={file.name}>
-          <td><bdi>{displayText(file.name)}</bdi></td><td data-wrap="never">{fileTypeLabel[file.type]}</td><td><bdi>{file.type === 'log' ? notApplicable : displayText(file.filegroup ?? '')}</bdi></td>
-          <td data-wrap="never">{file.type === 'filestream' ? '' : file.sizeMb.toLocaleString()}</td><td>{autogrowthText(file.growth, file.type)}</td><td data-wrap="anywhere"><bdi>{displayText(file.path)}</bdi></td><td><bdi>{displayText(file.fileName)}</bdi></td>
-        </tr>)}</tbody>
-      </table>
-    </div>
+    <h3 className="properties-group-title">Database files</h3>
+    <PropertiesGrid table={files} label="Database files" empty="No files are listed." suggestedName={`${state.label} files`} />
     <p className="field-note">{model.filesTruncated ? 'The database has more files than are listed. ' : ''}Adding, removing and resizing files is not supported yet.</p>
     {choosing && <SelectOwner logins={model.logins} current={draft.owner} onCancel={() => setChoosing(false)} onOk={login => { setChoosing(false); service.updateDraft(state.id, { owner: login }) }} />}
   </div>
@@ -100,26 +96,13 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
 
 /** Filegroups: SSMS's Rows, FILESTREAM and Memory Optimized Data lists, read-only in this version, flags as words. */
 function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const of = (type: DatabaseFilegroup['type']) => model.filegroups.filter(row => row.type === type)
-  const headers = { readOnly: 'Read-Only', isDefault: 'Default', autogrowAllFiles: 'Autogrow All Files' } as const
-  const yes = (value: boolean | undefined) => value ? 'Yes' : 'No'
-  const table = (key: string, title: string, rows: readonly DatabaseFilegroup[], columns: readonly (keyof typeof headers)[], note?: string) => {
-    const id = `${state.id}-filegroups-${key}`
-    return <div className="properties-filegroups-group" key={key}>
-      <h3 className="properties-group-title" id={id}>{title}</h3>
-      {note && <p className="field-note">{note}</p>}
-      {rows.length === 0 ? <p className="field-note">None.</p> : <div className="properties-table">
-        <table className="object-dialog-grid" aria-labelledby={id}>
-          <thead><tr><th scope="col">Name</th><th scope="col">{key === 'rows' ? 'Files' : 'FILESTREAM Files'}</th>{columns.map(column => <th key={column} scope="col">{headers[column]}</th>)}</tr></thead>
-          <tbody>{rows.map(row => <tr key={row.name}><td><bdi>{displayText(row.name)}</bdi></td><td data-wrap="never">{row.files}</td>{columns.map(column => <td key={column} data-wrap="never">{yes(row[column])}</td>)}</tr>)}</tbody>
-        </table>
-      </div>}
-    </div>
-  }
+  const lists = useMemo(() => filegroupLists(model).map(list => ({ list, table: filegroupsTable(model, list) })), [model])
   return <div className="properties-filegroups">
-    {table('rows', 'Rows', of('rows'), model.server.level >= 13 ? ['readOnly', 'isDefault', 'autogrowAllFiles'] : ['readOnly', 'isDefault'])}
-    {table('filestream', 'FILESTREAM', of('filestream'), ['readOnly', 'isDefault'], model.server.filestreamLevel === 0 ? greyNotes.filestream : undefined)}
-    {table('memory', 'Memory Optimized Data', of('memoryOptimized'), [])}
+    {lists.map(({ list, table }) => <div className="properties-filegroups-group" key={list.key}>
+      <h3 className="properties-group-title">{list.title}</h3>
+      {list.key === 'filestream' && model.server.filestreamLevel === 0 && <p className="field-note">{greyNotes.filestream}</p>}
+      <PropertiesGrid table={table} label={`${list.title} filegroups`} empty="None." suggestedName={`${state.label} ${list.title} filegroups`} />
+    </div>)}
     <p className="field-note">{model.filegroupsTruncated ? 'The database has more filegroups than are listed. ' : ''}Adding, removing and changing filegroups is not supported yet.</p>
   </div>
 }

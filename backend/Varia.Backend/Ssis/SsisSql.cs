@@ -121,7 +121,8 @@ internal static partial class SsisSql
     /// parameter is read (an xml parameter's /i nodes as int or bigint, D-ssis 4.6): the only string literals SSIS statements may hold.</summary>
     private static readonly HashSet<string> Literals = ["N'%'", "N'\\'","N'catalog'", "N'customized_logging_levels'", "N'worker_agents'", "N'event_messages'", "N'event_message_guid'", "N'executions'",
         "N'executed_count'", "N'get_operation_log_size'", "N'check_schema_version'", "N'sysadmin'", "N'ssis_admin'", "N'ssis_logreader'", "'.'", "'/i'", "'int'", "'bigint'"];
-    /// <summary>Metadata functions ignore the isolation level and LOCK_TIMEOUT (D-ssis 1.6).</summary>
+    /// <summary>Metadata functions ignore the isolation level, so behind uncommitted DDL they wait out LOCK_TIMEOUT and fail with
+    /// 1222, and HAS_PERMS_BY_NAME answers 0 (D-ssis 1.6; <see cref="CatalogSql.Builtins"/>).</summary>
     private static readonly string[] Builtins = [.. CatalogSql.Builtins, "OBJECT_ID(", "DB_ID(", "DB_NAME(", "COL_LENGTH(", "HAS_DBACCESS(", "HAS_PERMS_BY_NAME(", "SCHEMA_ID(", "TYPE_ID("];
     private static readonly string[] Writes = ["INSERT", "UPDATE", "DELETE", "MERGE", "EXEC", "EXECUTE", "CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "DENY", "REVOKE", "INTO", "WAITFOR"];
 
@@ -137,8 +138,9 @@ internal static partial class SsisSql
     public static List<string> Lint(string text, bool list)
     {
         var problems = new List<string>();
-        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(text, Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
+        problems.AddRange(CatalogSql.GluedNumbers(text));
         if (DateTimeCast().IsMatch(text)) problems.Add("converts a datetimeoffset to datetime, which drops its offset");
         if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase) || text.Contains("EXEC (", StringComparison.OrdinalIgnoreCase)
             || text.Contains("EXEC(", StringComparison.OrdinalIgnoreCase) || text.Contains("EXEC @", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
@@ -163,8 +165,9 @@ internal static partial class SsisSql
     public static List<string> LintWrite(string text, IReadOnlyList<string> procedures)
     {
         var problems = new List<string>();
-        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(text, Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
+        problems.AddRange(CatalogSql.GluedNumbers(text));
         if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
         if (text.Contains("SYNCHRONIZED", StringComparison.OrdinalIgnoreCase)) problems.Add("names SYNCHRONIZED");
         foreach (Match literal in LiteralPattern().Matches(text)) problems.Add("has the literal " + literal.Value);

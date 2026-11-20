@@ -68,7 +68,7 @@ export const bigQueryConnectionOptionsSchema = z.object({
   location: z.string().min(1).max(bigQueryLimits.location).regex(/^[A-Za-z\d-]+$/).optional(), dataset: bigQueryDatasetSchema.optional(),
   extraProjects: z.array(bigQueryProjectSchema).max(bigQueryLimits.extraProjects).optional(),
   authentication: z.enum(bigQueryAuthenticationModes),
-  // An opaque reference (a pick token or the saved profile's id), never a path: only main knows where the file is.
+  // An opaque reference (the token main's picker returned, which a saved entry keeps), never a path: only main knows where the file is.
   keyFile: z.uuid().optional(),
   impersonateServiceAccount: z.email().max(bigQueryLimits.serviceAccount).optional(),
   maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),

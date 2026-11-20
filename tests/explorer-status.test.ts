@@ -391,6 +391,12 @@ describe('ExplorerStatusService', () => {
     expect(client.streams).toHaveLength(2)
   })
 
+  it('opens no view for a BigQuery server, whose probes would be SQL Server ones', () => {
+    connections.add({ ...info(first), providerId: 'bigquery' } as ConnectionInfo, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as never)
+    connections.add(info(second), { server: 'b' } as never)
+    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([second])
+  })
+
   it('takes only background slots, so the documents a user opens always find one', () => {
     for (let at = 0; at < 10; at++) connections.add(info(`00000000-0000-4000-8000-00000000000${at.toString(16)}`), { server: 's' + at } as never)
     expect(client.streams).toHaveLength(liveServiceLimits.background)

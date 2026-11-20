@@ -2,7 +2,8 @@
 // from a row of Sessions, Blocking or Active Expensive Queries, whether Kill may be offered, and how each answer reads.
 // Pure functions: ActivityMonitorService runs the requests, and the flyout and the confirm draw these.
 import { activityLimits, detailsSections, killOutcomes, liveColumnId, tableSpecs, variaSessionKinds, type DetailsSection, type DetailsText, type KillOutcome } from '../../../shared/activity/catalog'
-import { loginTimePattern, type ActivityDetailsResult, type ActivityKillResult, type ActivitySessionDetails, type ActivityText } from '../../../shared/activity/schema'
+import { loginTimePattern, type ActivityDetailsResult, type ActivityKillResult, type ActivityLock, type ActivitySessionDetails, type ActivitySessionWait, type ActivityText, type ActivityTransaction } from '../../../shared/activity/schema'
+import type { LocalTableData } from '../../../shared/results/local-table'
 import { formatCount, plural } from '../results/status'
 
 /** The panes whose rows are sessions. */
@@ -149,6 +150,28 @@ export function detailsState(result: ActivityDetailsResult): { readonly kind: 'p
   if (result.state === 'ended') return { kind: 'departed', message: `Session ${result.sessionId} has ended (or this login can no longer see it). Its details are gone.` }
   if (result.state === 'changed') return { kind: 'departed', message: `Session ${result.sessionId} ended, and its id now belongs to another session. Nothing of the new session was read.` }
   return { kind: 'error', message: result.error?.message ?? 'The session could not be read.' }
+}
+
+/** Session waits as the flyout's card grid shows them: counts and milliseconds as numbers (right-aligned, sorted by value). */
+export function waitsTable(waits: readonly ActivitySessionWait[]): LocalTableData {
+  return {
+    columns: [{ name: 'Wait type' }, { name: 'Tasks', kind: 'number' }, { name: 'Wait (ms)', kind: 'number' }, { name: 'Max (ms)', kind: 'number' }, { name: 'Signal (ms)', kind: 'number' }],
+    rows: waits.map(wait => [wait.waitType, formatCount(wait.waitingTasks), formatCount(wait.waitTimeMs), formatCount(wait.maxWaitTimeMs), formatCount(wait.signalWaitTimeMs)])
+  }
+}
+/** Transactions, one row per transaction and database; a value the server did not give is NULL. */
+export function transactionsTable(transactions: readonly ActivityTransaction[]): LocalTableData {
+  return {
+    columns: [{ name: 'ID', kind: 'number' }, { name: 'Name' }, { name: 'Type' }, { name: 'State' }, { name: 'Database' }, { name: 'Begin time' }, { name: 'Log used (bytes)', kind: 'number' }],
+    rows: transactions.map(tran => [String(tran.transactionId), tran.name ?? null, tran.type, tran.state, tran.database ?? null, tran.beginTime?.replace('T', ' ') ?? null, tran.logBytesUsed === undefined ? null : formatCount(tran.logBytesUsed)])
+  }
+}
+/** Lock groups by resource type, database (its id when the name could not be read), mode and status. */
+export function locksTable(locks: readonly ActivityLock[]): LocalTableData {
+  return {
+    columns: [{ name: 'Resource' }, { name: 'Database' }, { name: 'Mode' }, { name: 'Status' }, { name: 'Count', kind: 'number' }],
+    rows: locks.map(lock => [lock.resourceType, lock.database ?? (lock.databaseId === undefined ? null : String(lock.databaseId)), lock.mode, lock.status, formatCount(lock.count)])
+  }
 }
 
 /** Copy's text: every section the flyout shows, as plain text (headings, "Label: value" lines, texts whole as read). */

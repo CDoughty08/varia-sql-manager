@@ -420,7 +420,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
   // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
   const indexNotice = indexIncomplete(entry, index)
-  const unbuilt = unindexedServers(spanning ? workbench.connections.live().map(connection => connection.id) : workbench.connections.isLive(state.connectionId) ? [state.connectionId] : [],
+  const unbuilt = unindexedServers(spanning ? workbench.connections.liveSqlServer().map(connection => connection.id) : workbench.connections.isLiveSqlServer(state.connectionId) ? [state.connectionId] : [],
     snapshot.indexes, spanning ? undefined : result?.index)
   const buildIndex = unbuilt.length ? <> <button type="button" className="object-search-build" onClick={() => { for (const id of unbuilt) objectSearch.build(id) }}>{unbuilt.length > 1 ? 'Build indexes' : 'Build index'}</button></> : null
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial

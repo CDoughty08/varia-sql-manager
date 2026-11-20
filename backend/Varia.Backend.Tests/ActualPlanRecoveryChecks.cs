@@ -96,7 +96,9 @@ internal static class ActualPlanRecoveryChecks
             ("DECLARE @sql nvarchar(max) = N'GRANT CONTROL SERVER TO ' + QUOTENAME(@name) + N';'; EXEC sys.sp_executesql @sql;", "other statement"),
             ("SELECT name FROM sys.server_event_sessions WHERE name=@other;", "unknown variable"),
             ("DROP EVENT SESSION [x] ON SERVER;", "static DDL outside the dynamic text"),
-            ("SELECT N'unterminated;", "unterminated literal") })
+            ("SELECT N'unterminated;", "unterminated literal"),
+            ("SELECT name FROM sys.server_event_sessions WHERE name=@name 1e1DELETE FROM t;", "a DELETE glued to a number"),
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION ' + QUOTENAME(@name) + N' ON SERVER; SELECT 1DELETE FROM t;'; EXEC sys.sp_executesql @sql;", "a DELETE glued to a number in the dynamic text") })
             check(ActualPlanSql.Lint(bad).Count > 0, "the collector lint refuses " + why);
 
         ScanChecks(check);

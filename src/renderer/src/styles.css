@@ -1687,6 +1687,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .advanced-dialog { width: min(640px, calc(100vw - 40px)); }
 .advanced-dialog .property-row { grid-template-columns: 230px minmax(0, 1fr); }
 .advanced-dialog .field-note { margin-top: 16px; }
+.connect-inline-action { margin-left: 6px; font-size: var(--varia-size-xs); padding: 1px 7px; }
+.bq-account .field-note { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.bq-unit { flex: 0 0 84px; width: 84px; }
+.bq-extra-projects { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; grid-column: 2; }
+.bq-extra-projects li { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--varia-size-sm); }
+.bq-source-path { font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); overflow-wrap: anywhere; }
 .dialog-heading h2 { font-weight: 600; font-size: var(--varia-size-lg); margin: 0 0 22px; }
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }
 .field-note { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
@@ -2518,6 +2524,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
+/* A Properties list (PropertiesGrid): a fitted page grid, as tall as its rows and as wide as the section. */
+.properties-grid { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+.properties-grid + .field-note { margin-top: var(--varia-space-2); }
 /* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so its scroller is a tab
    stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
    series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
@@ -2758,10 +2767,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-details-fields dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .activity-details-text { max-height: 16em; margin: 0; overflow: auto; padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 .activity-details-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.activity-details-table { width: 100%; border-collapse: collapse; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
-.activity-details-table th, .activity-details-table td { padding: 2px var(--varia-space-1); border-bottom: 1px solid var(--varia-panel-border); text-align: left; overflow-wrap: anywhere; }
-.activity-details-table thead th { color: var(--varia-descriptionForeground); font-weight: 600; }
-.activity-details-table tbody th { font-weight: 400; }
 .activity-details-load { display: flex; flex-direction: column; align-items: flex-start; gap: var(--varia-space-1); }
 .activity-details-foot { flex: none; padding: var(--varia-space-1) var(--varia-space-3); border-top: 1px solid var(--varia-panel-border); }
 .connection-modal.sub-dialog.activity-kill { width: min(460px, calc(100vw - 48px)); }
@@ -2948,10 +2953,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
 .search-details-definition { position: relative; isolation: isolate; }
 .search-details-match { position: absolute; left: 0; right: 0; z-index: -1; height: var(--varia-line-sm); background: var(--varia-list-inactiveSelectionBackground); pointer-events: none; }
-.search-details-columns { margin: 0; padding: var(--varia-space-1) var(--varia-space-3); list-style: none; }
-.search-details-columns li { display: flex; align-items: baseline; gap: var(--varia-space-2); line-height: var(--varia-line-md); }
-.search-details-column { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-details-column-type { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.search-details-columns { display: flex; flex-direction: column; padding: var(--varia-space-1) var(--varia-space-3); }
 .index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
 .index-status .codicon { font-size: var(--varia-glyph-sm); }
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }

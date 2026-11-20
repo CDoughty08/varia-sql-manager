@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ConnectionOptions } from './contracts'
+import type { BigQueryConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from './contracts'
 import { requiresUser, showsIdentity, usesPassword } from './auth'
 import { advancedConnectionSchema, bigQueryConnectionOptionsSchema, bigQueryLimits, connectionOptionsSchema, connectionPrincipalSchema, savedConnection } from './connections'
 import { providerIds } from './providers'
@@ -57,6 +57,15 @@ export const isSqlServerTarget = <T extends { readonly options: ConnectionTarget
 export function connectionTargetOptions(options: ConnectionOptions): SqlServerTargetOptions {
   const { displayName: _displayName, color: _color, environment: _environment, ...snapshot } = savedConnection(options)
   return sqlServerTargetOptionsSchema.parse(snapshot)
+}
+/** BigQuery's target settings: the options without their labels, in the schema's key order (so two equal ones encode alike). */
+export function bigQueryTargetOptions(options: BigQueryConnectionOptions): BigQueryTargetOptions {
+  const { displayName: _displayName, color: _color, environment: _environment, ...snapshot } = bigQueryConnectionOptionsSchema.parse(options)
+  return bigQueryTargetOptionsSchema.parse(snapshot)
+}
+/** Either provider's target settings. */
+export function targetOptionsOf(options: ProviderConnectionOptions): ConnectionTargetOptions {
+  return options.provider === 'bigquery' ? bigQueryTargetOptions(options) : connectionTargetOptions(options)
 }
 
 export const connectionCredentialReferenceSchema = z.object({ profileId: uuid, revision: uuid }).strict().readonly()
