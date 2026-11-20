@@ -31,6 +31,10 @@ internal static partial class BigQueryExecutionChecks
         public List<JsonNode> Rows = [];
         /// <summary>The most rows one page answers, whatever maxResults asks (BigQuery's own ~10 MB cut).</summary>
         public int PageCap = int.MaxValue;
+        /// <summary>Serializes each page's rows once and reuses the text (the read bench: building the page's JSON again for
+        /// every read would time the fake, not Varia).</summary>
+        public bool CacheRows;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int Offset, int Count), string> cachedRows = new();
         public int PollsBeforeDone;
         public string StatementType = "SELECT";
         public long? DmlAffected;
@@ -163,13 +167,18 @@ internal static partial class BigQueryExecutionChecks
                 if (Rows.Count > 0)
                 {
                     answer["totalRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    answer["rows"] = new JsonArray([.. Rows.Skip(offset).Take(count).Select(row => row.DeepClone())]);
+                    if (!CacheRows) answer["rows"] = PageRows(offset, count);
                 }
                 if (offset + count < Rows.Count) answer["pageToken"] = Token ?? "page-" + (offset + count).ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
             if (DmlAffected is { } dml) answer["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return new(200, answer.ToJsonString());
+            var text = answer.ToJsonString();
+            if (CacheRows && Schema is not null && Rows.Count > 0)
+                text = string.Concat(text.AsSpan(0, text.Length - 1), ",\"rows\":", cachedRows.GetOrAdd((offset, count), key => PageRows(key.Offset, key.Count).ToJsonString()), "}");
+            return new(200, text);
         }
+
+        JsonArray PageRows(int offset, int count) => new([.. Rows.Skip(offset).Take(count).Select(row => row.DeepClone())]);
     }
 
     sealed class Harness : IDisposable

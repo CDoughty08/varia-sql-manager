@@ -349,6 +349,19 @@ internal static partial class BigQueryExecutionChecks
         var columns = restSet is null || arrowSet is null ? "" : string.Join(",", restSet.Columns.Zip(arrowSet.Columns, (a, b) => a == b ? "" : a.Name).Where(name => name.Length > 0));
         check(restRows.Count == 600 && arrowRows.Count == 600 && differences.Count == 0 && columns == "" && restSet?.RowsRead == arrowSet?.RowsRead,
             $"REST and Arrow reads of the same rows give byte-identical cells for every type: {restRows.Count} {arrowRows.Count} {string.Join("; ", differences)} {columns}");
+        // The read bench's REST fake serializes each page's rows once and reuses the text: the same cells as pages built anew.
+        var cached = new Jobs { Schema = GoldenSchema(), Rows = rest, Destination = Destination, PageCap = 70, CacheRows = true };
+        var sameCells = true;
+        for (var read = 0; read < 2; read++)
+        {
+            using var harness = new Harness(cached);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT * FROM t ORDER BY i");
+            var rows = result?.ResultSets.SingleOrDefault() is { } set ? harness.Rows(set) : [];
+            sameCells &= code == "ok" && rows.Count == restRows.Count
+                && rows.Zip(restRows).All(pair => pair.First.Zip(pair.Second).All(cells => cells.First.Text == cells.Second.Text && cells.First.Flags == cells.Second.Flags));
+        }
+        check(sameCells && PageReads(cached) > 2, $"REST pages whose rows the fake serialized once read the same cells, twice over: {PageReads(cached)}");
         check(storage.Asked == Apache.Arrow.Ipc.CompressionCodecType.Zstd && storage.Sessions.Single().ReadSession.ReadOptions.ArrowSerializationOptions.BufferCompression
             == Google.Cloud.BigQuery.Storage.V1.ArrowSerializationOptions.Types.CompressionCodec.Zstd, "the read session asks for Zstandard buffer compression");
         // Batches sent uncompressed (an endpoint that ignores the option) or with LZ4 read the same as the Zstandard ones.

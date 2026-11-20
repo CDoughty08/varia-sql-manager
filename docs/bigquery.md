@@ -211,7 +211,7 @@ type.
   appends rows, so the store keeps one writer. A stream that fails transiently is read again from its offset; one that
   fails for good fails the query at once, with REST's error (an expired sign-in is `AUTH_EXPIRED`).
 - **Compression.** The session asks for Zstandard buffer compression: in the offline benchmark it sends a fifth to two
-  fifths of the uncompressed bytes for at most about 15% more decoding time, against LZ4's 55% for the same time
+  fifths of the uncompressed bytes for 10 to 40% more decoding time, against LZ4's 55% for up to 20%
   (Throughput below). The reader also reads LZ4 and uncompressed batches, which an endpoint that ignores the option
   sends.
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
@@ -350,16 +350,18 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
-  it measures decoding and storing, not the network, and prints the Arrow bytes each sent. It is run by hand, prints
+  it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the
+  forced collection one case's release schedules runs before the next case is timed), and prints the Arrow bytes each sent. It is run by hand, prints
   medians and has no floors. On a 2026 desktop, 500,000 rows:
 
   | Table | REST | Arrow | Arrow, LZ4 | Arrow, Zstandard |
   | --- | --- | --- | --- | --- |
-  | numbers (INT64 counter, short strings) | 0.78 M rows/s | 10.7 M rows/s, 11.0 MB | 9.7 M, 6.1 MB | 9.1 M, 2.2 MB |
-  | mixed (ids, amounts, countries, emails, text, flags) | 0.17 M rows/s | 0.36 M rows/s, 45.7 MB | 0.37 M, 26.1 MB | 0.37 M, 17.5 MB |
+  | numbers (INT64 counter, short strings) | 2.9 M rows/s | 9.2 M rows/s, 11.0 MB | 7.7 M, 6.1 MB | 6.6 M, 2.2 MB |
+  | mixed (ids, amounts, countries, emails, text, flags) | 1.0 M rows/s | 2.5 M rows/s, 45.7 MB | 2.5 M, 26.1 MB | 2.3 M, 17.5 MB |
 
   Downloading and decoding overlap, so a read takes about the longer of the two: at 100 Mbit/s the mixed table takes
-  about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s decoding bounds it either way.
+  about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s about 0.4 s uncompressed and 0.2 s with Zstandard, where
+  decoding bounds it.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
   cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.
