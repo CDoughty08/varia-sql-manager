@@ -23,7 +23,7 @@ internal static partial class PageCompressionBench
         var budget = (long)(gib * (1L << 30));
         // Room for the result, its unpacked copy and the operations' working memory beside it.
         // --whole: two more results of the same size and their unpacked copies.
-        var store = new ResultStore((whole ? 7 : 4) * budget, (whole ? 7 : 4) * budget) { Packing = PagePacking.OnRequest };
+        var store = new ResultStore((whole ? 7 : 4) * budget, (whole ? 7 : 4) * budget) { Packing = PagePacking.OnRequest, TypedPacking = !untyped };
         var query = store.BeginQuery("fused");
         var set = store.Open(query, 0, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The result set was not kept.");
         long rows = 0;

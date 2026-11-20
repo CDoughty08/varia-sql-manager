@@ -216,6 +216,8 @@ internal sealed partial class ResultStore
     /// off to filter pages of any size.</summary>
     internal bool FilterCapped { get; init; } = DefaultFilterCapped;
     internal static bool DefaultFilterCapped { get; set; } = true;
+    /// <summary>Whether packing types columns (PageCodec.Typed.cs): always in the product; the benchmarks compare both.</summary>
+    internal bool TypedPacking { get; init; } = true;
 
     private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
@@ -324,7 +326,7 @@ internal sealed partial class ResultStore
     internal byte[]? Pack(byte[] page, Action<bool>? quiet = null)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var packed = PageCodec.Pack(page, quiet);
+        var packed = PageCodec.Pack(page, quiet, TypedPacking);
         Interlocked.Add(ref packTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
         Interlocked.Add(ref packedIn, page.Length);
         if (packed is null) return null;
