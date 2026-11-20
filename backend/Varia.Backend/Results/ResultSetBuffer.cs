@@ -194,6 +194,9 @@ internal sealed class ResultSetBuffer
     /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
     /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }
+    /// <summary>Never packed at seal (<see cref="ResultStore.PackAtSeal"/>): set by the synthesize test hook, before its first
+    /// row, so a check or benchmark that asks for a raw result gets one.</summary>
+    internal bool SealRaw { get; set; }
 
     /// <summary>The builder for the next row, or null when this set stores nothing more: released, its query stopped, or,
     /// for a derived set, a row the budget refused or a page sealed under low system memory.</summary>
@@ -789,7 +792,7 @@ internal sealed class ResultSetBuffer
     /// packed; the pages sealed before then are queued with the one that reaches it.</summary>
     private void QueueSealedLocked()
     {
-        if (!store.PackAtSeal || store.Packing == PagePacking.Off || Budget.Live is not null || Derived || bytesStored < ResultPacker.FloorBytes) return;
+        if (!store.PackAtSeal || store.Packing == PagePacking.Off || Budget.Live is not null || Derived || SealRaw || bytesStored < ResultPacker.FloorBytes) return;
         var queued = 0;
         for (; sealQueued < pages.Count; sealQueued++)
         {

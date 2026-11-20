@@ -2767,6 +2767,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid()), 0, 1, 1, "rows",
             [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary", column.Role))], [.. columns.Select(column => column.Wire)])
             ?? throw new RequestException("BACKEND_ERROR", "The result memory budget is full.");
+        // Raw unless asked to pack, as the checks and benchmarks that compare raw and packed results expect.
+        set.SealRaw = true;
         try
         {
             for (long row = 0; row < args.Rows; row++)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Varia.Backend.Results;
 using static Varia.Backend.Tests.PackerChecks;
 
@@ -232,5 +233,14 @@ internal static class SealPackingChecks
         var plain = new SqlService(new ResultStore(1L << 30, 1L << 30));
         check(!plain.Results.PackAtSeal, "and only the backend process: a service without the policy does not");
         plain.Dispose();
+
+        // The synthesize test hook keeps its result raw unless asked to pack: the checks and benchmarks that compare a raw
+        // result with a packed one, or count its raw bytes against a budget, get the result they asked for.
+        var json = HostChecks.Json;
+        using var hooked = new SqlService(new ResultStore(1L << 30, 1L << 30), hooks: true, packHidden: true);
+        var descriptor = (ResultDescriptor)hooked.DispatchAsync(SqlService.SynthesizeMethod, JsonSerializer.SerializeToElement(new { shape = "W1", rows = 200_000 }, json), json).GetAwaiter().GetResult();
+        var synthesized = hooked.Results.Find(descriptor.ResultId)!;
+        check(descriptor.BytesStored > 4 * ResultPacker.FloorBytes && synthesized.Budget.SealPending == 0 && !synthesized.HasPacked,
+            "a synthesized result is never packed at seal: " + descriptor.BytesStored + " bytes, " + synthesized.Budget.SealPending + " queued");
     }
 }

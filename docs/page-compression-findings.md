@@ -38,7 +38,9 @@ packed) and catalog columns read sixteen times 52 % (58 MiB raw, 2.7 MiB packed)
 - **The policy's rules for holds.** A page is never replaced while a pin or lease is held: it stays queued, and the last
   hold to end starts the worker again. A release drops the queue; so does an operation's whole unpack of a complete
   result, a use the policy's delays then govern, and so does a failure while packing (a defect, never the user's: the
-  pages stay raw and readable). Live tables are never packed, and derived sets are left to the policy.
+  pages stay raw and readable). Live tables are never packed, and derived sets are left to the policy. The
+  `debug.results.synthesize` test hook's result stays raw unless it asks to pack, since the checks and benchmarks that
+  use it compare raw results with packed ones.
 - **A refused row waits for it.** While the query's own pages are queued (`QueryBudget.SealCanPack`), a row the budget
   refuses waits for their saving as it waits for packing for room ([Room for a query](#room-for-a-query)), through a
   pin too (a read's is brief; Find's or a profile's lasts the operation), whose end restarts the worker, within the
