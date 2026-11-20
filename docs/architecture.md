@@ -330,7 +330,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
     and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
-    mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
+    mounts (GridShell leaves that to its owner). Loading, error and Retry stay the surface's own notes; an empty table says
+    so in the surface's words (`empty`) over the header. `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
+    A read-only list of rows a user may want to copy is a `LocalGrid`. These stay as they are: editable grids (Table
+    Designer, New Database, Restore, object dialog pages, Shortcut Mapping, Extended properties), trees (Object Explorer,
+    the plan outline, View Dependencies, server files), listboxes whose rows are actions (Search Objects hits, pickers,
+    Peek Dependencies), Messages (a log), fact lists (`<dl>`: Peek Properties, plan properties), the column profile's
+    cards, and prose.
     Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
     the draft keeps a grid's selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
