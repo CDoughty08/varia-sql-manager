@@ -83,6 +83,21 @@ Servers whose resource objects share a fingerprint (version, edition, and those 
 checksum) share one copy, charged once; a server whose objects differ never reuses another's. A failed read is listed as
 skipped as `mssqlsystemresource`.
 
+### Editor metadata
+
+Where a database's children are kept, its table also holds what the query editor needs about them (`ObjectDetails`,
+column-wise beside the entries, found by binary search on the entry):
+
+- Each column's, parameter's and scalar function's return type (the function's parameter 0) as a type id, max length,
+  precision, scale and ordinal, with flags: nullable, identity, computed, has a default, output, read-only. Types are
+  the database's own list (system, alias, CLR and table types) with their names pooled as names, so a type text such as
+  `nvarchar(40)`, `decimal(18,2)`, `datetime2(7)` or an alias's own name is formatted on demand.
+- Each index's key columns in key order (descending marked) and then its included columns; a primary or unique key
+  shares its index's list; each foreign key's column pairs and the table it references (none when that table is not
+  indexed, as a hidden or left-out one).
+- The resource database's columns and parameters carry their types too. A database read without its children
+  (`CHILDREN_LEFT_OUT`) has no metadata.
+
 ### Failures and skipped databases
 
 - A failing statement (a catalog view the login may not read, or an edition lacks) lists the server or database as
@@ -109,6 +124,9 @@ skipped as `mssqlsystemresource`.
 - Once less than 128 MiB is free, definitions stop being kept: a build reads at most each one's first 256 characters,
   only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
   predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.
+- The editor metadata is charged per item: 13 bytes a typed column, parameter or function, 14 an index or foreign key,
+  5 a key column and 16 a type. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
+  840 key columns) beside about 195 KB of entries.
 - A database that does not fit with its children is read again without columns, indexes, statistics and parameters
   (status: `CHILDREN_LEFT_OUT`); one that still does not fit is skipped as `TOO_LARGE`. A read that runs out of room
   cancels its batch at once.

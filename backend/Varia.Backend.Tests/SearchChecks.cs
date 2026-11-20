@@ -30,6 +30,7 @@ internal static class SearchChecks
         Kinds(check);
         Packing(check);
         SearchPackedChecks.Run(check);
+        SearchDetailChecks.Run(check);
         Reader(check).GetAwaiter().GetResult();
         AgentRows(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
@@ -534,8 +535,23 @@ internal static class SearchChecks
     }
 
     /// <summary>A database batch's result sets (without definitions) as DataTables, in the batch's order and column types.</summary>
-    private static DataTableReader Batch(bool children, object?[][] objects, object?[][] types, object?[][] named, object?[][] columns, object?[][] indexes, object?[][] stats, object?[][] parameters)
+    /// <summary>The system types a test batch lists unless it names its own: int, nvarchar, decimal and sysname.</summary>
+    internal static readonly object?[][] SystemTypes =
+    [
+        [56, "sys", "int", (byte)56, false, false], [106, "sys", "decimal", (byte)106, false, false], [231, "sys", "nvarchar", (byte)231, false, false],
+        [256, "sys", "sysname", (byte)231, false, false]
+    ];
+
+    /// <summary>A database batch for the reader. Columns, indexes and parameters may be given short (object id, name, and an index's
+    /// type or a parameter's direction): the rest is filled in (a nullable int column, index_id and parameter_id counting up, an int
+    /// parameter). The key metadata sets are empty unless given.</summary>
+    internal static DataTableReader Batch(bool children, object?[][] objects, object?[][] types, object?[][] named, object?[][] columns, object?[][] indexes, object?[][] stats, object?[][] parameters,
+        object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null)
     {
+        var counted = 0;
+        object?[] Column(object?[] row) => row.Length > 2 ? row : [row[0], row[1], ++counted, 56, (short)4, (byte)10, (byte)0, true, false, false, false];
+        object?[] Index(object?[] row) => row.Length > 3 ? row : [row[0], row[1], row[2], ++counted];
+        object?[] Parameter(object?[] row) => row.Length > 3 ? row : [row[0], row[1], row[2], ++counted, 56, (short)4, (byte)10, (byte)0, false];
         var sets = new List<DataTable>
         {
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)), ("modified", typeof(DateTime)), ("parent", typeof(int)),
@@ -547,10 +563,18 @@ internal static class SearchChecks
         };
         if (children)
         {
-            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string))], columns));
-            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("type", typeof(byte))], indexes));
+            sets.Add(Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("system", typeof(byte)), ("user", typeof(bool)), ("table", typeof(bool))], allTypes ?? SystemTypes));
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("column", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)), ("scale", typeof(byte)),
+                ("nullable", typeof(bool)), ("identity", typeof(bool)), ("computed", typeof(bool)), ("default", typeof(bool))], [.. columns.Select(Column)]));
+            counted = 0;
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("type", typeof(byte)), ("index", typeof(int))], [.. indexes.Select(Index)]));
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string))], stats));
-            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool))], parameters));
+            counted = 0;
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool)), ("parameter", typeof(int)), ("type", typeof(int)), ("length", typeof(short)), ("precision", typeof(byte)),
+                ("scale", typeof(byte)), ("readonly", typeof(bool))], [.. parameters.Select(Parameter)]));
+            sets.Add(Rows([("id", typeof(int)), ("index", typeof(int)), ("column", typeof(int)), ("descending", typeof(bool)), ("included", typeof(bool))], indexColumns ?? []));
+            sets.Add(Rows([("id", typeof(int)), ("parent", typeof(int)), ("index", typeof(int))], keys ?? []));
+            sets.Add(Rows([("id", typeof(int)), ("column", typeof(int)), ("referenced", typeof(int)), ("other", typeof(int))], foreignKeys ?? []));
         }
         return new DataTableReader([.. sets]);
     }

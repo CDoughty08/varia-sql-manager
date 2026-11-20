@@ -36,6 +36,8 @@ internal static class SearchLiveChecks
         created = await sql("CREATE TABLE [srch].[Rates] (id int PRIMARY KEY, rate money, valid_from datetime2 GENERATED ALWAYS AS ROW START, valid_to datetime2 GENERATED ALWAYS AS ROW END,"
             + " PERIOD FOR SYSTEM_TIME (valid_from, valid_to)) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [srch].[Rates_Archive])); CREATE TABLE [srch].[Person] (person_name nvarchar(40)) AS NODE;", database);
         check(created.Error is null, "the search checks create a temporal table and a graph node table: " + created.Error);
+        created = await sql("CREATE TABLE [srch].[Line] (id int, priced_id int CONSTRAINT [fk_srch_line_priced] FOREIGN KEY REFERENCES [srch].[Priced] (id));", database);
+        check(created.Error is null, "the search checks create a table with a foreign key: " + created.Error);
 
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
@@ -62,6 +64,38 @@ internal static class SearchLiveChecks
             "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
         check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
         var memoryBefore = service.Search.MemoryUsed;
+
+        // The editor metadata a build keeps beside the children, as a real server reports it: types with their lengths and flags,
+        // a key's and an index's columns, a foreign key's column pairs and referenced table, a parameter's type, and the resource
+        // database's typed parameters (sys.sp_who's @loginame is a sysname).
+        static int At(ObjectTable table, string kind, string name, string? parent)
+        {
+            for (var at = 0; at < table.Count; at++)
+                if (table.Kind(at) == kind && table.Name(at) == name && table.ParentName(at) == parent) return at;
+            return -1;
+        }
+        var held = service.Search.IndexOf(connectionId);
+        var mine = held?.Databases.SingleOrDefault(value => value.Database == database)?.Table;
+        check(mine?.Details is not null, "a build keeps the scratch database's editor metadata");
+        if (mine is not null)
+        {
+            TypedDetail? Typed(string name, string parent, string kind = "column") => At(mine, kind, name, parent) is var at and >= 0 ? mine.Typed(at) : null;
+            check(Typed("id", "Priced") is { TypeText: "int", Ordinal: 1 } id && (id.Flags & TypedFlags.Nullable) == 0
+                && Typed("price", "Priced") is { TypeText: "money" } price && (price.Flags & TypedFlags.Nullable) != 0
+                && Typed("srch_total", "Priced") is { } total && (total.Flags & TypedFlags.Computed) != 0
+                && Typed("note", "Priced") is { TypeText: "nvarchar(40)" } note && (note.Flags & TypedFlags.Default) != 0
+                && Typed("valid_from", "Rates")?.TypeText == "datetime2(7)",
+                "a real server's columns carry their types, lengths, ordinals and flags: " + string.Join(", ", new[] { "id", "price", "srch_total", "note" }.Select(name => name + " " + Typed(name, "Priced")?.TypeText)));
+            check(Typed("@srch_param", "usp_Param", "parameter") is { TypeText: "int", Ordinal: 1 }, "a real server's parameter carries its type and ordinal");
+            var priced = At(mine, "table", "Priced", null);
+            var foreign = At(mine, "key", "fk_srch_line_priced", "Line");
+            check(mine.KeyColumns(At(mine, "key", "pk_srch_priced", "Priced")) is [{ Column: 1 }] && mine.KeyColumns(At(mine, "index", "ix_srch_price", "Priced")) is [{ Column: 2, Flags: 0 }]
+                && mine.KeyColumns(foreign) is [{ Column: 2, Referenced: 1 }] && priced >= 0 && mine.Referenced(foreign) == priced,
+                "a real server's primary key, index and foreign key carry their columns, and the foreign key its referenced table");
+        }
+        var resource = held?.Resource?.Table;
+        check(resource is not null && At(resource, "parameter", "@loginame", "sp_who") is var login and >= 0 && resource.Typed(login)?.TypeText == "sysname",
+            "the resource database's parameters carry their types");
 
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
@@ -150,7 +184,7 @@ internal static class SearchLiveChecks
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.
         check(!await RanToEnd(service, connectionId, cancel: true), "a stopped index read cancels its batch on a real server, so the rest of it is never sent");
         check(await RanToEnd(service, connectionId, cancel: false), "a reader closed short of its end without a cancel drains the batch on a real server");
-        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
+        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Line]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
             + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
             + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
     }

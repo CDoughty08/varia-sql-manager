@@ -56,20 +56,34 @@ internal sealed class ObjectTable
 {
     public const byte SystemFlag = 1, CutFlag = 2, ChildFlag = 4, RemovedFlag = 128;
 
-    public static readonly ObjectTable Empty = new([], [], ObjectShapes.Snapshot, null);
+    public static readonly ObjectTable Empty = new([], [], ObjectShapes.Snapshot, null, null);
 
     private readonly ObjectEntry[] entries;
     private readonly object?[] texts;
     private readonly ObjectShapes.Shape[] shapes;
     private readonly Dictionary<int, DateTime>? dates;
+    private readonly ObjectDetails? details;
 
-    private ObjectTable(ObjectEntry[] entries, object?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates)
+    private ObjectTable(ObjectEntry[] entries, object?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates, ObjectDetails? details)
     {
         this.entries = entries;
         this.texts = texts;
         this.shapes = shapes;
         this.dates = dates;
+        this.details = details;
     }
+
+    /// <summary>The editor metadata (types, index and key columns), or null where the read kept no children.</summary>
+    public ObjectDetails? Details => details;
+
+    /// <summary>The type of the column, parameter or scalar function at <paramref name="at"/>, or null.</summary>
+    public TypedDetail? Typed(int at) => details?.Typed(at, texts);
+
+    /// <summary>The columns of the index or key at <paramref name="at"/> (empty when it has none).</summary>
+    public KeyColumn[] KeyColumns(int at) => details?.Keys(at) ?? [];
+
+    /// <summary>The table the foreign key at <paramref name="at"/> references, or -1.</summary>
+    public int Referenced(int at) => details?.Referenced(at) ?? -1;
 
     public int Count => entries.Length;
     /// <summary>The distinct texts the entries name: strings, and <see cref="PackedText"/>s for long definitions (null where one was
@@ -146,7 +160,7 @@ internal sealed class ObjectTable
             if (copy[at].Name >= 0 && swap[copy[at].Name] is null || copy[at].Schema >= 0 && swap[copy[at].Schema] is null) throw new ArgumentException("A name has no text.");
             if (copy[at].Definition >= 0 && swap[copy[at].Definition] is null) { copy[at].Definition = -1; copy[at].Flags &= unchecked((byte)~CutFlag); }
         }
-        return new(copy, swap, shapes, dates);
+        return new(copy, swap, shapes, dates, details);
     }
 
     /// <summary>For each text, whether an entry names it as a name or schema (as against only as a definition).</summary>
@@ -158,6 +172,8 @@ internal sealed class ObjectTable
             names[entry.Name] = true;
             if (entry.Schema >= 0) names[entry.Schema] = true;
         }
+        if (details is not null)
+            foreach (var id in details.TextIds()) names[id] = true;
         return names;
     }
 
@@ -221,6 +237,7 @@ internal sealed class ObjectTable
         private readonly Dictionary<string, int> ids = new(StringComparer.Ordinal);
         private readonly Dictionary<PackedText, int> packedIds = [];
         private Dictionary<int, DateTime>? dates;
+        private ObjectDetails.Builder? details;
         private int removed;
 
         public int Count { get; private set; }
@@ -294,6 +311,12 @@ internal sealed class ObjectTable
         public bool Removed(int at) => (entries[at].Flags & RemovedFlag) != 0;
         public bool HasDefinition(int at) => entries[at].Definition >= 0;
 
+        /// <summary>The read's details (types, index and key columns), started on first use.</summary>
+        public ObjectDetails.Builder Details => details ??= new();
+
+        /// <summary>The id a text already has (a name or schema), for the details.</summary>
+        public int Id(string value) => ids[value];
+
         /// <summary>Makes <paramref name="at"/> a child of <paramref name="parent"/>, with the system flag a child takes from it.</summary>
         public void Attach(int at, int parent, bool system)
         {
@@ -339,7 +362,8 @@ internal sealed class ObjectTable
             if (map is not null)
                 for (var at = 0; at < kept.Length; at++)
                     if (kept[at].Owner >= 0) kept[at].Owner = map[kept[at].Owner];
-            return new(kept, [.. texts], ObjectShapes.Snapshot, keptDates);
+            var keptDetails = details?.Build(at => Removed(at) ? -1 : map is null ? at : map[at]);
+            return new(kept, [.. texts], ObjectShapes.Snapshot, keptDates, keptDetails);
         }
 
         /// <summary>Forgets every entry and text (after the read handed them over or gave them back).</summary>
@@ -350,6 +374,7 @@ internal sealed class ObjectTable
             ids.Clear();
             packedIds.Clear();
             dates = null;
+            details = null;
             removed = 0;
             Count = 0;
         }
