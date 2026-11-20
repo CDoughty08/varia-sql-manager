@@ -119,6 +119,8 @@ try {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
   await expect.poll(designerClipboard).toBe(['Id\tint\tNo', 'Name\tnvarchar(50)\tYes'].join(eol))
   console.log('Table designer checks: Ctrl+C copies the selected columns.')
+  // Back to the first row alone, as the steps below expect.
+  await rows().nth(0).getByRole('rowheader').click()
 
   // 3. The designer menu's Set Primary Key on the first row: the key glyph, and Allow Nulls greyed.
   await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
