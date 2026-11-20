@@ -194,7 +194,7 @@ internal static class AgentScriptingLiveChecks
             check(made.Status == "completed" && mapped.Status == "completed" && text?.Contains("msdb.dbo.sp_add_job ", StringComparison.Ordinal) == true
                 && text.Contains("N'" + job + "'", StringComparison.Ordinal) && text.Contains("sp_add_jobstep", StringComparison.Ordinal) && sees == false
                 // Its step that runs as a proxy it was not granted is scripted without the proxy, and the script says so.
-                && (!alerts || refused == "SqlException 229" && !text.Contains("@proxy_name=", StringComparison.Ordinal) && warnings.Contains(SmoScriptRunner.ProxyWarning)),
+                && (!alerts || refused == "SqlException 229" && !text.Contains("@proxy_name=", StringComparison.Ordinal) && warnings is [SmoScriptRunner.ProxyWarning, ..] && warnings.Contains(HeaderGuard.Warning)),
                 "a SQLAgentUserRole login scripts its own job's CREATE (preflight through sysjobs_view, then SMO), a step's proxy it cannot see left out with a warning, and msdb refuses it an alert's preflight (229): "
                 + made.Error + " " + mapped.Error + " " + failure + " " + refused + " " + sees + " " + string.Join(" | ", warnings) + " " + Excerpt(text));
         }

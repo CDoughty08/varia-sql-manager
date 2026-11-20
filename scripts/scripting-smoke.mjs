@@ -313,6 +313,7 @@ try {
   await menuNamed('Script Job as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
   await menuNamed('CREATE To').getByRole('menuitem', { name: 'New Query Editor Window', exact: true }).click()
   await expect.poll(editorText).toBe('-- create Nightly backup')
+  await expect(page.locator('#query-database')).toHaveValue('msdb')
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'agentJob', name: 'Nightly backup' }] })
   console.log('Scripting checks: a SQL Server Agent job offers Script Job as with CREATE, DROP and DROP And CREATE, and CREATE opens its script.')
 

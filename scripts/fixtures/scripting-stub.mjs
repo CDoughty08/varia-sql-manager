@@ -69,7 +69,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
           targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlserver', authentication: params.authentication, id: principalId } } })
       }
       case 'connections.disconnect': return ok({ disconnected: true })
-      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
+      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
       case 'scripting.script': return script(params)
       case 'query.session.close': return ok({ closed: true })

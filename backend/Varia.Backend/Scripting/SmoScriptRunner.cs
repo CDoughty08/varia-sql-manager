@@ -116,7 +116,8 @@ internal sealed class SmoScriptRunner
         // whose comments may look like SMO's at both ends.
         if (!HeaderGuard.Closed(batches, module => scripted.Defines(module, dto.ScriptTriggers))) throw new ScriptRefusedException(BrokenComment);
         if (unresolved.Count > 0 && UnresolvedWarning(unresolved, urn) is var notice && !warnings.Contains(notice)) warnings.Add(notice);
-        if (target.Kind == "agentJob" && target.SeesProxies == false && batches.Any(StepWithoutProxy) && !warnings.Contains(ProxyWarning)) warnings.Add(ProxyWarning);
+        // First, since the notice shows the first warning: running this script could change who a step runs as.
+        if (target.Kind == "agentJob" && target.SeesProxies == false && batches.Any(StepWithoutProxy) && !warnings.Contains(ProxyWarning)) warnings.Insert(0, ProxyWarning);
         var text = new StringBuilder();
         foreach (var batch in batches)
         {
