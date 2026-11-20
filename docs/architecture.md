@@ -269,6 +269,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
   to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
   pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
+  Rows match by `results.diff`'s `match` (`ResultDiffer.Compare`: auto, position, whole rows, or a composite key over
+  chosen pairs hashed with `CellHasher`, which reads `sortKind`, never type names); repeated keys and look-alikes are
+  marks, never kinds: the tone is `<kind> [flag…] [cell…]` (kinds `same`, `changed`, `added`, `removed`, `changedOld`,
+  `changedNew`; flags `dup`, `poss=<row>`, `gap=<n>`), kept within 500 characters, and readers ignore unknown flags.
+  The look-alike search is bounded (1,000 rows a side, 4,000,000 comparisons) and skipped, not slowed, past its bounds.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released

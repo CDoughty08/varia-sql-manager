@@ -1,5 +1,5 @@
 import { expect } from './smoke.mjs'
-import { dialogClosed, dialogWindow, documentTab, helpPage, quickInputBox } from './ui.mjs'
+import { clickToClose, dialogClosed, dialogWindow, documentTab, helpPage, quickInputBox } from './ui.mjs'
 
 /** Shares the updates suite's isolated app/profile; no extra CI job, server or launch. */
 export async function gettingStartedSmoke(page, menu, application) {
@@ -64,7 +64,7 @@ export async function gettingStartedSmoke(page, menu, application) {
     const options = optionsWindow.getByRole('dialog', { name: 'Options', exact: true })
     await expect(options).toBeVisible()
     await expect(options.getByRole('checkbox', { name: 'Include column headers when copying or saving the results', exact: true })).toBeChecked()
-    await options.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await clickToClose(options.getByRole('button', { name: 'Cancel', exact: true }))
     await dialogClosed(optionsWindow, 'Options')
     await results.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Explore returned rows', exact: true }).click()
     await results.screenshot({ path: 'artifacts/getting-started-results.png' })

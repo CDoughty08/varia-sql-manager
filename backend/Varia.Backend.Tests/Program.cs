@@ -116,6 +116,12 @@ if (args is ["--sql-definition-checks"])
     Console.WriteLine("Passed " + passed + " SQL definition checks.");
     return;
 }
+if (args is ["--diff-checks"])
+{
+    DiffChecks.Run(Check);
+    Console.WriteLine("Passed " + passed + " diff checks.");
+    return;
+}
 if (args is ["--result-name-checks"])
 {
     await ResultNameChecks.RunAsync(Check);
