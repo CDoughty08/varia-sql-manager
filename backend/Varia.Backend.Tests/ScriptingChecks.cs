@@ -191,11 +191,42 @@ internal static class ScriptingChecks
         check(trips, "URN values round-trip names with quotes, brackets, Unicode and 128 characters");
         try { Build("login", "Table", new("login", Name: "x")); check(false, "a server-level URN accepted a database type"); }
         catch (InvalidOperationException) { check(true, "server-level URNs take only server types"); }
+        AgentUrns(check, server);
         check(SmoScriptRunner.ChildInitTypes.Length == 14 && !SmoScriptRunner.ChildInitTypes.Contains(typeof(Table)) && !SmoScriptRunner.ChildInitTypes.Contains(typeof(Database)),
             "SMO's init fields are set for child types only");
         // SmoDependencyTypes reaches SMO's internals by name: an SMO that moves them must fail here, not in a user's script.
         SmoDependencyTypes.Ensure();
         check(SmoDependencyTypes.Count == 21, "SMO's dependency type table is found and filled before any job's SMO runs");
+    }
+
+    /// <summary>SQL Server Agent's objects (AG-4): below the server's JobServer, a job by its name and category, the others by
+    /// name, hostile names escaped; their preflights run in msdb through the scope wrapper and read the job's category.</summary>
+    private static void AgentUrns(Action<bool, string> check, string server)
+    {
+        var goldens = new (string Actual, string Expected)[]
+        {
+            (UrnBuilder.Build(server, "agentJob", "Job", new("agentJob", Name: "Nightly"), category: 0), server + "/JobServer/Job[@Name='Nightly' and @CategoryID='0']"),
+            (UrnBuilder.Build(server, "agentJob", "Job", new("agentJob", Name: "O'Brien]"), category: 3), server + "/JobServer/Job[@Name='O''Brien]' and @CategoryID='3']"),
+            (UrnBuilder.Build(server, "agentAlert", "Alert", new("agentAlert", Name: "Sev 17")), server + "/JobServer/Alert[@Name='Sev 17']"),
+            (UrnBuilder.Build(server, "agentOperator", "Operator", new("agentOperator", Name: "DBA")), server + "/JobServer/Operator[@Name='DBA']"),
+            (UrnBuilder.Build(server, "agentProxy", "ProxyAccount", new("agentProxy", Name: "Run as")), server + "/JobServer/ProxyAccount[@Name='Run as']")
+        };
+        var wrong = goldens.Where(item => item.Actual != item.Expected).Select(item => item.Actual).ToList();
+        var hostile = "a'b]--/*" + new string('n', 100);
+        var urn = new Urn(UrnBuilder.Build(server, "agentJob", "Job", new("agentJob", Name: hostile), category: 12));
+        var refused = 0;
+        try { UrnBuilder.Build(server, "agentJob", "Job", new("agentJob", Name: "x")); } catch (InvalidOperationException) { refused++; }
+        try { UrnBuilder.Build(server, "agentAlert", "Alert", new("agentAlert", "msdb", Name: "x")); } catch (InvalidOperationException) { refused++; }
+        check(wrong.Count == 0 && urn.Type == "Job" && urn.GetAttribute("Name") == hostile && urn.GetAttribute("CategoryID") == "12" && urn.Parent.Type == "JobServer" && refused == 2,
+            "Agent URNs sit below the server's JobServer, a job keyed by name and category, hostile names round-tripping; a job without its category or an Agent ref with a database is refused: "
+            + string.Join(", ", wrong));
+        var kinds = new[] { "agentJob", "agentAlert", "agentOperator", "agentProxy" };
+        check(kinds.All(kind => ScriptPreflight.Agent(kind) && !ScriptPreflight.ServerScope(kind) && ScriptPreflight.Home(kind, null) == "msdb" && Catalog.Row(kind, "") is { Scriptable: true, Preflight: "agentObject" } row
+                && row.Enabled.SequenceEqual(["create", "drop", "dropAndCreate"]) && row.Disabled.Count == 0)
+            && ScriptPreflight.Home("login", null) == "master" && ScriptPreflight.Home("table", "Sales") == "Sales" && !ScriptPreflight.Agent("login")
+            && ScriptPreflight.Statement("agentJob", 16, Catalog).Contains("j.category_id AS category_id FROM dbo.sysjobs_view AS j WHERE j.name = @name", StringComparison.Ordinal)
+            && ScriptPreflight.Statement("agentProxy", 16, Catalog).Contains("FROM dbo.sysproxies AS p", StringComparison.Ordinal),
+            "Agent's four kinds script CREATE, DROP and DROP And CREATE through the agentObject preflight, which runs in msdb (jobs through the role-filtered sysjobs_view, with their category)");
     }
 
     private static readonly ServerProfile Box2022 = new(16, "16.0.4135.4", 3, "sa", false, true, false, 16);

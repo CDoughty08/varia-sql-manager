@@ -11,7 +11,7 @@ namespace Varia.Backend.Scripting;
 internal sealed record ResolvedTarget(ObjectRefDto Ref, string Database, string Kind, string Subtype, ScriptTargetRow Row, ScriptSubject Subject,
     string? ParentUrnType = null, string? Column = null, bool SqlModule = false, bool? Encrypted = null, bool DefinitionVisible = true, long? DefinitionBytes = null,
     bool? CanViewDefinition = null, string? ObjectType = null, IReadOnlyList<ColumnRow>? Columns = null, IReadOnlyList<ParameterRow>? Parameters = null,
-    string? Identity = null, string? Provider = null);
+    string? Identity = null, string? Provider = null, int? Category = null);
 
 /// <summary>What the preflight concluded: the target, or an error value with no SMO call made.</summary>
 internal sealed record PreflightResult(ResolvedTarget? Target, ScriptError? Error, IReadOnlyList<string> Warnings);
@@ -66,6 +66,15 @@ internal static partial class ScriptPreflight
     private static readonly HashSet<string> SqlModuleTypes = ["V", "P", "FN", "IF", "TF", "R", "D", "TR"];
 
     public static bool ServerScope(string kind) => ServerKinds.Contains(kind);
+
+    /// <summary>SQL Server Agent's kinds: server-level objects (their refs name no database) whose tables live in msdb, so
+    /// their statement runs there through the scope wrapper, as Object Explorer lists them.</summary>
+    private static readonly HashSet<string> AgentKinds = ["agentJob", "agentAlert", "agentOperator", "agentProxy"];
+
+    public static bool Agent(string kind) => AgentKinds.Contains(kind);
+
+    /// <summary>The database a kind's statement runs in: master at server scope, msdb for Agent's kinds, else the object's own.</summary>
+    public static string Home(string kind, string? database) => ServerScope(kind) ? "master" : Agent(kind) ? "msdb" : database!;
 
     // --- Statements -------------------------------------------------------------------------------------------------
 
@@ -155,6 +164,12 @@ internal static partial class ScriptPreflight
                 + "FROM sys.server_triggers AS st LEFT JOIN sys.server_sql_modules AS m ON m.object_id = st.object_id WHERE st.name = @name;",
             "audit" => "SELECT au.audit_id AS object_id FROM sys.server_audits AS au WHERE au.name = @name;",
             "serverAuditSpecification" => "SELECT sas.server_specification_id AS object_id FROM sys.server_audit_specifications AS sas WHERE sas.name = @name;",
+            // Agent's tables in msdb, read as Object Explorer lists them: sysjobs_view filters by the login's Agent role, and SMO
+            // finds a job by its name and category.
+            "agentJob" => "SELECT j.category_id AS category_id FROM dbo.sysjobs_view AS j WHERE j.name = @name;",
+            "agentAlert" => "SELECT a.id AS object_id FROM dbo.sysalerts AS a WHERE a.name = @name;",
+            "agentOperator" => "SELECT o.id AS object_id FROM dbo.sysoperators AS o WHERE o.name = @name;",
+            "agentProxy" => "SELECT p.proxy_id AS object_id FROM dbo.sysproxies AS p WHERE p.name = @name;",
             _ => throw new InvalidOperationException("No preflight for " + kind)
         };
     }
@@ -269,7 +284,7 @@ internal static partial class ScriptPreflight
     {
         var kind = target.Kind;
         var server = ServerScope(kind);
-        var database = server ? "master" : target.Database!;
+        var database = Home(kind, target.Database);
         var subject = Subject(catalog, target, verb, database);
         var rowset = Rowset(kind, verb.Class);
         var statement = (delay is { } wait ? "WAITFOR DELAY '" + wait.ToString(@"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture) + "';\n" : "")
@@ -280,7 +295,7 @@ internal static partial class ScriptPreflight
         if (wrapped)
         {
             command.CommandText = ModuleCall;
-            Add(command, "@db", SqlDbType.NVarChar, 128, target.Database);
+            Add(command, "@db", SqlDbType.NVarChar, 128, database);
             Add(command, "@stmt", SqlDbType.NVarChar, -1, statement);
             Add(command, "@decl", SqlDbType.NVarChar, -1, Declarations);
         }
@@ -394,7 +409,8 @@ internal static partial class ScriptPreflight
         var resolved = new ResolvedTarget(target, database, kind, subtype, catalogRow, subject, target.Parent?.Kind switch { "table" => "Table", "view" => "View", _ => null },
             row.Text("column_name"), sqlModule, encrypted, visible, bytes, row.Has("can_view_definition") ? row.Bool("can_view_definition") : null, row.Text("object_type"),
             rowset == RowsetKind.Columns ? [.. rows!.Select(Column)] : null, rowset == RowsetKind.Parameters ? [.. rows!.Select(Parameter)] : null,
-            row.Has("credential_identity") ? row.Name("credential_identity") : null, row.Has("provider_name") ? row.Text("provider_name") : null);
+            row.Has("credential_identity") ? row.Name("credential_identity") : null, row.Has("provider_name") ? row.Text("provider_name") : null,
+            row.Has("category_id") ? row.Int("category_id") : null);
         // SMO reads a module's definition for every verb that writes its body.
         if (sqlModule && verb.Verb is ScriptVerb.Create or ScriptVerb.Alter or ScriptVerb.CreateOrAlter or ScriptVerb.DropAndCreate)
         {

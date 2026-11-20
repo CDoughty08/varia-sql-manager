@@ -178,7 +178,8 @@ describe('Object Explorer catalogue', () => {
     expect(nodeKinds.filter(kind => kindSpecs[kind].historyLookup)).toEqual(['table'])
     const ssisKinds = ['ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment']
     // Script As for Agent objects comes with AG-4; jobs, alerts, operators and proxies insert their name unquoted (raw).
-    const agentKinds = ['agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog']
+    // Jobs, alerts, operators and proxies are scriptable (AG-4); the node, its documents, subsystems and error logs are not.
+    const agentKinds = ['agent', 'agentJobActivity', 'agentProxySubsystem', 'agentErrorLog']
     expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds, ...agentKinds])
     // Schema-scoped objects insert [schema].[name]; the rest a one-part name, except parameters, the server and return values.
     for (const kind of nodeKinds) expect(kindSpecs[kind].insert === 'twoPart', kind).toBe(kindSpecs[kind].scope === 'schemaObject')

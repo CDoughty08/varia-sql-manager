@@ -301,6 +301,20 @@ try {
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'alter', targets: [{ kind: 'procedure', name: 'ShipOrder' }] })
   console.log('Scripting checks: Script View as, Script Stored Procedure as with EXECUTE and without SELECT, and Modify opening ALTER.')
 
+  // 6b. A SQL Server Agent job (behind the release gate, which smoke runs open): Script Job as offers CREATE, DROP and DROP And
+  // CREATE To, and CREATE To › New Query Editor Window opens the job's script.
+  const jobPath = ['server-a', 'SQL Server Agent', 'Jobs', 'Nightly backup']
+  await expandExplorerPath(page, ...jobPath.slice(0, -1))
+  await (await explorerRow(page, ...jobPath)).click({ button: 'right', force: true })
+  expect(await menuItemNames(explorerMenu())).toEqual(['Script Job as', 'Copy Name', 'Refresh'])
+  await explorerMenu().getByRole('menuitem', { name: 'Script Job as', exact: true }).click()
+  expect(await menuItemNames(menuNamed('Script Job as'))).toEqual(['CREATE To', 'DROP To', 'DROP And CREATE To'])
+  await menuNamed('Script Job as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
+  await menuNamed('CREATE To').getByRole('menuitem', { name: 'New Query Editor Window', exact: true }).click()
+  await expect.poll(editorText).toBe('-- create Nightly backup')
+  expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'agentJob', name: 'Nightly backup' }] })
+  console.log('Scripting checks: a SQL Server Agent job offers Script Job as with CREATE, DROP and DROP And CREATE, and CREATE opens its script.')
+
   // 7. The palette's Script As… lists only what the selection can be scripted with, by verb; SELECT to Clipboard runs.
   // Returning from the procedure can leave Orders outside the rendered window on a short display. Exercise that
   // state on every display before revealing the table again.

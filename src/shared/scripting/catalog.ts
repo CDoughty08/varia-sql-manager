@@ -62,7 +62,8 @@ export const scriptAsTitleKeys = [
   'userDefinedDataType', 'userDefinedType', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
   'schema', 'user', 'databaseRole', 'applicationRole', 'login', 'serverRole', 'credential', 'linkedServer', 'backupDevice',
   'audit', 'serverAuditSpecification', 'databaseAuditSpecification', 'fullTextCatalog', 'fullTextStoplist', 'searchPropertyList',
-  'partitionScheme', 'partitionFunction', 'planGuide'
+  'partitionScheme', 'partitionFunction', 'planGuide',
+  'agentJob', 'agentAlert', 'agentOperator', 'agentProxy'
 ] as const
 export type ScriptAsTitleKey = typeof scriptAsTitleKeys[number]
 /** The object noun of each title, as in "Script Table as" and in the backend's messages. */
@@ -74,7 +75,8 @@ export const scriptObjectTitles: { readonly [K in ScriptAsTitleKey]: string } = 
   schema: 'Schema', user: 'User', databaseRole: 'Role', applicationRole: 'Application Role', login: 'Login', serverRole: 'Server Role', credential: 'Credential',
   linkedServer: 'Linked Server', backupDevice: 'Backup Device', audit: 'Audit', serverAuditSpecification: 'Server Audit Specification',
   databaseAuditSpecification: 'Database Audit Specification', fullTextCatalog: 'Full-Text Catalog', fullTextStoplist: 'Full-Text Stoplist',
-  searchPropertyList: 'Search Property List', partitionScheme: 'Partition Scheme', partitionFunction: 'Partition Function', planGuide: 'Plan Guide'
+  searchPropertyList: 'Search Property List', partitionScheme: 'Partition Scheme', partitionFunction: 'Partition Function', planGuide: 'Plan Guide',
+  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'Proxy'
 }
 export const scriptAsTitles = Object.fromEntries(scriptAsTitleKeys.map(key => [key, `Script ${scriptObjectTitles[key]} as`])) as { readonly [K in ScriptAsTitleKey]: string }
 
@@ -89,11 +91,13 @@ export const smoUrnTypes = [
   'Trigger', 'Index', 'ForeignKey', 'Check', 'EdgeConstraint', 'Column/Default', 'Statistic',
   'Schema', 'User', 'Role', 'ApplicationRole', 'DdlTrigger', 'DatabaseAuditSpecification', 'FullTextCatalog', 'FullTextStopList', 'SearchPropertyList',
   'PartitionScheme', 'PartitionFunction', 'PlanGuide',
-  'Login', 'Credential', 'LinkedServer', 'BackupDevice', 'Audit', 'ServerAuditSpecification'
+  'Login', 'Credential', 'LinkedServer', 'BackupDevice', 'Audit', 'ServerAuditSpecification',
+  // SQL Server Agent's objects, below the server's JobServer (a job also by its category, which its preflight reads).
+  'Job', 'Alert', 'Operator', 'ProxyAccount'
 ] as const
 export type SmoUrnType = typeof smoUrnTypes[number]
-/** The backend's one catalog query per job, by what it reads. */
-export const preflightIds = ['module', 'table', 'child', 'type', 'schemaObject', 'databaseObject', 'database', 'serverObject'] as const
+/** The backend's one catalog query per job, by what it reads; `agentObject` reads msdb's Agent tables. */
+export const preflightIds = ['module', 'table', 'child', 'type', 'schemaObject', 'databaseObject', 'database', 'serverObject', 'agentObject'] as const
 export type PreflightId = typeof preflightIds[number]
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows verbs a kind does not support. */
@@ -208,7 +212,13 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   constraint: { ...plain('constraint', 'Check', 'child'), subtypeUrns: { default: 'Column/Default', edge: 'EdgeConstraint' }, parents: ['table'] },
   trigger: { ...trigger('trigger', 'Trigger', 'child'), parents: ['table', 'view'] },
   index: { ...plain('index', 'Index', 'child'), parents: ['table', 'view'] },
-  statistic: { ...plain('statistic', 'Statistic', 'child'), parents: ['table', 'view'] }
+  statistic: { ...plain('statistic', 'Statistic', 'child'), parents: ['table', 'view'] },
+  // SQL Server Agent (docs/agent-plan.md › Script As): SSMS's CREATE, DROP and DROP And CREATE, scripted by SMO. Their nodes
+  // exist only behind the agentEnabled release gate, so their Script submenu does too.
+  agentJob: plain('agentJob', 'Job', 'agentObject'),
+  agentAlert: plain('agentAlert', 'Alert', 'agentObject'),
+  agentOperator: plain('agentOperator', 'Operator', 'agentObject'),
+  agentProxy: plain('agentProxy', 'ProxyAccount', 'agentObject')
 }
 /** One spec per kind Object Explorer marks scriptable; server, folders, columns, parameters and return values have none. */
 export const scriptKindSpecs = Object.fromEntries(nodeKinds.flatMap(kind => {

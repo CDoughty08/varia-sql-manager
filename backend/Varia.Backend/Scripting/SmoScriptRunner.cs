@@ -71,7 +71,7 @@ internal sealed class SmoScriptRunner
         // Before any SMO: two jobs' first dependency walks would otherwise fill SMO's static type table together.
         SmoDependencyTypes.Ensure();
         var smo = Server();
-        var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column));
+        var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column, target.Category));
         var dependencies = dto.GenerateDependentObjects && SmoOptionsMapper.Dependencies(target.Row.Urn, target.ParentUrnType, target.Ref.Database is null);
         // The pass that reads definitions: CREATE (DROP And CREATE's second pass too), ALTER or CREATE OR ALTER.
         var reading = SmoOptionsMapper.Passes(verb)[^1];
