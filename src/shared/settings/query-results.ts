@@ -51,9 +51,14 @@ export const queryResultsSettings = [
     description: 'The height of the column filter that a header\'s funnel or Filter Column Values opens; a taller filter shows more values. 0 fits it to its contents. Dragging the filter\'s corner grip sets it, at least 240 px. The filter shrinks to fit a small window.'
   },
   {
-    key: 'queryResults.grid.includeColumnHeaders', page: 'queryResults.sqlServer.grid', group: 'Copy and save', label: 'Include column headers when copying or saving the results', type: 'boolean', default: false,
-    keywords: ['headers', 'copy', 'csv', 'export', 'save'],
-    description: 'Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them.'
+    key: 'queryResults.grid.copyColumnHeaders', page: 'queryResults.sqlServer.grid', group: 'Copy and save', label: 'Include column headers when copying the results', type: 'boolean', default: false,
+    keywords: ['headers', 'copy', 'clipboard', 'column names'],
+    description: 'Copy starts with a row of column names, in the results grid and in every other grid that copies its rows. Copy with Headers always includes them.'
+  },
+  {
+    key: 'queryResults.grid.saveColumnHeaders', page: 'queryResults.sqlServer.grid', group: 'Copy and save', label: 'Include column headers when saving the results', type: 'boolean', default: true,
+    keywords: ['headers', 'csv', 'export', 'save', 'column names'],
+    description: 'Save Results As (CSV and tab-delimited text) starts with a row of column names, from the results grid and from every other grid that saves its rows. JSON always names its keys.'
   },
   {
     key: 'queryResults.grid.discardResults', page: 'queryResults.sqlServer.grid', group: 'Limits and memory', label: 'Discard results after execution', type: 'boolean', default: false,
