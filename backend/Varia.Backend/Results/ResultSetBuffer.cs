@@ -34,6 +34,8 @@ internal sealed class StoredPage
     internal object Stored { get => Volatile.Read(ref stored); set => Volatile.Write(ref stored, value); }
     /// <summary>The page's n-gram filter while it is packed (<see cref="PageFilter"/>), else null.</summary>
     public PageFilter? Filter => Stored is PackedPage packed ? packed.Filter : null;
+    /// <summary>The page's compressed bytes while it is packed, without its filter, else null.</summary>
+    public int? PackedLength => Stored is PackedPage packed ? packed.Bytes.Length : null;
     /// <summary>Packing saved less than a tenth of the page, so it is not tried again (ResultSetBuffer.Pack).</summary>
     internal bool KeptRaw { get; set; }
     /// <summary>The page's bytes as sealed, through its set's accessor (<see cref="ResultSetBuffer.Body"/>). A call, not a

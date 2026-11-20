@@ -314,9 +314,9 @@ internal static class PageFilterChecks
         var set = FillWide(store, "capped", 6000);
         var pages = set.SealedSnapshot();
         var filtered = pages.Where(page => page.Filter is not null).ToArray();
-        var within = filtered.All(page => page.Filter!.Bytes <= ((PackedPage)page.Stored).Bytes.Length / 8 && page.StoredLength <= page.Length - page.Length / 10);
+        var within = filtered.All(page => page.Filter!.Bytes <= page.PackedLength!.Value / 8 && page.StoredLength <= page.Length - page.Length / 10);
         check(filtered.Length >= 2 && within,
-            "a page's filter stays within an eighth of its packed bytes, and the page with it saves a tenth: " + string.Join(", ", filtered.Take(4).Select(page => page.Filter!.Bytes + "/" + ((PackedPage)page.Stored).Bytes.Length + "/" + page.Length)));
+            "a page's filter stays within an eighth of its packed bytes, and the page with it saves a tenth: " + string.Join(", ", filtered.Take(4).Select(page => page.Filter!.Bytes + "/" + page.PackedLength!.Value + "/" + page.Length)));
         var differences = new List<string>();
         foreach (var text in new[] { "deadlock", "Datenbank", "qzxv", "4-4", "zzzzzz", "abcd" })
         {
@@ -340,7 +340,7 @@ internal static class PageFilterChecks
         }
         dense.Complete();
         var densePages = dense.SealedSnapshot();
-        check(densePages.Length >= 2 && densePages.All(page => page.Stored is PackedPage && page.Filter is null),
+        check(densePages.Length >= 2 && densePages.All(page => page.PackedLength is not null && page.Filter is null),
             "a page that packs to more than nine tenths of its size gets no filter: " + string.Join(", ", densePages.Take(3).Select(page => page.StoredLength + "/" + page.Length)));
         store.Release(dense.ResultId);
 
@@ -431,7 +431,7 @@ internal static class PageFilterChecks
         }
         catch (Exception exception) { failure = exception.GetType().Name; }
         finally { SearchFold.Seed(collation.Lcid, culture.Options, null); }
-        check(failure is null && failedPages.Length >= 2 && failedPages.All(page => page.Stored is PackedPage && page.Filter is null),
+        check(failure is null && failedPages.Length >= 2 && failedPages.All(page => page.PackedLength is not null && page.Filter is null),
             "a culture whose fold failed to build leaves its column unfiltered and packing goes on: " + (failure ?? "no failure"));
     }
 
