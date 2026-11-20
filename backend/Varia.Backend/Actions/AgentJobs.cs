@@ -29,7 +29,7 @@ internal sealed partial class ActionService
     internal const string JobIdleMessage = "The job is not running.";
     internal const string HostUnreadableMessage = "SQL Server did not say which machine and instance it runs as, so Varia cannot find its SQL Server Agent service.";
 
-    [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\z", RegexOptions.CultureInvariant)]
     private static partial Regex AgentCreatedPattern();
     internal static bool AgentCreated(string? text) => text is not null && AgentCreatedPattern().IsMatch(text)
         && DateTime.TryParseExact(text, "yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
@@ -313,7 +313,7 @@ internal sealed partial class ActionService
         RunStep Stop() => new(StopServiceStep, Guard(t => control.StopAsync(facts.Machine, facts.Service, t)), Detail: facts.Service);
         RunStep Stopped() => new(StoppedServiceStep, Guard(t => control.WaitAsync(facts.Machine, facts.Service, AgentServiceStatus.Stopped, t)), Detail: facts.Service);
         RunStep Start() => new(StartServiceStep, Guard(t => control.StartAsync(facts.Machine, facts.Service, t)), Detail: facts.Service);
-        RunStep Running() => new(RunningServiceStep, Guard(t => control.WaitAsync(facts.Machine, facts.Service, AgentServiceStatus.Running, t)), Detail: facts.Service);
+        RunStep Running() => new(RunningServiceStep, Guard(t => control.WaitAsync(facts.Machine, facts.Service, AgentServiceStatus.Running, t, started: true)), Detail: facts.Service);
         List<RunStep> plan = action switch
         {
             "startAgent" => [Start(), Running()],

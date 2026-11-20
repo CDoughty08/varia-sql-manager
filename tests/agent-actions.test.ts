@@ -66,10 +66,10 @@ describe('Start Job at Step and the service dialogs', () => {
     steps: Array.from({ length: steps }, (_, index) => ({ id: index + 1, name: `Step ${index + 1}` })), ...changes
   })
   const target = { kind: 'agentJob', name: 'Nightly' } as const
-  it('starts a one-step job as it opens, and names the step only when it is not the first', () => {
+  it('starts a one-step job as it opens, and always names the chosen step (the job\'s start step need not be the first)', () => {
     const runOnOpen = startJobAtStepDefinition.runOnOpen as (model: AgentJobFacts) => boolean
     expect([runOnOpen(facts(1)), runOnOpen(facts(3)), runOnOpen(facts(1, { running: true }))]).toEqual([true, false, false])
-    expect(startJobAtStepDefinition.request(target, facts(3), { step: 1 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' } })
+    expect(startJobAtStepDefinition.request(target, facts(3), { step: 1 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 1' })
     expect(startJobAtStepDefinition.request(target, facts(3), { step: 2 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 2' })
     expect([startJobBlocked(facts(0)), startJobBlocked(facts(2, { running: true })), startJobBlocked(facts(2))]).toEqual([agentDialogText.noSteps, agentDialogText.running, undefined])
   })
@@ -114,9 +114,12 @@ describe('a job\'s Stop, Disable, Enable and Rename', () => {
     await actions.changeJobState(node(), 'stopJob')
     expect(commands.getSnapshot().error).toBe('Stop Job failed for Nightly: The job is not running.')
   })
-  it('sends the job\'s identity with a rename', async () => {
-    const { actions, api, node } = setup()
+  it('sends the job\'s identity with a rename, and refuses a row without it', async () => {
+    const { actions, api, commands, node } = setup()
     api.executeObjectAction.mockResolvedValue(done())
+    await actions.commitRename(node({ created: undefined }), 'Nightly2')
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(commands.getSnapshot().error).toBe(jobActionMessages.unidentified)
     await actions.commitRename(node(), 'Nightly2')
     expect(api.executeObjectAction.mock.calls[0]![0]).toMatchObject({ action: 'rename', newName: 'Nightly2', agentIdentity: { created: '2026-01-01T00:00:00' } })
   })

@@ -73,10 +73,10 @@ internal sealed partial class AgentServiceControl(IServiceControl control, Agent
     private readonly AgentCatalog catalog = catalog ?? AgentCatalog.Current;
 
     // A NetBIOS computer name: at most 15 characters of letters, digits and hyphens (no dots: never a DNS name or an address).
-    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9-]{0,14}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9-]{0,14}\z", RegexOptions.CultureInvariant)]
     private static partial Regex MachinePattern();
     // An instance name: at most 16 characters, a letter or underscore first, then letters, digits, underscores and dollar signs.
-    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_$]{0,15}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_$]{0,15}\z", RegexOptions.CultureInvariant)]
     private static partial Regex InstancePattern();
 
     public static bool ValidMachine(string? machine) => machine is not null && MachinePattern().IsMatch(machine);
@@ -141,12 +141,14 @@ internal sealed partial class AgentServiceControl(IServiceControl control, Agent
         Bounded(() => { control.Stop(machine, service); return 0; }, Limit("serviceStatementMs"), "Stopping the service", token);
 
     /// <summary>Polls until the service reaches <paramref name="wanted"/>, within serviceWaitMs. A stopped service while waiting for it to
-    /// run means it failed to start (Agent ends itself when it cannot reach SQL Server, or its account is refused).</summary>
-    public async Task WaitAsync(string machine, string service, AgentServiceStatus wanted, CancellationToken token)
+    /// run means it failed to start (Agent ends itself when it cannot reach SQL Server, or its account is refused): after a Start that was
+    /// sent (<paramref name="started"/>) at once, since the SCM reports Start Pending as soon as it accepts one, otherwise once it was seen
+    /// starting.</summary>
+    public async Task WaitAsync(string machine, string service, AgentServiceStatus wanted, CancellationToken token, bool started = false)
     {
         var deadline = DateTime.UtcNow + Limit("serviceWaitMs");
         var poll = Limit("servicePollMs");
-        var pending = false;
+        var pending = started;
         while (true)
         {
             var state = await QueryAsync(machine, service, token).ConfigureAwait(false);

@@ -39,7 +39,8 @@ export function startJobBlocked(model: AgentJobFacts): string | undefined {
 
 /**
  * Start Job at Step (SSMS's Start Job at Step…): a job with one step starts as the dialog opens, as SSMS's does; one with more lists
- * its steps, the first chosen. sp_start_job takes the step by name, and only when it is not the first.
+ * its steps, the first chosen. sp_start_job always gets the chosen step by name: without one it starts at the job's start step, which
+ * need not be the first.
  */
 export const startJobAtStepDefinition: ObjectDialogDefinition<AgentJobFacts, StartJobDraft> = {
   dialog: 'startJobAtStep',
@@ -47,8 +48,7 @@ export const startJobAtStepDefinition: ObjectDialogDefinition<AgentJobFacts, Sta
   initialDraft: model => ({ step: model.steps[0]?.id ?? 1 }),
   request: (target, model, draft) => {
     const chosen = model.steps.find(step => step.id === draft.step)
-    const first = model.steps[0]
-    return { action: 'startJob', target, agentIdentity: model.agentIdentity, ...(chosen && first && chosen.id !== first.id ? { stepName: chosen.name } : {}) }
+    return { action: 'startJob', target, agentIdentity: model.agentIdentity, ...(chosen ? { stepName: chosen.name } : {}) }
   },
   blocked: startJobBlocked,
   runOnOpen: model => model.steps.length === 1 && !model.running,

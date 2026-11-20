@@ -243,6 +243,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const badName = object.kind === 'login' && isLoginSubtype(node.subtype) ? loginNameRefusal(node.subtype, text) : undefined
     if (badName) return this.refuseName(loginMessages[badName])
     this.cancelRename()
+    if (object.kind === 'agentJob' && !node.created) { this.options.report.error(jobActionMessages.unidentified); return true }
     if (this.disposed || !this.isLive(node.connectionId)) return true
     const characters = [...displayText(text)]
     const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')

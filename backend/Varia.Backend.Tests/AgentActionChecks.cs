@@ -144,8 +144,9 @@ internal static class AgentActionChecks
             && AgentServiceControl.ServiceName(new string('a', 17)) is null && AgentServiceControl.ServiceName("x\\y") is null,
             "the Agent service is SQLSERVERAGENT for the default instance and SQLAgent$<instance> for a named one, only for a valid instance name");
         check(AgentServiceControl.ValidMachine("SQL-01") && !AgentServiceControl.ValidMachine("sql.contoso.com") && !AgentServiceControl.ValidMachine("10.0.0.1") && !AgentServiceControl.ValidMachine(new string('a', 16))
-            && !AgentServiceControl.ValidMachine("-sql") && !AgentServiceControl.ValidMachine(null) && !AgentServiceControl.ValidMachine("\\\\host"),
-            "the machine is a NetBIOS name only: never a DNS name, an address or a UNC path");
+            && !AgentServiceControl.ValidMachine("-sql") && !AgentServiceControl.ValidMachine(null) && !AgentServiceControl.ValidMachine("\\\\host")
+            && !AgentServiceControl.ValidMachine("SQL01\n") && AgentServiceControl.ServiceName("SALES\n") is null,
+            "the machine is a NetBIOS name only: never a DNS name, an address or a UNC path, and neither name may end in a newline");
         check(AgentServiceControl.Classify(5) == ServiceFailure.Denied && new[] { 1722, 1726, 1753, 53, 67 }.All(code => AgentServiceControl.Classify(code) == ServiceFailure.Unreachable)
             && AgentServiceControl.Classify(1060) == ServiceFailure.NotFound && AgentServiceControl.Classify(1058) == ServiceFailure.Disabled && AgentServiceControl.Classify(1053) == ServiceFailure.Other,
             "Windows errors classify: 5 denied, RPC and name errors unreachable, 1060 no such service, 1058 disabled, anything else other");
@@ -211,6 +212,10 @@ internal static class AgentActionChecks
         var fell = await Run("startAgent", control => { control.States.Enqueue(AgentServiceStatus.StartPending); control.States.Enqueue(AgentServiceStatus.Stopped); });
         check(fell.Result.Error?.Code == "SQL_ERROR" && Statuses(fell.Result) == "done failed" && fell.Result.Error.Message.Contains("stopped again while it was starting", StringComparison.Ordinal) && fell.Result.AgentService == "stopped",
             "a service that stops again while starting fails the wait, pointing at its error log");
+        var quick = await Run("startAgent", control => { control.States.Enqueue(AgentServiceStatus.Stopped); });
+        check(quick.Result.Error?.Code == "SQL_ERROR" && Statuses(quick.Result) == "done failed" && quick.Result.Error.Message.Contains("stopped again while it was starting", StringComparison.Ordinal)
+            && quick.Control.Calls.Count(call => call.StartsWith("query", StringComparison.Ordinal)) <= 2,
+            "a service already stopped again at the first read after Start fails at once, not after serviceWaitMs: " + string.Join(",", quick.Control.Calls));
         var unreadable = await Run("startAgent", control => control.OnQuery = new ServiceControlException(ServiceFailure.Denied, 5));
         check(unreadable.Result.Error?.Code == "PERMISSION_DENIED" && Statuses(unreadable.Result) == "done failed" && unreadable.Result.AgentService == "unreadable",
             "a state the login may not read fails the wait as denied, and the reply's state is unreadable");
