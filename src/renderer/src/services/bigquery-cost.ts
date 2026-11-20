@@ -37,7 +37,8 @@ export interface CostPromptRequest {
   readonly thresholdBytes: number
   readonly prices: boolean
 }
-export interface CostPromptAnswer { readonly run: boolean; readonly dontAskAgain?: boolean }
+/** `moot`: the prompt waited behind another whose answer made it moot, and was never shown. */
+export interface CostPromptAnswer { readonly run: boolean; readonly dontAskAgain?: boolean; readonly moot?: true }
 
 /** Where "Don't ask again for this connection" is kept. */
 export interface CostOptOut {
@@ -140,7 +141,7 @@ export interface BigQueryCostDeps {
   readonly events: Pick<EventBus, 'subscribe'>
   readonly monaco: MarkerMonaco
   /** Shows a cost prompt (BigQueryCostPrompt) and resolves with the answer. */
-  readonly ask: (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean) => Promise<CostPromptAnswer>
+  readonly ask: (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void) => Promise<CostPromptAnswer>
   readonly optOut: CostOptOut
   readonly schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
 }
@@ -157,6 +158,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private readonly entries = new Map<string, Entry>()
   private readonly subscriptions: (() => void)[] = []
   private disposed = false
+  /** "Don't warn me about incomplete estimates again" while its setting is being written. */
+  private incompleteOff = false
   constructor(private readonly deps: BigQueryCostDeps) {
     super(new Map())
     const reconcile = () => this.reconcile()
@@ -338,25 +341,36 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (!estimate || this.entries.get(tabId) !== entry || this.connection(tabId)?.id !== connection.id) return true
     await this.deps.optOut.refresh(connection)
     if (signal?.aborted || this.disposed) return false
-    const settings = this.deps.settings, thresholdBytes = gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
-    const prompt = costPrompt(estimate, {
-      askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes,
-      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !entry.warnedIncomplete
+    const settings = this.deps.settings, threshold = () => gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
+    // The prompt as things stand: worked out again for a waiting prompt whose turn found it moot (another tab's Don't ask
+    // again), so the incomplete-estimate warning it was hiding still asks.
+    const current = () => costPrompt(estimate, {
+      askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes: threshold(),
+      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !this.incompleteOff && !entry.warnedIncomplete
     })
-    if (!prompt) return true
-    const answer = await this.deps.ask({
-      prompt, connection: connection.displayName ?? connection.server, thresholdBytes, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
-      ...this.cap(connection) ? { cap: this.cap(connection) } : {}
-    }, signal, () => prompt.kind === 'threshold'
-      ? settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection)
-      : settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !entry.warnedIncomplete)
-    if (signal?.aborted) return false
-    if (prompt.kind === 'incomplete' && answer.run) entry.warnedIncomplete = true
-    if (answer.dontAskAgain) {
-      if (prompt.kind === 'threshold') await this.deps.optOut.dontAsk(connection)
-      else await this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false).catch(() => {})
+    // Each turn ends in an answer or a prompt found moot by another tab's answer or a settings change, which only the user
+    // makes; the bound is a guard, not a limit anyone reaches.
+    for (let prompt = current(), turns = 0; prompt && turns < 16; turns++) {
+      const kind = prompt.kind
+      let applied: Promise<unknown> | undefined
+      const answer = await this.deps.ask({
+        prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
+        ...this.cap(connection) ? { cap: this.cap(connection) } : {}
+      }, signal, () => current()?.kind === kind,
+      // Applied as the answer is given, before another tab's waiting prompt is checked: Don't ask again stops it too.
+      given => {
+        if (signal?.aborted || !given.dontAskAgain) return
+        if (kind === 'threshold') { applied = this.deps.optOut.dontAsk(connection); return }
+        this.incompleteOff = true
+        applied = this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false).finally(() => { this.incompleteOff = false })
+      })
+      await applied?.catch(() => {})
+      if (signal?.aborted) return false
+      if (answer.moot) { prompt = current(); continue }
+      if (kind === 'incomplete' && answer.run) entry.warnedIncomplete = true
+      return answer.run && !this.disposed
     }
-    return answer.run && !this.disposed
+    return !this.disposed
   }
 
   /** The cap a job on this connection carries: its own, else Options' (undefined: none). */
@@ -371,11 +385,11 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return this.deps.settings.get('queryExecution.bigQuery.costPrompt') && (!connection || this.deps.optOut.asks(connection))
   }
 
-  /** The prompt choice for a connection changed: the chips re-render. */
   /** A connect that names the cost-prompt choice (Advanced Properties): main saved it, and the chip shows it now. */
   connectedWith(options: ProviderConnectionOptions, saved = true): void {
     if (options.provider === 'bigquery' && options.costPrompt !== undefined) this.deps.optOut.named(options, options.costPrompt, saved)
   }
+  /** The prompt choice for a connection changed: the chips re-render. */
   optOutChanged(): void { if (!this.disposed) this.publish(new Map(this.getSnapshot())) }
 
   /** A run finished: the chip shows what it processed (or keeps the estimate when BigQuery reported no bytes), unless the

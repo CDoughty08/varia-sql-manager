@@ -230,7 +230,8 @@ Messages).
     again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
 
   One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
-  one that the answer before it made moot (Don't ask again) runs without showing.
+  one that the answer before it made moot (Don't ask again) is not shown; the incomplete-estimate warning it was
+  hiding still asks.
 
   A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel,
   closing the tab or disconnecting while the estimate is worked out or a prompt is open or waiting stops the run at once,

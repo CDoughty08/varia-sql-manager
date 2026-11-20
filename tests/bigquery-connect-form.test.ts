@@ -120,6 +120,12 @@ describe('Connect dialog: BigQuery fields', () => {
     expect(bigQueryFormShape(unnamed, 'inherit', false)).toBe(bigQueryFormShape(saved, 'inherit'))
     expect(bigQueryFormShape({ ...form, costPrompt: true }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
     expect(bigQueryFormShape({ ...form, displayName: 'Other' }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    // Default dataset typed into and cleared again is no change, as the dialog compares it: the form names no choice and
+    // shows the saved entry's.
+    const cleared = { ...unnamed, dataset: '' }
+    expect(savedCostPrompt([{ options: saved }], cleared)).toBe(false)
+    expect(bigQueryFormShape(cleared, 'inherit', savedCostPrompt([{ options: saved }], cleared))).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(savedCostPrompt([{ options: saved }], { ...unnamed, dataset: '  ' })).toBe(false)
     expect(accountText({ kind: 'user', account: 'ada@example.com' })).toBe('Signed in to gcloud as ada@example.com')
     expect(accountText({ kind: 'serviceAccount', account: 'reader@varia-alpha.iam.gserviceaccount.com', impersonated: 'etl@varia-alpha.iam.gserviceaccount.com' }))
       .toBe('Service account reader@varia-alpha.iam.gserviceaccount.com, acting as etl@varia-alpha.iam.gserviceaccount.com')

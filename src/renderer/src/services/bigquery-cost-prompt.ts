@@ -3,7 +3,13 @@ import { incompleteText } from '../../../shared/bigquery/dry-run'
 import { SnapshotStore } from '../core/store'
 import type { CostPromptAnswer, CostPromptRequest } from './bigquery-cost'
 
-interface Pending { readonly id: number; readonly request: CostPromptRequest; readonly resolve: (answer: CostPromptAnswer) => void; readonly stillAsks?: () => boolean }
+interface Pending {
+  readonly id: number
+  readonly request: CostPromptRequest
+  readonly resolve: (answer: CostPromptAnswer) => void
+  readonly stillAsks?: () => boolean
+  readonly onAnswer?: (answer: CostPromptAnswer) => void
+}
 
 /**
  * The cost prompts waiting for an answer, which BigQueryCostPrompt shows one at a time (it is modal). Another tab's prompt
@@ -16,11 +22,12 @@ export class CostPromptService extends SnapshotStore<{ readonly pending?: Pendin
   constructor() { super({}) }
   /** Shows the prompt (after any shown before it); `signal` (Cancel, or the tab closing) closes it as Cancel would.
    *  `stillAsks` is checked again when a waiting prompt's turn comes: an answer to the one before it (Don't ask again)
-   *  may have made it moot, and it then runs without showing. */
-  ask(request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean): Promise<CostPromptAnswer> {
+   *  may have made it moot, and it then resolves `moot` without showing (the caller works out what to ask, if anything). `onAnswer` applies an answer (its Don't ask again) before
+   *  the next prompt's turn, so that check sees it. */
+  ask(request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void): Promise<CostPromptAnswer> {
     if (signal?.aborted) return Promise.resolve({ run: false })
     return new Promise(resolve => {
-      const pending: Pending = { id: ++this.next, request, resolve, ...stillAsks ? { stillAsks } : {} }
+      const pending: Pending = { id: ++this.next, request, resolve, ...stillAsks ? { stillAsks } : {}, ...onAnswer ? { onAnswer } : {} }
       signal?.addEventListener('abort', () => this.settle(pending, { run: false }), { once: true })
       this.queue.push(pending)
       this.show()
@@ -36,6 +43,7 @@ export class CostPromptService extends SnapshotStore<{ readonly pending?: Pendin
     const index = this.queue.indexOf(pending)
     if (index < 0) return
     this.queue.splice(index, 1)
+    try { pending.onAnswer?.(answer) } catch { /* The answer still stands. */ }
     pending.resolve(answer)
     this.show()
   }
@@ -44,7 +52,7 @@ export class CostPromptService extends SnapshotStore<{ readonly pending?: Pendin
     let head = this.queue[0]
     while (head && head !== this.getSnapshot().pending && head.stillAsks && !safe(head.stillAsks)) {
       this.queue.shift()
-      head.resolve({ run: true })
+      head.resolve({ run: true, moot: true })
       head = this.queue[0]
     }
     if (this.getSnapshot().pending !== head) this.publish(head ? { pending: head } : {})

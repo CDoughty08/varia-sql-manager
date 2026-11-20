@@ -345,10 +345,12 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         return new(bytes, Incomplete: incomplete, StatementType: statement);
     }
 
-    /// <summary>DDL that processes no table data whatever it names, so 0 bytes is the true figure.</summary>
+    /// <summary>Statements that process no billed table data whatever they name (DDL, snapshot copies, loads, index
+    /// creation), so 0 bytes is the true figure.</summary>
     static bool ReadsNothing(string? statement) => statement is not null && (statement.StartsWith("DROP_", StringComparison.Ordinal)
         || statement.StartsWith("ALTER_", StringComparison.Ordinal) || statement is "CREATE_TABLE" or "CREATE_VIEW" or "CREATE_SCHEMA" or "CREATE_FUNCTION"
-        or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE");
+        or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE" or "CREATE_SNAPSHOT_TABLE"
+        or "LOAD_DATA" or "CREATE_SEARCH_INDEX" or "CREATE_VECTOR_INDEX");
 
     static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token)
     {

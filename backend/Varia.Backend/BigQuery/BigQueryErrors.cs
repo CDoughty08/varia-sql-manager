@@ -22,7 +22,8 @@ internal static partial class BigQueryErrors
     public const string LegacySql = "Varia runs GoogleSQL only. Remove #legacySQL and write the query in GoogleSQL.";
 
     // Google access and refresh tokens ("ya29.", "1//"), beside the JSON Web Tokens EntraFailures.Sanitize removes.
-    [GeneratedRegex(@"Dataset (?<project>[^\s:]+):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
+    // A domain-scoped project (example.com:proj) keeps its domain: the dataset is after the last colon.
+    [GeneratedRegex(@"Dataset (?<project>[^\s:]+(?::[^\s:]+)?):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
     private static partial Regex DatasetLocationMessage();
 
     /// <summary>A NOT_FOUND naming a dataset "not found in location X": a dataset in another location (LOCATION_MISMATCH, found

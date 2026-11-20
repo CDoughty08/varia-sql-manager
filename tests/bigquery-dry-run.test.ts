@@ -101,7 +101,8 @@ function fixture(settings: Partial<SettingsValues> = {}) {
   const service = new BigQueryCostService({
     api, documents: docs.documents, connections, events: docs.events, monaco: { MarkerSeverity: { Error: 8 } as never, editor: { setModelMarkers: markers } },
     settings: { get: key => values[key] as never, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) }, choose: async (key: SettingKey, value: unknown) => { values[key] = value; listeners.forEach(listener => listener()) } },
-    ask: async (request, signal) => { asked.push(request); signals.push(signal); return answer },
+    // As CostPromptService does: the answer is applied (onAnswer) before the promise settles.
+    ask: async (request, signal, _stillAsks, onAnswer) => { asked.push(request); signals.push(signal); const given = await answer; onAnswer?.(given); return given },
     optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) }, named: () => {} },
     schedule: (callback, ms) => { expect(ms).toBe(dryRunDebounceMs); timers.push(callback); return ++timerIds as unknown as ReturnType<typeof setTimeout> }
   })
@@ -379,6 +380,69 @@ describe('the estimate before Execute', () => {
     expect(await asking).toBe(false)
     expect(f.declined.size).toBe(0)
   })
+  it("applies Don't ask again as the answer is given, so another tab's waiting prompt sees it", async () => {
+    const f = fixture()
+    f.replies.push(estimate(20 * GiB))
+    let check: (() => boolean) | undefined
+    ;(f.service as unknown as { deps: { ask: BigQueryCostDepsAsk } }).deps.ask = async (_request, _signal, stillAsks, onAnswer) => {
+      check = stillAsks
+      const given = { run: true, dontAskAgain: true }
+      onAnswer?.(given)
+      // What the queue checks for the next prompt, before this answer's promise settles.
+      expect(stillAsks?.()).toBe(false)
+      return given
+    }
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(true)
+    expect(check).toBeDefined()
+    expect(f.declined.size).toBe(1)
+  })
+  it("holds Don't warn me about incomplete estimates while its setting is being written", async () => {
+    const f = fixture()
+    f.replies.push(estimate(GiB, { incomplete: 'script' }))
+    let write!: () => void
+    const deps = (f.service as unknown as { deps: { ask: BigQueryCostDepsAsk; settings: { choose: (key: SettingKey, value: unknown) => Promise<void> } } }).deps
+    const choose = deps.settings.choose
+    deps.settings.choose = (key, value) => new Promise(resolve => { write = () => { void choose(key, value).then(resolve) } })
+    deps.ask = async (_request, _signal, stillAsks, onAnswer) => {
+      const given = { run: true, dontAskAgain: true }
+      onAnswer?.(given)
+      // The setting still reads on until the write lands; a waiting incomplete prompt must not show meanwhile.
+      expect(f.values['queryExecution.bigQuery.incompleteEstimateWarning']).toBe(true)
+      expect(stillAsks?.()).toBe(false)
+      write()
+      return given
+    }
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(true)
+    expect(f.values['queryExecution.bigQuery.incompleteEstimateWarning']).toBe(false)
+  })
+  it('keeps asking what applies while prompts turn moot one after another', async () => {
+    const f = fixture()
+    f.replies.push(estimate(20 * GiB, { incomplete: 'script' }))
+    const kinds: string[] = []
+    ;(f.service as unknown as { deps: { ask: BigQueryCostDepsAsk } }).deps.ask = async request => {
+      kinds.push(request.prompt.kind)
+      // Threshold moot (Don't ask again elsewhere), then incomplete moot (its prompt turned back on in Options, which
+      // puts the threshold prompt first again), then the threshold prompt is answered.
+      if (kinds.length === 1) { f.declined.add(connectionId); return { run: true, moot: true } }
+      if (kinds.length === 2) { f.declined.delete(connectionId); return { run: true, moot: true } }
+      return { run: false }
+    }
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(false)
+    expect(kinds).toEqual(['threshold', 'incomplete', 'threshold'])
+  })
+  it("asks the incomplete-estimate warning a moot threshold prompt was hiding", async () => {
+    const f = fixture()
+    f.replies.push(estimate(20 * GiB, { incomplete: 'script' }))
+    const kinds: string[] = []
+    ;(f.service as unknown as { deps: { ask: BigQueryCostDepsAsk } }).deps.ask = async request => {
+      kinds.push(request.prompt.kind)
+      // Another tab's Don't ask again for this connection while this threshold prompt waited.
+      if (request.prompt.kind === 'threshold') { f.declined.add(connectionId); return { run: true, moot: true } }
+      return { run: false }
+    }
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(false)
+    expect(kinds).toEqual(['threshold', 'incomplete'])
+  })
   it("says on the chip when the connection's prompt is off", () => {
     const over = costChip({ phase: 'estimate', bytes: 11 * GiB }, defaultSettings, false)
     expect(over.tone).toBe('warning')
@@ -386,6 +450,8 @@ describe('the estimate before Execute', () => {
     expect(over.title).not.toContain('Execute asks first')
   })
 })
+
+type BigQueryCostDepsAsk = (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void) => Promise<CostPromptAnswer>
 
 describe('the saved prompt choice', () => {
   const options = { provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud' } as const
@@ -507,12 +573,13 @@ describe('the cost prompt', () => {
   it("runs a waiting prompt without showing it once the one before it made it moot (Don't ask again)", async () => {
     const prompts = new CostPromptService()
     const request = { prompt: { kind: 'threshold', bytes: 1 }, connection: 'c', thresholdBytes: 0, prices: true } as const
+    // The opt-out is applied only by the answer's own handler, as beforeExecute applies it.
     let asks = true
-    const first = prompts.ask(request, undefined, () => asks), second = prompts.ask(request, undefined, () => asks)
-    asks = false
+    const apply = (given: CostPromptAnswer) => { if (given.dontAskAgain) asks = false }
+    const first = prompts.ask(request, undefined, () => asks, apply), second = prompts.ask(request, undefined, () => asks, apply)
     prompts.answer(prompts.getSnapshot().pending!.id, { run: true, dontAskAgain: true })
     await expect(first).resolves.toEqual({ run: true, dontAskAgain: true })
-    await expect(second).resolves.toEqual({ run: true })
+    await expect(second).resolves.toEqual({ run: true, moot: true })
     expect(prompts.getSnapshot().pending).toBeUndefined()
   })
   it('closes the open prompt as Cancel when its run is cancelled', async () => {

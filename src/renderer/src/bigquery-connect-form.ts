@@ -81,7 +81,8 @@ export function withoutCostPrompt(options: BigQueryConnectionOptions): BigQueryC
 /** The saved choice for these settings: false when an entry with them chose "Don't ask again". */
 export function savedCostPrompt(profiles: readonly { readonly options: BigQueryConnectionOptions }[], options: BigQueryConnectionOptions): false | undefined {
   let key: string
-  try { key = connectionKey(options) } catch { return undefined }
+  // The form as Connect would send it: a field typed into and cleared again ('' or spaces) is no field.
+  try { key = connectionKey(bigQueryFormOptions(options)) } catch { return undefined }
   return profiles.some(profile => { try { return profile.options.costPrompt === false && connectionKey(profile.options) === key } catch { return false } }) ? false : undefined
 }
 /** What Advanced Properties' OK names: the form's choice when the box is as it was, else the box (true clears a saved
@@ -94,7 +95,8 @@ export function advancedCostPrompt(options: BigQueryConnectionOptions, saved: fa
  *  (`costPrompt`: the form's, else the saved entry's), so a box ticked and unticked again is no change. */
 export function bigQueryFormShape(from: BigQueryConnectionOptions, autoReconnect: string | undefined, costPrompt = from.costPrompt): string {
   const { costPrompt: _costPrompt, ...rest } = from
-  return JSON.stringify([Object.entries(rest).filter(([, value]) => value !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false])
+  // A field typed into and cleared again holds '' where the saved entry has none: both are empty.
+  return JSON.stringify([Object.entries(rest).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value] as const).filter(([, value]) => value !== undefined && value !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false])
 }
 
 /** How many projects Load projects keeps across its pages. */

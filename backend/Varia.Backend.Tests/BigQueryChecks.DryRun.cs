@@ -59,6 +59,8 @@ internal static partial class BigQueryChecks
             (DryRunAnswer(0, tables: false), null, "0 bytes from no table (SELECT 1)"),
             (DryRunAnswer(0, "DROP_TABLE"), null, "0 bytes from DDL that names a table"),
             (DryRunAnswer(0, "TRUNCATE_TABLE"), null, "0 bytes from TRUNCATE TABLE"),
+            (DryRunAnswer(0, "LOAD_DATA"), null, "0 bytes from LOAD DATA (loads are free)"),
+            (DryRunAnswer(0, "CREATE_SNAPSHOT_TABLE"), null, "0 bytes from a snapshot (a free copy)"),
             (DryRunAnswer(0, "CREATE_TABLE_AS_SELECT"), "zeroBytes", "0 bytes from CREATE TABLE AS SELECT over tables that were read"),
             (DryRunAnswer(0, "MERGE"), "zeroBytes", "0 bytes from MERGE over tables that were read"),
             (DryRunAnswer(10_485_760, accuracy: "PRECISE"), null, "a precise figure")
@@ -120,6 +122,13 @@ internal static partial class BigQueryChecks
         var noDataset = await harness.Call("bigquery.dryRun", Args("SELECT * FROM salez.orders"));
         check(noDataset.Code == "SQL_ERROR" && noDataset.Message == "Not found: Dataset varia-alpha:salez was not found in location US",
             $"a dry run naming a dataset that does not exist is the query's error: {noDataset.Code} {noDataset.Message}");
+        // A domain-scoped project keeps its domain when Varia asks where the dataset is.
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Dataset example.com:varia-alpha:sales_eu was not found in location US")));
+        harness.Fake.On("GET", BigQueryFake.Datasets, new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#dataset\",\"datasetReference\":{\"projectId\":\"example.com:varia-alpha\",\"datasetId\":\"sales_eu\"},\"location\":\"EU\"}"));
+        var scoped = await harness.Call("bigquery.dryRun", Args("SELECT * FROM sales_eu.orders"));
+        var asked = harness.Fake.To(BigQueryFake.Datasets).Last().Url;
+        check(scoped.Code == "LOCATION_MISMATCH" && asked.Contains("example.com", StringComparison.Ordinal),
+            $"a domain-scoped project's dataset in another location is LOCATION_MISMATCH, asked of the whole project id: {scoped.Code} {asked}");
         harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Project varia-alpha")));
         var gone = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
         check(gone.Code == "NOT_FOUND", $"a dry run in a project that no longer exists is NOT_FOUND, not a query error: {gone.Code} {gone.Message}");
