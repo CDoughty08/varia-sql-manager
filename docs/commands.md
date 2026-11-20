@@ -1053,7 +1053,7 @@ Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `peek.copyProperties` | Always |
 
-## Context keys (164)
+## Context keys (167)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1065,6 +1065,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `isMac` | boolean | static | The app runs on macOS. |
 | `isWindows` | boolean | static | The app runs on Windows. |
 | `isLinux` | boolean | static | The app runs on Linux or another platform treated like it. |
+| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out. |
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
@@ -1182,6 +1183,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
 | `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
 | `explorerSelectionDependencies` | boolean | state | The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
+| `explorerSelectionAgentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | state | The login's SQL Server Agent role on the server of the selected Object Explorer node, when that node is an Agent node (`agentRoleOf` in `src/shared/agent/profile.ts`): 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' while `agent.profile` is being read, or 'profileFailed' when it failed; '' for any other node. Keep it out of keybinding `when` clauses. |
 | `explorerActionSelectTop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Select Top 1000 Rows: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -1215,6 +1217,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `explorerProvider` | `''`, `'sqlserver'`, `'bigquery'` | target | The engine of the server the Object Explorer node the menu is for is on: 'sqlserver' or 'bigquery', or '' for the empty area. Items whose `providers` lack it are left out. |
+| `agentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | target | The login's SQL Server Agent role on the server of the Object Explorer node the menu is for, when that node is an Agent node: 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' (not read yet) or 'profileFailed'; '' for any other node. |
 | `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a grid with its own source: a live view's (an Activity Monitor pane) or a local table's (a Peek list). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |
 | `outputGridBare` | boolean | target | The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it. |

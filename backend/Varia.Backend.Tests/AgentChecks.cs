@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Varia.Backend.Agent;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
+using Varia.Backend.Protocol;
 
 namespace Varia.Backend.Tests;
 
@@ -18,6 +20,170 @@ internal static class AgentChecks
         Scratch(check);
         await SweepAsync(check);
         await ReaderAsync(check);
+        await ProfileAsync(check);
+    }
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+    };
+
+    /// <summary>agent.profile (AG-0b): its batch passes Object Explorer's lint for every band with only its own literals, reads the
+    /// 2022 server-state permissions only from band 16, and Agent XPs by configuration id; the method is a SQL Server-only read on
+    /// the explorer lane that checks ids and members before the connection; a server with no Agent answers NOT_SUPPORTED without
+    /// connecting, a failed connection is a value, and msdb refusing the login is a profile with no role.</summary>
+    private static async Task ProfileAsync(Action<bool, string> check)
+    {
+        var failures = AgentProfileSql.Lint().Where(item => item.Problems.Count > 0).Select(item => item.Band + ": " + string.Join(", ", item.Problems)).ToList();
+        var old = AgentProfileSql.Render(new SqlRender(15));
+        var current = AgentProfileSql.Render(new SqlRender(16));
+        check(failures.Count == 0 && AgentProfileSql.Lint().Count() == ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1
+            && !old.Contains("SECURITY STATE", StringComparison.Ordinal) && !old.Contains("PERFORMANCE STATE", StringComparison.Ordinal)
+            && current.Contains("N'VIEW SERVER SECURITY STATE'", StringComparison.Ordinal) && current.Contains("N'VIEW SERVER PERFORMANCE STATE'", StringComparison.Ordinal)
+            && current.Contains("c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = 16384", StringComparison.Ordinal) && !current.Contains("Agent XPs", StringComparison.Ordinal)
+            && !System.Text.RegularExpressions.Regex.IsMatch(current, @"\bEXEC\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+            "agent.profile's batch passes CatalogSql.Lint for every band with its own literals, reads the 2022 server-state permissions from band 16 only, and Agent XPs by id as value_in_use: " + string.Join(" | ", failures));
+        check(CatalogSql.Lint(current + "SELECT N'x';", new SqlRender(16), false, false, AgentProfileSql.Literals).Contains("has the literal N'x'")
+            && CatalogSql.Lint(current, new SqlRender(16), false, false).Any(problem => problem.StartsWith("has the literal N'sysadmin'", StringComparison.Ordinal)),
+            "agent.profile's literals are an exact set: another literal is refused, and the set is the batch's own, not Object Explorer's");
+
+        using (var sql = new SqlService())
+        {
+            async Task<string> Code(string body)
+            {
+                try { await sql.DispatchAsync("agent.profile", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
+            var codes = new[]
+            {
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\"}"),
+                await Code("{\"connectionId\":\"x\",\"requestId\":\"" + Guid.NewGuid() + "\"}"),
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"y\"}"),
+                await Code("{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"extra\":1}")
+            };
+            check(codes.SequenceEqual(["NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]) && SqlService.MethodNames.Contains("agent.profile") && sql.Methods.Contains("agent.profile")
+                && sql.LaneOf("agent.profile") == RequestLane.Explorer && !sql.Sensitive("agent.profile") && !sql.AnswersStop("agent.profile")
+                && Providers.Of("agent.profile").SequenceEqual([Providers.SqlServer]),
+                "agent.profile is a SQL Server-only read on the explorer lane that checks its ids and members before the connection: " + string.Join(", ", codes));
+        }
+
+        AgentProfileArgs Args() => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString());
+        foreach (var (edition, words) in new[] { (4, "SQL Server Express"), (5, "Azure SQL Database") })
+        {
+            var host = new ExplorerChecks.FakeHost(16, edition);
+            using var service = new ExplorerService(host);
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: { Code: "NOT_SUPPORTED", Retryable: false } } && result.Error.Message.Contains(words, StringComparison.Ordinal) && host.Connections == 0,
+                "agent.profile on " + words + " answers NOT_SUPPORTED without connecting: " + result.Error?.Message);
+        }
+        var unreachable = new ExplorerChecks.FakeHost();
+        using (var service = new ExplorerService(unreachable))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && unreachable.Connections == 1 && service.RunningCount == 0,
+                "agent.profile that cannot reach the server answers an error value, not an exception, and unregisters: " + result.Error?.Code);
+        }
+        check(AgentProfileSql.NoMsdb("windows", 3) is { MsdbAccess: false, Sysadmin: false, UserRole: false, ReaderRole: false, OperatorRole: false, AgentXps: null, DatabaseMailXps: null },
+            "msdb refusing the login (916) is a profile with msdb access off, no role and the server options unread");
+        var denied = new ExplorerError("PERMISSION_DENIED", "denied", false);
+        var refusedOpen = new ExplorerError("NO_DB_ACCESS", "no default database", false);
+        check(AgentProfileSql.Failed(new("NO_DB_ACCESS", "no msdb", false), true, "linux", 2) is { Error: null, Profile: { MsdbAccess: false, Platform: "linux", EngineEdition: 2 } }
+            && AgentProfileSql.Failed(denied, true, "windows", 3) is { Profile: null } refused && refused.Error == denied
+            && AgentProfileSql.Failed(refusedOpen, false, "windows", 3) is { Profile: null } unopened && unopened.Error == refusedOpen,
+            "agent.profile answers msdb refusing the login (NO_DB_ACCESS once open) as a profile with no role, and any other failure, a refused open included, as the error itself");
+        // msdb refusing the login once the pool connection is open (916 from the scope wrapper) is a profile with no role; the
+        // server-scope read of its server facts follows, and failing too (1222 here) leaves that profile with nothing read.
+        static Microsoft.Data.SqlClient.SqlException NoMsdb() => ConnectionFailureChecks.Sql(916, 1, 14, "server", "The server principal is not able to access the database \"msdb\" under the current security context.");
+        var refusing = new ExplorerChecks.FakeHost { Opening = (_, _) => Task.CompletedTask };
+        var scopes = new List<(string? Database, string Statement)>();
+        using (var service = new ExplorerService(refusing, new ExplorerOptions { TestStatementFailure = (database, statement, _) =>
+        {
+            lock (scopes) scopes.Add((database, statement));
+            return Task.FromResult(database == "msdb" ? NoMsdb() : ConnectionFailureChecks.Sql(1222, 1, 16, "server", "Lock request time out period exceeded."));
+        } }))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            bool Batch(string text, bool msdb) => Enumerable.Range(ExplorerCatalog.MinBand, ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1)
+                .Any(band => AgentProfileSql.Render(new SqlRender(band), msdb) == text);
+            check(result is { Error: null, Profile: { MsdbAccess: false, Sysadmin: false, UserRole: false, ServerServices: false, AgentXps: null } } && service.RunningCount == 0
+                && scopes is [("msdb", var first), (null, var second)] && Batch(first, true) && Batch(second, false),
+                "agent.profile whose msdb refuses the login after the connection opened (916) runs the server-scope batch at server scope next, and with that failing too answers a profile with msdb access off and no role: "
+                + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope.Database ?? "server")));
+        }
+        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 1 s of a 3 s budget, so the
+        // server-scope read is cancelled under 3.5 s after msdb's started (a reset budget: 4 s or more), and the 916's no-role
+        // profile stands. The times are taken inside the fake statements, so the call's own overhead does not count.
+        var budgetWatch = System.Diagnostics.Stopwatch.StartNew();
+        long msdbAt = -1, cancelledAt = -1;
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            AgentProfileBudget = TimeSpan.FromSeconds(3),
+            TestStatementFailure = async (database, _, token) =>
+            {
+                if (database == "msdb")
+                {
+                    msdbAt = budgetWatch.ElapsedMilliseconds;
+                    await Task.Delay(TimeSpan.FromSeconds(1), token);
+                    return NoMsdb();
+                }
+                try { await Task.Delay(TimeSpan.FromSeconds(10), token); }
+                finally { cancelledAt = budgetWatch.ElapsedMilliseconds; }
+                return NoMsdb();
+            }
+        }))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Error: null, Profile.MsdbAccess: false } && msdbAt >= 0 && cancelledAt - msdbAt is > 1000 and < 3500 && service.RunningCount == 0,
+                "agent.profile whose server-scope read outlasts what is left of the one budget answers the no-role profile, not a TIMEOUT, without restarting the budget: "
+                + result.Error?.Code + ", cancelled " + (cancelledAt - msdbAt) + " ms after msdb's read started");
+        }
+        // A disconnect during the server-scope read cancels the request (CANCELLED), never a profile for a connection that is gone.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            TestStatementFailure = async (database, _, token) =>
+            {
+                if (database == "msdb") return NoMsdb();
+                reached.TrySetResult();
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                return NoMsdb();
+            }
+        }))
+        {
+            var args = Args();
+            var call = service.AgentProfileAsync(args, CancellationToken.None);
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            service.Forget(args.ConnectionId);
+            string? code = null;
+            try { await call; } catch (RequestException error) { code = error.Code; }
+            check(code == "CANCELLED" && service.RunningCount == 0,
+                "agent.profile whose connection is disconnected during the server-scope read is CANCELLED, not a no-role profile: " + (code ?? "answered"));
+        }
+        // A server-scope read whose connection the server refuses to open (18456) is that error, not "no role".
+        var opens = 0;
+        var disabled = new ExplorerChecks.FakeHost { Opening = (_, _) => Interlocked.Increment(ref opens) == 1 ? Task.CompletedTask
+            : throw ConnectionFailureChecks.Sql(18456, 1, 14, "server", "Login failed for user.") };
+        using (var service = new ExplorerService(disabled, new ExplorerOptions { TestStatementFailure = (_, _, _) => Task.FromResult(NoMsdb()) }))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && opens == 2 && service.RunningCount == 0,
+                "agent.profile whose server-scope read cannot open its connection (18456) answers that error, not a no-role profile: " + result.Error?.Code + " opens " + opens);
+        }
+        check(new[] { 13, 16 }.All(band => AgentProfileSql.Render(new SqlRender(band), msdb: false) is var text && !text.Contains("msdb", StringComparison.OrdinalIgnoreCase)
+                && !text.Contains("IS_ROLEMEMBER", StringComparison.Ordinal) && text.Contains("IsClustered", StringComparison.Ordinal) && text.Contains("16384", StringComparison.Ordinal)),
+            "agent.profile's server-scope batch names nothing in msdb and still reads the server state, clustering and Agent XPs");
+        // A pool connection the server refuses to open (4060: its database was dropped) is an error value, never "msdb refused the login".
+        var dropped = new ExplorerChecks.FakeHost { Opening = (_, _) => throw ConnectionFailureChecks.Sql(4060, 1, 11, "server", "Cannot open database requested by the login.") };
+        using (var service = new ExplorerService(dropped))
+        {
+            var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
+            check(result is { Profile: null, Error: not null } && service.RunningCount == 0,
+                "agent.profile whose pool connection cannot open its database (4060) answers the error, not a no-role profile: " + result.Error?.Code + " " + (result.Profile is null ? "" : "profile"));
+        }
+        check(AgentProfileSql.NoRow is { Code: "SQL_ERROR", Retryable: true } && !AgentProfileSql.NoRow.Message.StartsWith("Msg ", StringComparison.Ordinal) && !AgentProfileSql.NoRow.Message.Contains("Refresh", StringComparison.Ordinal),
+            "a capability read with no row is a retryable SQL_ERROR in words, not a message numbered Msg 0, and leaves Refresh to retry to the renderer");
     }
 
     private static void Catalog(Action<bool, string> check)

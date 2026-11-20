@@ -206,7 +206,7 @@ children are first listed, so the collapsed Agent node already has it, and befor
 `noAccess` badge is absent, Start/Stop/Restart and Properties are disabled with "Reading this login's Agent role…", and
 the read is also started when the Agent node's context menu or an Agent palette command opens (vitest of the node menu
 before the profile arrives); if the read fails with 916 (no msdb access: it runs through `msdb.sys.sp_executesql`) the
-role is `none` with a no-msdb flag, so the `noAccess` badge still shows; any other failure (deadline, error) is
+role is `none` with a no-msdb flag (the server facts then come from a second read at server scope), so the `noAccess` badge still shows; any other failure (deadline, error) is
 `profileFailed`, whose disabled reason is "Could not read this login's Agent role: <reason>. Refresh to retry." and
 Refresh re-reads it (vitests for 916, a failure and the retry; a live `AgentRoles` check with guest CONNECT revoked on a
 scratch database login where practical; mock note on `oe-unknown`), re-read on Refresh of the Agent node and on reconnect, dropped on disconnect) that
@@ -1107,7 +1107,7 @@ its `MethodNames` entry and C# record; string inputs get max lengths in both zod
 
 | Method | Purpose | Policy notes |
 | --- | --- | --- |
-| `agent.profile` | Capability read (roles, server state, Database Mail access, platform, Agent state) | Metadata slot, short deadline |
+| `agent.profile` | Capability read (roles, server state, Database Mail access, platform, Agent state) | Explorer lane, its own slot per connection, short deadline |
 | `agent.historyMessage` | One history row's full message (`instance_id`) | Metadata slot |
 | `agent.errorLogs` | Error log list (`xp_enumerrorlogs 2`) for the Log File Viewer's sources | Metadata slot |
 | Existing `actions.describe` / `actions.execute` | Job, alert, operator, proxy, credential, schedule, Agent Properties describes and every write, service control included | As other object actions; credential execute is sensitive |
@@ -1297,7 +1297,7 @@ CLAUDE.md requires. The **Shared files** column names files BigQuery lanes also 
 | Lane | Scope | Depends on | Shared files | Size |
 | --- | --- | --- | --- | --- |
 | AG-0a | **Done.** Foundations in new files only: `src/shared/agent/catalog.ts` (code tables, gates, decoding, limits, `AgentSql.ReadProcedures`/`WriteProcedures` lists) with `tests/agent-catalog.test.ts` generating docs/sql-server-agent.md's reference part and `Agent/agent-catalog.json`; `backend/Varia.Backend/Agent/` with `AgentSql` and `AgentSql.LintRead`, `AgentReader` (not yet wired to a method), offline suites; `VARIA_TEST_SQL_AGENT`, the scratch prefix and sweep extension, the Agent live suite skeleton; CI `MSSQL_AGENT_ENABLED` and the Agent-up wait; AG-0's spikes on the owner's test instance (results in the PR and in docs/sql-server-agent.md) | — | Program.cs `offlineSuites`, `LiveGroups.Suites`, ci.yml, `tests/ci-workflow.test.ts`, session-start.sh, CLAUDE.md's generated-files table (one row each) | M |
-| AG-0b | `agent.profile` in the five places, the `agentRole` context keys, the release gate (Coordination with BigQuery) | AG-0a, **BQ-0 merged** | contracts.ts, validation.ts, methods.ts, preload, `SqlService.DispatchAsync`, Contracts.cs, context keys | S |
+| AG-0b | **Done.** `agent.profile` in the five places, the `agentRole` context keys, the release gate (Coordination with BigQuery) | AG-0a, **BQ-0 merged** | contracts.ts, validation.ts, methods.ts, preload, `SqlService.DispatchAsync`, Contracts.cs, context keys | S |
 | AG-1 | Object Explorer, as before (catalogue kinds, Agent node, folders, `explorer.agentService`, chips, `agent.tree`, Search Objects batch, icons, menus with not-yet verbs hidden, Ctrl+Q reveal), all behind the release gate | AG-0b; **before BQ-5** | explorer catalogue and its generated docs, live catalogue, icons, menus | M |
 | AG-2 | Job verbs from the tree (Start Job at Step dialog for the tree, Stop, Enable/Disable, Rename, Delete), `AgentSql.LintExecutable`, identity guard, msdb error mapping, Agent service Start / Stop / Restart through the Windows route (state only elsewhere), `agent-service.yml` | AG-1 | actions catalogue, ActionService | M |
 | AG-3 | Job Activity Monitor (`agent.jobs`, LiveGrid, tiles, chips, filters, states) with the rethink's chevron (last run in place), double-click to open (hidden until AG-6a), bulk Enable, Disable, Start and Stop with one result per job; status-bar running job and Agent-stopped probe | AG-1 (AG-2 for actions) | live catalogue, status bar | M |

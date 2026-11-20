@@ -326,7 +326,9 @@ export const agentLimits = {
   /** One `xp_servicecontrol N'QueryState'` read, in ms. */
   serviceReadMs: 10_000,
   /** How long the live checks wait for Agent to come up after the server does, in ms. */
-  agentUpWaitMs: 120_000
+  agentUpWaitMs: 120_000,
+  /** `agent.profile`'s own budget from the moment it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role). */
+  profileMs: 10_000
 } as const
 export type AgentLimit = keyof typeof agentLimits
 
