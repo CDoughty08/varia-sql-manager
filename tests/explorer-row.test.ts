@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, recoveryLabel, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
 import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
-import { databaseChips, serverChips } from '../src/shared/explorer/status'
+import { agentChips, databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -213,6 +213,18 @@ describe('Object Explorer row visuals', () => {
     expect(render(database({ sublabel: '(Offline)', status: 'unavailable' }))).toContain('<span class="oe-sublabel">(Offline)</span>')
     // Other rows take no database state from a status.
     expect(render(node(), { status: restoring })).not.toMatch(/Restoring|RESTORING|oe-chips/)
+  })
+  it('show SQL Server Agent\'s state chips and Agent XPs sublabel, and say them in its accessible name and tooltip (AG-1)', () => {
+    const agent = node({ kind: 'agent', label: 'SQL Server Agent', lower: 'sql server agent', ref: { type: 'object', object: { kind: 'agent' } }, icon: 'agent', level: 2, parent: 1 })
+    const { chips, sublabel } = agentChips({ xps: 0, state: 1 }, undefined)
+    const status: RowStatus = { chips, live: true, words: 'Stopped, Agent XPs disabled', ...sublabel ? { sublabel } : {} }
+    const markup = render(agent, { status })
+    expect(markup).toContain('aria-label="SQL Server Agent, Stopped, Agent XPs disabled"')
+    expect(markup).toContain('title="SQL Server Agent\nSQL Server Agent\nStopped, Agent XPs disabled"')
+    expect(markup).toContain('<span class="oe-sublabel">Agent XPs disabled</span>')
+    expect(markup).toContain('<span class="status-pill-label">STOPPED</span>')
+    // Without a status (gate off, no sample, unknown state) the row is as listed.
+    expect(render(agent)).not.toMatch(/oe-chips|oe-sublabel/)
   })
   it('show a login\'s Disabled or Connect denied as a static chip beside its badge, and say it in words', () => {
     const login = (name: string, fields: Partial<TreeNode> = {}) => node({ kind: 'login', label: name, lower: name.toLowerCase(), ref: { type: 'object', object: { kind: 'login', name } }, icon: 'login', level: 4, hasChildren: false, subtype: 'sql', ...fields })

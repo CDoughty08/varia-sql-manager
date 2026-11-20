@@ -1,6 +1,6 @@
 import type { ContextKeys, TargetKeys } from '../../../shared/commands/context-keys'
 import type { ContextMenuId } from '../../../shared/commands/menus'
-import { folderSpecs, nodeStatuses } from '../../../shared/explorer/catalog.ts'
+import { folderSpecs, kindSpecs, nodeStatuses } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
@@ -172,6 +172,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
     explorerFolderInsertable: target?.kind === 'explorer' && target.node?.kind === 'folder' && !!target.node.insertable,
+    explorerNodeNameless: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && target.node.kind !== 'server' && Object.hasOwn(kindSpecs, target.node.kind) && kindSpecs[target.node.kind as keyof typeof kindSpecs].insert === 'none',
     explorerNodePeekable: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && isPeekKind(target.node.kind),
     explorerNodeDependencies: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && isDependencyKind(target.node.kind),
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',

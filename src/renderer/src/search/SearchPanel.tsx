@@ -101,9 +101,10 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   if (!status || status.state === 'none') return 'This server has no index yet.'
   // The server's own objects are reported under an empty database name; a database kept without its children is still indexed.
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
-  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut).length
+  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent).length
   const server = status.skipped.some(skip => !skip.database)
-  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '')
+  const agent = status.skipped.some(skip => skip.agent)
+  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '') + (agent ? ' · SQL Server Agent objects skipped' : '')
     + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
@@ -134,10 +135,11 @@ export function indexGap(entry: IndexEntry): string | undefined {
   if (entry.error) return 'index could not be built'
   const status = entry.status
   if (!status || status.state === 'none') return 'no index yet'
-  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut).length
+  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent).length
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
   const gaps = [
     databases ? `${count(databases, 'database')} skipped` : '', status.skipped.some(skip => !skip.database) ? 'server objects skipped' : '',
+    status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
     partial ? `children left out of ${count(partial, 'database')}` : '', status.definitions ? '' : 'names only'
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined

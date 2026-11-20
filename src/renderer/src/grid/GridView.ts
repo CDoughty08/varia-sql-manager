@@ -43,21 +43,18 @@ const classes = Array.from({ length: 4096 }, (_, bits) => 'rg-c' + (bits & NULL 
 /** A header's search mark: 0 none, 1 matched, 2 the active match, 3 dimmed. */
 const headerMarks = ['', 'hit', 'cur', 'dim'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
-// A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's added or removed
-// row or a changed row's old or new half); the row number's likewise.
-const rowTones = [...liveTones, 'added', 'removed', 'changedOld', 'changedNew'] as const
+// A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's kind: an unchanged
+// row, a changed entry in one row, an added or removed row, or a changed entry's old or new half); the row number's likewise.
+/** A comparison's tone kinds (UnifiedDiff.Tone); no live tone uses them (tests/results-diff.test.ts). */
+export const diffKinds = ['same', 'changed', 'added', 'removed', 'changedOld', 'changedNew'] as const
+const rowTones = [...liveTones, ...diffKinds] as const
 const toneIndex = new Map<string, number>(rowTones.map((tone, index) => [tone, index + 1]))
 /** What a screen reader hears on a diff's row: a changed row's halves are heard as its removed and added rows. */
 const diffLabels: Readonly<Record<string, string>> = { added: 'added row', removed: 'removed row', changedOld: 'removed row', changedNew: 'added row' }
-/**
- * A row's tone from its tone text's kind. A changed row's halves are written as removed and added rows that list the
- * changed cells, so a removed or added kind followed by cells is the old or new half: only those cells are emphasised.
- */
+/** A row's tone: its tone text's kind, the first token (a changed entry's halves are changedOld and changedNew). */
 export function rowToneOf(toneText: string): string {
   const space = toneText.indexOf(' ')
-  const kind = space < 0 ? toneText : toneText.slice(0, space)
-  if (space < 0) return kind
-  return kind === 'removed' ? 'changedOld' : kind === 'added' ? 'changedNew' : kind
+  return space < 0 ? toneText : toneText.slice(0, space)
 }
 // A highlight (highlights.ts) adds its colour's class to both: 0 for none, else 1 + its index in highlightColors.
 const highlightClass = ['', ...highlightColors.map(color => ' hl hl-' + color)]
@@ -76,7 +73,7 @@ interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: n
  */
 interface RowSlot {
   /** `size` is what the mark's row-size bar shows ('' for none), so it is written only when it changes. */
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text; readonly diffMark?: Text } & NameParts
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text; readonly diffMark?: Text; readonly diffFlag?: Text } & NameParts
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
@@ -1267,7 +1264,7 @@ export class GridView {
     el.append(header)
     let mark: RowSlot['mark']
     if (withCells) {
-      mark = this.rotated ? this.nameMark() : { el: doc.createElement('div'), text: doc.createTextNode(''), size: '', ...this.diff ? { diffMark: doc.createTextNode('') } : {} }
+      mark = this.rotated ? this.nameMark() : { el: doc.createElement('div'), text: doc.createTextNode(''), size: '', ...this.diff ? { diffMark: doc.createTextNode(''), diffFlag: doc.createTextNode('') } : {} }
       mark.el.className = 'rg-rn'
       mark.el.style.display = 'none'
       if (mark.diffMark) {
@@ -1278,6 +1275,13 @@ export class GridView {
         mark.el.append(glyph)
       }
       if (!this.rotated) mark.el.append(mark.text)
+      if (mark.diffFlag) {
+        // After the number: ≈ for a repeated key, else ? for a possible match.
+        const flag = doc.createElement('span')
+        flag.className = 'rg-df'
+        flag.append(mark.diffFlag)
+        mark.el.append(flag)
+      }
       this.marksRows.append(mark.el)
     }
     const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined, gutterKey: '', gutter: '' }
@@ -1515,7 +1519,7 @@ export class GridView {
     // Then writes: sizes, scroll offsets, the row container.
     this.resizeStep()
     // A name column sized in a wider pane still leaves a drawn column in view in this one; the saved width is kept.
-    const rowHeader = this.rotated ? Math.min(this.nameWidth, Math.max(g.nameColumnMinWidth, width - g.columnMinWidth)) : this.diff ? rowHeaderWidth(Math.max(rows, this.o.diffSides?.rows ?? 0), this.charWidth) + Math.ceil(this.charWidth) + g.diffGutterChrome
+    const rowHeader = this.rotated ? Math.min(this.nameWidth, Math.max(g.nameColumnMinWidth, width - g.columnMinWidth)) : this.diff ? rowHeaderWidth(Math.max(rows, this.o.diffSides?.rows ?? 0), this.charWidth) + 2 * Math.ceil(this.charWidth) + g.diffGutterChrome
       : rowHeaderWidth(rows, this.charWidth)
     let columnsMoved = false
     if (rowHeader !== this.rowHeader) {
@@ -1874,17 +1878,19 @@ export class GridView {
     return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? null : window.text[index]
   }
 
-  /** A comparison row's gutter (diff-gutter.ts): its mark, its number in its own input, and its name on the row header
-   *  (and in the tooltip), from its marker and row number cells; blank until their tiles are read. */
+  /** A comparison row's gutter (diff-gutter.ts): its mark, its number in its own input, its flag (≈ or ?) and its name on
+   *  the row header (and in the tooltip), from its marker, row number and tone cells; blank until their tiles are read. */
   private paintGutter(slot: RowSlot, row: number, tile: (row: number, column: number) => RowWindow | null): void {
     const diff = this.diff!, mark = this.hiddenText(row, diff.mark, tile), left = this.hiddenText(row, diff.leftRow, tile), right = this.hiddenText(row, diff.rightRow, tile)
-    const loaded = mark !== undefined && left !== undefined && right !== undefined
-    const key = loaded ? `${mark}|${left}|${right}` : ''
+    const tone = diff.tone < 0 ? null : this.hiddenText(row, diff.tone, tile)
+    const loaded = mark !== undefined && left !== undefined && right !== undefined && tone !== undefined
+    const key = loaded ? `${mark}|${left}|${right}|${tone}` : ''
     if (key === slot.gutterKey) return
     slot.gutterKey = key
-    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides) : undefined
+    const gutter = loaded ? diffGutter(mark, left, right, this.o.diffSides, tone) : undefined
     // The pinned active row has no drawn number, only its header, which still names the row.
     if (slot.mark?.diffMark) { slot.mark.diffMark.nodeValue = gutter?.mark ?? ''; slot.mark.text.nodeValue = gutter?.number ?? '' }
+    if (slot.mark?.diffFlag) slot.mark.diffFlag.nodeValue = gutter?.flag ?? ''
     slot.number.nodeValue = gutter?.name ?? 'Loading'
     slot.gutter = gutter?.name ?? ''
   }

@@ -280,7 +280,7 @@ export const explorerLines = page => page.evaluate(part => [...document.querySel
  * that replaces main's request handler receives it as an argument to answer explorer.children.
  */
 export function explorerStatics() {
-  const profile = { band: 16, engine: 'box' }
+  const profile = { band: 16, engine: 'box', edition: 3, linux: false }
   return {
     objects: Object.fromEntries(nodeKinds.map(kind => [kind, staticChildren({ kind }, profile)])),
     folders: Object.fromEntries(folderIds.map(folder => [folder, staticChildren({ folder }, profile)])),

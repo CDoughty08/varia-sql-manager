@@ -312,11 +312,12 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
   const sublabel = shownSublabel(node)
   const tag = root ? environmentTag(environment) : undefined
-  // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server and database
-  // rows show live chips (group names are the server's text); a login shows its listing's static chips.
-  const staticChips = live || root ? undefined : listedChips(node)
-  const chips = staticChips ?? status?.chips
-  const serverWords = root && status?.words ? displayText(status.words) : undefined
+  // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server, database
+  // and SQL Server Agent rows show live chips (group names are the server's text); a login shows its listing's static chips.
+  const agent = node.kind === 'agent'
+  const staticChips = live || root || node.kind !== 'login' ? undefined : listedChips(node)
+  const chips = staticChips ?? (live || root || agent ? status?.chips : undefined)
+  const serverWords = (root || agent) && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
   // The tree shows the peek cursor over these while Peek on Hover's modifier is held (styles.css, data-peek-armed).
@@ -345,6 +346,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
       : <Label text={node.label} />}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {sublabel && !live && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+    {agent && status?.sublabel && <span className="oe-sublabel">{displayText(status.sublabel)}</span>}
     {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
     <RowEnd count={itemCount(node)} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
       {chips && chips.length > 0 && <StatusChips chips={chips} />}

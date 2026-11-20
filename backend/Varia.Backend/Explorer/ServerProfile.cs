@@ -24,7 +24,7 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
         + " CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')),"
         + " CONVERT(bit, CASE WHEN (SELECT s.authenticating_database_id FROM sys.dm_exec_sessions AS s WHERE s.session_id = @@SPID) = 1 THEN 0 ELSE 1 END), SUSER_SID();";
 
-    public ExplorerProfile Explorer(ExplorerCatalog catalog) => catalog.Profile(Major, EngineEdition, CatalogBand) with { Linux = Linux };
+    public ExplorerProfile Explorer(ExplorerCatalog catalog) => catalog.Profile(Major, EngineEdition, CatalogBand) with { Linux = Linux, Agent = Agent.AgentCatalog.Current.PlatformOf(EngineEdition, Linux) };
 
     /// <summary>Runs the probe on an open connection; a failure (permissions, an unusual edition) falls back to the
     /// version the provider reported, a box edition, and every flag off.</summary>

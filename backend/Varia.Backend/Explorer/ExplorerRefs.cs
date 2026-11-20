@@ -156,5 +156,6 @@ internal static class ExplorerRefs
     public static void CheckServed(ExplorerRequest request, ExplorerCatalog catalog, ExplorerProfile profile)
     {
         if (request.Folder is { } folder && !catalog.Served(folder.Id, profile)) throw Invalid("this server has no " + folder.Id + " folder.");
+        if (!catalog.KindServed(request.Object.Kind, profile)) throw Invalid("this server has no " + request.Object.Kind + ".");
     }
 }

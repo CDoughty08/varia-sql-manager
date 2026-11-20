@@ -26,12 +26,16 @@ internal sealed class StoredPage
     /// <summary>The page's length as sealed (what results.read sends), whatever form the store keeps it in.</summary>
     public int Length { get; }
     /// <summary>The bytes the store holds for the page now (its packed length when packed): what its budget charge counts.</summary>
-    public int StoredLength => Stored is PackedPage packed ? packed.Bytes.Length : Length;
+    public long StoredLength => Stored is PackedPage packed ? packed.Charged : Length;
     /// <summary>The set that stores the page, or null for a page built for one read.</summary>
     public ResultSetBuffer? Set { get; }
     /// <summary>The bytes as the store keeps them: the page as sealed (a byte array) or a <see cref="PackedPage"/>. Only
     /// <see cref="ResultSetBuffer"/> reads or replaces this, under its lock; a reader may see either form.</summary>
     internal object Stored { get => Volatile.Read(ref stored); set => Volatile.Write(ref stored, value); }
+    /// <summary>The page's n-gram filter while it is packed (<see cref="PageFilter"/>), else null.</summary>
+    public PageFilter? Filter => Stored is PackedPage packed ? packed.Filter : null;
+    /// <summary>The page's compressed bytes while it is packed, without its filter, else null.</summary>
+    public int? PackedLength => Stored is PackedPage packed ? packed.Bytes.Length : null;
     /// <summary>Packing saved less than a tenth of the page, so it is not tried again (ResultSetBuffer.Pack).</summary>
     internal bool KeptRaw { get; set; }
     /// <summary>The page's bytes as sealed, through its set's accessor (<see cref="ResultSetBuffer.Body"/>). A call, not a
@@ -40,10 +44,14 @@ internal sealed class StoredPage
     public byte[] Body() => Set is null ? (byte[])Stored : Set.Body(this);
 }
 
-/// <summary>A page's Zstandard bytes (<see cref="PageCodec"/>); its length as sealed is the page's.</summary>
-internal sealed class PackedPage(byte[] bytes)
+/// <summary>A page's Zstandard bytes (<see cref="PageCodec"/>; its length as sealed is the page's) and the n-gram filter
+/// Find consults before unpacking it (<see cref="PageFilter"/>), built from the same page.</summary>
+internal sealed class PackedPage(byte[] bytes, PageFilter? filter = null)
 {
     public byte[] Bytes { get; } = bytes;
+    public PageFilter? Filter { get; } = filter;
+    /// <summary>What the page costs packed: its bytes and its filter's.</summary>
+    public long Charged => Bytes.Length + (Filter?.Bytes ?? 0);
 }
 
 /// <summary>One stored result set: an append-only page directory that results.read serves, and, while the set is open,
@@ -665,6 +673,12 @@ internal sealed class ResultSetBuffer
             if (Volatile.Read(ref stopped) != 0 || proceed is not null && !proceed()) return false;
             if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) return true;
             var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
+            // Built outside the lock from the raw page, only for a page that stays packed, and capped: at most an eighth of
+            // the packed bytes, and the page with its filter still saves a tenth (a wide page of GUIDs would cost more).
+            var filter = keep && raw.Length >= store.FilterMinBytes
+                ? PageFilter.Build(raw, Columns, Wires, store.FilterCapped ? Math.Min(bytes.Length / 8, raw.Length - raw.Length / 10 - bytes.Length) : long.MaxValue)
+                : null;
+            var stored = bytes.Length + (filter?.Bytes ?? 0);
             lock (gate)
             {
                 if (state != 1 || pins > 0 || leases > 0)
@@ -682,14 +696,14 @@ internal sealed class ResultSetBuffer
                     store.CountKeptRaw();
                     return true;
                 }
-                page.Stored = new PackedPage(bytes);
+                page.Stored = new PackedPage(bytes, filter);
                 store.CountPacked();
-                var difference = (long)raw.Length - bytes.Length;
+                var difference = raw.Length - stored;
                 if (difference >= 0) ReturnLocked(difference);
                 else Charge(-difference);
-                packedBytes += bytes.Length;
+                packedBytes += stored;
                 packedLogical += raw.Length;
-                store.Held(bytes.Length, raw.Length, 0);
+                store.Held(stored, raw.Length, 0);
                 saved += difference;
                 return true;
             }
@@ -748,7 +762,7 @@ internal sealed class ResultSetBuffer
             if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
             long need = 0;
             foreach (var page in pages)
-                if (page.Stored is PackedPage packed) need += page.Length - packed.Bytes.Length;
+                if (page.Stored is PackedPage packed) need += page.Length - packed.Charged;
             return Math.Max(0, need);
         }
     }
@@ -818,10 +832,10 @@ internal sealed class ResultSetBuffer
                 var at = cache.FindIndex(item => item.Page == packed[i]);
                 if (at >= 0) DropCachedLocked(at);
                 packed[i].Stored = bodies[i];
-                added += packed[i].Length - bytes.Bytes.Length;
-                packedBytes -= bytes.Bytes.Length;
+                added += packed[i].Length - bytes.Charged;
+                packedBytes -= bytes.Charged;
                 packedLogical -= packed[i].Length;
-                store.Held(-bytes.Bytes.Length, -packed[i].Length, 0);
+                store.Held(-bytes.Charged, -packed[i].Length, 0);
             }
             // Pages another operation unpacked meanwhile give their share back.
             if (added > reserved) Charge(added - reserved);
