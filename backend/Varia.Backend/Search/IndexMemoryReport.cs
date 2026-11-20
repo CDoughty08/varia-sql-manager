@@ -6,8 +6,8 @@ namespace Varia.Backend.Search;
 /// set once, however many connections show it); the pool's figures are its own counters. A table's definitions are the texts its
 /// entries name as definitions and its packed texts (<see cref="ObjectTable.DefinitionTexts"/>), so a long definition a read pooled
 /// for a row it then left out (a child whose parent the login cannot see) still counts as one, and that row's name stays a name.
-/// Names are the pool's charges less those definitions, so texts a running read holds count as names and its records as reading;
-/// with no read running, records, names and definitions add up to the budget's use.
+/// Names are the held tables' other texts. A running read's records and the texts it has pooled are in no held table yet, so they
+/// are what is left of the budget's use, shown as reading; with no read running, records, names and definitions add up to it.
 /// </summary>
 internal static class IndexMemoryReport
 {
@@ -35,7 +35,8 @@ internal static class IndexMemoryReport
         foreach (var set in resources) { tables.Add(set.Table); recordBytes += set.Bytes; cut += set.Cut; }
         // Pooled tables share the pool's copy of a text, so one reference is one distinct text.
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        long objects = 0, definitions = 0, packedDefinitions = 0, definitionTexts = 0, packedTexts = 0, packedBytes = 0, packedTextBytes = 0, definitionBytes = 0;
+        long objects = 0, definitions = 0, packedDefinitions = 0, definitionTexts = 0, packedTexts = 0, packedBytes = 0, packedTextBytes = 0, definitionBytes = 0, nameBytes = 0;
+        var kinds = new List<bool[]>(tables.Count);
         foreach (var table in tables)
         {
             objects += table.Count;
@@ -46,6 +47,7 @@ internal static class IndexMemoryReport
                 if (stored is PackedText) packedDefinitions++;
             }
             var defined = table.DefinitionTexts();
+            kinds.Add(defined);
             for (var id = 0; id < defined.Length; id++)
             {
                 if (!defined[id] || table.Texts[id] is not { } text || !seen.Add(text)) continue;
@@ -57,8 +59,16 @@ internal static class IndexMemoryReport
                 packedTextBytes += IndexMemory.StringBytes(packed.Length);
             }
         }
-        // The figures are read one after another while reads may run, so none is allowed below zero.
+        // Names after every definition, so a text one table holds as a definition and another as a name counts once, as a definition.
+        for (var at = 0; at < tables.Count; at++)
+        {
+            var defined = kinds[at];
+            var held = tables[at].Texts;
+            for (var id = 0; id < defined.Length; id++)
+                if (!defined[id] && held[id] is { } text && seen.Add(text)) nameBytes += StringPool.Cost(text);
+        }
+        // The figures are read one after another while reads may run, so reading is not allowed below zero.
         return new(holding, objects, texts, references, definitions, packedDefinitions, definitionTexts, packedTexts, packedBytes, packedTextBytes, cut, childrenLeftOut,
-            recordBytes, Math.Max(0, poolBytes - definitionBytes), Math.Min(definitionBytes, poolBytes), Math.Max(0, used - recordBytes - poolBytes), lastBuildMs, lastSearchMs);
+            recordBytes, nameBytes, definitionBytes, Math.Max(0, used - recordBytes - nameBytes - definitionBytes), lastBuildMs, lastSearchMs);
     }
 }

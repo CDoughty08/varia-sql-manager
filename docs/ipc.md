@@ -922,7 +922,7 @@ it to the page as the report's `index`.
 | `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
 | `definitionTexts`, `packedTexts` | The distinct definitions the held tables hold (modules, constraint and computed column expressions, plan guides: texts an object names as its definition, and packed ones, including one pooled for a row a read then left out), and how many are zstd frames (`PackedText`) |
 | `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
-| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and records of reads still running. They add up to `usedBytes` while no build runs |
+| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and the records and pooled texts of reads still running. They add up to `usedBytes` |
 | `cut`, `childrenLeftOut` | Definitions left out or cut short; held databases read without their children (`CHILDREN_LEFT_OUT`), whatever later builds reported |
 | `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 

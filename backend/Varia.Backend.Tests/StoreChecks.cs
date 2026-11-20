@@ -618,7 +618,7 @@ internal static class StoreChecks
     private static void MemoryBudgetReports(Action<bool, string> check)
     {
         var reports = new List<(long Used, long Limit, long Seq)>();
-        var details = new List<(int Texts, long NameBytes, long RecordBytes)>();
+        var details = new List<(int Texts, long ReadingBytes, long NameBytes)>();
         var sent = new List<IndexMemoryDetail>();
         var store = new ResultStore(1L << 30, 1L << 29);
         long resultsUsed = -1;
@@ -641,7 +641,7 @@ internal static class StoreChecks
             lock (reports)
             {
                 var detail = report.GetProperty("detail");
-                details.Add((detail.GetProperty("texts").GetInt32(), detail.GetProperty("nameBytes").GetInt64(), detail.GetProperty("recordBytes").GetInt64()));
+                details.Add((detail.GetProperty("texts").GetInt32(), detail.GetProperty("readingBytes").GetInt64(), detail.GetProperty("nameBytes").GetInt64()));
                 reports.Add((used, report.GetProperty("globalBytes").GetInt64(), report.GetProperty("seq").GetInt64()));
                 return reports.Count != 1;
             }
@@ -662,7 +662,7 @@ internal static class StoreChecks
                 "explorer.index.memory reports the shared index budget, retries refused samples, and reports bytes released");
         lock (reports)
             check(details.SequenceEqual([(0, 0L, 0L), (0, 0L, 0L), (1, StringPool.Cost("dbo.Orders"), 0L), (0, 0L, 0L)]),
-                "explorer.index.memory carries what the index holds, read as each event goes out");
+                "explorer.index.memory carries what the index holds, read as each event goes out (a pooled text no table holds yet is still being read)");
         lock (reports)
             check(ReferenceEquals(sent[0], sent[1]) && !ReferenceEquals(sent[1], sent[2]),
                 "a refused index report's detail is kept for its retry rather than walking the index again");

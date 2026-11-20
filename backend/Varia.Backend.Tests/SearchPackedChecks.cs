@@ -374,8 +374,11 @@ internal static class SearchPackedChecks
             "the pool's distinct texts and references are reported, a shared set's once");
         var late = Read("Late", ("usp_Late", Module("usp_Late")));
         var reading = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held);
-        check(reading.ReadingBytes == late.Bytes && reading.RecordBytes + reading.NameBytes + reading.DefinitionBytes + reading.ReadingBytes == budget.Used
-            && reading.LastBuildMs is null && reading.LastSearchMs is null, "a read's records not yet held show as reading, and the parts still add up");
+        var heldTexts = new HashSet<object>(tables.SelectMany(table => table.Texts).OfType<object>(), ReferenceEqualityComparer.Instance);
+        var lateTexts = late.Table.Texts.OfType<object>().Where(text => !heldTexts.Contains(text)).Distinct(ReferenceEqualityComparer.Instance).Sum(text => StringPool.Cost(text));
+        check(reading.ReadingBytes == late.Bytes + lateTexts && lateTexts > 0 && reading.NameBytes == detail.NameBytes && reading.DefinitionBytes == detail.DefinitionBytes
+            && reading.RecordBytes + reading.NameBytes + reading.DefinitionBytes + reading.ReadingBytes == budget.Used
+            && reading.LastBuildMs is null && reading.LastSearchMs is null, "a read not yet held shows as reading, its pooled texts with its records, not as names");
         first.Put(late);
         // A definition a read pooled for a row it then left out (a child whose parent the login cannot see) is still charged as a
         // definition: no entry names it, but the table holds it.

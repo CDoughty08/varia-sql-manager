@@ -333,7 +333,7 @@ export interface ResultMemoryDetail {
  *  metrics). Objects and definitions count each held table once (a shared resource set once): `definitions` and
  *  `packedDefinitions` are objects, `definitionTexts` and `packedTexts` the distinct texts behind them. `packedBytes` is what
  *  the packed texts cost and `packedTextBytes` what they would as strings. `texts` and `references` are the shared pool's
- *  distinct texts and the references to them. `recordBytes`, `nameBytes`, `definitionBytes` and `readingBytes` (records of
+ *  distinct texts and the references to them. `recordBytes`, `nameBytes`, `definitionBytes` and `readingBytes` (records and texts of
  *  reads still running) add up to the budget's use. `cut` is definitions left out or cut short, `childrenLeftOut` databases
  *  indexed without their children. The times are absent before the first build or search. */
 export interface IndexMemoryDetail {
