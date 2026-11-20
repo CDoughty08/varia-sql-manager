@@ -60,6 +60,9 @@ internal sealed partial class SqlService
         return mapped;
     }
 
+    /// <summary>A script child's rows failed to read: the query fails, where a failed listing only stops the early reads.</summary>
+    private sealed class ChildReadFailure(Exception inner) : Exception(inner.Message, inner);
+
     private static string TransactionName(BigQueryTransaction state) => state switch { BigQueryTransaction.Open => "open", BigQueryTransaction.Unknown => "unknown", _ => "none" };
 
     private async Task<QueryResult> ExecuteBigQueryAsync(QueryArgs args, BigQueryConnection connection, RequestContext? context)
@@ -176,7 +179,9 @@ internal sealed partial class SqlService
                 if (readChildren.Contains(child.Id)) continue;
                 if (!child.Done) break;
                 readChildren.Add(child.Id);
-                await ChildAsync(child);
+                // A child's rows that fail to read fail the query, unlike a listing that fails: its set is cut short.
+                try { await ChildAsync(child); }
+                catch (Exception error) when (!token.IsCancellationRequested) { throw new ChildReadFailure(error); }
             }
             return listed;
         }
@@ -274,7 +279,7 @@ internal sealed partial class SqlService
                         page = null;
                         if (!listing) continue;
                         try { await ChildrenAsync(full: false); }
-                        catch (Exception) when (!token.IsCancellationRequested) { listing = false; }
+                        catch (Exception error) when (!token.IsCancellationRequested && error is not ChildReadFailure) { listing = false; }
                     }
                 }
                 catch (BigQueryJobException error) { jobFailed = error; }
@@ -291,7 +296,7 @@ internal sealed partial class SqlService
                 {
                     try { (children, listedAll) = await ChildrenAsync(full: true); }
                     // A listing that fails leaves the children unread: the parent's own rows are shown, and the summary says so.
-                    catch (Exception error) when (!token.IsCancellationRequested && error is not BigQueryJobException) { children = null; }
+                    catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
                 }
                 if (sessionJob)
                 {
@@ -358,6 +363,7 @@ internal sealed partial class SqlService
         }
         catch (Exception error)
         {
+            if (error is ChildReadFailure read) error = read.InnerException!;
             if (currentSet is not null) currentSet.Incomplete = true;
             // A disconnect that closed the handle under the run (its client disposed) stopped it, as one that cancelled it does.
             if (!token.IsCancellationRequested && bigQuery.Find(args.ConnectionId) != connection) running.Cancel();

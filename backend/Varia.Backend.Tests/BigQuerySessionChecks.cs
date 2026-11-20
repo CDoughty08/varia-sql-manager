@@ -146,6 +146,8 @@ internal static class BigQuerySessionChecks
 
         static JsonObject Gone(string session) => new() { ["reason"] = "invalidQuery", ["message"] = "Session " + session + " has expired and is no longer available." };
 
+        public BigQueryFake.Reply InsertReply(BigQueryFake.Request request) => Insert(request);
+
         BigQueryFake.Reply Insert(BigQueryFake.Request request)
         {
             var body = JsonNode.Parse(request.Body)!;
@@ -643,6 +645,47 @@ internal static class BigQuerySessionChecks
         check(refusedState.State is { Checked: true, TransactionCount: 0 } && !Says(afterRefusal.Result, "Waiting for BigQuery job"),
             $"a query refused at insert leaves the session checked and free: {refusedState.State} {Texts(afterRefusal.Result?.Messages ?? [])}");
 
+        // A script child's rows that fail to read fail the query, rather than showing a partial result as complete.
+        bq.Scripts["SCRIPT two selects"] = [("SELECT", null), ("SELECT", null)];
+        var childTab = Tab();
+        await harness.Execute(childTab, "SELECT 1");
+        harness.Fake.Fault = request => request.Url.Contains("/queries/child_", StringComparison.Ordinal) ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var partial = await harness.Execute(childTab, "SCRIPT two selects");
+        harness.Fake.Fault = null;
+        check(partial.Result is { Status: "failed" } && !Says(partial.Result, "The script completed."),
+            $"a script whose child rows fail to read fails, never completes: {partial.Result?.Status} {Texts(partial.Result?.Messages ?? [])}");
+
+        // An insert whose first attempt may have created the job, then retries that never left: the job may exist, so it holds the session.
+        var ambiguousTab = Tab();
+        await harness.Execute(ambiguousTab, "SELECT 1");
+        Bq.FakeJob? ambiguousJob = null;
+        harness.Fake.On("POST", Base + "/jobs", request =>
+        {
+            var body = JsonNode.Parse(request.Body)!;
+            if (body["configuration"]!["query"]!["query"]!.GetValue<string>() != "SELECT ambiguous") return bq.InsertReply(request);
+            ambiguousJob = bq.Create(body);
+            ambiguousJob.Hold = true;
+            return new(500, Bq.Error(500, "Backend error.", "backendError"));
+        });
+        var sentOnce = false;
+        harness.Fake.Fault = request =>
+        {
+            if (request.Method == "POST" && request.Body.Contains("SELECT ambiguous", StringComparison.Ordinal))
+            {
+                if (!sentOnce) { sentOnce = true; return null; }
+                return new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.");
+            }
+            return request.Method == "GET" && ambiguousJob is { } held && request.Url.Contains("/jobs/" + held.Id, StringComparison.Ordinal)
+                ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        };
+        var ambiguous = await harness.Execute(ambiguousTab, "SELECT ambiguous");
+        harness.Fake.Fault = null;
+        var ambiguousState = await harness.State(ambiguousTab);
+        check(ambiguous.Result is { Status: "failed" } && ambiguousJob is not null && ambiguousState.State is { Checked: false },
+            $"an insert whose first attempt may have reached BigQuery holds the session even when later retries never left: {ambiguous.Result?.Status} {ambiguousState.State}");
+        if (ambiguousJob is not null) bq.Release(ambiguousJob);
+        await harness.Close(ambiguousTab);
+
         // The session's end fails: abortFailed, with BigQuery's message.
         bq.AbortError = Failure("accessDenied", "Access Denied: Project varia-alpha: User does not have bigquery.jobs.create permission.");
         var failTab = await Open(false);
@@ -824,6 +867,26 @@ internal static class BigQuerySessionChecks
         check(keptRefusal.Code != "ok" && keptRefusal.Message.StartsWith("The stopped job committed a transaction before it stopped. The transaction was not committed", StringComparison.Ordinal),
             $"a refused commit after a stopped script committed still says the script committed: {keptRefusal.Code} {keptRefusal.Message}");
         await harness.Close(againTab, "rollback");
+
+        // The same with a later statement failing (unchecked) and a long refusal: the joined note stays within its bound.
+        bq.Scripts["SCRIPT commits then fails"] = [("BEGIN_TRANSACTION", null), ("COMMIT_TRANSACTION", null), ("BEGIN_TRANSACTION", null), ("UPDATE", Failure("invalidQuery", "Bad update."))];
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var longTab = Tab();
+        bq.HoldQueries = false;
+        await harness.Execute(longTab, "SELECT 1");
+        bq.HoldQueries = true;
+        var longArgs = harness.Query(longTab, "SCRIPT commits then fails");
+        var longRun = harness.Call("query.execute", longArgs);
+        await Task.WhenAny(bq.Polling.Task, longRun).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = longArgs["queryId"]!.GetValue<string>() });
+        await longRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Release(bq.Jobs[bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>()]);
+        bq.CommitError = Failure("invalidQuery", "No transaction is active. " + new string('x', 3000));
+        var joined = await harness.Close(longTab, "commit");
+        bq.CommitError = null;
+        check(joined is { Code: "ok", Result.Note: { Code: "commitNotApplied" } joinedNote } && joinedNote.Message!.Length <= 2001
+            && joinedNote.Message.StartsWith("The stopped job committed a transaction before it stopped.", StringComparison.Ordinal),
+            $"a note joined with a stopped job's commit stays within 2,001 characters: {joined.Code} {joined.Result?.Note?.Message?.Length}");
 
         // A stopped single statement is settled without jobs.list, so the Job User role keeps a checked transaction.
         bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);

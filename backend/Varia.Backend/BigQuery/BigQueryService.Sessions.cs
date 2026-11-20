@@ -455,13 +455,13 @@ internal sealed partial class BigQueryService
                 try
                 {
                     var committed = await CommitAsync(session, abortOnRefusedCommit, token);
-                    if (committed is not null) return note is null ? committed : committed with { Note = committed.Note! with { Message = Join(note, committed.Note.Message) } };
+                    if (committed is not null) return note is null ? committed : committed with { Note = Note(committed.Note!.Code, Join(note, committed.Note.Message), committed.Note.JobId) };
                 }
                 catch (FallThrough fall)
                 {
                     // A refused commit on an unchecked session ends it, still holding the queue; an end that fails answers
                     // abortFailed, carrying BigQuery's commit message.
-                    return await EndAsync(session, note is null ? fall.Note : fall.Note with { Message = Join(note, fall.Note.Message) }, token);
+                    return await EndAsync(session, note is null ? fall.Note : Note(fall.Note.Code, Join(note, fall.Note.Message), fall.Note.JobId), token);
                 }
                 catch (RequestException error) when (note is not null) { throw new RequestException(error.Code, Join(note, error.Message)); }
             }

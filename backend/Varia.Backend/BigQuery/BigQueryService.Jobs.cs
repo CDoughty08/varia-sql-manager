@@ -113,6 +113,9 @@ internal sealed partial class BigQueryService
     internal async Task<Job> InsertJobAsync(BigQueryConnection connection, Job job, string? dataset, CancellationToken token)
     {
         var reference = job.JobReference;
+        // The first failure after which the job may exist: what the caller hears, since a later attempt that never left the
+        // machine says nothing about that one.
+        Exception? ambiguous = null;
         for (var attempt = 1; ; attempt++)
         {
             try { return await CallAsync(t => connection.Client.Service.Jobs.Insert(job, reference.ProjectId).ExecuteAsync(t), token); }
@@ -124,6 +127,7 @@ internal sealed partial class BigQueryService
             }
             catch (Exception error) when (Transient(error, token))
             {
+                if (!NotSent(error)) ambiguous ??= error;
                 // Before sending again, ask whether the first one arrived, where it would run.
                 try
                 {
@@ -132,7 +136,7 @@ internal sealed partial class BigQueryService
                 }
                 catch (GoogleApiException lookup) when (lookup.HttpStatusCode == HttpStatusCode.NotFound && attempt < InsertAttempts) { }
                 catch (Exception lookup) when (attempt < InsertAttempts && Transient(lookup, token)) { }
-                catch (Exception) when (attempt >= InsertAttempts) { throw error; }
+                catch (Exception) when (attempt >= InsertAttempts) { throw ambiguous ?? error; }
                 await Task.Delay(Backoff(attempt), token);
             }
         }
