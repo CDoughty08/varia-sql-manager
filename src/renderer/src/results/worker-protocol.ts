@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -15,7 +15,7 @@ export type IdentityRequest =
   | { readonly method: 'rowIds'; readonly firstRow: number; readonly count: number }
   | { readonly method: 'findRows'; readonly ids: readonly number[] }
   /** results.diff: this result (the earlier) against `right` (the later), of the same generation. */
-  | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number; readonly match?: DiffMatch }
+  | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number; readonly match?: DiffMatch; readonly layout?: DiffLayout; readonly replaces?: number }
   /** results.diffSeek: this comparison's next or previous change unit from a position (its view's, when the key names one),
    *  or a look-alike row's partner. */
   | { readonly method: 'diffSeek'; readonly from: number; readonly direction: 'next' | 'previous' }

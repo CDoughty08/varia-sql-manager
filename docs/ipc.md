@@ -261,7 +261,7 @@ noted where it matters.
 | `results.identify` | port | unary | results | 120 s ([Row identities and highlights](#row-identities-and-highlights)) |
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows |
 | `results.findRows` | port | unary | results | 60 s; 1 – 10,000 identities in a result or view |
-| `results.diff` | port | unary | results | 120 s; stored as a new result ([Result diffs](#result-diffs)) |
+| `results.diff` | port | unary | results | 120 s; stored as a new result, two rows a change or one row an entry, optionally replacing an earlier comparison under its allowance ([Result diffs](#result-diffs)) |
 | `results.diffSeek` | port | unary | results | 10 s; the next or previous change, or a look-alike's partner, in a comparison or its view ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; stored as a new result ([Pivots](#pivots)) |
@@ -958,6 +958,16 @@ Results stay in backend memory, never on disk (`ResultStore`).
   on it answer `BUDGET_STOPPED`). A query's own ceiling fixed when it began (an actual plan's) stays: the smaller of it and
   the current half holds. Test hooks'
   `VARIA_RESULT_BUDGET_BYTES` fixes the figure and turns off the memory-load check.
+- **Allowances.** A comparison that replaces another (`results.diff`'s `replaces`, [Result diffs](#result-diffs)) raises
+  its query's limit by the replaced comparison's whole charge (its rows, metadata, change index, views, identity and
+  value lists) while both are held, so a new comparison can be written beside the old one it replaces. The query's
+  limit is `min(half, its own ceiling) + allowances` (`ResultStore.QueryLimit`), read by every reservation of the query:
+  rows, working memory on any thread, rooms, waits for room and spare memory alike. One allowance per replaced
+  comparison, granted once; allowances of different comparisons add up. It ends when the replaced comparison's bytes go
+  back (its release, after its last lease or pin) or when nothing holds it (the replace failed or was cancelled, or the
+  new comparison was released first). While it lasts the query's other operations (sorts, filters, pivots, profiles of
+  any of its results) may use the raised limit too, so the query's use can pass its half (the meter above 100 %); the
+  global budget and the memory-load check are not raised.
 - **Working memory** of operations (sort keys, profile figures) is charged to the same budget (pinned by
   `tests/working-memory-lint.test.ts`). Reservations of 64 MiB or more, any memory that only makes an operation faster once 64 MiB
   of it is held (`ResultStore.TryReserveSpare`), and stepped ones (`WorkSteps`) at each further 64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory); refused Distinct Count bounds are not an
@@ -1267,9 +1277,10 @@ Compare with Previous Result and the Compare popover compare two results of one 
 (`Results/ResultDiff.cs`), producing a new result. The renderer runs at most four comparisons per window (`DerivedJobs`,
 shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s.
 
-- **`results.diff { left, right, exact?, context?, match? }`** answers `{ descriptor, match, same, changed, added, removed,
-  soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired, columnChanges,
-  trailingHidden, overview, units }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
+- **`results.diff { left, right, exact?, context?, match?, layout?, replaces? }`** answers `{ descriptor, match, same,
+  changed, added, removed, soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired,
+  columnChanges, trailingHidden, overview, units, layout }`. `layout` is `unified` (absent: two rows a change) or `entry`
+  (one row an entry, below); any other is `INVALID_PARAMS`, and the answer says which was written. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
   own result sets can be compared: not a pivot, a comparison or an execution plan set."), complete (`RESULT_OPEN`,
   "Compare the results after they finish loading."), and the query must not have stopped storing (`BUDGET_STOPPED`, see
   [Pivots](#pivots)). Columns pair by name case-insensitively (`src/shared/ordinal-casing.ts`), in `left`'s order, when
@@ -1303,10 +1314,12 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   tone was cut, and its change units: each changed cell the tone lists, plus one for a cut tone, on a changed entry's
   `changedNew` half (its `changedOld` half has none); one for an added or removed row; none for an unchanged row (soft
   cells are not changes). Running totals of units every 4,096 rows (`limits.diff.indexBlockRows`) let a seek skip empty
-  stretches. A look-alike row holds its partner as a stored row (none when the partner was not stored). It is charged
-  to the query's budget before the rows are written, and refused with the diff (`TOO_LARGE`, the diff's sentence). A
-  view of a diff keeps its own running totals over its order, charged with the view. The one-row layout's cut-row
-  bitsets join this index later; a cut row is already marked.
+  stretches. A look-alike row holds its partner as a stored row (none when the partner was not stored). In the one-row
+  layout a changed row is one entry with the units of its listed cells (plus one when cut), and each cut row keeps its
+  full list of changed pairs as a bitset (4 bytes plus 8 per 64 pairs), found by stored row through a sorted list of cut
+  rows, so Save can write every changed cell's old value. It is charged to the query's budget before the rows are
+  written (a cut row's bitset as it is met), and refused with the diff. A view of a diff keeps its own running totals
+  over its order, charged with the view.
 - **`results.diffSeek { resultId, viewId?, from, direction }`** (`direction`: `next` or `previous`; `from`: a position,
   -1 before the first) finds the nearest row with change units after or before `from`, wrapping round, in stored order
   or the view's. It answers `{ row, column, index, total, rows }`: the position, the column to land on (the first listed
@@ -1324,8 +1337,8 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   `right`'s names and types (the data columns, in pair order), then a hidden suffix: `Change` (role `mark`: " ", "−",
   "+"), `Old row` and `New row` (roles `leftRow`, `rightRow`: bigint, the 1-based row in each input, NULL where the entry
   has none; both halves of a changed entry carry both), and an `nvarchar(500)` tone (role `tone`): `<kind> [flag…] [cell…]`.
-  Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves); `changed` is
-  reserved for the one-row layout. Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
+  Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves), and `changed`
+  (the one-row layout's changed entry, marked `~`). Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
   `poss=<row>` (on `added`/`removed` only: the possible match's 1-based row in the other input) and `gap=<n>` (the
   unchanged entries left out just before this row, under any `context` but -1, absent when 0; on a change, its
   `changedOld` half). Readers ignore unknown flags. Then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs as
@@ -1333,19 +1346,37 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   included, is at most 500 characters. An unchanged row with no flags and no soft cell has a NULL tone. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
   `tone`; a previous value's `of` names its pair) are not data: `results.view` sort keys and filters, `duplicates`
   columns, `results.distinct`, `results.profile` and `results.identify`'s `column` refuse them (`INVALID_PARAMS`), search
-  and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only (a transposed
-  Save of a diff is `INVALID_PARAMS`). `results.identify` on a diff refuses `by: 'column'`; `auto` and `row` answer
+  and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only, and each
+  shown data column's previous values after it as `<name> (old)` (a transposed Save of a diff is `INVALID_PARAMS`). `results.identify` on a diff refuses `by: 'column'`; `auto` and `row` answer
   column -1 with one identity per entry, a hash of its (input result id, row) pairs ordered by input id, so both halves
   share it, `unique` counts entries, and it survives a swap of the same inputs. `context` unchanged rows show each side
   of a change (default 1, at most 100, -1 for all). Data cells keep their source lengths for `results.rowBytes`; the
   suffix is not measured, so a row's bytes are its shown values'. It is a derived set
   (`ResultStore.Open(derived: true)`) charged to the query's budget and stored whole or not at all (`TOO_LARGE`, "There is
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
-  released with the query's results or at once when its answer is not delivered. A source released meanwhile:
+  released with the query's results or at once when its answer is not delivered. When what was refused grows with the
+  rows stored (the rows, their previous values, the change index or a cut row's bitset) and `context` is -1 (All rows),
+  the refusal is `DIFF_ROWS_TOO_LARGE` ("There is not enough result memory for all rows of the differences. Show changes
+  only, or close other results and try again."), which Changes only may fit; with any other `context`, for the
+  alignment's working memory and for other causes it stays `TOO_LARGE` (low system memory: its own sentence). A source
+  released meanwhile:
   `RESULT_RELEASED`. Building holds about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) plus 12 bytes per
   differing cell, charged to the budget as they grow (`TOO_LARGE` without room); a `columns` match adds 9 bytes a row to find
   repeated keys, and the look-alike search 9 bytes a value it reads (refused: the search is skipped). Work is split across
   threads with one thread's result.
+- **The one-row layout** (`layout: 'entry'`): the same entries and suffix, a changed entry as one row (mark `~`, tone
+  `changed`, both row numbers) of the new values. After the data columns come previous-value columns, one a pair (role
+  `old`, `of` its pair, named `<name> (old)`), with `left`'s type, collation and length rule: the old value in every
+  changed (not soft) cell, listed by the tone or past its cut, NULL elsewhere. They are not measured for
+  `results.rowBytes` but count toward the 8 MiB row limit; past it a value is stored truncated and marked. Data, previous
+  values and suffix must fit a page's 4,096 columns, so more than 2,046 pairs (`limits.diff.maxEntryPairs`) is
+  `INVALID_PARAMS`; the renderer asks for two rows itself then.
+- **Replaces** (`replaces`: a comparison's result id): the new comparison is written under an allowance of the replaced
+  one's charge ([Result store and memory budget](#result-store-and-memory-budget)), kept by the new comparison until
+  either is released. It must be a comparison of the same query and the same two inputs, in either order
+  (`INVALID_PARAMS`; released: `RESULT_RELEASED`). Main forwards it only for a comparison its port owns whose recorded
+  inputs are the request's, either way round (`RESULT_UNAVAILABLE` for one it does not own, `INVALID_REQUEST` for other
+  inputs). The caller releases the old comparison once the new one is shown.
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
@@ -2057,7 +2088,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'identify'; rid; generation; resultId: u32; by: 'auto' | 'column' | 'row'; column? }  // column only with by: 'column'
 { t: 'rowIds'; rid; generation; resultId: u32; firstRow; count: 1..limits.identity.maxRows; viewId?: u32 }
 { t: 'findRows'; rid; generation; resultId: u32; ids: id[1..limits.identity.maxFind]; viewId?: u32 }
-{ t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext }  // main sends { left, right }
+{ t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext; match?; layout?: 'unified' | 'entry'; replaces?: u32 }  // main sends { left, right }
 { t: 'profile'; rid; generation; resultId: u32; columns: distinct column[≤ limits.profile.maxColumns]; viewId?: u32 }
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
@@ -2234,7 +2265,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (plus a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused; the change index at 3 bytes a stored row, 8 bytes per 4,096 rows of running totals, 64 bytes a look-alike row and 1 KiB, under the same budget and refused with the diff (`DiffIndex.BytesFor`), and 8 bytes per 4,096 positions of a view's totals; `overview` at most 512 buckets; a kind filter 1 – 4 kinds | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused; the change index at 3 bytes a stored row, 8 bytes per 4,096 rows of running totals, 64 bytes a look-alike row and 1 KiB, under the same budget and refused with the diff (`DiffIndex.BytesFor`), plus 4 bytes and 8 per 64 pairs for each cut row of the one-row layout (`DiffIndex.CutBytes`), and 8 bytes per 4,096 positions of a view's totals; the one-row layout at most 2,046 pairs (`limits.diff.maxEntryPairs`); a replace's allowance of the replaced comparison's charge on the query's limit, ended with it; `overview` at most 512 buckets; a kind filter 1 – 4 kinds | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters (at least one), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (plus ranked or whole text, date or binary key values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transposed Copy and Save | `transposed` boolean; `headerColumn` 0 – 4,095, a shown column, only with `transposed`; at most 4,095 source rows a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
@@ -2338,7 +2369,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

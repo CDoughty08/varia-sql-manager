@@ -16,8 +16,10 @@ internal enum DiffKindSet : byte { None = 0, Same = 1, Changed = 2, Added = 4, R
 /// <c>kind</c> filter, results.diffSeek (with a view's own running totals, <see cref="ViewBlocks"/>), and the answer's
 /// overview and unit total without reading tone text. A change unit is each changed cell a tone lists (a cut tone counts
 /// one more) and each added or removed row; a changed entry's units are on its new half in two rows. Soft cells are not
-/// units. The one-row layout's cut rows will keep their full changed-pair lists here too (comparison plan PR 6): the
-/// <see cref="Cut"/> flag already marks them.</summary>
+/// units. In the one-row layout each cut row (<see cref="Cut"/>) also keeps its full changed-pair list, a bitset of the pair
+/// count's bits, found by stored row through the sorted list of cut rows (4 bytes each; a row's bitset is at its place in the
+/// list times the bitset's words); only Save reads it (<see cref="ChangedPairs"/>), so a changed cell past the cut keeps its
+/// old value. Each is charged as it is written (<see cref="CutBytes"/>), at most one a stored row.</summary>
 internal sealed class DiffIndex
 {
     /// <summary>Stored (or view) rows a running total covers.</summary>
@@ -42,9 +44,15 @@ internal sealed class DiffIndex
     private readonly int[] possRows;
     private readonly int[] partners;
     private readonly byte[] overview;
+    private readonly int[] cutRows;
+    private readonly ulong[] cutBits;
+    private readonly int words;
 
-    private DiffIndex(byte[] marks, ushort[] units, int[] possRows, int[] partners, long bytes)
+    private DiffIndex(byte[] marks, ushort[] units, int[] possRows, int[] partners, long bytes, int[]? cutRows = null, ulong[]? cutBits = null, int words = 0)
     {
+        this.cutRows = cutRows ?? [];
+        this.cutBits = cutBits ?? [];
+        this.words = words;
         this.marks = marks;
         this.units = units;
         this.possRows = possRows;
@@ -71,6 +79,23 @@ internal sealed class DiffIndex
     /// <summary>The bytes an index of <paramref name="rows"/> stored rows with <paramref name="possible"/> look-alike rows
     /// holds: what results.diff reserves before writing the rows, the diff refused whole when the budget has no room.</summary>
     public static long BytesFor(long rows, long possible) => 3 * rows + 8 * (rows / BlockRows + 2) + PossibleBytes * possible + Overhead;
+
+    /// <summary>The bytes a cut row's changed-pair list adds in the one-row layout: its place in the sorted list of cut rows
+    /// and its bitset of <paramref name="pairs"/> bits.</summary>
+    public static long CutBytes(int pairs) => 4 + 8L * Words(pairs);
+
+    private static int Words(int pairs) => (pairs + 63) / 64;
+
+    /// <summary>Cut rows that keep their changed-pair lists (the one-row layout's).</summary>
+    public int CutLists => cutRows.Length;
+
+    /// <summary>A cut row's full changed-pair list in the one-row layout (bit p for pair p), found by its stored row; empty
+    /// for any other row.</summary>
+    public ReadOnlySpan<ulong> ChangedPairs(int row)
+    {
+        var at = Array.BinarySearch(cutRows, row);
+        return at < 0 ? [] : cutBits.AsSpan(at * words, words);
+    }
 
     /// <summary>The bytes a view's running totals take (<see cref="ViewBlocks"/>), charged with the view.</summary>
     public static long ViewBlockBytes(long rows) => 8 * (rows / BlockRows + 2);
@@ -232,8 +257,32 @@ internal sealed class DiffIndex
 
     /// <summary>Builds an index as the writer stores rows, in order: exactly the rows it was sized for, or the diff was cut
     /// short and is refused (the index is then never built).</summary>
-    internal sealed class Builder(int rows, int possible, long bytes)
+    /// <param name="pairs">The diff's pairs, the width of a cut row's changed-pair list (<see cref="Cut"/>).</param>
+    /// <param name="reserve">Asked for each cut row's list (<see cref="CutBytes"/>) before it is kept; a refusal stops the
+    /// diff (<see cref="Refused"/>), which is then refused whole.</param>
+    internal sealed class Builder(int rows, int possible, long bytes, int pairs = 0, Func<long, bool>? reserve = null)
     {
+        private readonly List<int> cutRows = [];
+        private readonly List<ulong> cutBits = [];
+        private readonly int words = Words(pairs);
+        private long cutHeld;
+
+        /// <summary>What the index holds of the budget so far: the bytes reserved before writing, and the cut rows' lists.</summary>
+        public long Bytes => bytes + cutHeld;
+
+        /// <summary>A cut row's list was refused: the diff stores no more.</summary>
+        public bool Refused { get; private set; }
+
+        /// <summary>Reserves the next cut row's changed-pair list (<see cref="CutBytes"/>); false, and <see cref="Refused"/>,
+        /// when the budget has no room.</summary>
+        public bool TryCut()
+        {
+            var size = CutBytes(pairs);
+            if (reserve is not null && !reserve(size)) { Refused = true; return false; }
+            cutHeld += size;
+            return true;
+        }
+
         private readonly byte[] marks = new byte[rows];
         private readonly ushort[] units = new ushort[rows];
         // A look-alike row's own key and its partner's: an input row and its side (row * 2, + 1 for the new input).
@@ -248,7 +297,8 @@ internal sealed class DiffIndex
         public static long Key(int row, bool isNew) => 2L * row + (isNew ? 1 : 0);
 
         /// <summary>Records the next stored row. A look-alike row names its own key and its partner's (<see cref="Key"/>).</summary>
-        public void Add(DiffRowKind kind, bool repeated, bool cut, int rowUnits, long ownKey = -1, long partnerKey = -1)
+        /// <param name="changed">A cut row's full changed-pair list in the one-row layout, reserved by <see cref="TryCut"/>.</param>
+        public void Add(DiffRowKind kind, bool repeated, bool cut, int rowUnits, long ownKey = -1, long partnerKey = -1, ReadOnlySpan<int> changed = default, bool keepsList = false)
         {
             if (count == marks.Length) throw new InvalidOperationException("The diff stored more rows than its index was sized for.");
             var mark = (byte)kind;
@@ -260,6 +310,13 @@ internal sealed class DiffIndex
                 ownKeys[possCount] = ownKey;
                 partnerKeys[possCount] = partnerKey;
                 possRows[possCount++] = count;
+            }
+            if (keepsList)
+            {
+                cutRows.Add(count);
+                var start = cutBits.Count;
+                for (var w = 0; w < words; w++) cutBits.Add(0);
+                foreach (var pair in changed) if (pair >= 0) cutBits[start + pair / 64] |= 1UL << (pair % 64);
             }
             marks[count] = mark;
             units[count++] = (ushort)Math.Min(rowUnits, ushort.MaxValue);
@@ -283,7 +340,7 @@ internal sealed class DiffIndex
             // A partner not stored (never, as added and removed rows always are) leaves its row without one.
             for (var k = 0; k < possCount; k++) if (partnerRows[k] < 0) marks[kept[k]] &= unchecked((byte)~Poss);
             var withPartner = Enumerable.Range(0, possCount).Where(k => partnerRows[k] >= 0).ToArray();
-            return new DiffIndex(marks, units, [.. withPartner.Select(k => kept[k])], [.. withPartner.Select(k => partnerRows[k])], bytes);
+            return new DiffIndex(marks, units, [.. withPartner.Select(k => kept[k])], [.. withPartner.Select(k => partnerRows[k])], Bytes, [.. cutRows], [.. cutBits], words);
         }
     }
 

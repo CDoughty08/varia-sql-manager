@@ -110,6 +110,8 @@ internal sealed class ResultSetBuffer
     private SearchMemo? searchMemo;
     /// <summary>A diff's change index (<see cref="Results.DiffIndex"/>), its bytes counted in <see cref="charged"/>.</summary>
     private DiffIndex? diffIndex;
+    /// <summary>The allowance the replace that wrote this set holds (<see cref="ResultStore.Allow"/>), let go when it is freed.</summary>
+    private AllowanceHold? allowanceHold;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -560,6 +562,27 @@ internal sealed class ResultSetBuffer
         }
     }
 
+    /// <summary>What the set holds of its query's budget now: its rows, metadata, change index and search memo.</summary>
+    internal long ChargedBytes { get { lock (gate) return charged; } }
+
+    /// <summary>Grants an allowance for replacing this set (<see cref="ResultStore.Allow"/>) unless it has been freed, under
+    /// its lock, so its free (which ends the allowance) comes wholly before or after the grant.</summary>
+    internal QueryBudget.Allowance? Grant(Func<QueryBudget.Allowance> join)
+    {
+        lock (gate) return gone ? null : join();
+    }
+
+    /// <summary>Keeps the allowance hold of the replace that wrote this set until the set is freed; a set already freed lets
+    /// it go at once.</summary>
+    internal void KeepAllowance(AllowanceHold hold)
+    {
+        lock (gate)
+        {
+            if (!gone && allowanceHold is null) { allowanceHold = hold; return; }
+        }
+        hold.Dispose();
+    }
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
@@ -960,6 +983,10 @@ internal sealed class ResultSetBuffer
         var freed = charged;
         ReturnLocked(charged);
         slack = working = pending = 0;
+        // Its bytes are back: an allowance for replacing it ends (whatever holds it), and the one its own replace held is let go.
+        Budget.End(ResultId);
+        allowanceHold?.Dispose();
+        allowanceHold = null;
         return freed;
     }
 

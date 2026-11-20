@@ -480,7 +480,10 @@ export class ResultsWorkerCore {
       })
     } else {
       this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The comparison was cancelled.' })
-      this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context, ...body.match ? { match: body.match } : {} })
+      this.send({
+        t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context, ...body.match ? { match: body.match } : {},
+        ...body.layout ? { layout: body.layout } : {}, ...body.replaces === undefined ? {} : { replaces: body.replaces }
+      })
     }
   }
 

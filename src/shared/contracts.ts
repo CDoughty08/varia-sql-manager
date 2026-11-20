@@ -412,8 +412,13 @@ export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId
 export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
 /** results.diff: compares two complete results of the same query, `left` the earlier and `right` the later, and stores
  *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
- *  all); `exact`: text compared character for character instead of by collation. */
-export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number; match?: DiffMatch }
+ *  all); `exact`: text compared character for character instead of by collation. `layout`: `unified` (default: a changed
+ *  entry as a − row and a + row) or `entry` (one row an entry, each pair's old value in a previous-value column; at most
+ *  `limits.diff.maxEntryPairs` pairs). `replaces`: a comparison of the same two inputs (either order) this one replaces,
+ *  whose whole charge raises the query's memory limit while both are held. */
+export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number; match?: DiffMatch; layout?: DiffLayout; replaces?: number }
+/** A comparison's stored shape: two rows a change (`unified`) or one row an entry (`entry`). */
+export type DiffLayout = 'unified' | 'entry'
 /** How results.diff matches rows: `auto` (absent: the first unique key column, else whole rows), `position` (the n-th row
  *  with the n-th), `rows` (whole rows) or `columns` (a composite key of 1 to `limits.diff.maxKeyColumns` distinct pair
  *  indexes; NULL matches NULL, and a key that repeats pairs in order, flagged `dup`). */
@@ -436,6 +441,8 @@ export interface ResultsDiffResult {
   overview: number[]
   /** The change units over every stored row: each changed cell a tone lists (a cut tone one more) and each added or removed row. */
   units: number
+  /** The layout written. */
+  layout: DiffLayout
 }
 /** results.diffSeek on a comparison: the next or previous change unit from `from` (-1: before the first), wrapping round,
  *  or the position of a look-alike row's partner (`partnerOf`). Positions are `viewId`'s when given, else stored rows. */
