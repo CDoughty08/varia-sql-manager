@@ -2544,7 +2544,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   a call-counting context.
 - **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
   (`backend/Varia.Backend.Tests/SearchBench.cs`): one letter over a synthetic index of 1,000,000 objects in 20 databases
-  (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates.
+  (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates,
+  then a search inside 10,000 compressed procedure definitions (42 M characters) that matches none, so every one is
+  unpacked and scanned (`node.search.definitionScanP95Ms`).
   Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
   Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
   characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits

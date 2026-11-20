@@ -59,11 +59,11 @@ internal sealed class ObjectTable
     public static readonly ObjectTable Empty = new([], [], ObjectShapes.Snapshot, null);
 
     private readonly ObjectEntry[] entries;
-    private readonly string?[] texts;
+    private readonly object?[] texts;
     private readonly ObjectShapes.Shape[] shapes;
     private readonly Dictionary<int, DateTime>? dates;
 
-    private ObjectTable(ObjectEntry[] entries, string?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates)
+    private ObjectTable(ObjectEntry[] entries, object?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates)
     {
         this.entries = entries;
         this.texts = texts;
@@ -72,8 +72,9 @@ internal sealed class ObjectTable
     }
 
     public int Count => entries.Length;
-    /// <summary>The distinct texts the entries name (null where one was given back, see <see cref="WithTexts"/>).</summary>
-    public IReadOnlyList<string?> Texts => texts;
+    /// <summary>The distinct texts the entries name: strings, and <see cref="PackedText"/>s for long definitions (null where one was
+    /// given back, see <see cref="WithTexts"/>).</summary>
+    public IReadOnlyList<object?> Texts => texts;
     /// <summary>The shapes the entries' ids index (for a per-search lookup such as which kinds a search keeps).</summary>
     public IReadOnlyList<ObjectShapes.Shape> Shapes => shapes;
 
@@ -81,9 +82,14 @@ internal sealed class ObjectTable
     public string Kind(int at) => shapes[entries[at].Shape].Kind;
     public string Folder(int at) => shapes[entries[at].Shape].Folder;
     public string? Subtype(int at) => shapes[entries[at].Shape].Subtype;
-    public string Name(int at) => texts[entries[at].Name]!;
-    public string? Schema(int at) => Text(entries[at].Schema);
-    public string? Definition(int at) => Text(entries[at].Definition);
+    public string Name(int at) => (string)texts[entries[at].Name]!;
+    public string? Schema(int at) => (string?)Text(entries[at].Schema);
+    /// <summary>The definition as the table holds it (a string, or a <see cref="PackedText"/>), or null: a search reads it through
+    /// <see cref="DefinitionText.Read"/>.</summary>
+    public object? StoredDefinition(int at) => Text(entries[at].Definition);
+    /// <summary>The definition as a string (unpacked): for records and checks, never a search's scan.</summary>
+    public string? Definition(int at) => Text(entries[at].Definition) is { } stored ? DefinitionText.ToText(stored) : null;
+    public bool HasDefinition(int at) => entries[at].Definition >= 0;
     public bool DefinitionCut(int at) => (entries[at].Flags & CutFlag) != 0;
     public bool System(int at) => (entries[at].Flags & SystemFlag) != 0;
     public DateTime? Modified(int at) => Date(entries[at].Modified, at, dates);
@@ -108,14 +114,14 @@ internal sealed class ObjectTable
     public int LabelLength(int at)
     {
         ref readonly var entry = ref entries[at];
-        var name = texts[entry.Name]!.Length;
-        if (entry.Schema >= 0) return texts[entry.Schema]!.Length + 1 + name;
+        var name = ((string)texts[entry.Name]!).Length;
+        if (entry.Schema >= 0) return ((string)texts[entry.Schema]!).Length + 1 + name;
         if ((entry.Flags & ChildFlag) == 0) return name;
         ref readonly var parent = ref entries[entry.Owner];
-        return (parent.Schema >= 0 ? texts[parent.Schema]!.Length : 0) + texts[parent.Name]!.Length + 2 + name;
+        return (parent.Schema >= 0 ? ((string)texts[parent.Schema]!).Length : 0) + ((string)texts[parent.Name]!).Length + 2 + name;
     }
 
-    private string? Text(int id) => id < 0 ? null : texts[id];
+    private object? Text(int id) => id < 0 ? null : texts[id];
 
     /// <summary>The object as a record: for checks and diagnostics, never a search's scan.</summary>
     public IndexedObject Row(int at)
@@ -132,7 +138,7 @@ internal sealed class ObjectTable
 
     /// <summary>This table with each text swapped for <paramref name="swap"/>'s (the pool's copy). Where the swap answers null for
     /// a definition, the entries that named it keep no definition. A text that is also a name must be swapped.</summary>
-    public ObjectTable WithTexts(string?[] swap)
+    public ObjectTable WithTexts(object?[] swap)
     {
         var copy = (ObjectEntry[])entries.Clone();
         for (var at = 0; at < copy.Length; at++)
@@ -180,14 +186,17 @@ internal sealed class ObjectTable
         {
             builder.Text(row.Name);
             if (row.Schema is not null) builder.Text(row.Schema);
-            if (row.Definition is not null) builder.Text(row.Definition);
         }
+        // Definitions are held as a read holds them: packed when long.
+        var held = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var row in list)
+            if (row.Definition is { } definition && !held.ContainsKey(definition)) builder.Text(held[definition] = DefinitionText.Hold(definition));
         var parents = new Dictionary<(string, string?, string), int>();
         for (var at = 0; at < list.Count; at++)
         {
             var row = list[at];
             var added = builder.Add(row);
-            if (row.Definition is not null) builder.SetDefinition(added, row.Definition, row.DefinitionCut);
+            if (row.Definition is not null) builder.SetDefinition(added, held[row.Definition], row.DefinitionCut);
             if (row.ParentName is null) { parents.TryAdd((row.Kind, row.Schema, row.Name), added); continue; }
             if (!parents.TryGetValue((row.ParentKind!, row.ParentSchema, row.ParentName), out var parent)) throw new ArgumentException("A child's parent is not in the table: " + row.Label);
             builder.Attach(added, parent, row.System);
@@ -208,14 +217,15 @@ internal sealed class ObjectTable
     internal sealed class Builder
     {
         private ObjectEntry[] entries = new ObjectEntry[64];
-        private readonly List<string?> texts = [];
+        private readonly List<object?> texts = [];
         private readonly Dictionary<string, int> ids = new(StringComparer.Ordinal);
+        private readonly Dictionary<PackedText, int> packedIds = [];
         private Dictionary<int, DateTime>? dates;
         private int removed;
 
         public int Count { get; private set; }
         /// <summary>Every text that took an id, in id order.</summary>
-        public IReadOnlyList<string?> Texts => texts;
+        public IReadOnlyList<object?> Texts => texts;
 
         /// <summary>The id of <paramref name="value"/>, taking one when it has none.</summary>
         public int Text(string value)
@@ -226,16 +236,35 @@ internal sealed class ObjectTable
             return texts.Count - 1;
         }
 
+        /// <summary>The id of a packed definition, taking one when it has none.</summary>
+        public int Text(PackedText value)
+        {
+            if (packedIds.TryGetValue(value, out var id)) return id;
+            packedIds[value] = texts.Count;
+            texts.Add(value);
+            return texts.Count - 1;
+        }
+
+        /// <summary>The id of a text of either form.</summary>
+        public int Text(object value) => value is string text ? Text(text) : Text((PackedText)value);
+
+        public bool TryText(PackedText value, out PackedText held)
+        {
+            if (packedIds.TryGetValue(value, out var id)) { held = (PackedText)texts[id]!; return true; }
+            held = value;
+            return false;
+        }
+
         public bool TryText(string value, out string held)
         {
-            if (ids.TryGetValue(value, out var id)) { held = texts[id]!; return true; }
+            if (ids.TryGetValue(value, out var id)) { held = (string)texts[id]!; return true; }
             held = "";
             return false;
         }
 
         public bool TryText(ReadOnlySpan<char> value, out string held)
         {
-            if (ids.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(value, out var id)) { held = texts[id]!; return true; }
+            if (ids.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(value, out var id)) { held = (string)texts[id]!; return true; }
             held = "";
             return false;
         }
@@ -275,9 +304,10 @@ internal sealed class ObjectTable
         /// <summary>Names the table a history table is shown below.</summary>
         public void SetVia(int at, int table) => entries[at].Owner = table;
 
-        public void SetDefinition(int at, string text, bool cut)
+        /// <summary>Gives <paramref name="at"/> its definition (a string or a packed text that already has an id).</summary>
+        public void SetDefinition(int at, object text, bool cut)
         {
-            entries[at].Definition = ids[text];
+            entries[at].Definition = text is string value ? ids[value] : packedIds[(PackedText)text];
             entries[at].Flags = (byte)(cut ? entries[at].Flags | CutFlag : entries[at].Flags & ~CutFlag);
         }
 
@@ -318,6 +348,7 @@ internal sealed class ObjectTable
             entries = new ObjectEntry[64];
             texts.Clear();
             ids.Clear();
+            packedIds.Clear();
             dates = null;
             removed = 0;
             Count = 0;

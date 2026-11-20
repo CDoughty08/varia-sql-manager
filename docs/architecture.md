@@ -541,7 +541,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
   `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database, names, definitions, by
   `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
-  held once in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue)
+  held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
   `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
   the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by
