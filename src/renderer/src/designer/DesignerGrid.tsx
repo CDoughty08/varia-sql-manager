@@ -18,13 +18,15 @@ export const typeChoices: readonly string[] = systemTypes.filter(type => !type.u
   .flatMap(type => [formatTypeText(defaultType(type)), ...type.listMax ? [formatTypeText({ system: type.name, max: true })] : []])
 
 /** Copy's rows: the selected rows, else the current one (not the empty new-column row), as the grid shows them. */
-export function designerCopyRows(state: Pick<DesignerState, 'rows' | 'selected' | 'current'>): CopyRows {
-  const chosen = state.rows.filter(row => state.selected.includes(row.key))
-  const rows = chosen.length ? chosen : state.rows[state.current.row] ? [state.rows[state.current.row]] : []
-  return { columns: columns.map(column => headers[column]), rows: rows.map(row => [row.name, row.typeText, checkText(row.allowNulls)]) }
+export function designerCopyRows(state: Pick<DesignerState, 'rows' | 'selected' | 'current'>, editing?: Editing): CopyRows {
+  const chosen = state.rows.flatMap((row, index) => state.selected.includes(row.key) ? [index] : [])
+  const indexes = chosen.length ? chosen : state.rows[state.current.row] ? [state.current.row] : []
+  // A cell being edited copies the text it shows, not yet committed.
+  const text = (index: number, column: 'name' | 'type', value: string) => editing?.row === index && editing.column === column ? editing.text : value
+  return { columns: columns.map(column => headers[column]), rows: indexes.map(index => { const row = state.rows[index]; return [text(index, 'name', row.name), text(index, 'type', row.typeText), checkText(row.allowNulls)] }) }
 }
 
-interface Editing { readonly row: number; readonly column: 'name' | 'type'; readonly text: string }
+export interface Editing { readonly row: number; readonly column: 'name' | 'type'; readonly text: string }
 
 /** The rows [first, last) a viewport shows, with overscan, for a scroll offset and height. */
 export function visibleRange(scrollTop: number, height: number, count: number): { readonly first: number; readonly last: number } {
@@ -48,7 +50,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
   const live = useRef<Editing | undefined>(undefined)
   const setEditing = (value: Editing | undefined) => { live.current = value; setEditingState(value) }
   const [view, setView] = useState({ top: 0, height: 400 })
-  const copy = useRowCopy(() => designerCopyRows(state))
+  const copy = useRowCopy(() => designerCopyRows(state, live.current))
   const count = state.rows.length + 1
   const problems = useMemo(() => TableDesignerService.design(state).problems, [state])
   const problemAt = (row: number, column: DesignerColumn) => problems.find(problem => problem.row === row && (column === 'name' ? problem.property === 'name'

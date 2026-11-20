@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
-import { useDomRowCopy } from '../../grid/row-copy'
+import { checkText, useRowCopy, type CopyRows } from '../../grid/row-copy'
 import { actionLimits } from '../../../../shared/actions/catalog.ts'
 import { loginLimits, loginMessages, loginPropertiesMessages, publicRole, userMappingMessages, type NewLoginDatabase, type NewLoginModel } from '../../../../shared/actions/logins.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
@@ -41,6 +41,16 @@ export function mappingRange(scrollTop: number, height: number, count: number): 
 
 interface Editing { readonly database: string; readonly column: 'user' | 'schema'; readonly text: string }
 
+/** User Mapping's row as Copy writes it: Map, Database, User and Default Schema as the grid shows them, a cell being edited with its text. */
+export function userMappingCopyRows(draft: NewLoginDraft, database: NewLoginModel['databases'][number] | undefined, notRead: (database: string) => boolean, editing?: { readonly database: string; readonly column: 'user' | 'schema'; readonly text: string }): CopyRows | undefined {
+  if (!database) return undefined
+  const mapping = mappingOf(draft, database.name), usable = !unavailableChip(database), unread = usable && notRead(database.name), mapped = usable && mapping.map
+  const noSchema = signingAuth(draft.auth)
+  const text = (of: 'user' | 'schema') => editing?.database === database.name && editing.column === of ? editing.text
+    : unread ? (of === 'user' ? loginPropertiesMessages.notRead : '') : mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : noSchema ? '' : mapping.defaultSchema) : ''
+  return { columns: userMappingColumns.map(of => headers[of]), rows: [[checkText(mapped), displayText(database.name), text('user'), text('schema')]] }
+}
+
 /**
  * SSMS's "Users mapped to this login:" grid: Map, Database, User and Default Schema (with … for Select Schema). One focusable
  * grid with an active cell (aria-activedescendant): arrows, Home, End and Page keys move it; Space toggles Map; F2, Enter or
@@ -54,7 +64,8 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
   /** Login Properties: why a row cannot change (dbo, or not read yet), and whether its user is not read yet. */
   locked(database: string): string | undefined; notRead(database: string): boolean
 }) {
-  const copyRow = useDomRowCopy()
+  // Copy reads the selected database from the model: only the rows in view render, and the selected one may have scrolled away.
+  const copyRow = useRowCopy(() => userMappingCopyRows(draft, databases[row], notRead, live.current))
   const { dialogs } = useWorkbench()
   const root = useRef<HTMLDivElement | null>(null)
   const body = useRef<HTMLDivElement | null>(null)

@@ -840,11 +840,13 @@ try {
   await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
   // Ctrl+C with only a caret in a cell copies the row as shown (a placeholder's default name included), tab-separated;
   // with text selected in the field it copies that text, as any field does.
-  await page.keyboard.press('End')
+  // The caret and selection are set directly: on macOS, End and Shift+Home scroll rather than move the caret.
+  const salesName = newFiles().getByLabel('Logical Name of Sales', { exact: true })
+  await salesName.evaluate(field => field.setSelectionRange(field.value.length, field.value.length))
   await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
   await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+c`)
   await expect.poll(clipboard).toMatch(new RegExp(String.raw`^Sales\tROWS Data\tPRIMARY\t[^\t]+\t[^\t]+\tC:\\Program Files\\Microsoft SQL Server\\MSSQL17\.MSSQLSERVER\\MSSQL\\DATA\tSales\.mdf$`))
-  await page.keyboard.press('Shift+Home')
+  await salesName.selectText()
   await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+c`)
   await expect.poll(clipboard).toBe('Sales')
   // Each filegroup list's buttons say which list they act on.

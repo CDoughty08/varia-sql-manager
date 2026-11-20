@@ -41,6 +41,19 @@ describe('editable grid rows read from the page', () => {
     expect(cellText(html('<span>a<button>x</button>  b<datalist><option>z</option></datalist></span>').firstElementChild!)).toBe('a b')
   })
 
+  it('leaves out hidden reasons and error messages, and keeps the spaces in a value', () => {
+    // Restore's backup sets: a reason only a screen reader hears; Extended properties: a field's error under it.
+    expect(cellText(html('<div> <input type="checkbox"> <span hidden>Logs follow this backup.</span> </div>').firstElementChild!)).toBe('No')
+    expect(cellText(html('<div><input type="text" value="MS_Description"><span class="property-field-error"><svg></svg>A property of that name exists.</span></div>').firstElementChild!)).toBe('MS_Description')
+    expect(cellText(html('<div><p role="alert">Fix this</p>Kept</div>').firstElementChild!)).toBe('Kept')
+    // A path or name copies exactly, its doubled and edge spaces included; layout whitespace around it does not.
+    const field = html('<div>\n  <input type="text"> <button>…</button>\n</div>').firstElementChild!
+    field.querySelector('input')!.value = ' C:\\My  Data '
+    expect(cellText(field)).toBe(' C:\\My  Data ')
+    expect(cellText(html('<div>  Read  only <input type="text" value="x"> after  </div>').firstElementChild!)).toBe('Read only x after')
+    expect(cellText(html('<div><input type="hidden" value="secret"><span>shown</span></div>').firstElementChild!)).toBe('shown')
+  })
+
   it('leaves selected text and a field\'s selected text to the native copy, but copies the row from a bare caret', () => {
     const field = html('<input type="text" value="Sales">').querySelector('input')!
     field.setSelectionRange(1, 3)
@@ -62,6 +75,9 @@ describe('Table Designer copy', () => {
     expect(designerCopyRows({ rows, selected: [3, 1], current: { row: 1, column: 'name' } })).toEqual({ columns: ['Column Name', 'Data Type', 'Allow Nulls'], rows: [['Id', 'int', 'No'], ['Notes', 'nvarchar(MAX)', 'Yes']] })
     expect(designerCopyRows({ rows, selected: [], current: { row: 1, column: 'type' } }).rows).toEqual([['Name', 'nvarchar(50)', 'Yes']])
     expect(designerCopyRows({ rows, selected: [], current: { row: 3, column: 'name' } }).rows).toEqual([])
+    // A cell being edited copies the text it shows, before it is committed.
+    expect(designerCopyRows({ rows, selected: [], current: { row: 1, column: 'name' } }, { row: 1, column: 'name', text: 'Price' }).rows).toEqual([['Price', 'nvarchar(50)', 'Yes']])
+    expect(designerCopyRows({ rows, selected: [1, 2], current: { row: 1, column: 'type' } }, { row: 1, column: 'type', text: 'money' }).rows).toEqual([['Id', 'int', 'No'], ['Name', 'money', 'Yes']])
   })
 })
 

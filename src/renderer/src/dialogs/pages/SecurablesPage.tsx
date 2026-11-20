@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
-import { useDomRowCopy } from '../../grid/row-copy'
+import { useDomRowCopy, useRowCopy, type CopyRows } from '../../grid/row-copy'
 import { loginLimits, loginMessages, permissionsProtected, type LoginFacts } from '../../../../shared/actions/logins.ts'
 import {
   addObjectsChoices, addObjectsText, effectiveUnavailableSubtypes, objectTypeOrder, permissionCascades, permissionChecked, permissionColumns, reservedPermission, securableKey, securablesMessages,
@@ -28,12 +28,19 @@ const columnTitles: Readonly<Record<PermissionColumn, string>> = { grant: 'Grant
 /** The hidden text that tells assistive technology why CONNECT SQL's boxes are greyed. */
 const reservedNote = 'securables-reserved-note'
 
+/** The Securables grid's selected row as Copy writes it: Name and Type. */
+export function securablesCopyRows(model: SecurablesModelOf, draft: NewLoginDraft): CopyRows | undefined {
+  const ref = draft.securables.find(item => securableKey(item) === draft.securable)
+  return ref ? { columns: ['Name', 'Type'], rows: [[securableName(model, ref), securableTypeLabel(ref)]] } : undefined
+}
+
 /** "Securables:": Name and Type, one focusable grid whose arrows, Home, End and Page keys move the selected row; Delete removes it. */
 function SecurablesGrid({ model, draft, onSelect, onRemove }: { model: SecurablesModelOf; draft: NewLoginDraft; onSelect(key: string): void; onRemove(key: string): void }) {
-  const copyRow = useDomRowCopy()
   const root = useRef<HTMLDivElement | null>(null), body = useRef<HTMLDivElement | null>(null)
   const [top, setTop] = useState(0)
   const rows = draft.securables, count = rows.length
+  // Copy reads the selected securable from the model: only the rows in view render, and the selected one may have scrolled away.
+  const copyRow = useRowCopy(() => securablesCopyRows(model, draft))
   const row = draft.securable === undefined ? -1 : rows.findIndex(ref => securableKey(ref) === draft.securable)
   const height = Math.min(Math.max(count, 1), shownRows) * userMappingRowHeight
   useLayoutEffect(() => {

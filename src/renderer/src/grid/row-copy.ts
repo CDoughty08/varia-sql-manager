@@ -33,28 +33,45 @@ export function copiesText(target: EventTarget | null): boolean {
 const rowSelector = 'tr, [role="row"]'
 const cellSelector = 'td, th, [role="gridcell"], [role="rowheader"], [role="columnheader"]'
 const isElement = (node: Node | null | undefined): node is Element => node?.nodeType === 1
+// Left out of a cell's text: controls, hidden text (a reason only a screen reader hears), icons, and a field's error message.
+const skipped = 'button, datalist, template, [hidden], .visually-hidden, [aria-hidden="true"], [role="alert"], .property-field-error'
 /**
  * A cell's text as shown: a field's value (else its placeholder, as File Name shows its default), a list's chosen option, a
- * checkbox as Yes or No, and the rest of its text, leaving out buttons, hidden text and icons. `data-copy` overrides it.
+ * checkbox as Yes or No, and the rest of its text, leaving out buttons, hidden text, icons and error messages. A value keeps
+ * its spaces, so a path or name copies exactly; only the layout's whitespace collapses. `data-copy` overrides it.
  */
 export function cellText(cell: Element): string {
   const override = cell.getAttribute('data-copy')
   if (override !== null) return override
-  let text = ''
+  const parts: { text: string; value: boolean }[] = []
+  const add = (text: string, value: boolean) => { if (text) parts.push({ text, value }) }
   const walk = (node: Node) => {
-    if (node.nodeType === 3) { text += node.nodeValue ?? ''; return }
-    if (!isElement(node) || node.matches('button, datalist, template, .visually-hidden, [aria-hidden="true"]')) return
+    if (node.nodeType === 3) { add((node.nodeValue ?? '').replace(/\s+/g, ' '), false); return }
+    if (!isElement(node) || node.matches(skipped)) return
     if (node.matches('input')) {
       const input = node as HTMLInputElement
-      text += input.type === 'checkbox' || input.type === 'radio' ? checkText(input.checked) : input.value || input.placeholder
+      if (input.type !== 'hidden') add(input.type === 'checkbox' || input.type === 'radio' ? checkText(input.checked) : input.value || input.placeholder, true)
       return
     }
-    if (node.matches('textarea')) { text += (node as HTMLTextAreaElement).value; return }
-    if (node.matches('select')) { const select = node as HTMLSelectElement; text += select.options[select.selectedIndex]?.textContent ?? ''; return }
+    if (node.matches('textarea')) { add((node as HTMLTextAreaElement).value, true); return }
+    if (node.matches('select')) { const select = node as HTMLSelectElement; add(select.options[select.selectedIndex]?.textContent ?? '', true); return }
     node.childNodes.forEach(walk)
   }
   walk(cell)
-  return text.replace(/\s+/g, ' ').trim()
+  // Layout whitespace: none at the ends, and one space where two runs meet. A value's own spaces stay.
+  const blank = (part: { text: string; value: boolean } | undefined) => !!part && !part.value && part.text === ' '
+  while (blank(parts[0])) parts.shift()
+  while (blank(parts.at(-1))) parts.pop()
+  let text = '', layoutSpace = false
+  parts.forEach((part, index) => {
+    let piece = part.text
+    if (!part.value) {
+      if (index === 0 || layoutSpace) piece = piece.replace(/^ /, '')
+      if (index === parts.length - 1) piece = piece.replace(/ $/, '')
+    }
+    if (piece) { text += piece; layoutSpace = !part.value && piece.endsWith(' ') }
+  })
+  return text
 }
 const cellsOf = (row: Element) => [...row.children].filter(child => child.matches(cellSelector))
 const isHeaderRow = (row: Element) => cellsOf(row).every(cell => cell.matches('th[scope="col"], [role="columnheader"]'))
@@ -88,7 +105,7 @@ export function useDomRowCopy(): (event: ClipboardEvent<HTMLElement>) => void {
 /**
  * An editable grid's Copy: Ctrl+C (⌘C on macOS) and Edit › Copy reach the focused grid as a copy event, which writes `rows()`
  * (its selected rows) as a results grid's copy, with a header line when Include column headers when copying the results is
- * on. A field being edited, or selected text, copies its text as usual; a grid with no rows to copy leaves the event alone.
+ * on. Selected text, in a field or the page, copies natively; a caret alone copies the row; a grid with no rows to copy leaves the event alone.
  */
 export function useRowCopy(rows: () => CopyRows | undefined): (event: ClipboardEvent<HTMLElement>) => void {
   const workbench = useOptionalWorkbench()
