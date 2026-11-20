@@ -4,6 +4,7 @@ import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView,
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -187,6 +188,11 @@ export interface QueryOptions {
   includeClientStatistics?: boolean
   /** Read every row and keep none (SSMS's Discard results after execution): sets count in `discardedResultSets` (with those past a limit or the budget), plans are kept. */
   discardResults?: boolean
+  /** BigQuery: Tools › Options' maximum bytes billed (Query Execution › BigQuery › Cost), sent as the job's
+   *  `maximumBytesBilled` when the connection sets none of its own. SQL Server refuses it. */
+  maximumBytesBilled?: number
+  /** BigQuery: Show cost as Bytes only, so the job's Messages line leaves out the dollars. SQL Server refuses it. */
+  hidePrices?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -578,6 +584,7 @@ export interface RpcMethods {
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
+  'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -837,6 +844,9 @@ export interface VariaApi {
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
   bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
+  /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
+   *  cost prompts and dry-run diagnostics). It sends the text to Google. */
+  bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */

@@ -43,7 +43,8 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. Database is SQL Server's and required there; Dataset is a BigQuery query's default dataset
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
+    long? MaximumBytesBilled = null, bool? HidePrices = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);

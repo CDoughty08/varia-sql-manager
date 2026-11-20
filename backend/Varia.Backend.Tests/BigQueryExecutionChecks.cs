@@ -503,6 +503,22 @@ internal static class BigQueryExecutionChecks
             && body["configuration"]?["jobTimeoutMs"] is null && HttpUtility.ParseQueryString(jobs.Reads.Last().Query)["location"] == "US",
             $"a finished job's bytes, slot time and cache hit are in Messages, priced, and in the summary; a request's dataset replaces the connection's: {code} {message} {Texts(result?.Messages ?? [])}");
 
+        // Show cost as Bytes only: the same figures without dollars.
+        (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["hidePrices"] = true);
+        check(code == "ok" && Says(result, "Bytes processed: 1.24 GiB · Bytes billed: 1.24 GiB · Slot time: 1.3 s · Cache hit: no") && !Texts(result?.Messages ?? []).Contains('$'),
+            $"hidePrices leaves the dollars out of the job's Messages line: {code} {message} {Texts(result?.Messages ?? [])}");
+        // Tools › Options' cap goes out as the job's maximumBytesBilled when the connection sets none (this one sets 10 MiB).
+        (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["maximumBytesBilled"] = 10_737_418_240L);
+        var ownCap = jobs.InsertBodies.Last()["configuration"]?["query"]?["maximumBytesBilled"]?.ToString();
+        await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = harness.ConnectionId });
+        await harness.ConnectAsync();
+        (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["maximumBytesBilled"] = 10_737_418_240L);
+        body = jobs.InsertBodies.Last();
+        check(code == "ok" && ownCap == "10485760" && body["configuration"]?["query"]?["maximumBytesBilled"]?.ToString() == "10737418240",
+            $"the connection's cap wins; Options' maximum bytes billed is the job's cap when the connection has none: {ownCap} {code} {message} {body}");
+        (code, _, _) = await harness.Execute("SELECT * FROM t", args => args["maximumBytesBilled"] = 0);
+        check(code == "INVALID_PARAMS", $"a cap below one byte is refused: {code}");
+
         // A SELECT that returns nothing: BigQuery's page has the schema but no rows or totalRows.
         jobs.Statistics = null;
         jobs.Rows = [];
@@ -625,6 +641,9 @@ internal static class BigQueryExecutionChecks
             check(code == "ok" && result is { Status: "failed", Error.Code: "COST_CAP" } && result.Error.Message.Contains("1000 B (< $0.01)", StringComparison.Ordinal)
                 && result.Error.Message.Contains("10485760 or higher required", StringComparison.Ordinal) && harness.Fake.To(Base + "/jobs/[^/]+").Any(),
                 $"a job over the connection's cap fails as COST_CAP naming the cap: {result?.Error}");
+            (code, result, _) = await harness.Execute("SELECT * FROM big", args => args["maximumBytesBilled"] = 10_737_418_240L);
+            check(code == "ok" && jobs.InsertBodies.Last()["configuration"]?["query"]?["maximumBytesBilled"]?.ToString() == "1000" && result?.Error?.Message.Contains("1000 B (< $0.01)", StringComparison.Ordinal) == true,
+                $"the connection's own cap wins over Options' and is the one COST_CAP names: {jobs.InsertBodies.Last()} {result?.Error}");
 
             jobs.Failure = Error("responseTooLarge", "Response too large to return. Consider specifying a destination table in your job configuration.");
             (code, result, _) = await harness.Execute("SELECT * FROM huge");
@@ -742,6 +761,17 @@ internal static class BigQueryExecutionChecks
         {
             ["connectionId"] = Guid.NewGuid().ToString(), ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1", ["maxRows"] = 0, ["timeoutSeconds"] = 0
         });
+        var sqlServerCap = await harness.Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = Guid.NewGuid().ToString(), ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1",
+            ["database"] = "master", ["maximumBytesBilled"] = 1024, ["maxRows"] = 0, ["timeoutSeconds"] = 0
+        });
+        var sqlServerPrices = await harness.Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = Guid.NewGuid().ToString(), ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1",
+            ["database"] = "master", ["hidePrices"] = true, ["maxRows"] = 0, ["timeoutSeconds"] = 0
+        });
+        check(sqlServerCap.Code == "INVALID_PARAMS" && sqlServerPrices.Code == "INVALID_PARAMS", $"maximum bytes billed and prices are refused for SQL Server: {sqlServerCap.Code} {sqlServerPrices.Code}");
         check(legacy.Code == "LEGACY_SQL" && badDataset.Code == "INVALID_PARAMS" && badSql.Code == "INVALID_PARAMS" && sqlServerDataset.Code == "INVALID_PARAMS" && noDatabase.Code == "INVALID_PARAMS"
             && jobs.InsertedIds.IsEmpty,
             $"legacy SQL, a bad dataset or script, a dataset for SQL Server and SQL Server without a database are refused before any job: {legacy.Code} {badDataset.Code} {badSql.Code} {sqlServerDataset.Code} {noDatabase.Code}");

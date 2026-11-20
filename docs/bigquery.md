@@ -194,6 +194,32 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
 Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
 beside them, "< $0.01" below a cent. The price is an estimate: projects with capacity reservations do not pay per byte.
 `BigQueryCost` (C#) and `src/shared/bigquery/cost.ts` write the same text, pinned by `tests/fixtures/bigquery/cost.json`.
+Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`hidePrices` for
+Messages).
+
+- **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A query tab shows it in a chip
+  beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (Execute will ask), and after a
+  run what the job processed and cost. Its tooltip says the estimate is free and on demand, and why it may be low.
+- **Diagnostics.** After a 1 s pause in editing, a dry run (one in flight per tab; the latest text wins) marks the error
+  BigQuery reports at its `[line:column]` (owner `varia.googlesql.dryRun`, so Alt+F8 reaches it) and updates the chip; the
+  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Nothing dry-runs after a restore, a provider switch or a
+  dataset change until the user edits or executes (decision 44). Text Editor › GoogleSQL › **Check queries with a dry run
+  while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
+- **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
+  first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
+  Cancel as an alert dialog with a **Cost settings…** link:
+  - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection.
+  - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
+    external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
+    `UNKNOWN`. **Don't warn me about incomplete estimates again** clears
+    `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel while
+  the estimate is worked out stops the run before anything is sent. Emulator mode's faked estimates never ask.
+- **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
+  `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
+  job past it at no charge (`COST_CAP`, which names the cap).
 
 ## Errors
 
@@ -242,7 +268,10 @@ errors (syntax errors included) as `jobInternalError`, and reports no bytes stat
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
-  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text.
+  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text. The dry-run
+  checks in `BigQueryChecks` cover `bigquery.dryRun` (the body, each incomplete reason, a refused query's `[line:column]`,
+  the limits); `tests/bigquery-dry-run.test.ts` the cost rules, the prompts, the chip and the diagnostics loop, and
+  `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
   `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure). CI

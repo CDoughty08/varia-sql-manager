@@ -76,6 +76,7 @@ const api: VariaApi = {
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
   bigQueryAccount: params => request('bigquery.account', params),
   bigQueryProjects: params => request('bigquery.projects', params),
+  bigQueryDryRun: params => request('bigquery.dryRun', params),
   databases: connectionId => request('databases.list', { connectionId }),
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   explorerChildren: params => request('explorer.children', params),

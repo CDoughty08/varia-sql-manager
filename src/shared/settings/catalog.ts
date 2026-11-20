@@ -5,6 +5,7 @@ import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
 import { activityMonitorSettings } from './activity-monitor'
+import { bigQuerySettings } from './bigquery'
 import { connectionSettings } from './connections'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
@@ -34,7 +35,8 @@ const settingAreas = [
   liveDataSettings,
   activityMonitorSettings,
   integrationServicesSettings,
-  updateSettings
+  updateSettings,
+  bigQuerySettings
 ] as const
 
 type Def = typeof settingAreas[number][number]

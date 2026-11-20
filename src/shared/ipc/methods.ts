@@ -80,6 +80,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // BigQuery before connecting (the dialog's account line and project picker): main injects the credential material.
   'bigquery.account': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
+  // The free estimate and dry-run diagnostics on a connected handle (docs/bigquery.md, Cost).
+  'bigquery.dryRun': { ...control, deadlineMs: 30_000, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
   // A BigQuery handle lists its billing project's datasets (a query tab's Dataset box).
@@ -214,7 +216,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined
+  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.hidePrices === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

@@ -112,8 +112,8 @@ internal static partial class BigQueryErrors
         if (has("responseTooLarge"))
             return new("RESULT_TOO_LARGE", "The result is over BigQuery's 10 GB result limit. Filter or aggregate the query so it returns fewer rows or columns.");
         if (has("bytesBilledLimitExceeded"))
-            return new("COST_CAP", Says("The query would bill more than this connection's maximum bytes billed" + (cap is { } limit ? " (" + BigQueryCost.Priced(limit) + ")" : "")
-                + ", so BigQuery did not run it. Raise the cap in the connection's Cost settings, or make the query read less."));
+            return new("COST_CAP", Says("The query would bill more than its maximum bytes billed" + (cap is { } limit ? " (" + BigQueryCost.Priced(limit) + ")" : "")
+                + ", so BigQuery did not run it. Raise the cap in the connection's Advanced Properties or in Tools › Options › Query Execution › BigQuery › Cost, or make the query read less."));
         // A job BigQuery stopped at its jobTimeoutMs says "stopped" too, with "timed out" in its message.
         if (has("stopped") && google.Contains("timed out", StringComparison.OrdinalIgnoreCase)) return new("TIMEOUT", "The BigQuery job exceeded its execution timeout, and BigQuery stopped it.");
         if (has("stopped")) return new("CANCELLED", "The BigQuery job was cancelled.");

@@ -11,7 +11,7 @@ namespace Varia.Backend.Tests;
 /// SqlService.DispatchAsync against <see cref="BigQueryFake"/>, for every sign-in mode, identity pin and error row. No
 /// request leaves the process: every check ends with the fake's unmatched list empty.
 /// </summary>
-internal static class BigQueryChecks
+internal static partial class BigQueryChecks
 {
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -85,6 +85,7 @@ internal static class BigQueryChecks
             await ErrorsAsync(check, key);
             await PreConnectAsync(check, key);
             await EmulatorAsync(check);
+            await DryRunAsync(check, key);
         }
         finally { temp.Delete(recursive: true); }
     }

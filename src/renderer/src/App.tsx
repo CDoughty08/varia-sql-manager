@@ -16,6 +16,7 @@ import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
 import ServerFilePicker from './server-files/ServerFilePicker'
+import BigQueryCostPrompt from './BigQueryCostPrompt'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -328,6 +329,7 @@ export default function App() {
     <DependenciesDialog />
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
+    <BigQueryCostPrompt />
     {recoveryOpen && <RecoveryDialog />}
     {showAbout > 0 && <AboutDialog raise={showAbout} onClose={() => setShowAbout(0)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />

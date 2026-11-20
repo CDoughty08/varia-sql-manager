@@ -45,6 +45,9 @@ internal sealed partial class SqlService
         if (dataset is not null && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (BigQueryErrors.IsLegacySql(args.Sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+        if (args.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed is outside its supported range.");
+        // The connection's own cap (Advanced Properties) wins over Tools › Options' default.
+        var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
 
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -101,7 +104,7 @@ internal sealed partial class SqlService
                     {
                         Query = args.Sql, UseLegacySql = false,
                         DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
-                        MaximumBytesBilled = connection.Options.MaximumBytesBilled
+                        MaximumBytesBilled = cap
                     }
                 }
             };
@@ -178,7 +181,7 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = await BigQueryFailureAsync(error, connection, created, CancellationToken.None);
+                var mapped = await BigQueryFailureAsync(error, connection, created, cap, CancellationToken.None);
                 // A job BigQuery stopped (its timeout, or a cancel from elsewhere) ended as one Varia stopped would.
                 status = error is BigQueryJobException && mapped.Code is "TIMEOUT" or "CANCELLED" ? (mapped.Code == "TIMEOUT" ? "timedOut" : "cancelled") : "failed";
                 messages.Add(mapped.Message, MessageKind.Error);
@@ -198,7 +201,7 @@ internal sealed partial class SqlService
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
         }
-        if (summary is not null && BigQueryCost.Summary(summary) is { } cost) messages.Add(cost);
+        if (summary is not null && BigQueryCost.Summary(summary, args.HidePrices != true) is { } cost) messages.Add(cost);
         var output = messages.Snapshot();
         void Note(string text) => output.Add(new(text, QueryMessages.Info));
         var descriptors = sets.Select(set => set.Describe()).ToList();
@@ -312,11 +315,11 @@ internal sealed partial class SqlService
 
     /// <summary>The error value for a failed execution: the job's own error, or the failed call's, with a location mismatch
     /// told apart from a missing dataset by asking where the dataset is (datasets.get, free).</summary>
-    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, CancellationToken token)
+    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, CancellationToken token)
     {
         var project = connection.Options.Project;
-        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, connection.Options.MaximumBytesBilled)
-            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: connection.Options.MaximumBytesBilled, token: token) as RequestException
+        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap)
+            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: cap, token: token) as RequestException
             ?? new RequestException("BACKEND_ERROR", "Execution stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
         if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
         string? actual;

@@ -106,8 +106,11 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
     public void Dispose() => Client.Dispose();
 }
 
-/// <summary>A dry run's estimate; emulator mode fakes it (the emulator does not dry-run).</summary>
-internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false);
+/// <summary>A dry run's estimate; emulator mode fakes it (the emulator does not dry-run). Incomplete says why the figure may
+/// be low (docs/bigquery.md, Cost): <c>script</c> (a script's dry run stops at its first DDL or control statement),
+/// <c>lowerBound</c> or <c>unknown</c> (BigQuery's own accuracy), or <c>zeroBytes</c> (tables were read but 0 bytes
+/// reported: external and row-level-security tables).</summary>
+internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false, string? Incomplete = null, string? StatementType = null);
 
 /// <summary>
 /// The BigQuery engine (docs/bigquery.md): BigQuery connections in a registry keyed by the same handle ids as SQL Server's,
@@ -288,18 +291,45 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     /// <summary>The connect probe: a dry run of SELECT 1 in the billing project. It proves bigquery.jobs.create and bills nothing.</summary>
     internal static async Task ProbeAsync(BigQueryClient client, string project, string? location, CancellationToken token) =>
-        await DryRunAsync(client, project, location, ProbeSql, token);
+        await DryRunAsync(client, project, location, ProbeSql, null, token);
 
     /// <summary>A dry run (free): the bytes a query would process. Emulator mode answers a faked estimate.</summary>
-    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token)
+    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token, string? dataset = null)
     {
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
-        try { return new(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, token)); }
+        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, dataset, token)); }
         catch (Exception error) { throw BigQueryErrors.Map(error, connection.Options.Project, ProbePermission, token: token); }
     }
 
-    static async Task<long> DryRunAsync(BigQueryClient client, string project, string? location, string sql, CancellationToken token)
+    /// <summary>bigquery.dryRun (docs/bigquery.md, Cost): the free estimate before Execute and the editor's diagnostics. It
+    /// sends the text to Google, as Execute would, but runs nothing and bills nothing.</summary>
+    public async Task<BigQueryDryRunResult> DryRunQueryAsync(BigQueryDryRunArgs args, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > MaxDryRunCharacters) throw new RequestException("INVALID_PARAMS", "The query text is empty or too long.");
+        if (args.Dataset is { } dataset && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
+            throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
+        var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
+        var estimate = await EstimateAsync(connection, args.Sql, token, args.Dataset ?? connection.Options.Dataset);
+        return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked);
+    }
+
+    /// <summary>The most text a dry run takes, as query.execute does (dryRunLimits in src/shared/bigquery/dry-run.ts).</summary>
+    public const int MaxDryRunCharacters = 1_000_000;
+
+    /// <summary>The bytes a dry run reports, and why the figure may be low.</summary>
+    internal static BigQueryEstimate Estimate(Job answer)
+    {
+        var query = answer.Statistics?.Query;
+        var bytes = Math.Max(0, answer.Statistics?.TotalBytesProcessed ?? query?.TotalBytesProcessed ?? 0);
+        var statement = query?.StatementType is { Length: > 0 and <= 64 } type && type.All(c => char.IsAsciiLetterUpper(c) || c == '_') ? type : null;
+        var incomplete = statement == "SCRIPT" ? "script"
+            : query?.TotalBytesProcessedAccuracy switch { "LOWER_BOUND" => "lowerBound", "UNKNOWN" => "unknown", _ => null }
+            ?? (bytes == 0 && query?.ReferencedTables is { Count: > 0 } ? "zeroBytes" : null);
+        return new(bytes, Incomplete: incomplete, StatementType: statement);
+    }
+
+    static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token)
     {
         var job = new Job
         {
@@ -307,11 +337,14 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
             Configuration = new JobConfiguration
             {
                 DryRun = true, Labels = new Dictionary<string, string>(Labels),
-                Query = new JobConfigurationQuery { Query = sql, UseLegacySql = false }
+                Query = new JobConfigurationQuery
+                {
+                    Query = sql, UseLegacySql = false,
+                    DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset }
+                }
             }
         };
-        var answer = await client.Service.Jobs.Insert(job, project).ExecuteAsync(token);
-        return answer.Statistics?.TotalBytesProcessed ?? answer.Statistics?.Query?.TotalBytesProcessed ?? 0;
+        return await client.Service.Jobs.Insert(job, project).ExecuteAsync(token);
     }
 
     /// <summary>The default dataset's location (datasets.get), the connection's location when the options name none.</summary>
