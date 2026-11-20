@@ -346,6 +346,10 @@ internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWo
 /// (which name no database) only by a search of the whole server.</summary>
 internal static class IndexSearch
 {
+    /// <summary>The characters a scan unpacks before it checks its budget and Stop, however few objects that took: a few
+    /// milliseconds of unpacking.</summary>
+    internal const int CheckChars = 1 << 20;
+
     /// <summary>A hit as the scan finds it, before its result is built: its rank, the object and where its name matched (From is
     /// -1 when only its definition did, whose first match it then carries). The scan keeps at most the candidate cap of these;
     /// labels are built only for the kept ones, and results (match counts, previews, dates) only for the best `limit`.</summary>
@@ -379,9 +383,11 @@ internal static class IndexSearch
             for (var at = 0; at < table.Count; at++)
             {
                 // The budget and Stop are checked by objects scanned, not hits found: a search with few hits still reads every
-                // definition, and a superseded search must not keep scanning on the thread pool.
-                if ((++scanned & 63) == 0)
+                // definition, and a superseded search must not keep scanning on the thread pool. Unpacking is the slow part of a
+                // definition search, so a run of long packed definitions is checked sooner than every 64 objects.
+                if ((++scanned & 63) == 0 || scratch.Unpacked >= CheckChars)
                 {
+                    scratch.Unpacked = 0;
                     token.ThrowIfCancellationRequested();
                     if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 }

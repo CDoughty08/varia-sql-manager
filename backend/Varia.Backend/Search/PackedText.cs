@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Unicode;
 
 namespace Varia.Backend.Search;
 
@@ -9,7 +10,9 @@ namespace Varia.Backend.Search;
 /// distinct definition is its own frame, and the same text always packs to the same bytes, so the <see cref="StringPool"/> still
 /// holds a definition every database and connection shares once, and a preview unpacks only its own text. Equal by content.
 /// Definitions shorter than <see cref="MinChars"/> (a default's ((0)), most computed columns) stay strings: a frame's overhead
-/// would eat most of the gain, and they are the ones many objects share.
+/// would eat most of the gain, and they are the ones many objects share. So does a text that is not well-formed UTF-16 (an
+/// unpaired surrogate, which nvarchar allows and the per-module cut can leave): UTF-8 cannot hold it, and a search must see the
+/// text SQL Server returned.
 /// </summary>
 internal sealed class PackedText : IEquatable<PackedText>
 {
@@ -41,30 +44,31 @@ internal sealed class PackedText : IEquatable<PackedText>
     /// <summary>What the packed text costs the budget: the object (header, frame reference, lengths, hash) and its frame.</summary>
     public long Bytes => 40 + ((24L + frame.Length + 7) & ~7L);
 
-    /// <summary>Whether a definition of <paramref name="length"/> characters is packed.</summary>
-    public static bool Packs(int length) => length >= MinChars;
-
-    public static PackedText Pack(ReadOnlySpan<char> text)
+    /// <summary><paramref name="text"/> packed, or null when it stays a string: shorter than <see cref="MinChars"/>, or not
+    /// well-formed UTF-16, so that it unpacks to exactly the characters it was.</summary>
+    public static PackedText? TryPack(ReadOnlySpan<char> text)
     {
-        var count = Encoding.UTF8.GetByteCount(text);
-        var utf8 = ArrayPool<byte>.Shared.Rent(count);
-        var room = ArrayPool<byte>.Shared.Rent((int)ZstandardEncoder.GetMaxCompressedLength(count));
+        if (text.Length < MinChars) return null;
+        var utf8 = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(text.Length));
+        byte[]? room = null;
         try
         {
-            var written = Encoding.UTF8.GetBytes(text, utf8);
+            if (Utf8.FromUtf16(text, utf8, out _, out var written, replaceInvalidSequences: false) != OperationStatus.Done) return null;
+            room = ArrayPool<byte>.Shared.Rent((int)ZstandardEncoder.GetMaxCompressedLength(written));
             if (!ZstandardEncoder.TryCompress(utf8.AsSpan(0, written), room, out var packed, Level, 0)) throw new InvalidOperationException("A definition did not pack.");
             return new PackedText(room.AsSpan(0, packed).ToArray(), text.Length, written);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(utf8);
-            ArrayPool<byte>.Shared.Return(room);
+            if (room is not null) ArrayPool<byte>.Shared.Return(room);
         }
     }
 
     /// <summary>The text, unpacked into <paramref name="scratch"/>'s buffers (grown as needed): valid until the scratch is used again.</summary>
     public ReadOnlySpan<char> Unpack(Scratch scratch)
     {
+        scratch.Unpacked += Length;
         var bytes = scratch.Bytes(ByteLength);
         if (!ZstandardDecoder.TryDecompress(frame, bytes, out var written) || written != ByteLength) throw new InvalidDataException("A packed definition did not unpack.");
         var chars = scratch.Chars(Length);
@@ -84,6 +88,9 @@ internal sealed class PackedText : IEquatable<PackedText>
     /// <summary>The buffers one search (one thread) unpacks definitions into, reused from one definition to the next.</summary>
     internal sealed class Scratch
     {
+        /// <summary>The characters unpacked since the search last checked its budget and Stop (it resets this).</summary>
+        public long Unpacked { get; set; }
+
         private byte[] bytes = [];
         private char[] chars = [];
 
@@ -104,6 +111,6 @@ internal static class DefinitionText
     /// <summary>The stored text as a string.</summary>
     public static string ToText(object stored) => stored as string ?? stored.ToString()!;
 
-    /// <summary>The form the index holds <paramref name="text"/> in: packed when it is long enough, else the string.</summary>
-    public static object Hold(string text) => PackedText.Packs(text.Length) ? PackedText.Pack(text) : text;
+    /// <summary>The form the index holds <paramref name="text"/> in: packed when it can be (<see cref="PackedText.TryPack"/>), else the string.</summary>
+    public static object Hold(string text) => PackedText.TryPack(text) ?? (object)text;
 }

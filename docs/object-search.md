@@ -100,8 +100,12 @@ skipped as `mssqlsystemresource`.
 - A definition of 512 characters or more is held compressed (`PackedText`: one zstd frame of its UTF-8 text, level 3),
   about a seventh of the string on real module definitions, and charged at its compressed size. The same text always
   compresses to the same frame, so the pool still holds a definition shared by several databases or servers once. A
-  search unpacks each definition into its own reusable buffer as it reads it; shorter definitions (defaults, most
-  computed columns) stay strings.
+  search unpacks each definition into reusable buffers of its own (bytes and characters, which grow to as much as
+  about ten times the longest definition it reads, so at most about 10 MB), which makes a search inside definitions
+  about four times slower than over strings, still far inside its time limit; it checks its time limit and Stop after
+  each million or so characters it unpacks, as well as every 64 objects. Packing a definition as it is read borrows
+  pooled buffers of a few times its size while it compresses. Shorter definitions (defaults, most computed columns)
+  stay strings, and so does a text with an unpaired surrogate, which UTF-8 cannot hold exactly.
 - Once less than 128 MiB is free, definitions stop being kept: a build reads at most each one's first 256 characters,
   only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
   predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.

@@ -935,7 +935,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) return Repeated(reader, ordinal);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return (None, false);
-        if ((PackedText.Packs(text.Length) ? (object?)Pooled(PackedText.Pack(text), limits.NamesReserveBytes) : Pooled(text, limits.NamesReserveBytes)) is not { } copy) { cut++; return (None, false); }
+        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, limits.NamesReserveBytes) : Pooled(text, limits.NamesReserveBytes)) is not { } copy) { cut++; return (None, false); }
         modules++;
         if (longer) cut++;
         return (copy, longer);
