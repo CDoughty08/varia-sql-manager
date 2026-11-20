@@ -37,3 +37,21 @@ it('measures Find through a culture compare with and without the pre-check, and 
     { id: 'node.find.typeAheadSpeedup', ...read('node.find.typeAheadSpeedup') }
   )
 })
+
+// The room pool (backend/Varia.Backend/Results/RoomPool.cs): random 128-row tiles of a scattered view of a packed result,
+// read inside the .NET test program (backend/Varia.Backend.Tests/RoomPoolBench.cs), which reads the memory a tile allocates
+// and the full collections the reads cause. Without the pool each tile made a 256 KiB room a page, about 33 MB.
+it('measures the memory a tile of a sorted view of a packed result allocates', () => {
+  const output = execFileSync('dotnet', ['run', '--project', 'backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj', '--configuration', 'Release', '--', '--room-pool-bench'],
+    { encoding: 'utf8', timeout: 280_000, maxBuffer: 16 * 1024 * 1024 })
+  const measured = new Map(output.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line) as Metric).map(metric => [metric.id, metric]))
+  const read = (id: string) => {
+    const metric = measured.get(id)
+    expect(metric, id).toBeTruthy()
+    return { value: metric!.value, unit: metric!.unit, detail: metric!.detail }
+  }
+  record(
+    { id: 'node.roomPool.tileAllocatedMb', ...read('node.roomPool.tileAllocatedMb') },
+    { id: 'node.roomPool.tileGen2', ...read('node.roomPool.tileGen2') }
+  )
+})

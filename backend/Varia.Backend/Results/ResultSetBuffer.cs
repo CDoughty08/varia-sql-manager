@@ -108,6 +108,8 @@ internal sealed class ResultSetBuffer
     private volatile bool incomplete;
     /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
     private SearchMemo? searchMemo;
+    /// <summary>A diff's change index (<see cref="Results.DiffIndex"/>), its bytes counted in <see cref="charged"/>.</summary>
+    private DiffIndex? diffIndex;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -542,6 +544,22 @@ internal sealed class ResultSetBuffer
         }
     }
 
+    /// <summary>A diff's change index, kept from when results.diff wrote it until the set is freed; null for other sets.</summary>
+    internal DiffIndex? DiffIndex => Volatile.Read(ref diffIndex);
+
+    /// <summary>Keeps a diff's change index, taking over the bytes its writer reserved for it (<see cref="DiffIndex.Bytes"/>);
+    /// a freed set keeps none and returns them.</summary>
+    internal void KeepDiffIndex(DiffIndex index)
+    {
+        lock (gate)
+        {
+            if (gone) { store.Return(Budget, index.Bytes); return; }
+            if (diffIndex is { } last) ReturnLocked(last.Bytes);
+            charged += index.Bytes;
+            Volatile.Write(ref diffIndex, index);
+        }
+    }
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
@@ -852,7 +870,11 @@ internal sealed class ResultSetBuffer
     /// packed ones unpacked on the workers, after reserving their bytes as working memory, which the caller returns
     /// (<see cref="ReturnWork"/>, <paramref name="reserved"/>) when it is done with them. Null, reserving nothing, when the
     /// budget has no room: the caller then reads them one at a time through <see cref="Body"/>.</summary>
-    public byte[][]? BodiesTogether(IReadOnlyList<StoredPage> wanted, out long reserved, CancellationToken token = default)
+    /// <param name="rooms">With a list, the packed pages are unpacked into rooms rented from the store's pool
+    /// (<see cref="ResultStore.Rooms"/>), added to it: a body is then longer than its page (read its first
+    /// <see cref="StoredPage.Length"/> bytes), and the caller gives every room back (<see cref="ReturnRooms"/>) once it
+    /// reads none of them. Without one, each is a new array of its page's length.</param>
+    public byte[][]? BodiesTogether(IReadOnlyList<StoredPage> wanted, out long reserved, CancellationToken token = default, List<byte[]>? rooms = null)
     {
         // Reserved is set only once the reservation is made, so a throw before it leaves the caller holding nothing.
         reserved = 0;
@@ -881,13 +903,19 @@ internal sealed class ResultSetBuffer
         if (!store.TryReserveWork(Budget, need)) return null;
         reserved = need;
         var held = need;
+        var rented = rooms?.Count ?? 0;
         try
         {
+            // Rented here, on one thread, so the workers only unpack.
+            var into = rooms is null ? null : new byte[unpack.Count][];
+            if (into is not null)
+                for (var k = 0; k < unpack.Count; k++) rooms!.Add(into[k] = store.Rooms.Rent(wanted[unpack[k]].Length));
             using var threads = ViewSorter.Gate.Take(Math.Min(unpack.Count, ViewSorter.Workers));
             threads.For(unpack.Count, k =>
             {
                 var page = wanted[unpack[k]];
-                bodies[unpack[k]] = page.Stored is PackedPage packed ? store.Unpack(packed, page.Length) : (byte[])page.Stored;
+                // A page another operation unpacked in place meanwhile answers its own array (its room goes back unused).
+                bodies[unpack[k]] = into is null ? page.Stored is PackedPage packed ? store.Unpack(packed, page.Length) : (byte[])page.Stored : Read(page, into[k]);
             }, token);
         }
         catch
@@ -895,9 +923,24 @@ internal sealed class ResultSetBuffer
             // Returned here, so the caller (which returns what it holds) holds nothing.
             store.Return(Budget, held);
             reserved = 0;
+            if (rooms is not null)
+            {
+                for (var k = rented; k < rooms.Count; k++) store.Rooms.Return(rooms[k]);
+                rooms.RemoveRange(rented, rooms.Count - rented);
+            }
             throw;
         }
         return bodies;
+    }
+
+    /// <summary>The store's pool of rooms for reads of packed pages.</summary>
+    internal RoomPool Rooms => store.Rooms;
+
+    /// <summary>Gives back the rooms <see cref="BodiesTogether"/> rented, once nothing reads them, and empties the list.</summary>
+    public void ReturnRooms(List<byte[]> rooms)
+    {
+        foreach (var room in rooms) store.Rooms.Return(room);
+        rooms.Clear();
     }
 
     /// <summary>Returns working memory reserved by <see cref="BodiesTogether"/> or <see cref="TryReserveWork"/>.</summary>
@@ -909,8 +952,9 @@ internal sealed class ResultSetBuffer
         gone = true;
         pages.Clear();
         cache.Clear();
-        // Its bytes are in charged, returned below.
+        // Their bytes are in charged, returned below.
         Volatile.Write(ref searchMemo, null);
+        Volatile.Write(ref diffIndex, null);
         store.Held(-packedBytes, -packedLogical, -cacheBytes);
         packedBytes = packedLogical = cacheBytes = 0;
         var freed = charged;

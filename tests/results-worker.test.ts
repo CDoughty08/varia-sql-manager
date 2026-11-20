@@ -279,6 +279,16 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
+  it('relays a comparison seek to main by view, in either form, and its answer to the page', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'identity', id: 107, key: { ...key, view: 3 }, request: { method: 'diffSeek', from: -1, direction: 'previous' } })
+    expect(sent.at(-1)).toEqual({ t: 'diffSeek', rid: 1, generation: 1, resultId: 5, viewId: 3, from: -1, direction: 'previous' })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { row: 2, column: 1, index: 4, total: 4, rows: 6 } })
+    expect(posted.at(-1)).toEqual({ type: 'identity', id: 107, result: { row: 2, column: 1, index: 4, total: 4, rows: 6 } })
+    core.handle({ type: 'identity', id: 108, key, request: { method: 'diffSeek', partnerOf: 6 } })
+    expect(sent.at(-1)).toEqual({ t: 'diffSeek', rid: 2, generation: 1, resultId: 5, partnerOf: 6 })
+  })
+
   it('relays row identity requests to main by view, their answers and failures to the page, and cancels an identify', () => {
     const { core, sent, posted } = fixture()
     core.handle({ type: 'identity', id: 100, key: { ...key, view: 3 }, request: { method: 'identify', by: 'column', column: 2 } })

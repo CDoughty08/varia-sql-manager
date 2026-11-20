@@ -274,6 +274,10 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   marks, never kinds: the tone is `<kind> [flag…] [cell…]` (kinds `same`, `changed`, `added`, `removed`, `changedOld`,
   `changedNew`; flags `dup`, `poss=<row>`, `gap=<n>`), kept within 500 characters, and readers ignore unknown flags.
   The look-alike search is bounded (1,000 rows a side, 4,000,000 comparisons) and skipped, not slowed, past its bounds.
+  A diff keeps a change index (`Results/DiffIndex.cs`) beside its rows, charged with them and refused with them: each
+  stored row's kind, marks, change units and look-alike partner, with running totals per 4,096 rows that each view of
+  the diff keeps over its own order. The `kind` view filter, `results.diffSeek` and the answer's `overview` and `units`
+  read only this index (a seek reads one tone, of the row it lands on), never the tone column's text row by row.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
@@ -398,7 +402,14 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
   - Reads: a packed page unpacks into a six-page per-result cache (`CachePages`) only while the budget has spare room
     (`TryReserveSpare`), else for that read alone. A view read unpacks its base pages 64 at a time on the workers
-    (`BodiesTogether`, reserved working memory, one at a time when refused).
+    (`BodiesTogether`, reserved working memory, one at a time when refused) into rooms rented from the store's pool.
+  - Room pool (`RoomPool`, `ResultStore.Rooms`): view reads and `PageRooms` rent their rooms from it and give them back
+    once nothing reads them (a grid's view read before it hands over a page, Copy and Save through a view when they drop
+    the group; `PageRooms` at its end, only rooms their readers gave back), so reading again allocates no large arrays. A
+    rented room is at least the page's length (read its first `StoredPage.Length` bytes; the shortest idle room that fits,
+    so it may be longer) and its reader is charged the page's length. Idle rooms are uncharged, capped at `RoomPool.IdleBytes`
+    (a tile's 64 rooms and one a worker), never kept twice or past `LargestRoom`, and let go after `IdleMs` without a
+    rental (the memory timer's `Trim`).
   - Fused reads leave the result packed. Sort, filter, profile and pivot use `ViewSorter.PageSource` and `PageRooms`;
     distinct lists, row identities, diffs and search use `PageRooms.Over` with a `RoomReader` per worker. Each reader
     unpacks the page it reads into a room (one page of the largest packed length, working memory reserved when made,
