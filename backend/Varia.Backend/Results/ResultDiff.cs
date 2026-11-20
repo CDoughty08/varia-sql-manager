@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace Varia.Backend.Results;
 
@@ -6,25 +7,72 @@ namespace Varia.Backend.Results;
 /// result (added) or only in the first (removed).</summary>
 internal enum DiffKind : byte { Same, Changed, Added, Removed }
 
-/// <summary>One aligned entry: its kind, its row in each result (-1 where it has none), and its differing cells,
-/// DiffModel.Cells[CellStart .. CellStart + CellCount]. A matched row whose only differences are soft is Same.</summary>
-internal readonly record struct DiffEntry(DiffKind Kind, int Left, int Right, int CellStart = 0, int CellCount = 0);
+/// <summary>An entry's marks: its key occurs more than once in either result, so it was paired in order (a guess).</summary>
+[Flags]
+internal enum DiffFlags : byte { None = 0, Repeated = 1 }
+
+/// <summary>How results.diff matches rows: Auto (the first unique key candidate, else whole rows), Position (the n-th row
+/// with the n-th), Rows (whole rows: the shared columns together) or Columns (a composite key of chosen pairs).</summary>
+internal enum DiffMatchMode : byte { Auto, Position, Rows, Columns }
+
+/// <summary>What results.diff was asked to match rows by: a mode, and for Columns 1 to <see cref="ResultDiffer.MaxKeyColumns"/>
+/// distinct pair indexes.</summary>
+internal sealed record DiffMatch(DiffMatchMode Mode, int[] Pairs)
+{
+    public static readonly DiffMatch Auto = new(DiffMatchMode.Auto, []);
+}
+
+/// <summary>One aligned entry: its kind, its row in each result (-1 where it has none), its differing cells,
+/// DiffModel.Cells[CellStart .. CellStart + CellCount], and its flags. A matched row whose only differences are soft is
+/// Same. The flags sit in the kind's padding: still 20 bytes an entry, as the working memory charges.</summary>
+[StructLayout(LayoutKind.Explicit)]
+internal readonly record struct DiffEntry([field: FieldOffset(0)] DiffKind Kind, [field: FieldOffset(4)] int Left, [field: FieldOffset(8)] int Right,
+    [field: FieldOffset(12)] int CellStart = 0, [field: FieldOffset(16)] int CellCount = 0, [field: FieldOffset(1)] DiffFlags Flags = DiffFlags.None);
 
 /// <summary>Two results aligned row by row (results.diff), in unified order: the second result's order, each removed row
 /// after the first result's row it followed. The unified result is one rendering of it (<see cref="UnifiedDiff"/>); a
 /// side-by-side one would read the same entries. <see cref="Pairs"/> are the shared columns (left, right) compared; an
 /// entry's cells are pair indexes, negative (~index) for a soft difference: equal by the collation but not character for
 /// character.</summary>
-internal sealed class DiffModel(DiffEntry[] entries, (int Left, int Right)[] pairs, int[] cells, int keyPair, bool approximate)
+internal sealed class DiffModel(DiffEntry[] entries, (int Left, int Right)[] pairs, int[] cells, DiffMatchMode mode, int[] keyPairs, bool approximate)
 {
     public DiffEntry[] Entries { get; } = entries;
     public (int Left, int Right)[] Pairs { get; } = pairs;
     public int[] Cells { get; } = cells;
     public ReadOnlySpan<int> CellsOf(DiffEntry entry) => Cells.AsSpan(entry.CellStart, entry.CellCount);
-    /// <summary>The pair whose values matched rows, or -1 when whole rows (their shared columns) did.</summary>
-    public int KeyPair { get; } = keyPair;
+    /// <summary>How rows were matched: Auto with its key, or Rows when Auto found none; Position, Rows or Columns as asked.</summary>
+    public DiffMatchMode Mode { get; } = mode;
+    /// <summary>The pairs whose values matched rows: Auto's key or the chosen Columns; none for Rows and Position.</summary>
+    public int[] KeyPairs { get; } = keyPairs;
+    /// <summary>Auto's key pair, or -1 when whole rows matched (or another mode was asked).</summary>
+    public int KeyPair => Mode == DiffMatchMode.Auto && KeyPairs.Length == 1 ? KeyPairs[0] : -1;
     /// <summary>A matched or compared value was a truncated value's stored prefix.</summary>
     public bool Approximate { get; } = approximate;
+    /// <summary>Possible matches (look-alikes): a removed or added entry's index, and its partner's 0-based row in the other
+    /// result. Both entries of a pair are listed.</summary>
+    public IReadOnlyDictionary<int, int> Possible { get; init; } = new Dictionary<int, int>();
+    /// <summary>Too many unmatched rows, or no memory for their values, to look for possible matches.</summary>
+    public bool PossibleSkipped { get; init; }
+
+    /// <summary>Entries whose key repeats (<see cref="DiffFlags.Repeated"/>).</summary>
+    public long Repeated()
+    {
+        long repeated = 0;
+        foreach (var entry in Entries) if ((entry.Flags & DiffFlags.Repeated) != 0) repeated++;
+        return repeated;
+    }
+
+    /// <summary>Each pair's changed and soft cells, in pair order: the model's true counts, whatever a cut tone lists.</summary>
+    public (long Changed, long Soft)[] ColumnChanges()
+    {
+        var changes = new (long Changed, long Soft)[Pairs.Length];
+        foreach (var cell in Cells)
+        {
+            if (cell < 0) changes[~cell].Soft++;
+            else changes[cell].Changed++;
+        }
+        return changes;
+    }
 
     /// <summary>Entries of each kind, and soft differences (values equal only by collation).</summary>
     public (long Same, long Changed, long Added, long Removed, long Soft) Counts()
@@ -227,13 +275,30 @@ internal sealed class RowAccess
 
 /// <summary>Aligns two complete results (results.diff). Columns pair by name (case-insensitively, in the first result's
 /// order) when both hold text or both binary; a pair's values compare by the first result's column type and collation, so
-/// a column whose type or collation changed between the results still matches. Rows match by a key: the first candidate (RowIdentity.Candidates over the shared columns) that is unique, NULL-free
-/// and untruncated in both results, else by their shared columns' values together, the k-th copy of a row matching the
-/// k-th copy in the other result. Values compare as SQL Server would (CellHasher): numbers by value, text by its column's
-/// collation, unless <c>exact</c>, which compares text character for character.</summary>
+/// a column whose type or collation changed between the results still matches. Rows match as <see cref="DiffMatch"/> asks:
+/// Auto by the first candidate (RowIdentity.Candidates over the shared columns) that is unique, NULL-free and untruncated
+/// in both results, else by whole rows (their shared columns' values together); Rows by whole rows; Columns by the chosen
+/// pairs' values together (NULL matching NULL); Position the n-th row with the n-th. A key or whole row met more than once
+/// matches in order, the k-th copy with the k-th; under Columns such entries are flagged. Values compare as SQL Server would
+/// (CellHasher): numbers by value, text by its column's collation, unless <c>exact</c>, which compares text character for
+/// character. Unmatched rows that look alike are then paired as possible matches (<see cref="LookAlikes"/>).</summary>
 internal static class ResultDiffer
 {
     private const int CancelEvery = 1 << 12;
+
+    /// <summary>The most pairs a Columns match takes (limits.diff.maxKeyColumns).</summary>
+    public const int MaxKeyColumns = 16;
+
+    /// <summary>The look-alike search's bounds: removed rows, added rows, and removed × added × compared columns.</summary>
+    public const int MaxLookAlikeRows = 1000;
+    public const long MaxLookAlikeWork = 4_000_000;
+
+    /// <summary>Bytes a Columns match adds per row while it runs, to find repeated keys: each row's key tagged with its side,
+    /// sorted (8), and its flag (1).</summary>
+    public const long RepeatBytes = 9;
+
+    /// <summary>What results.diff answers (DIFF_KEY_TRUNCATED) when a chosen key column holds a truncated value.</summary>
+    public const string KeyTruncated = "A key column holds values too long to compare. Choose another.";
 
     /// <summary>Bytes the alignment holds per row while it runs: a left row's identity, match, chain, place in its part and
     /// lookup entry with its bucket (8 + 4 + 4 + 4 + 24 + 4, and 6 for the lookups' sizes rounding up to a prime, up to a
@@ -297,9 +362,10 @@ internal static class ResultDiffer
     /// <see cref="CellChunk"/> cells at a time, beyond the <see cref="WorkingBytes"/> the caller reserved; a refusal fails
     /// the diff with TOO_LARGE, since every value of two wide results can differ.</summary>
     public static DiffModel Compare(ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, bool exact, CancellationToken token,
-        Func<long, bool>? reserve = null, DiffStages? stages = null)
+        Func<long, bool>? reserve = null, DiffStages? stages = null, DiffMatch? match = null)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        match ??= DiffMatch.Auto;
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
         var pairs = Pairs(left.Columns, right.Columns, left.Wires, right.Wires);
@@ -309,6 +375,8 @@ internal static class ResultDiffer
                 : "The columns these results share hold binary data in one and text in the other, so they cannot be compared.");
         if (pairs.Length > MaxPairs)
             throw new RequestException("INVALID_PARAMS", "These results share more than " + MaxPairs.ToString("N0", CultureInfo.InvariantCulture) + " columns, more than a diff can show.");
+        if (match.Mode == DiffMatchMode.Columns && (match.Pairs is not { Length: >= 1 and <= MaxKeyColumns } || match.Pairs.Any(pair => pair < 0 || pair >= pairs.Length) || match.Pairs.Distinct().Count() != match.Pairs.Length))
+            throw new RequestException("INVALID_PARAMS", "Choose 1 to 16 different paired columns to match rows by.");
         long leftTotal = 0, rightTotal = 0;
         foreach (var page in leftPages) leftTotal += page.Rows;
         foreach (var page in rightPages) rightTotal += page.Rows;
@@ -320,43 +388,65 @@ internal static class ResultDiffer
         var compared = right.Columns.ToArray();
         foreach (var (l, r) in pairs) compared[r] = compared[r] with { DataType = left.Columns[l].DataType, SortKind = left.Columns[l].SortKind, Collation = left.Columns[l].Collation };
         var rightHasher = new CellHasher(compared, right.Wires);
-        var leftIds = new long[leftTotal];
-        var rightIds = new long[rightTotal];
+        // Position matching reads no identity.
+        var positional = match.Mode == DiffMatchMode.Position;
+        long[] leftIds = positional ? [] : new long[leftTotal];
+        long[] rightIds = positional ? [] : new long[rightTotal];
         // Packed results are read fused: each reader unpacks the page it reads into a room of its own and both stay packed.
         using var leftOwned = PageRooms.Over(leftPages, left.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
         var leftRooms = leftOwned;
         using var rightRooms = PageRooms.Over(rightPages, right.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
-        var keyPair = -1;
+        var mode = match.Mode;
+        int[] keyPairs = [];
         var approximate = false;
-        var rightCandidates = RowIdentity.Candidates(right.Columns, right.Wires).ToHashSet();
-        var tried = 0;
         // How many key candidates it takes is not known ahead: no percentage until rows are matched.
         var progress = OperationProgress.Current;
         progress?.Phase("identify", 0.45, known: false);
-        foreach (var candidate in RowIdentity.Candidates(left.Columns, left.Wires))
+        if (mode == DiffMatchMode.Auto)
         {
-            var pair = Array.FindIndex(pairs, item => item.Left == candidate);
-            if (pair < 0 || !rightCandidates.Contains(pairs[pair].Right)) continue;
-            if (++tried > RowIdentity.MaxCandidates) break;
-            var (leftUnique, leftApproximate) = RowIdentity.Fill(leftHasher, leftPages, candidate, leftIds, stopEarly: true, token, rooms: leftRooms);
-            if (!leftUnique || leftApproximate) continue;
-            var (rightUnique, rightApproximate) = RowIdentity.Fill(rightHasher, rightPages, pairs[pair].Right, rightIds, stopEarly: true, token, rooms: rightRooms);
-            if (!rightUnique || rightApproximate) continue;
-            keyPair = pair;
-            break;
+            var rightCandidates = RowIdentity.Candidates(right.Columns, right.Wires).ToHashSet();
+            var tried = 0;
+            foreach (var candidate in RowIdentity.Candidates(left.Columns, left.Wires))
+            {
+                var pair = Array.FindIndex(pairs, item => item.Left == candidate);
+                if (pair < 0 || !rightCandidates.Contains(pairs[pair].Right)) continue;
+                if (++tried > RowIdentity.MaxCandidates) break;
+                var (leftUnique, leftApproximate) = RowIdentity.Fill(leftHasher, leftPages, candidate, leftIds, stopEarly: true, token, rooms: leftRooms);
+                if (!leftUnique || leftApproximate) continue;
+                var (rightUnique, rightApproximate) = RowIdentity.Fill(rightHasher, rightPages, pairs[pair].Right, rightIds, stopEarly: true, token, rooms: rightRooms);
+                if (!rightUnique || rightApproximate) continue;
+                keyPairs = [pair];
+                break;
+            }
+            if (keyPairs.Length == 0) mode = DiffMatchMode.Rows;
         }
-        if (keyPair < 0)
+        if (mode == DiffMatchMode.Rows)
         {
             var leftColumns = pairs.Select(pair => pair.Left).ToArray();
             var rightColumns = pairs.Select(pair => pair.Right).ToArray();
             approximate |= Rows(leftHasher, leftPages, leftColumns, leftIds, token, leftRooms);
             approximate |= Rows(rightHasher, rightPages, rightColumns, rightIds, token, rightRooms);
         }
+        else if (mode == DiffMatchMode.Columns)
+        {
+            // A composite key: the chosen pairs' values together, NULL hashing alike with NULL. A truncated value is only its
+            // stored prefix, which could pair different rows: refused rather than guessed.
+            keyPairs = [.. match.Pairs];
+            if (Rows(leftHasher, leftPages, [.. keyPairs.Select(pair => pairs[pair].Left)], leftIds, token, leftRooms)
+                || Rows(rightHasher, rightPages, [.. keyPairs.Select(pair => pairs[pair].Right)], rightIds, token, rightRooms))
+                throw new RequestException("DIFF_KEY_TRUNCATED", KeyTruncated);
+        }
 
         var matching = System.Diagnostics.Stopwatch.GetTimestamp();
         if (stages is not null) stages.Identity += matching - started;
         progress?.Phase("match", 0.55);
-        var (matchedLeft, rightMatch) = Match(leftIds, rightIds, token);
+        bool[]? leftRepeated = null, rightRepeated = null;
+        if (mode == DiffMatchMode.Columns)
+        {
+            if (reserve is not null && !reserve(RepeatBytes * (leftTotal + rightTotal))) throw new RequestException("TOO_LARGE", TooLarge);
+            (leftRepeated, rightRepeated) = Repeats(leftIds, rightIds, token);
+        }
+        var (matchedLeft, rightMatch) = positional ? Positions((int)leftTotal, (int)rightTotal) : Match(leftIds, rightIds, token);
         progress?.Phase("align", 0.85);
         var aligning = System.Diagnostics.Stopwatch.GetTimestamp();
         if (stages is not null) stages.Matching += aligning - matching;
@@ -370,8 +460,159 @@ internal static class ResultDiffer
             if (stages is not null) stages.Unpacked = true;
         }
         var (entries, cells) = Align(leftHasher, leftPages, rightHasher, rightPages, pairs, exact, matchedLeft, rightMatch, reserve, ref approximate, token, leftRooms, rightRooms);
+        if (leftRepeated is not null && rightRepeated is not null)
+        {
+            for (var e = 0; e < entries.Length; e++)
+            {
+                if ((e & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var entry = entries[e];
+                if ((entry.Left >= 0 && leftRepeated[entry.Left]) || (entry.Right >= 0 && rightRepeated[entry.Right])) entries[e] = entry with { Flags = entry.Flags | DiffFlags.Repeated };
+            }
+        }
+        // Look-alikes are compared over the columns that did not match rows: none are left when every pair is a key, and
+        // Position has no key to have changed.
+        var possible = new Dictionary<int, int>();
+        var skipped = false;
+        if (mode != DiffMatchMode.Position)
+        {
+            int[] others = [.. Enumerable.Range(0, pairs.Length).Where(pair => !keyPairs.Contains(pair))];
+            (possible, skipped) = LookAlikes(entries, pairs, others, leftHasher, leftPages, rightHasher, rightPages, reserve, token, leftRooms, rightRooms, exact);
+        }
         if (stages is not null) stages.Aligning += System.Diagnostics.Stopwatch.GetTimestamp() - aligning;
-        return new DiffModel(entries, pairs, cells, keyPair, approximate);
+        return new DiffModel(entries, pairs, cells, mode, keyPairs, approximate) { Possible = possible, PossibleSkipped = skipped };
+    }
+
+    /// <summary>Position matching: the n-th row of each result with the n-th of the other; the rest are added or removed.</summary>
+    private static (int[] MatchedLeft, int[] RightMatch) Positions(int leftTotal, int rightTotal)
+    {
+        var matchedLeft = new int[leftTotal];
+        var rightMatch = new int[rightTotal];
+        for (var i = 0; i < leftTotal; i++) matchedLeft[i] = i < rightTotal ? i : -1;
+        for (var j = 0; j < rightTotal; j++) rightMatch[j] = j < leftTotal ? j : -1;
+        return (matchedLeft, rightMatch);
+    }
+
+    /// <summary>Which rows' keys occur more than once in either result. Each key is tagged with its side in its lowest bit
+    /// and sorted; a run of one key with two copies on a side has its bits set, so that every copy of the key (both sides')
+    /// then finds itself repeated by a binary search, the array staying sorted.</summary>
+    internal static (bool[] Left, bool[] Right) Repeats(long[] leftIds, long[] rightIds, CancellationToken token)
+    {
+        var tagged = new long[leftIds.Length + rightIds.Length];
+        for (var i = 0; i < leftIds.Length; i++) tagged[i] = leftIds[i] << 1;
+        for (var j = 0; j < rightIds.Length; j++) tagged[leftIds.Length + j] = rightIds[j] << 1 | 1;
+        token.ThrowIfCancellationRequested();
+        Array.Sort(tagged);
+        token.ThrowIfCancellationRequested();
+        for (var start = 0; start < tagged.Length;)
+        {
+            var key = tagged[start] >> 1;
+            int end = start, lefts = 0, rights = 0;
+            for (; end < tagged.Length && tagged[end] >> 1 == key; end++)
+                if ((tagged[end] & 1) == 0) lefts++; else rights++;
+            var repeated = lefts > 1 || rights > 1;
+            for (var k = start; k < end; k++) tagged[k] = key << 1 | (repeated ? 1L : 0L);
+            start = end;
+        }
+        var left = new bool[leftIds.Length];
+        var right = new bool[rightIds.Length];
+        for (var i = 0; i < left.Length; i++) left[i] = Array.BinarySearch(tagged, leftIds[i] << 1 | 1) >= 0;
+        token.ThrowIfCancellationRequested();
+        for (var j = 0; j < right.Length; j++) right[j] = Array.BinarySearch(tagged, rightIds[j] << 1 | 1) >= 0;
+        return (left, right);
+    }
+
+    /// <summary>Possible matches (D5): removed and added rows whose <paramref name="compared"/> pairs mostly agree, the hint
+    /// that a key changed. A pair qualifies when at least 75% of the compared columns hold equal values (NULL equal to NULL)
+    /// and at least min(3, columns) of those are not NULL; it is kept only when each is the other's unique best (a tie on
+    /// either side keeps neither). Skipped past <see cref="MaxLookAlikeRows"/> rows a side or <see cref="MaxLookAlikeWork"/>
+    /// comparisons, or when the values read are refused as working memory: the answer says so. Never changes a kind. Values are
+    /// equal as the diff compares them: with <paramref name="exact"/>, text equal only by its collation is not.</summary>
+    internal static (Dictionary<int, int> Partners, bool Skipped) LookAlikes(DiffEntry[] entries, (int Left, int Right)[] pairs, int[] compared, CellHasher leftHasher, StoredPage[] leftPages,
+        CellHasher rightHasher, StoredPage[] rightPages, Func<long, bool>? reserve, CancellationToken token, PageRooms? leftRooms = null, PageRooms? rightRooms = null, bool exact = false)
+    {
+        var partners = new Dictionary<int, int>();
+        if (compared.Length == 0) return (partners, false);
+        var removed = new List<int>();
+        var added = new List<int>();
+        for (var e = 0; e < entries.Length; e++)
+        {
+            if (entries[e].Kind == DiffKind.Removed) { if (removed.Count <= MaxLookAlikeRows) removed.Add(e); }
+            else if (entries[e].Kind == DiffKind.Added && added.Count <= MaxLookAlikeRows) added.Add(e);
+        }
+        if (removed.Count == 0 || added.Count == 0) return (partners, false);
+        var columns = compared.Length;
+        if (removed.Count > MaxLookAlikeRows || added.Count > MaxLookAlikeRows || (long)removed.Count * added.Count * columns > MaxLookAlikeWork) return (partners, true);
+        // Each value read is kept as its hash and whether it is NULL.
+        if (reserve is not null && !reserve((removed.Count + added.Count) * (long)columns * 9)) return (partners, true);
+        (ulong[] Hashes, bool[] Nulls) Read(List<int> rows, bool isLeft)
+        {
+            var hasher = isLeft ? leftHasher : rightHasher;
+            var hashes = new ulong[rows.Count * columns];
+            var nulls = new bool[rows.Count * columns];
+            using var reader = new RowAccess(isLeft ? leftPages : rightPages, hasher.Count).Reader(isLeft ? leftRooms : rightRooms, isLeft ? LeftSlots : RightSlots);
+            for (var k = 0; k < rows.Count; k++)
+            {
+                token.ThrowIfCancellationRequested();
+                var entry = entries[rows[k]];
+                var view = reader.At(isLeft ? entry.Left : entry.Right, out var at);
+                for (var c = 0; c < columns; c++)
+                {
+                    var column = isLeft ? pairs[compared[c]].Left : pairs[compared[c]].Right;
+                    nulls[k * columns + c] = view.IsNull(column, at);
+                    var hash = hasher.CellValue(view, column, at);
+                    // Exact text compares character for character (CompareCells), so its hash takes the bytes in too.
+                    if (exact && hasher.IsText(column) && !nulls[k * columns + c]) hash ^= Bytes(view.Span(column, at));
+                    hashes[k * columns + c] = hash;
+                }
+            }
+            return (hashes, nulls);
+        }
+        static ulong Bytes(ReadOnlySpan<byte> span)
+        {
+            var hash = 14695981039346656037UL;
+            foreach (var b in span) hash = (hash ^ b) * 1099511628211UL;
+            return hash;
+        }
+        var (oldHashes, oldNulls) = Read(removed, true);
+        var (newHashes, _) = Read(added, false);
+        var needed = Math.Min(3, columns);
+        // Each side's best score, its partner, and whether another tied it (-1: none qualified).
+        var bestOld = new int[removed.Count];
+        var partnerOld = new int[removed.Count];
+        var tieOld = new bool[removed.Count];
+        var bestNew = new int[added.Count];
+        var partnerNew = new int[added.Count];
+        var tieNew = new bool[added.Count];
+        Array.Fill(bestOld, -1);
+        Array.Fill(bestNew, -1);
+        for (var r = 0; r < removed.Count; r++)
+        {
+            token.ThrowIfCancellationRequested();
+            for (var a = 0; a < added.Count; a++)
+            {
+                int equal = 0, values = 0;
+                for (var c = 0; c < columns; c++)
+                {
+                    if (oldHashes[r * columns + c] != newHashes[a * columns + c]) continue;
+                    equal++;
+                    if (!oldNulls[r * columns + c]) values++;
+                }
+                if (4L * equal < 3L * columns || values < needed) continue;
+                if (equal > bestOld[r]) { bestOld[r] = equal; partnerOld[r] = a; tieOld[r] = false; }
+                else if (equal == bestOld[r]) tieOld[r] = true;
+                if (equal > bestNew[a]) { bestNew[a] = equal; partnerNew[a] = r; tieNew[a] = false; }
+                else if (equal == bestNew[a]) tieNew[a] = true;
+            }
+        }
+        for (var r = 0; r < removed.Count; r++)
+        {
+            if (bestOld[r] < 0 || tieOld[r]) continue;
+            var a = partnerOld[r];
+            if (tieNew[a] || partnerNew[a] != r) continue;
+            partners[removed[r]] = entries[added[a]].Right;
+            partners[added[a]] = entries[removed[r]].Left;
+        }
+        return (partners, false);
     }
 
     /// <summary>The runs the alignment splits the second result's rows into, one a thread asked for.</summary>
@@ -664,8 +905,9 @@ internal static class ResultDiffer
 /// them with <c>context</c> -1). Its columns are the shared columns (the second result's names and types), then a hidden
 /// suffix: the marker ("Change", role mark: " ", "−" or "+"), the entry's row in the first result ("Old row", role leftRow)
 /// and in the second ("New row", role rightRow), 1-based and NULL where it has none (both halves of a changed entry carry
-/// both), and the tone (role tone): "added" or "removed" ("same" for an unchanged row with soft differences), then the
-/// differing cells as pair indexes (which are the data columns' indexes), a soft one with a leading "~". The suffix is not
+/// both), and the tone (role tone): its kind ("same", "added", "removed", or "changedOld" and "changedNew" for a change's
+/// halves), its flags (<see cref="ToneFlags"/>), then the differing cells as pair indexes (which are the data columns'
+/// indexes), a soft one with a leading "~"; NULL for an unchanged row with neither. The suffix is not
 /// data: the grid draws it in the row header, and only Save writes it (ResultJobs). Each data cell's bytes are its source
 /// cell's, so the row-size bar sums the values shown, not the suffix. Rows stop at the first one refused, and the set then
 /// says why it was truncated: a full budget never stops between a changed row's two halves, though a page sealed under low
@@ -717,11 +959,11 @@ internal static class UnifiedDiff
     }
 
     /// <summary>Writes the rows into <paramref name="set"/> (opened with <see cref="Columns"/> and <see cref="Wires"/>), then
-    /// completes it.</summary>
+    /// completes it. Returns the unchanged entries left out after the last row stored (trailingHidden).</summary>
     /// <param name="tooLarge">What it answers (TOO_LARGE) when the budget has no room for the rooms a packed result is
     /// read through: each side's rows are read fused, a few pages kept unpacked (<see cref="ResultDiffer.LeftSlots"/>), in
     /// about the order the comparison read them.</param>
-    public static void Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token,
+    public static long Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token,
         string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null)
     {
         using var leftPin = left.Pin();
@@ -745,6 +987,8 @@ internal static class UnifiedDiff
         }
         var tone = new System.Text.StringBuilder(64);
         var counter = 0;
+        // Unchanged entries left out since the last row stored: the next row's gap flag, or what trails the last one.
+        long omitted = 0;
         using var written = OperationProgress.Current?.Count((model.Entries.Length >> 10) + 1) ?? default;
         try
         {
@@ -754,21 +998,27 @@ internal static class UnifiedDiff
             for (var k = 0; k < model.Entries.Length; k++)
             {
                 if (++counter == 1 << 10) { counter = 0; token.ThrowIfCancellationRequested(); written.Done(); }
-                if (!shown[k]) continue;
+                if (!shown[k]) { omitted++; continue; }
                 // Before each row, not each thousand: one row can be up to a page.
                 leftReader.YieldAhead();
                 rightReader.YieldAhead();
                 var entry = model.Entries[k];
                 var cells = model.CellsOf(entry);
+                var repeated = (entry.Flags & DiffFlags.Repeated) != 0;
+                var partner = model.Possible.TryGetValue(k, out var row) ? row : -1;
+                var gap = omitted;
+                omitted = 0;
                 var stored = entry.Kind switch
                 {
-                    DiffKind.Same => Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty ? null : Tone(tone, "same", cells)),
-                    DiffKind.Added => Row(set, sides.Right, entry.Right, Added, -1, entry.Right, "added"),
-                    DiffKind.Removed => Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, "removed"),
-                    _ => Pair(set, sides, entry, Tone(tone, "removed", cells), Tone(tone, "added", cells))
+                    DiffKind.Same => Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty && !repeated && gap == 0 ? null : Tone(tone, "same", Flags(repeated, -1, gap), cells)),
+                    DiffKind.Added => Row(set, sides.Right, entry.Right, Added, -1, entry.Right, Tone(tone, "added", Flags(repeated, partner, gap), [])),
+                    DiffKind.Removed => Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, Tone(tone, "removed", Flags(repeated, partner, gap), [])),
+                    // The gap is on the first row stored after the run: the old half.
+                    _ => Pair(set, sides, entry, Tone(tone, "changedOld", Flags(repeated, -1, gap), cells), Tone(tone, "changedNew", Flags(repeated, -1, 0), cells))
                 };
                 if (!stored) break;
             }
+            return omitted;
         }
         finally
         {
@@ -781,11 +1031,28 @@ internal static class UnifiedDiff
         }
     }
 
-    /// <summary>The tone text: the kind, then the differing cells' pair indexes in order, each run of adjacent columns of
-    /// one kind (changed, or soft with "~") as "first-last", cut at a whole entry with " …" past <see cref="MaxToneChars"/>.</summary>
-    internal static string Tone(System.Text.StringBuilder tone, string kind, ReadOnlySpan<int> cells)
+    /// <summary>A row's tone flags: its key repeats (<c>dup</c>), its possible match's 0-based row in the other result
+    /// (<c>poss=</c>, 1-based; -1 for none), and the unchanged entries left out just before it (<c>gap=</c>; 0 for none).</summary>
+    internal readonly record struct ToneFlags(bool Repeated, int Partner, long Gap)
+    {
+        public static readonly ToneFlags None = new(false, -1, 0);
+    }
+
+    private static ToneFlags Flags(bool repeated, int partner, long gap) => new(repeated, partner, gap);
+
+    /// <summary>The tone text with no flags.</summary>
+    internal static string Tone(System.Text.StringBuilder tone, string kind, ReadOnlySpan<int> cells) => Tone(tone, kind, ToneFlags.None, cells);
+
+    /// <summary>The tone text: the kind, its flags (at most three, 34 characters: <c>dup poss=&lt;n&gt; gap=&lt;n&gt;</c>), then the
+    /// differing cells' pair indexes in order, each run of adjacent columns of one kind (changed, or soft with "~") as
+    /// "first-last", cut at a whole entry with " …" so that the whole text, kind and flags included, is at most
+    /// <see cref="MaxToneChars"/>.</summary>
+    internal static string Tone(System.Text.StringBuilder tone, string kind, ToneFlags flags, ReadOnlySpan<int> cells)
     {
         tone.Clear().Append(kind);
+        if (flags.Repeated) tone.Append(" dup");
+        if (flags.Partner >= 0) tone.Append(" poss=").Append((flags.Partner + 1L).ToString(CultureInfo.InvariantCulture));
+        if (flags.Gap > 0) tone.Append(" gap=").Append(flags.Gap.ToString(CultureInfo.InvariantCulture));
         Span<char> entry = stackalloc char[32];
         for (var i = 0; i < cells.Length;)
         {

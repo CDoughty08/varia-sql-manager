@@ -900,7 +900,7 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | --- | --- |
 | `logicalBytes` | Every stored result's pages uncompressed |
 | `storedBytes` | Raw pages plus compressed ones: `logicalBytes` − `packedLogicalBytes` + `compressedBytes` |
-| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the uncompressed rows they hold |
+| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size with their Find filters, and the uncompressed rows they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
@@ -960,7 +960,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   error (the pivot sorts by cell and value instead), and a profile refused on several threads is read again on one.
   Nothing more is stored while the OS reports high memory load (checked at every page seal; the load is the runtime's
   reading at its last GC, refreshed by a gen0 collection when more than a second old).
-- **Charges.** A sealed page costs its length (packed length once packed) + 96 bytes + its cell lengths
+- **Charges.** A sealed page costs its length (packed length plus its Find filter's bytes once packed, [Search in results](#search-in-results)) + 96 bytes + its cell lengths
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a set's metadata 512 bytes + 2 per name character + 64
   per column; the page builder's space in 256 KiB steps. A failed reservation rolls back the current row; later rows
   are counted in `rowsRead` but not stored, later sets count in `discardedResultSets`, and execution continues.
@@ -1257,24 +1257,47 @@ Compare with Previous Result and the Compare popover compare two results of one 
 (`Results/ResultDiff.cs`), producing a new result. The renderer runs at most four comparisons per window (`DerivedJobs`,
 shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s.
 
-- **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
-  approximate, leftOnly, rightOnly }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
+- **`results.diff { left, right, exact?, context?, match? }`** answers `{ descriptor, match, same, changed, added, removed,
+  soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired, columnChanges,
+  trailingHidden }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
   own result sets can be compared: not a pivot, a comparison or an execution plan set."), complete (`RESULT_OPEN`,
   "Compare the results after they finish loading."), and the query must not have stopped storing (`BUDGET_STOPPED`, see
   [Pivots](#pivots)). Columns pair by name case-insensitively (`src/shared/ordinal-casing.ts`), in `left`'s order, when
   both are text or both binary, repeats pairing with the next unused one (`tests/fixtures/compare-pairing/cases.json`).
   1 to 4,092 must pair (`INVALID_PARAMS`); `leftOnly`/`rightOnly` name up to 64 unpaired columns, not compared.
-- **Alignment.** Rows match by `key`, the first shared column unique, NULL-free and untruncated in both (ranked as
-  `results.identify` does), else by all shared columns (`key` absent), k-th copy to k-th copy. Values compare by `left`'s
-  type and collation. Collation-equal but not identical text is a soft difference (row unchanged, counted in `soft`);
-  `exact` compares character for character. `approximate`: a truncated prefix was compared.
+- **Match modes.** `match` is `{ mode: 'auto' }` (absent: auto), `{ mode: 'position' }`, `{ mode: 'rows' }` or
+  `{ mode: 'columns', columns }` with 1 to 16 distinct pair indexes, each below the pair count (`limits.diff.maxKeyColumns`;
+  zod, then the backend, `INVALID_PARAMS`). `auto` matches by the first shared column unique, NULL-free and untruncated in
+  both (ranked as `results.identify` does), else by whole rows; `rows` by whole rows (all pairs together); `columns` by
+  the chosen pairs together, NULL matching NULL; `position` the n-th row of each with the n-th, the rest added or removed.
+  A key or whole row met more than once matches in order, k-th copy to k-th copy. A chosen key column holding a truncated
+  value is refused with `DIFF_KEY_TRUNCATED` ("A key column holds values too long to compare. Choose another."). Values
+  compare by `left`'s type and collation (its sort kind: floats and binary by exact value). Collation-equal but not
+  identical text is a soft difference (row unchanged, counted in `soft`); `exact` compares character for character.
+  `approximate`: a truncated prefix was compared.
+- **The answer.** `match` is `{ mode, columns }`, what matched rows: `auto` with its key column's name, `rows` when
+  asked or when auto found no key, `position`, or `columns` with the key columns' names (`right`'s). `repeated` counts
+  entries whose key occurs more than once on either side (only `columns` can have them; flagged `dup`). `possible`
+  counts possible matches: after alignment (not `position`), removed and added rows are compared over the pairs that did
+  not match rows (all pairs for whole rows; none left when every pair is a key, so nothing is sought); a pair qualifies
+  when at least 75% of those columns are equal as the cells compare (NULL equal to NULL; with `exact`, text equal only
+  by its collation is not) and at least min(3, columns) of the equal values are not NULL, and is kept only when each is the other's unique best (a tie on either side keeps neither). Counts and colours
+  never change. `possibleSkipped`: more than 1,000 removed or added rows, more than 4,000,000 comparisons (removed ×
+  added × columns), or the values' working memory refused. `nothingPaired`: both inputs have rows and none matched.
+  `columnChanges`: each pair's `{ changed, soft }` cells, in pair order (the true counts, whatever a cut tone lists).
+  `trailingHidden`: unchanged entries left out after the last stored row (with `context` ≥ 0).
 - **The unified result** (`kind: 'diff'`, stamped with the generation and owned by main) is in the later result's order,
   each removed row after the row it followed, a changed row as old (−) then new (+). Columns: the shared columns with
   `right`'s names and types (the data columns, in pair order), then a hidden suffix: `Change` (role `mark`: " ", "−",
   "+"), `Old row` and `New row` (roles `leftRow`, `rightRow`: bigint, the 1-based row in each input, NULL where the entry
-  has none; both halves of a changed entry carry both), and an `nvarchar(500)` tone (role `tone`): `added`, `removed` or
-  `same` (soft only), then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs
-  as `first-last` (`removed 0-5 ~7`), ending `…` when too long. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
+  has none; both halves of a changed entry carry both), and an `nvarchar(500)` tone (role `tone`): `<kind> [flag…] [cell…]`.
+  Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves); `changed` is
+  reserved for the one-row layout. Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
+  `poss=<row>` (on `added`/`removed` only: the possible match's 1-based row in the other input) and `gap=<n>` (the
+  unchanged entries left out just before this row, under any `context` but -1, absent when 0; on a change, its
+  `changedOld` half). Readers ignore unknown flags. Then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs as
+  `first-last` (`changedOld dup 0-5 ~7`); the cells are cut at a whole entry with ` …` so the whole text, kind and flags
+  included, is at most 500 characters. An unchanged row with no flags and no soft cell has a NULL tone. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
   `tone`; a previous value's `of` names its pair) are not data: `results.view` sort keys and filters, `duplicates`
   columns, `results.distinct`, `results.profile` and `results.identify`'s `column` refuse them (`INVALID_PARAMS`), search
   and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only (a transposed
@@ -1287,17 +1310,20 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
   released with the query's results or at once when its answer is not delivered. A source released meanwhile:
   `RESULT_RELEASED`. Building holds about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) plus 12 bytes per
-  differing cell, charged to the budget as they grow (`TOO_LARGE` without room). Work is split across threads with one thread's result.
+  differing cell, charged to the budget as they grow (`TOO_LARGE` without room); a `columns` match adds 9 bytes a row to find
+  repeated keys, and the look-alike search 9 bytes a value it reads (refused: the search is skipped). Work is split across
+  threads with one thread's result.
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
-  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): a removed or added kind that lists
-  cells is a changed row's old or new half (`changedOld`, `changedNew` in `rowTones`), whose changed cells alone are
-  coloured. The colour is each cell's background colour, under translucent highlight, search-match and selection layers
+  colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): its kind is the row's tone (the
+  kinds join `rowTones`; no live tone uses them), and a `changedOld` or `changedNew` half colours its changed cells alone. The colour is each cell's background colour, under translucent highlight, search-match and selection layers
   in that order (`styles.css`, pinned by `tests/results-diff.test.ts`). It also draws each row's gutter
   from the suffix it reads with every row tile (`GridData`'s suffix tiles): a kind bar, the mark and the row's number in
-  its own input (the old input's on a − row), named for screen readers and in the tooltip ("Removed; row 3 in Result
-  1").
+  its own input (the old input's on a − row), then ≈ for a repeated key, else ? for a possible match, named for screen
+  readers and in the tooltip ("Removed, repeated key, possible match with row 12 in Result 2; row 3 in Result 1"); a cut
+  tone's name ends "More changes in this row are not listed". The strip says how rows matched ("rows matched by Id,
+  Status", "rows matched by position", "whole rows matched").
 
 ## Pivots
 
@@ -1394,6 +1420,27 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
   and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
   filter's value search uses the same matcher.
+- **Page filters** (`Results/PageFilter.cs`). Packing a page of 32 KiB or more also builds a filter for each searchable
+  column: which ASCII characters its cells hold (and whether any other), and a Bloom filter of its trigrams (4-grams for
+  binary and `uniqueidentifier`, whose hex holds every trigram; two hashes, at the smallest power-of-two size up to 16 KiB
+  its grams leave at most 40 % full, left out when fuller) in the matcher's own compare space: code points for _BIN/_BIN2, .NET's ignore-case classes
+  for no collation and for binary's `0x` hex, and the culture's search fold for a verified culture (packing waits for the
+  fold's first build, so a page packed before any search still gets the column's filter). A text of 4 or more
+  characters that a page's filter rules out in every searched column cannot match there, so the search passes the page
+  over without unpacking it. A column of only NULLs on the page rules any text out; a column with a cell the fold does
+  not vouch for, or of a culture without a fold, has no filter and the page is read. A page passed over that holds a
+  truncated cell keeps the answer `approximate`; through a view such a page is read, as the view may leave that row out.
+  Ruling out by filter is ruling out by fold, so a narrowed search after it must meet the fold rule (below). A filter is
+  charged to the budget with its packed page ([Charges](#result-store-and-memory-budget)), dropped when the page is
+  unpacked and freed with its result. It takes at most an eighth of the page's packed bytes, and never so much that the
+  page with it saves under a tenth (a page of GUIDs or random text would otherwise cost more than it saved): over that,
+  the largest gram filters are left out, then the whole filter. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
+  2.8 KiB a page (4.6 % of the packed bytes) and build at about 240 MB/s on the packer's thread; specific words pass over
+  40 – 66 % of the pages (8152, xp_cmdshell, Datenbank, データベース: Find 1.3 – 1.9 times faster), common words
+  (database, error) none, and pages holding cells the fold cannot vouch for (Thai, Indic, Chinese punctuation) are always
+  read. `PageFilterChecks` compares filtered searches with reading every page over fuzzed multilingual pages, in base
+  order and through filtered and shuffled views, both ways and while typing, and checks the budget to the byte; the
+  packed pass of the .NET checks gives every page a filter however small.
 - **Narrowing while typing** (`Results/SearchNarrowing.cs`). Each search keeps a memo on its result: its text, view and
   rows, what each column's ruling out needs, and two bits a position (matched; did not match but must be looked at
   again). The next search reads only the matched positions when its text is the same (Find Next and Previous), or the
@@ -2154,7 +2201,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (plus a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters (at least one), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (plus ranked or whole text, date or binary key values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transposed Copy and Save | `transposed` boolean; `headerColumn` 0 – 4,095, a shown column, only with `transposed`; at most 4,095 source rows a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
@@ -2258,7 +2305,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

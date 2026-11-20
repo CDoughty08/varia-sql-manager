@@ -10,7 +10,7 @@ namespace Varia.Backend.Tests;
 /// <summary>Result diffs (results.diff): rows aligned by a key both results share or by whole rows, the unified order,
 /// collation-aware equality with soft differences, the unified result's rows and tones, context, and the host method's
 /// checks, budget and lifetime.</summary>
-internal static class DiffChecks
+internal static partial class DiffChecks
 {
     private static readonly ResultCollation CaseInsensitive = new(1033, 0, 1252, false, 1 | 8 | 16);
     private static readonly ResultColumn[] Columns =
@@ -36,6 +36,7 @@ internal static class DiffChecks
         Suffix(check);
         Refusals(check);
         LowMemorySteps(check);
+        Matches(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
@@ -173,7 +174,7 @@ internal static class DiffChecks
         var (left, right) = Pair(store, [Row("1")], [Row("2")], columns, columns);
         var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
         var tones = Text(Unified(store, left, right, model)).Select(row => row.Split('|')[^1]).ToArray();
-        check(tones is ["removed 1-150", "added 1-150"], "a row's tone lists a run of adjacent differing columns as a range: " + string.Join(" / ", tones));
+        check(tones is ["changedOld 1-150", "changedNew 1-150"], "a row's tone lists a run of adjacent differing columns as a range: " + string.Join(" / ", tones));
         // Runs of either kind, and a tone too long for what the grid reads of a cell, cut at a whole entry.
         var builder = new StringBuilder();
         check(UnifiedDiff.Tone(builder, "same", [0, 1, ~2, ~3, 5]) == "same 0-1 ~2-3 5", "a soft run is listed apart from a changed one, by pair index (the data column's index)");
@@ -246,11 +247,11 @@ internal static class DiffChecks
         {
             "2|PEAR|2.0| |2|1|same ~1",
             "3|plum|3.00|−|3|NULL|removed",
-            "1|apple|1.50|−|1|2|removed 2",
-            "1|apple|1.75|+|1|2|added 2",
+            "1|apple|1.50|−|1|2|changedOld 2",
+            "1|apple|1.75|+|1|2|changedNew 2",
             "5|kiwi|5.00|+|NULL|3|added",
-            "4|fig|4.00|−|4|4|removed 2",
-            "4|fig|NULL|+|4|4|added 2",
+            "4|fig|4.00|−|4|4|changedOld 2",
+            "4|fig|NULL|+|4|4|changedNew 2",
             "6|lime|6.00| |5|5|NULL"
         };
         check(unified.IsComplete && rows.SequenceEqual(expected) && string.Join(",", unified.Columns.Select(column => column.Name)) == "ItemId,Name,Price,Change,Old row,New row,"
@@ -413,7 +414,7 @@ internal static class DiffChecks
         var before = Held.Bytes(store);
         var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId });
         var stored = store.Find(diff.Descriptor.ResultId);
-        check(SqlService.MethodNames.Contains("results.diff") && diff.Key == "ItemId" && diff is { Same: 1, Changed: 1, Added: 1, Removed: 0, Soft: 1 } && diff.Descriptor.Kind == "diff"
+        check(SqlService.MethodNames.Contains("results.diff") && diff.Match is { Mode: "auto", Columns: ["ItemId"] } && diff is { Same: 1, Changed: 1, Added: 1, Removed: 0, Soft: 1 } && diff.Descriptor.Kind == "diff"
             && diff.Descriptor.State == "complete" && diff.Descriptor.RowsStored == 4 && stored is not null && ReferenceEquals(stored.Budget, left.Budget) && Held.Bytes(store) > before,
             "results.diff stores the unified diff as a complete result of the same query and counts each kind");
         var otherBudget = store.BeginQuery("other");
@@ -511,7 +512,7 @@ internal static class DiffChecks
                 suffix.Add(string.Join("|", cells));
             }
         }
-        check(suffix.Count == 2 && suffix[0].StartsWith("−|removed ", StringComparison.Ordinal) && suffix[1].StartsWith("+|added ", StringComparison.Ordinal) && !suffix.Any(text => text.Contains("cut ", StringComparison.Ordinal)),
+        check(suffix.Count == 2 && suffix[0].StartsWith("−|changedOld ", StringComparison.Ordinal) && suffix[1].StartsWith("+|changedNew ", StringComparison.Ordinal) && !suffix.Any(text => text.Contains("cut ", StringComparison.Ordinal)),
             $"a diff row whose data reaches the 8 MiB row limit still stores its marker and tone whole: {string.Join(" / ", suffix)}");
         // The reservation covers the row numbers too: data at the limit, nine-digit numbers and a short tone still fit whole.
         var limit = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text]);

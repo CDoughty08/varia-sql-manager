@@ -3,6 +3,7 @@ import type { Disposable } from '../core/types'
 import { pairColumns, type ColumnPairing } from './compare-pairing'
 import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import type { DiffMatchUsed } from '../../../shared/contracts'
 import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
 import { comparedNames, comparisonName, entryNumber, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
 import { formatCount } from './status'
@@ -20,8 +21,8 @@ export interface CompareInfo {
   readonly rightName?: string
   /** The larger input's stored rows when compared, which sizes the gutter's row numbers after an input is closed. */
   readonly inputRows?: number
-  /** The column whose values matched rows; undefined when whole rows did. */
-  readonly key: string | undefined
+  /** What matched rows: the mode, and the key columns (auto's chosen column, or those asked for). */
+  readonly match: DiffMatchUsed
   readonly exact: boolean
   readonly same: number
   readonly changed: number
@@ -345,7 +346,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (key === undefined) return undefined
       done = true
       const info: CompareInfo = {
-        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
+        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, match: result.match, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate,
         // The handles' counts: an entry keeps the descriptor it opened with, before any row was stored.
         inputRows: Math.max(from.handle.getSnapshot().rowsStored, to.handle.getSnapshot().rowsStored)
@@ -442,10 +443,16 @@ export function compareSources(tab: TabResults | undefined, sources: readonly So
 /** The two compared results' names as they were when compared, "Result N" for a comparison made before names. */
 const sideNames = (info: CompareInfo): [string, string] => [info.leftName ?? entryNumber({ number: info.leftNumber }), info.rightName ?? entryNumber({ number: info.rightNumber })]
 
+/** How the strip says rows were matched. */
+export function matchedBy(match: DiffMatchUsed): string {
+  if (match.mode === 'position') return 'rows matched by position'
+  return match.columns.length > 0 && match.mode !== 'rows' ? `rows matched by ${match.columns.join(', ')}` : 'whole rows matched'
+}
+
 /** What a diff grid's strip says after its two inputs: how rows matched, the counts, soft differences, the columns left
  *  out, and that the inputs' filters and sorts were not applied. */
 export function compareDetails(info: CompareInfo): string {
-  const by = info.key ? `rows matched by ${info.key}` : 'whole rows matched'
+  const by = matchedBy(info.match)
   const [leftName, rightName] = sideNames(info)
   const parts = [`${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
   if (info.soft > 0) parts.push(`${count(info.soft, 'value differs', 'values differ')} only by collation (case or trailing spaces), underlined.`)
