@@ -1013,7 +1013,9 @@ internal static class BigQuerySessionChecks
         var gets = harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal));
         var waitingArgs = harness.Query(waitTab, "SELECT 1");
         var waiting = harness.Call("query.execute", waitingArgs);
-        await Poll(() => harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal)) > gets);
+        // Stop only once the run polls the stopped job: a Stop before that ends the run before it waits (a loaded CI runner).
+        var polled = await Poll(() => harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal)) > gets, 120);
+        check(polled, "the run after a Stop polls the stopped job before it starts");
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = waitingArgs["queryId"]!.GetValue<string>() });
         await waiting.WaitAsync(TimeSpan.FromSeconds(30));
         check(await Poll(() => bq.Cancels.Count(id => id == stoppedId) >= 2), $"a second Stop sends jobs.cancel again for the job the tab waits for: {bq.Cancels.Count(id => id == stoppedId)}");

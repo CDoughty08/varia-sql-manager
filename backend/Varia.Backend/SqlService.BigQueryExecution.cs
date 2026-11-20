@@ -33,9 +33,6 @@ internal sealed partial class SqlService
 
     internal int BigQueryPageRows(int columns) => Math.Clamp(BigQueryPageCells / Math.Max(1, columns), BigQueryFirstPageRows, bigQuery.PageRows);
 
-    [GeneratedRegex(@"Dataset (?<project>[^\s:]+):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
-    private static partial Regex DatasetLocationMessage();
-
     /// <summary>BigQuery's error positions, [line:column] in the submitted text.</summary>
     [GeneratedRegex(@"\[(?<line>\d{1,7}):(?<column>\d{1,7})\]")]
     private static partial Regex ErrorPosition();
