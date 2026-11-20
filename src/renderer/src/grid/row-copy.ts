@@ -80,7 +80,7 @@ const isHeaderRow = (row: Element) => cellsOf(row).every(cell => cell.matches('t
 /**
  * The row an editable grid's copy is about, read from the page: the row the copy came from, else the grid's selected or active
  * row, with the grid's column titles. A column without a title (a row selector, a hidden Remove column) is left out, and a
- * row whose cells do not line up with the titles (a group heading) copies nothing.
+ * row whose cells do not line up with the titles, or a lone cell (a group heading), copies nothing; a spanning cell fills its columns.
  */
 export function domCopyRows(grid: Element, from: EventTarget | null): CopyRows | undefined {
   const inGrid = (row: Element | null | undefined) => row && grid.contains(row) && !isHeaderRow(row) ? row : undefined
@@ -90,7 +90,10 @@ export function domCopyRows(grid: Element, from: EventTarget | null): CopyRows |
     ?? inGrid(grid.querySelector('[aria-selected="true"][role="row"], tr[aria-selected="true"], [data-selected][role="row"], tr[data-selected]'))
   const head = [...grid.querySelectorAll(rowSelector)].find(isHeaderRow)
   if (!row || !head) return undefined
-  const titles = cellsOf(head).map(cellText), cells = cellsOf(row)
+  const titles = cellsOf(head).map(cellText), shown = cellsOf(row)
+  // A cell spanning columns (a gesture's one key for every platform) fills each of them; a lone cell is a group heading.
+  if (shown.length < 2 && titles.length > 1) return undefined
+  const cells = shown.flatMap(cell => Array<Element>(Math.max(1, Number(cell.getAttribute('colspan')) || 1)).fill(cell))
   if (cells.length !== titles.length) return undefined
   const kept = titles.flatMap((title, index) => title ? [index] : [])
   return { columns: kept.map(index => titles[index]), rows: [kept.map(index => cellText(cells[index]))] }

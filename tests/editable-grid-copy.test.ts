@@ -39,6 +39,11 @@ describe('editable grid rows read from the page', () => {
       <tr aria-selected="true" tabindex="0"><td data-copy="Copy">Copy<span>edit.copy</span></td><td data-copy="Ctrl+C"><kbd>Ctrl</kbd><kbd>C</kbd></td></tr></tbody></table>`).querySelector('table')!
     expect(domCopyRows(shortcuts, shortcuts.querySelector('[colspan]'))).toBeUndefined()
     expect(domCopyRows(shortcuts, shortcuts.querySelector('[tabindex]'))?.rows).toEqual([['Copy', 'Ctrl+C']])
+    // Every platform shown: a gesture's one key spans the platform columns, and copies in each of them.
+    const platforms = html(`<table role="grid"><thead><tr><th scope="col">Command</th><th scope="col">Windows</th><th scope="col">Linux</th><th scope="col">macOS</th><th scope="col">Source</th></tr></thead>
+      <tbody><tr><th colspan="5" scope="colgroup">Mouse</th></tr><tr tabindex="0"><td>Peek Definition</td><td colspan="3">Alt+Click</td><td>Default</td></tr></tbody></table>`).querySelector('table')!
+    expect(domCopyRows(platforms, platforms.querySelector('[tabindex]'))?.rows).toEqual([['Peek Definition', 'Alt+Click', 'Alt+Click', 'Alt+Click', 'Default']])
+    expect(domCopyRows(platforms, platforms.querySelector('[colspan="5"]'))).toBeUndefined()
     expect(cellText(html('<span>a<button>x</button>  b<datalist><option>z</option></datalist></span>').firstElementChild!)).toBe('a b')
   })
 
