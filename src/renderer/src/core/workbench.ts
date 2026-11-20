@@ -368,6 +368,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
+  // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
+  queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  documents.sessionHooks = {
+    message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
+    bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
+  }
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -392,7 +398,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
   })
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)

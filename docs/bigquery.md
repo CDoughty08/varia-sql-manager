@@ -183,11 +183,67 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
   (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
-  a DDL statement's completion, that a script returns its last statement's rows only, and the job's statistics: bytes
-  processed and billed with their price, slot time and cache hit. The summary's `job` carries the same figures, and the
-  Results status shows the bytes processed beside the row count ("1.24 GiB processed · < $0.01").
-- **Stop and the timeout.** Stop ends the request with status `cancelled` and, when the job had not finished, says it keeps
-  running in BigQuery (Stop's `jobs.cancel` comes with scripts and sessions). A tab runs one query at a time (`SESSION_BUSY`).
+  a DDL statement's completion, and the job's statistics: bytes processed and billed with their price, slot time and
+  cache hit. The summary's `job` carries the same figures, and the Results status shows the bytes processed beside the
+  row count ("1.24 GiB processed · < $0.01"). Each job's start and end also go to the renderer as a `query.job` event
+  (docs/ipc.md, Query events).
+- **Error positions.** BigQuery's `[line:column]` positions are the submitted text's; the backend maps them to the
+  editor's, adding a selection's first line and, on that line, its first column (`startColumn`).
+- **Stop and the timeout.** Stop ends the request with status `cancelled` and sends `jobs.cancel` (best-effort: BigQuery
+  may still bill work done before the job stopped); the execution timeout does the same. A tab runs one query at a time
+  (`SESSION_BUSY`).
+
+### Scripts
+
+A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend
+lists the parent's new children (`jobs.list` with `parentJobId`, newest first, so paging stops at the first child it has
+read) and reads each finished one in statement order: a SELECT's rows become the next result set, a DML statement's
+affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
+it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
+needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
+rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
+
+### Sessions
+
+Each query tab has its own BigQuery session, so temp tables, variables and transactions carry from one Execute to the
+next. The tab's first job creates it (`createSession`); later jobs carry its id (`session_id`), which never leaves the
+backend. Emulator mode has no sessions. A session runs one job at a time: a job Varia stopped, or lost track of after a
+network failure, must reach DONE before the next one runs, and Messages says the tab is waiting for it.
+
+- **Location.** A session lives in one location. A tab's first job runs in its dataset's location when the connection's
+  location is Automatic (`datasets.get`, cached), else the connection's. Choosing a dataset in another location asks
+  "Switch this tab to EU?": Switch ends the session (asking first about a running query and an open transaction, as a
+  close does) and the next Execute starts one in the new location; Don't Switch keeps the dataset and session. A query
+  sent with such a dataset anyway is refused with `LOCATION_MISMATCH`. Temp tables in a session are billed as storage
+  until the session ends.
+- **Transactions.** The backend tracks the session's transaction from the statement types of its jobs, top-level and
+  child: `BEGIN TRANSACTION` opens it, a successful `COMMIT` or `ROLLBACK` closes it, and a statement failing inside it
+  makes it unknown (BigQuery names no reason, so message text is never read for this), as does a script whose children
+  could not all be listed. `query.session.state` answers from this, with no request to BigQuery: open is
+  `{ transactionCount: 1, checked: true }`, unknown or a stopped job not yet DONE is `checked: false`, and a running query
+  answers `SESSION_BUSY`.
+- **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
+  transaction as they do for SQL Server, with BigQuery's own "not checked" note. Commit runs `COMMIT TRANSACTION` in the
+  session; every close then ends the session with `CALL BQ.ABORT_SESSION(@session_id)` outside it, which rolls back
+  what is still open. A close never aborts a session while one of its jobs runs: a commit or rollback answers
+  `JOB_RUNNING` and the tab stays (a plain close stops the query first, as SQL Server's does). A job Varia stopped is
+  waited for (20 s, 25 s for a commit) so the abort never races it.
+- **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
+  session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
+  quit, where the window stays open. A refusal BigQuery may lift (`backendError`, `rateLimitExceeded`) keeps the tab, and
+  so does a commit whose request never left the machine (`CONNECTION_LOST`); closing again retries. A commit whose
+  outcome is unknown (no answer within 25 s, or main's 60 s deadline) closes with `outcomeUnknown` and its job id: the
+  session is aborted only once that COMMIT is DONE, or not found after 2 minutes, within 10 minutes and even after
+  Disconnect; past that it is left to expire.
+- **Notes.** A close answers a note when something needs saying: `commitNotApplied`, `committedBeforeCancel` (a stopped
+  script had already committed), `outcomeUnknown`, `abortFailed` (the session could not be ended, so its transaction stays
+  open until it expires and its temp tables are billed meanwhile) or `sessionExpired`. It shows in the tab's Messages
+  when the tab stays, else as a notification; quit stops for `outcomeUnknown`, `committedBeforeCancel` and
+  `abortFailed` so they are read, and quitting again proceeds.
+- **Expiry.** BigQuery ends a session after 24 hours idle or 7 days. A query refused for an expired session runs once more
+  in a new one (the refused job ran nothing), and Messages says its temp tables, variables and any open transaction are
+  gone. Closing an expired session succeeds at once, with `sessionExpired` when a transaction was tracked; a commit
+  answers `SESSION_LOST`, saying nothing was committed.
 
 ### Cost
 

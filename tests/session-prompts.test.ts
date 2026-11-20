@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { needsSessionPrompt, sessionActions, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionTab } from '../src/shared/sessions'
+import { bigQueryCommitTimeout, needsSessionPrompt, quitStoppingNotes, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
 
 const open = (name: string, transactions = 1): SessionTab => ({ name, transactions, running: false })
 const running = (name: string, transactions = 0): SessionTab => ({ name, transactions, running: true })
@@ -28,7 +28,9 @@ describe('session prompts', () => {
   for (const action of sessionActions) {
     it.each(matrix)(`${action}: %s`, (_situation, tabs, expected) => {
       expect(needsSessionPrompt(tabs)).toBe(expected !== undefined)
-      expect(answers(action, tabs)).toEqual(action === 'disconnect' ? expected?.map(answer => answer.replace('and Close=', 'and Disconnect=')) : expected)
+      const labels = action === 'disconnect' ? expected?.map(answer => answer.replace('and Close=', 'and Disconnect='))
+        : action === 'switchLocation' ? expected?.map(answer => answer.replace('and Close=', 'and Switch=').replace('Keep Running=', "Don't Switch=")) : expected
+      expect(answers(action, tabs)).toEqual(labels)
       const prompt = sessionPrompt({ action, tabs })
       if (!prompt) return
       // Escape is Cancel (Keep Running). As in SSMS, Enter commits an open transaction (Yes); with an executing query among
@@ -93,5 +95,43 @@ describe('session prompts', () => {
       { ...valid, tabs: [{ ...unchecked('a.sql'), unchecked: false }] },
       { ...valid, tabs: Array.from({ length: sessionPromptLimits.tabs + 1 }, () => open('a.sql')) }
     ]) expect(sessionPromptRequestSchema.safeParse(invalid).success, JSON.stringify(invalid).slice(0, 120)).toBe(false)
+  })
+  it('gives each provider its own "not checked" causes, and a mixed box both', () => {
+    const detail = (tabs: SessionTab[]) => { const prompt = sessionPrompt({ action: 'close', tabs })!; return `${prompt.message} ${prompt.detail}` }
+    const bigQuery = detail([{ ...unchecked('b.sql'), provider: 'bigquery' }])
+    expect(bigQuery).toContain('For a BigQuery query marked "not checked"')
+    expect(bigQuery).not.toContain('SHOWPLAN')
+    expect(detail([unchecked('a.sql')])).toContain('SHOWPLAN')
+    expect(detail([unchecked('a.sql')])).not.toContain('BigQuery')
+    const mixed = detail([unchecked('a.sql'), { ...unchecked('b.sql'), provider: 'bigquery' }])
+    expect(mixed).toContain('SHOWPLAN')
+    expect(mixed).toContain('For a BigQuery query marked "not checked"')
+  })
+  it('asks before a BigQuery query switches its session to another location (decision 18)', () => {
+    const location = { dataset: 'sales_eu', from: 'US', to: 'EU' }
+    const prompt = sessionPrompt({ action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location })!
+    expect(prompt.title).toBe('Switch this tab to EU?')
+    expect(prompt.message).toContain('sales_eu is in EU')
+    expect(prompt.message).toContain('q.sql is in US')
+    expect(prompt.buttons.map(button => `${button.label}=${button.answer}`)).toEqual(['Switch=proceed', "Don't Switch=cancel"])
+    expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
+    // The request carries the location only for a switch, with one query, which need not have anything open.
+    const valid = { action: 'switchLocation', tabs: [{ name: 'q.sql', transactions: 0, running: false, provider: 'bigquery' }], location }
+    expect(sessionPromptRequestSchema.parse(valid)).toEqual(valid)
+    for (const invalid of [
+      { ...valid, action: 'close' }, { ...valid, tabs: [valid.tabs[0], valid.tabs[0]] }, { ...valid, location: { ...location, dataset: 'a;b' } },
+      { ...valid, location: { ...location, to: 'x'.repeat(65) } }, { ...valid, location: { ...location, extra: 1 } }, { ...valid, tabs: [{ ...valid.tabs[0], provider: 'oracle' }] },
+      { action: 'switchLocation', tabs: valid.tabs }
+    ]) expect(sessionPromptRequestSchema.safeParse(invalid).success, JSON.stringify(invalid).slice(0, 120)).toBe(false)
+    // provider is accepted on any tab the box asks about.
+    expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [{ ...open('a.sql'), provider: 'sqlserver' }] }).success).toBe(true)
+  })
+  it('words every close note, naming the query, and stops quit for the ones that matter', () => {
+    const codes: SessionCloseNoteCode[] = ['commitNotApplied', 'committedBeforeCancel', 'outcomeUnknown', 'abortFailed', 'sessionExpired']
+    for (const code of codes) expect(sessionCloseNoteText('q.sql', { code, message: 'Boom', jobId: 'job_1' })).toMatch(/^q\.sql: /)
+    expect(sessionCloseNoteText('q.sql', { code: 'commitNotApplied', message: 'Boom' })).toContain('(Boom)')
+    expect(sessionCloseNoteText('q.sql', { code: 'outcomeUnknown', jobId: 'job_1' })).toContain('job job_1')
+    expect([...quitStoppingNotes].sort()).toEqual(['abortFailed', 'committedBeforeCancel', 'outcomeUnknown'])
+    expect(bigQueryCommitTimeout).toContain('could not learn whether the commit took effect')
   })
 })

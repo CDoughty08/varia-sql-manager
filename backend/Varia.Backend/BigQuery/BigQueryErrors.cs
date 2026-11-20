@@ -25,6 +25,13 @@ internal static partial class BigQueryErrors
     [GeneratedRegex(@"\b(?:ya29\.|1//)[\w.-]+")]
     private static partial Regex GoogleToken();
 
+    // BigQuery names no reason for a session that is gone (expired or ended), only a message; read here and nowhere else.
+    [GeneratedRegex(@"\bsession\b[^\n]{0,200}?\b(?:expired|has expired|not found|was not found|terminated|is not active|no longer (?:exists|active|valid)|does not exist|was aborted|has ended)", RegexOptions.IgnoreCase)]
+    private static partial Regex SessionGoneText();
+
+    /// <summary>Whether BigQuery's message says a session is gone (docs/bigquery.md, Sessions).</summary>
+    public static bool IsSessionGone(string? message) => message is { Length: > 0 and <= 16384 } && SessionGoneText().IsMatch(message);
+
     public static string Sanitize(string? text) => EntraFailures.Sanitize(GoogleToken().Replace(text ?? "", "<token>"));
 
     /// <summary>

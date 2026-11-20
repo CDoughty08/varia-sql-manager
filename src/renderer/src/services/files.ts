@@ -6,6 +6,7 @@ import type { QueryDocument } from '../documents'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
 import { requireKeptPins, type KeptSession } from './session'
+import { quitStoppingNotes, sessionCloseNoteText, type SessionCloseNote } from '../../../shared/sessions'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
   & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload' | 'keepSession'>>
@@ -36,7 +37,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private checking: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
@@ -287,8 +288,9 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       const plan = await this.queries.confirmSessions('close', [id])
       if (!plan || this.disposed || !this.documents.get(id)) return
       if (this.documents.revision(id) !== approved) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
-      const file = this.documents.get(id)?.file
-      await this.documents.close(id, plan.get(id))
+      const { file, name } = this.documents.get(id)!
+      const note = await this.documents.close(id, plan.get(id))
+      if (note) this.queries.sessionNote?.(id, note, name)
       if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
     })
   }
@@ -310,8 +312,9 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.queries.isRunning(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
-        const file = this.documents.get(id)?.file
-        await this.documents.close(id, plan.get(id))
+        const { file, name } = this.documents.get(id)!
+        const note = await this.documents.close(id, plan.get(id))
+        if (note) this.queries.sessionNote?.(id, note, name)
         if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
       }
       const kept = [running ? (running === 1 ? '1 query is still running and stayed open.' : `${running} queries are still running and stayed open.`) : '', unfinished(unasked, 'open')]
@@ -363,8 +366,20 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       }
       unchanged()
       // Each transaction ends in its own session as the user chose; a commit that fails is reported and the window stays.
-      for (const [id, transaction] of plan) if (this.documents.get(id)) await this.documents.endSession(id, transaction)
+      // A BigQuery commit refused at quit keeps the window (abortOnRefusedCommit false), since a closing app could show no
+      // note; a commit or session end whose note matters stops the quit so it can be read, and quitting again proceeds.
+      const stopping: [string, SessionCloseNote][] = []
+      for (const [id, transaction] of plan) {
+        if (!this.documents.get(id)) continue
+        const note = await this.documents.endSession(id, transaction, { abortOnRefusedCommit: false })
+        if (note && quitStoppingNotes.has(note.code)) stopping.push([id, note])
+        else if (note) this.queries.sessionNote?.(id, note)
+      }
       if (this.disposed) return
+      if (stopping.length) {
+        for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
+        throw new Error(`Varia SQL Manager stayed open so you can read this; close it again to quit. ${stopping.map(([id, note]) => sessionCloseNoteText(this.documents.get(id)?.name ?? 'A query', note)).join(' ')}`)
+      }
       // The editors stay editable while commits wait on SQL Server: an edit made meanwhile was never confirmed.
       unchanged()
       if (kept && keepSession) {

@@ -51,6 +51,7 @@ internal static class BigQueryExecutionChecks
         public readonly ConcurrentQueue<string> InsertedIds = new();
         public readonly ConcurrentQueue<JsonNode> InsertBodies = new();
         public readonly ConcurrentQueue<Uri> Reads = new();
+        public readonly ConcurrentQueue<string> Cancels = new();
         public readonly HashSet<string> Created = [];
         /// <summary>Set when a held getQueryResults arrives: the query is running.</summary>
         public TaskCompletionSource Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,6 +71,10 @@ internal static class BigQueryExecutionChecks
             fake.On("POST", Base + "/jobs", Insert);
             fake.On("GET", Base + "/queries/[^/]+", Results);
             fake.On("GET", Base + "/jobs/[^/]+", Get);
+            // A script's children, listed between polls: these jobs have none.
+            fake.On("GET", Base + "/jobs", new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#jobList\"}"));
+            // Stop's jobs.cancel, best-effort.
+            fake.On("POST", Base + "/jobs/[^/]+/cancel", request => { Cancels.Enqueue(request.Url.Split('/')[^2]); return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}"); });
             return fake;
         }
 
@@ -174,6 +179,7 @@ internal static class BigQueryExecutionChecks
             Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             Service.BigQuery.PollMs = 50;
+            Service.BigQuery.ChildPollMs = 50;
         }
 
         public async Task ConnectAsync(Action<JsonObject>? change = null)
@@ -798,8 +804,10 @@ internal static class BigQueryExecutionChecks
         var (code, value, _) = await running.WaitAsync(TimeSpan.FromSeconds(30));
         var result = value as QueryResult;
         check(busy.Code == "SESSION_BUSY" && stop.Code == "ok" && code == "ok" && result is { Status: "cancelled", Error.Code: "CANCELLED" }
-            && Says(result, "The script was cancelled.") && Says(result, "keeps running in BigQuery until it finishes; its id is varia-emulator:" + jobs.InsertedIds.Single()),
-            $"a tab runs one query at a time, and Stop ends the request, saying the job runs on in BigQuery: {busy.Code} {code} {result?.Status} {Texts(result?.Messages ?? [])}");
+            && Says(result, "The script was cancelled.") && Says(result, "Varia asked BigQuery to cancel job varia-emulator:" + jobs.InsertedIds.Single() + ". Cancelling is best-effort"),
+            $"a tab runs one query at a time, and Stop ends the request, saying Varia asked BigQuery to cancel the job: {busy.Code} {code} {result?.Status} {Texts(result?.Messages ?? [])}");
+        var cancelled = await BigQuerySessionChecks.Poll(() => jobs.Cancels.Contains(jobs.InsertedIds.Single()));
+        check(cancelled, "Stop sends jobs.cancel for the running job");
         jobs.Hang = false;
         var again = await harness.Execute("SELECT 1", next => next["sessionId"] = args["sessionId"]!.GetValue<string>());
         check(again is { Code: "ok", Result.Status: "completed" }, $"the tab runs again once its query ended: {again.Code} {again.Result?.Status}");
@@ -816,7 +824,7 @@ internal static class BigQueryExecutionChecks
         await Task.WhenAny(jobs.Polling.Task, reading).WaitAsync(TimeSpan.FromSeconds(30));
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = paging["queryId"]!.GetValue<string>() });
         var stopped = (await reading.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
-        check(stopped is { Status: "cancelled" } && !Says(stopped, "keeps running") && stopped.ResultSets.Single() is { RowsStored: 1, Incomplete: true },
+        check(stopped is { Status: "cancelled" } && !Says(stopped, "cancel job") && stopped.ResultSets.Single() is { RowsStored: 1, Incomplete: true },
             $"Stop after the job finished keeps the rows read and does not say the job runs on: {stopped?.Status} {Texts(stopped?.Messages ?? [])}");
         jobs.HangPages = false;
         jobs.Hang = true;

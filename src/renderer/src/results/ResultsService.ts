@@ -317,6 +317,8 @@ export interface TabResults {
   /** The run was made with Discard results after execution on: its sets were read and none kept (plans are), so the
    *  Results view says so in place of grids, whatever the setting is now. */
   readonly discard?: true
+  /** A view made only to show Messages lines written outside any execution (`addMessage`): no run summary is drawn. */
+  readonly messagesOnly?: true
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -422,6 +424,9 @@ interface Run {
   /** Its last entry was closed by `removeEntry`. */
   emptied: boolean
   readonly discard: boolean
+  /** Lines written outside the execution (`addMessage`), after its own; the summary does not replace them. */
+  notes: MessageEntry[]
+  messagesOnly?: true
 }
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
@@ -583,12 +588,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: []
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
         if (this.runs.get(tabId) === run && run.status === 'running') onSession?.(event)
-      } else this.event(tabId, run, event)
+      } else if (event.type !== 'query.job') this.event(tabId, run, event)
     })
     this.runs.set(tabId, run)
     this.publishNow(tabId)
@@ -694,6 +699,31 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const next = { ...this.getSnapshot() }
     delete next[tabId]
     this.publish(next)
+  }
+
+  /**
+   * Appends a line to the tab's Messages outside any execution (QueryService.addSessionMessage: a session close's note, a
+   * refused close): after the run's own lines, which a running run's summary does not replace; a tab with no run gets a
+   * messages-only view. The strip opens for an error line, as for a run's.
+   */
+  addMessage(tabId: string, text: string, kind: 'info' | 'error' = 'info'): void {
+    if (this.disposed) return
+    const entry: MessageEntry = { text: text.slice(0, wire.messages.characters), kind }
+    let run = this.runs.get(tabId)
+    if (!run) {
+      this.begin(tabId, crypto.randomUUID())
+      run = this.runs.get(tabId)
+      if (!run) return
+      run.subscription?.dispose()
+      run.subscription = undefined
+      run.status = 'completed'
+      run.endedAt = run.startedAt
+      run.messagesOnly = true
+    }
+    run.notes = [...run.notes, entry].slice(-resultLimits.messages)
+    if (!run.manualView && !run.sets.length) run.view = 'messages'
+    this.openStripFor(run, [entry])
+    this.publishNow(tabId)
   }
 
   /** Close Results: the memory is freed now; Messages stay. Not for a bare run (Peek's rows go with their card or tab). */
@@ -2026,11 +2056,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return {
       ...this.shapeOf(run), ...focused !== undefined && run.entries.has(focused) ? { focused } : {}, ...run.bare ? { bare: true as const } : {},
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, planSets: run.planSets,
-      messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
+      messages: run.notices.length || run.notes.length ? [...run.notices, ...run.messages, ...run.notes] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {}
+      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {},
+      ...run.messagesOnly ? { messagesOnly: true as const } : {}
     }
   }
 

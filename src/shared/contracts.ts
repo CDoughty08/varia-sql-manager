@@ -24,7 +24,7 @@ import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest,
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
-import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { ProductLink } from './product'
@@ -177,6 +177,8 @@ export interface QueryOptions {
   maxRows: number
   timeoutSeconds: number
   startLine?: number
+  /** A BigQuery selection's first column on `startLine`, so BigQuery's [line:column] error positions map back to the editor. */
+  startColumn?: number
   /** Result sets kept per script, 1..1000 (default 10); later ones are counted, not stored. */
   maxResultSets?: number
   /** Stop at the first batch that raises an error (SQLCMD's `:on error exit`). By default the next GO batch still runs, as in SSMS. */
@@ -330,6 +332,10 @@ export type QueryEvent =
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
   | { type: 'messages'; messages: MessageEntry[] }
+  | QueryJobEvent
+/** A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): its id, project and location, whether
+ *  it is auxiliary, and the session's tracked transaction as the job started. Never the session id. Essential. */
+export interface QueryJobEvent { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown' }
 /** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. */
 export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number }
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
@@ -583,8 +589,10 @@ export interface RpcMethods {
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
-  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open. */
-  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
+  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open.
+   *  `abortOnRefusedCommit` (default true) lets a BigQuery commit refused on an unchecked session end the session anyway;
+   *  the result's `note` says what became of a BigQuery commit or of the session's end. */
+  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd; abortOnRefusedCommit?: boolean }; result: SessionCloseResult }
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   /** The results whose grids are shown in any window now: the whole set each time, replacing the last (an advisory hint for
@@ -902,8 +910,8 @@ export interface VariaApi {
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
-   *  the session open, with its transaction. */
-  closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
+   *  the session open, with its transaction. The result's `note` says what became of a BigQuery commit or session end. */
+  closeQuerySession(sessionId: string, options?: SessionCloseOptions): Promise<ApiResult<SessionCloseResult>>
   /** Reads an idle query session's open transaction before it ends. A busy, lost or unknown session is an error value. */
   querySessionState(sessionId: string): Promise<ApiResult<SessionState>>
   /** Tells the backend which results' grids are shown in any window (the whole set, replacing the last). */

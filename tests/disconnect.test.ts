@@ -25,7 +25,7 @@ function fixture() {
     validateClose: vi.fn<DisconnectHost['validateClose']>(),
     prepareSessions: vi.fn<DisconnectHost['prepareSessions']>(async () => { order.push('sessions'); return plan }),
     cancelSessions: vi.fn<DisconnectHost['cancelSessions']>(async () => { order.push('cancel') }),
-    endSession: vi.fn<DisconnectHost['endSession']>(async () => { order.push('transaction') }),
+    endSession: vi.fn<DisconnectHost['endSession']>(async () => { order.push('transaction'); return undefined }),
     disconnect: vi.fn<DisconnectHost['disconnect']>(async () => { order.push('disconnect') }),
     detached: vi.fn<DisconnectHost['detached']>(() => { order.push('detach'); state.docs = state.docs.map(doc => doc.targetId === id(1) ? { ...doc, connectionId: undefined } : doc) }),
     closeQueries: vi.fn<DisconnectHost['closeQueries']>(() => { order.push('close'); state.docs = state.docs.filter(doc => !doc.query) })
@@ -41,6 +41,21 @@ describe('server disconnect coordinator', () => {
     expect(f.host.prepareClose).toHaveBeenCalledWith(['query-1', 'query-2'])
     expect(f.state.docs).toEqual([expect.objectContaining({ id: 'designer', targetId: id(1), database: 'Sales', dirty: true, connectionId: undefined })])
     expect(f.targets.get(id(1))).toMatchObject({ inExplorer: true, resumeWanted: false, lifecycle: { state: 'disconnected' } })
+  })
+  it('shows each BigQuery close note after the disconnect, naming its query, even once the tabs closed', async () => {
+    const f = fixture(), sessionNote = vi.fn<NonNullable<DisconnectHost['sessionNote']>>()
+    Object.assign(f.host, { sessionNote })
+    f.host.endSession.mockResolvedValueOnce({ code: 'outcomeUnknown', jobId: 'job_9' })
+    f.host.disconnect.mockImplementationOnce(async () => { expect(sessionNote).not.toHaveBeenCalled() })
+    expect(await f.coordinator.disconnect(id(1))).toMatchObject({ status: 'disconnected' })
+    expect(sessionNote).toHaveBeenCalledExactlyOnceWith('query-1', { code: 'outcomeUnknown', jobId: 'job_9' }, 'dirty.sql')
+    // A failed disconnect still shows the notes of the sessions that already ended.
+    const g = fixture(), failed = vi.fn<NonNullable<DisconnectHost['sessionNote']>>()
+    Object.assign(g.host, { sessionNote: failed })
+    g.host.endSession.mockResolvedValueOnce({ code: 'abortFailed', message: 'Denied' })
+    g.host.disconnect.mockRejectedValueOnce(new Error('Teardown failed.'))
+    expect(await g.coordinator.disconnect(id(1))).toMatchObject({ status: 'failed' })
+    expect(failed).toHaveBeenCalledExactlyOnceWith('query-1', { code: 'abortFailed', message: 'Denied' }, 'dirty.sql')
   })
   it('keeps tabs and databases without asking to save drafts or releasing output', async () => {
     const f = fixture(), before = f.state.docs

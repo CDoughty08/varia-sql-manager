@@ -95,15 +95,61 @@ internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Htt
 }
 
 /// <summary>One BigQuery connection handle: its options (without credential material), client, pinned principal and the
-/// default location (the options', or the default dataset's).</summary>
+/// default location (the options', or the default dataset's). Work that must outlive a Disconnect (a pending session
+/// abort, a Stop's jobs.cancel) leases the client; it is disposed once the handle is closed and no lease is left.</summary>
 internal sealed class BigQueryConnection(string id, BigQueryConnectOptions options, BigQueryClient client, BigQueryPrincipal principal, string? location) : IDisposable
 {
+    private readonly Lock gate = new();
+    private int leases;
+    private bool closed, disposed;
     public string Id { get; } = id;
     public BigQueryConnectOptions Options { get; } = options;
     public BigQueryClient Client { get; } = client;
     public BigQueryPrincipal Principal { get; } = principal;
     public string? Location { get; } = location;
-    public void Dispose() => Client.Dispose();
+    /// <summary>Datasets' locations read for tabs whose dataset is not the connection's (datasets.get, free); null when
+    /// BigQuery named none or the read failed.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, string?> DatasetLocations { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Keeps the client open past a Disconnect until the lease is disposed; null once the client is disposed.</summary>
+    public IDisposable? Lease()
+    {
+        lock (gate)
+        {
+            if (disposed) return null;
+            leases++;
+            return new Release(this);
+        }
+    }
+
+    sealed class Release(BigQueryConnection connection) : IDisposable
+    {
+        private int done;
+        public void Dispose() { if (Interlocked.Exchange(ref done, 1) == 0) connection.Return(); }
+    }
+
+    void Return()
+    {
+        lock (gate)
+        {
+            leases--;
+            if (!closed || leases > 0 || disposed) return;
+            disposed = true;
+        }
+        Client.Dispose();
+    }
+
+    /// <summary>Closes the handle: the client is disposed now, or when the last lease ends.</summary>
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            closed = true;
+            if (leases > 0 || disposed) return;
+            disposed = true;
+        }
+        Client.Dispose();
+    }
 }
 
 /// <summary>A dry run's estimate; emulator mode fakes it (the emulator does not dry-run).</summary>
@@ -177,6 +223,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
     public bool Disconnect(string connectionId)
     {
         if (!connections.TryRemove(connectionId, out var connection)) return false;
+        ForgetSessions(connection);
         connection.Dispose();
         return true;
     }
@@ -323,6 +370,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     public void Dispose()
     {
+        // A pending abort ends with the backend: its session is left to expire (docs/bigquery.md, Sessions).
+        stopping.Cancel();
         foreach (var id in connections.Keys) Disconnect(id);
     }
 }

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult } from '../src/shared/contracts'
 import { connectionInfo, connectionOptions, queryOutput, workbenchFixture } from './fixtures/workbench'
-import { deferred } from './fixtures/documents'
+import { deferred, documentFixture } from './fixtures/documents'
+import { TargetService } from '../src/renderer/src/services/targets'
+import type { QueryService } from '../src/renderer/src/services/queries'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -141,7 +143,7 @@ describe('query targets', () => {
     expect(documents.get(tab.id)?.connectionId).toBe('server-a')
     expect(await queries.transactionState(tab.id)).toEqual({ transactions: 1 })
     await targets.changeConnection(tab.id, 'server-b')
-    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'commit'], [tab.id, 'commit']])
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, { transaction: 'commit' }], [tab.id, { transaction: 'commit' }]])
     expect(documents.get(tab.id)?.connectionId).toBe('server-b')
     expect(queries.getSnapshot()[tab.id]?.session).toBeUndefined()
   })
@@ -168,7 +170,7 @@ describe('query targets', () => {
     })
     await targets.disconnectAll()
     expect(api.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'disconnectAll', tabs: [{ name: 'query.sql', transactions: 1, running: false }] })
-    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'commit']])
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, { transaction: 'commit' }]])
     expect(documents.get(busy.id)?.connectionId).toBe('server-a')
     expect(api.querySessionState.mock.calls.map(([id]) => id)).toEqual([tab.id, busy.id])
   })
@@ -201,9 +203,64 @@ describe('query targets', () => {
     expect(api.closeQuerySession).not.toHaveBeenCalled()
     api.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'rollback' })
     await targets.disconnectAll()
-    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, 'rollback'], [idle.id]])
+    expect(api.closeQuerySession.mock.calls).toEqual([[tab.id, { transaction: 'rollback' }], [idle.id]])
     expect(documents.getSnapshot().documents.map(document => document.connectionId)).toEqual([undefined, undefined, 'server-a'])
     expect(documents.get(busy.id)?.connectionId).toBe('server-a')
     await running.finish()
+  })
+})
+
+describe('BigQuery location switch (decision 18)', () => {
+  function bigQueryFixture(sessionLocation: string | undefined) {
+    const docs = documentFixture()
+    const queries = {
+      isRunning: vi.fn(() => false), mayHaveTransaction: vi.fn(async () => false),
+      confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map([['x', 'commit' as const]])),
+      sessionEnded: vi.fn(), sessionNote: vi.fn<QueryService['sessionNote']>(), sessionLocation: vi.fn(() => sessionLocation),
+      confirmLocationSwitch: vi.fn<QueryService['confirmLocationSwitch']>(async () => true)
+    }
+    const files = { clearError: vi.fn(), reportError: vi.fn() }
+    const connection = { id: 'bq', server: 'demo', database: '', serverVersion: '', commandTimeout: 0, generation: 1, providerId: 'bigquery' }
+    const locations: Record<string, string> = { sales_us: 'US', sales_eu: 'EU' }
+    const targets = new TargetService(docs.documents, queries, { get: () => connection as never }, files, undefined, (_id, dataset) => locations[dataset])
+    const tab = docs.documents.create('q.sql', 'SELECT 1', 'sales_us', 'bq')
+    queries.confirmSessions.mockImplementation(async () => new Map([[tab.id, 'commit' as const]]))
+    return { ...docs, queries, files, targets, tab }
+  }
+  it('asks before a dataset in another location ends the session, then ends it as answered and shows its note', async () => {
+    const f = bigQueryFixture('US')
+    f.api.closeQuerySession.mockResolvedValueOnce({ ok: true, value: { closed: true, note: { code: 'sessionExpired' } } })
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    await vi.waitFor(() => expect(f.documents.get(f.tab.id)?.database).toBe('sales_eu'))
+    expect(f.queries.confirmLocationSwitch).toHaveBeenCalledExactlyOnceWith(f.tab.id, { dataset: 'sales_eu', from: 'US', to: 'EU' })
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('switchLocation', [f.tab.id])
+    expect(f.api.closeQuerySession).toHaveBeenCalledExactlyOnceWith(f.tab.id, { transaction: 'commit' })
+    expect(f.queries.sessionNote).toHaveBeenCalledExactlyOnceWith(f.tab.id, { code: 'sessionExpired' })
+  })
+  it("keeps the dataset and session on Don't Switch, and asks nothing in the same location or with no session", async () => {
+    const f = bigQueryFixture('US')
+    f.queries.confirmLocationSwitch.mockResolvedValueOnce(false)
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    await vi.waitFor(() => expect(f.queries.confirmLocationSwitch).toHaveBeenCalled())
+    await vi.waitFor(() => expect(f.documents.getSnapshot().busy).toBe(false))
+    expect(f.documents.get(f.tab.id)?.database).toBe('sales_us')
+    expect(f.api.closeQuerySession).not.toHaveBeenCalled()
+    // Locations compare without case (BigQuery names US and us alike).
+    const same = bigQueryFixture('us')
+    same.documents.update(same.tab.id, { database: 'other' })
+    same.targets.changeDatabase(same.tab.id, 'sales_us')
+    expect(same.documents.get(same.tab.id)?.database).toBe('sales_us')
+    expect(same.queries.confirmLocationSwitch).not.toHaveBeenCalled()
+    const none = bigQueryFixture(undefined)
+    none.targets.changeDatabase(none.tab.id, 'sales_eu')
+    expect(none.documents.get(none.tab.id)?.database).toBe('sales_eu')
+    expect(none.queries.confirmLocationSwitch).not.toHaveBeenCalled()
+  })
+  it('keeps the dataset when a commit at the switch is refused', async () => {
+    const f = bigQueryFixture('US')
+    f.api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'The transaction was not committed, and the query stays open.', code: 'JOB_RUNNING' })
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    await vi.waitFor(() => expect(f.files.reportError).toHaveBeenCalledWith('The transaction was not committed, and the query stays open.'))
+    expect(f.documents.get(f.tab.id)?.database).toBe('sales_us')
   })
 })

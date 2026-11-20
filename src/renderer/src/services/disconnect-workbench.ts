@@ -12,7 +12,7 @@ import type { QueryService } from './queries'
 export interface DisconnectWorkbenchOptions {
   readonly connectionTargets: ConnectionTargetService
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'revision' | 'runTask' | 'connectionBusy' | 'endSession'>
-  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions'>
+  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions' | 'sessionNote'>
   readonly files: Pick<FileService, 'prepareQueryClose' | 'validateQueryClose'>
   readonly longRuns: Pick<LongRunService, 'disconnectRefusal'>
   readonly prompts: DisconnectPromptService
@@ -42,6 +42,7 @@ export function createDisconnectCoordinator(options: DisconnectWorkbenchOptions)
     prepareSessions: ids => queries.prepareSessions('disconnect', ids),
     cancelSessions: plan => queries.cancelPreparedSessions(plan),
     endSession: (id, transaction) => documents.endSession(id, transaction),
+    sessionNote: (id, note, name) => queries.sessionNote(id, note, name),
     disconnect: async handle => {
       const response = await api.disconnect(handle.id)
       if (!response.ok) throw new Error(response.error)

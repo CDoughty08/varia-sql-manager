@@ -191,8 +191,22 @@ export const queryEventSchema = z.discriminatedUnion('type', [
     type: z.literal('progress'), completedBatches: count, totalBatches: count, batchNumber: count, iteration: count,
     results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncated: truncationSchema.optional() }).strict()).max(64)
   }).strict(),
-  z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict()
+  z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict(),
+  // A BigQuery request's top-level job (QueryJobEvent): the job reference's bounds are the connection model's.
+  z.object({
+    type: z.literal('query.job'), jobId: z.string().min(1).max(1024), project: z.string().min(1).max(128), location: z.string().min(1).max(64).optional(),
+    state: z.enum(['running', 'done']), auxiliary: z.boolean(), transaction: z.enum(['none', 'open', 'unknown'])
+  }).strict()
 ])
+/** query.session.close's answer (SessionCloseResult in C#): a BigQuery close's note carries BigQuery's message (cut at 2,000
+ *  characters) or the job it names. */
+export const sessionCloseResultSchema = z.object({
+  closed: z.boolean(),
+  note: z.object({
+    code: z.enum(['commitNotApplied', 'committedBeforeCancel', 'outcomeUnknown', 'abortFailed', 'sessionExpired']),
+    message: z.string().max(2001).optional(), jobId: z.string().min(1).max(1024).optional()
+  }).strict().optional()
+}).strict()
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
   clientStatistics: clientStatisticsSchema.optional(),

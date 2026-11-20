@@ -2827,6 +2827,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private async Task<SessionState> SessionStateAsync(SessionStateArgs args, CancellationToken token)
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
+        // A BigQuery tab's transaction is tracked, not read: nothing is sent to BigQuery.
+        if (bigQuery.OwnsSession(args.SessionId)) return bigQuery.State(args.SessionId);
         if (!sessions.TryGetValue(args.SessionId, out var session)) throw new RequestException("SESSION_CLOSED", "This query has no open SQL session.");
         if (!session.TryEnter()) throw new RequestException("SESSION_BUSY", "A query is running in this tab.");
         try
@@ -2891,6 +2893,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (!Guid.TryParse(args.SessionId, out _)) throw new RequestException("INVALID_PARAMS", "A valid session ID is required.");
         if (args.Transaction is not (null or "commit" or "rollback")) throw new RequestException("INVALID_PARAMS", "A transaction ends by commit or rollback.");
+        if (bigQuery.OwnsSession(args.SessionId))
+        {
+            // A plain close stops the tab's running query (Stop), then waits for its job before ending the session.
+            return await bigQuery.CloseSessionAsync(args.SessionId, args.Transaction, args.AbortOnRefusedCommit ?? true, token);
+        }
         // A rollback is the close itself: SQL Server rolls back what a closed session left open, on its own time. An explicit
         // ROLLBACK would hold this request until the rollback finished, since an attention waits for it too.
         if (args.Transaction == "commit" && sessions.TryGetValue(args.SessionId, out var open)) await CommitAsync(args.SessionId, open, token);
@@ -2970,7 +2977,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var removed = sessions.TryRemove(sessionId, out var session);
         session?.Close();
         // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
-        return new { Closed = removed };
+        return new SessionCloseResult(removed);
     }
 
     private async Task OpenSessionAsync(QuerySession session, CancellationToken token)
