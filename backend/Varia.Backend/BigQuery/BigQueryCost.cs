@@ -62,16 +62,17 @@ internal static class BigQueryCost
 
     /// <summary>The Messages line every finished job gets: bytes processed and billed with their price, slot time and cache
     /// hit, each only when BigQuery reported it, and that the price is an on-demand estimate. Null when it reported none of
-    /// them (the emulator).</summary>
-    public static string? Summary(BigQueryJobSummary job)
+    /// them (the emulator). Without prices (Show cost as Bytes only) the figures stand alone.</summary>
+    public static string? Summary(BigQueryJobSummary job, bool prices = true)
     {
         var parts = new List<string>();
-        if (job.BytesProcessed is { } processed) parts.Add("Bytes processed: " + Priced(processed));
-        if (job.BytesBilled is { } billed) parts.Add("Bytes billed: " + Priced(billed));
+        string Figure(long bytes) => prices ? Priced(bytes) : Bytes(bytes);
+        if (job.BytesProcessed is { } processed) parts.Add("Bytes processed: " + Figure(processed));
+        if (job.BytesBilled is { } billed) parts.Add("Bytes billed: " + Figure(billed));
         if (job.SlotMs is { } slots) parts.Add("Slot time: " + SlotTime(slots));
         if (job.CacheHit is { } hit) parts.Add("Cache hit: " + (hit ? "yes" : "no"));
         if (parts.Count == 0) return null;
-        var priced = job.BytesProcessed is not null || job.BytesBilled is not null;
+        var priced = prices && (job.BytesProcessed is not null || job.BytesBilled is not null);
         return string.Join(" · ", parts) + (priced ? " · Prices are on-demand estimates at $" + DollarsPerTiB.ToString("0.00", CultureInfo.InvariantCulture) + " per TiB." : "");
     }
 }

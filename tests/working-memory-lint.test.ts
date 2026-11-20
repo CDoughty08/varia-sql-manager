@@ -33,8 +33,8 @@ const expected: Record<string, Partial<Record<keyof typeof reservations, number>
   ProfileAsync: { work: 1, spare: 1, steps: 1, handed: 1 },
   DistinctAsync: { work: 1, spare: 1 },
   IdentifyAsync: { work: 1 },
-  // The alignment (work) and the differing cells (steps).
-  DiffAsync: { work: 1, steps: 1, handed: 1 },
+  // The alignment and the change index (work; the index's refusal is DiffChecks' IndexCharge), and the differing cells (steps).
+  DiffAsync: { work: 2, steps: 1, handed: 1 },
   // The groups (work), the figures (steps) and the collated keys (spare).
   PivotAsync: { work: 1, spare: 1, steps: 1, handed: 1 }
 }

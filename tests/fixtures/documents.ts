@@ -102,6 +102,7 @@ export class TestModel {
   redo(): void { if (this.index < this.history.length - 1) { this.index++; this.version++; this.emit() } }
   private emit(): void { this.listeners.forEach(listener => listener()) }
   dispose(): void { this.disposed = true; this.listeners.clear() }
+  isDisposed(): boolean { return this.disposed }
   asModel(): editor.ITextModel { return this as unknown as editor.ITextModel }
 }
 

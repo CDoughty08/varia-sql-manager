@@ -498,9 +498,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
+  // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).
+  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true }
   const workbench = {
     sqlLanguage,
     sqlDiagnostics,
+    bigQueryCost,
     platform,
     commands,
     context,
@@ -657,6 +660,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   return {
     ...doc,
     sqlLanguage,
+    bigQueryCost,
     api,
     connections,
     backend,

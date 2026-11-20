@@ -10,9 +10,10 @@ import { withKey } from './query-context'
  * ending, the file's encoding (what a new query will be saved in), and Read-only. Shown while a document is open.
  */
 export default function EditorStatus() {
-  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics } = useWorkbench()
+  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics, bigQueryCost } = useWorkbench()
   useServiceSnapshot(sqlLanguage)
   useServiceSnapshot(sqlDiagnostics)
+  useServiceSnapshot(bigQueryCost)
   const canGoToLine = useCommandEnabled('edit.goToLine'), canToggleMode = useCommandEnabled('editor.toggleOvertype')
   const goToLineKey = useKeybindingLabel('edit.goToLine')
   const caret = useServiceSnapshot(editorStatus)
@@ -24,7 +25,8 @@ export default function EditorStatus() {
   const file = active.file
   const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
   const language = isQueryDocument(active) ? sqlLanguage.availability(active.id) : undefined
-  const issues = isQueryDocument(active) ? sqlDiagnostics.status(active.id) : undefined
+  // A BigQuery tab's issues come from its dry runs; SQL Server's from SQL analysis.
+  const issues = isQueryDocument(active) ? bigQueryCost.status(active.id) ?? sqlDiagnostics.status(active.id) : undefined
   return <span className="editor-status">
     <button type="button" className="editor-status-position editor-status-action" disabled={!canGoToLine} title={withKey('Go to line', goToLineKey)} aria-label={`Line ${caret.line}, column ${caret.column}, character ${caret.character}`}
       onClick={() => void commands.execute('edit.goToLine', undefined, 'toolbar')}><span>Ln {caret.line}</span><span>Col {caret.column}</span><span>Ch {caret.character}</span></button>

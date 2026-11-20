@@ -16,6 +16,7 @@ import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
 import ServerFilePicker from './server-files/ServerFilePicker'
+import BigQueryCostPrompt from './BigQueryCostPrompt'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -225,6 +226,8 @@ export default function App() {
     while (documents.getSnapshot().busy) if (!await whenConnectionDocumentsIdle(documents, signal)) { opened.association?.abandon(true); return }
     if (signal.aborted) { opened.association?.abandon(true); return }
     setOptions(chosen)
+    // A choice Advanced Properties named: Execute and the chip follow it now (for the session if it could not be saved).
+    workbench.bigQueryCost.connectedWith(chosen, !info.historyWarning)
     setExplorerError(info.historyWarning ?? '')
     // Labels the user changed in Connect are their choice already, and only those reach a reused connection: its other
     // labels (a connection-only environment, say) stay. Without such a change, labels that differ still ask.
@@ -328,6 +331,7 @@ export default function App() {
     <DependenciesDialog />
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
+    <BigQueryCostPrompt />
     {recoveryOpen && <RecoveryDialog />}
     {showAbout > 0 && <AboutDialog raise={showAbout} onClose={() => setShowAbout(0)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />

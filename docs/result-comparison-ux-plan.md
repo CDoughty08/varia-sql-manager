@@ -143,7 +143,7 @@ reservation is refused, the whole diff is refused (whole or refused, as the rows
   in both layouts except where a cut differs between them. Soft (collation-only) cells are not change units, matching
   the soft notice and `columnChanges.soft`.
 - When a view of a diff is built, a running total per 4,096 view positions is built with it from the view's `Order`
-  (O(view rows), 4 bytes a block, charged with the view), so view-order seek and counts need no scan.
+  (O(view rows), 8 bytes a block, charged with the view), so view-order seek and counts need no scan.
 - It serves the `kind` filter, seek, partner lookup and `overview` without reading tone text. Bounds in ipc.md § Limits and
   `limits.diff` (src/shared/ipc/wire/protocol.ts and C#).
 
@@ -537,7 +537,7 @@ checks in `ViewSorter`/`KindOf`, `ResultTextWriter`, `RowIdentity`, `HighlightsS
   comparison's commands, context keys, menu entries and settings are engine-neutral and declare both engines, as BQ-0's
   lint asks for neutral entries.
 - **BQ-3c-1's remote-result refusal.** Every page reader refuses a remote result with `REMOTE_RESULT`. `results.diffSeek`
-  and the change index are new readers: whichever of PR 5 and BQ-3c-1 merges second adds the case, and
+  and the change index are new readers (PR 5 has landed, so BQ-3c-1 adds the case), and
   `tests/result-page-access.test.ts` covers it. BigQuery already disables Compare on a windowed result, so a diff's
   inputs are always in memory.
 - **PR 6 before BQ-3c-1 starts.** PR 6 changes `ResultStore`'s limit readers (`store.Allow`, `QueryLimit`); BQ-3c-1

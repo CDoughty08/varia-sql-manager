@@ -9,7 +9,7 @@ namespace Varia.Backend.BigQuery;
 /// </summary>
 internal sealed record BigQueryConnectOptions(string Provider, string Project, string Authentication,
     string? Location = null, string? Dataset = null, IReadOnlyList<string>? ExtraProjects = null, string? KeyFile = null,
-    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, string? DisplayName = null, string? Color = null,
+    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, bool? CostPrompt = null, string? DisplayName = null, string? Color = null,
     string? Environment = null, bool NonInteractive = false, BigQueryCredentialMaterial? Credential = null);
 
 /// <summary>
@@ -118,3 +118,11 @@ internal static partial class BigQueryLimits
 /// </summary>
 internal sealed record BigQueryJobSummary(string Project, string JobId, string? Location = null, string? StatementType = null, long? BytesProcessed = null,
     long? BytesBilled = null, bool? CacheHit = null, long? SlotMs = null);
+
+/// <summary>bigquery.dryRun's parameters (src/shared/bigquery/dry-run.ts): a connected handle, GoogleSQL text (the editor's,
+/// or the text Execute is about to run) and the tab's default dataset.</summary>
+internal sealed record BigQueryDryRunArgs(string ConnectionId, string Sql, string? Dataset = null);
+
+/// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
+/// whether emulator mode faked it. A refused query is an error value (SQL_ERROR with BigQuery's <c>[line:column]</c>).</summary>
+internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incomplete = null, string? StatementType = null, bool Faked = false);

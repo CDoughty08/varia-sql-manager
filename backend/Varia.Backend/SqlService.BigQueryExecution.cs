@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Google;
 using Google.Apis.Bigquery.v2.Data;
 using Varia.Backend.BigQuery;
@@ -30,9 +29,6 @@ internal sealed partial class SqlService
 
     internal int BigQueryPageRows(int columns) => Math.Clamp(BigQueryPageCells / Math.Max(1, columns), BigQueryFirstPageRows, bigQuery.PageRows);
 
-    [GeneratedRegex(@"Dataset (?<project>[^\s:]+):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
-    private static partial Regex DatasetLocationMessage();
-
     private async Task<QueryResult> ExecuteBigQueryAsync(QueryArgs args, BigQueryConnection connection, RequestContext? context)
     {
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
@@ -45,6 +41,9 @@ internal sealed partial class SqlService
         if (dataset is not null && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (BigQueryErrors.IsLegacySql(args.Sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+        if (args.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed is outside its supported range.");
+        // The connection's own cap (Advanced Properties) wins over Tools › Options' default.
+        var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
 
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -101,7 +100,7 @@ internal sealed partial class SqlService
                     {
                         Query = args.Sql, UseLegacySql = false,
                         DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
-                        MaximumBytesBilled = connection.Options.MaximumBytesBilled
+                        MaximumBytesBilled = cap
                     }
                 }
             };
@@ -178,7 +177,7 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = await BigQueryFailureAsync(error, connection, created, CancellationToken.None);
+                var mapped = await BigQueryFailureAsync(error, connection, created, cap, args.Prices != false, CancellationToken.None);
                 // A job BigQuery stopped (its timeout, or a cancel from elsewhere) ended as one Varia stopped would.
                 status = error is BigQueryJobException && mapped.Code is "TIMEOUT" or "CANCELLED" ? (mapped.Code == "TIMEOUT" ? "timedOut" : "cancelled") : "failed";
                 messages.Add(mapped.Message, MessageKind.Error);
@@ -198,7 +197,7 @@ internal sealed partial class SqlService
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
         }
-        if (summary is not null && BigQueryCost.Summary(summary) is { } cost) messages.Add(cost);
+        if (summary is not null && BigQueryCost.Summary(summary, args.Prices != false) is { } cost) messages.Add(cost);
         var output = messages.Snapshot();
         void Note(string text) => output.Add(new(text, QueryMessages.Info));
         var descriptors = sets.Select(set => set.Describe()).ToList();
@@ -312,25 +311,12 @@ internal sealed partial class SqlService
 
     /// <summary>The error value for a failed execution: the job's own error, or the failed call's, with a location mismatch
     /// told apart from a missing dataset by asking where the dataset is (datasets.get, free).</summary>
-    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, CancellationToken token)
+    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, bool prices, CancellationToken token)
     {
         var project = connection.Options.Project;
-        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, connection.Options.MaximumBytesBilled)
-            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: connection.Options.MaximumBytesBilled, token: token) as RequestException
+        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap, prices)
+            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: cap, token: token, prices: prices) as RequestException
             ?? new RequestException("BACKEND_ERROR", "Execution stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
-        if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
-        string? actual;
-        try
-        {
-            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var found = await connection.Client.Service.Datasets.Get(match.Groups["project"].Value, match.Groups["dataset"].Value).ExecuteAsync(limit.Token);
-            actual = found.Location;
-        }
-        // Any failure here (a refused token, a disposed client) leaves the query's own error as it was.
-        catch (Exception) { return mapped; }
-        var ran = match.Groups["location"].Value;
-        if (actual is not { Length: > 0 and <= BigQueryLimits.Location } || !BigQueryLimits.LocationId().IsMatch(actual) || string.Equals(actual, ran, StringComparison.OrdinalIgnoreCase)) return mapped;
-        return new RequestException("LOCATION_MISMATCH", "Dataset " + match.Groups["dataset"].Value + " is in location " + actual + ", but the query ran in " + ran
-            + ". A query runs in one location: query datasets in " + ran + ", or connect with the location set to " + actual + ".");
+        return await BigQueryErrors.LocationAsync(mapped, connection.Client);
     }
 }

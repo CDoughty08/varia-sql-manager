@@ -34,6 +34,8 @@ describe('column filter', () => {
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 2)).toBe('between')
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 1)).toBeUndefined()
     expect(columnFilterKind({ op: 'duplicates', columns: [2] }, 2)).toBeUndefined()
+    // A comparison's kind filter names no column either.
+    expect([0, 2].map(column => columnFilterKind({ op: 'kind', kinds: ['added'] }, column))).toEqual([undefined, undefined])
     // Keep Selected Rows names no column: it is no column's filter, and never the not-NULL one.
     for (const kept of [{ op: 'keepRows' as const, rows: [2] }, { op: 'keepRows' as const, cells: { ranges: [[2, 1]] as [number, number][] } }]) {
       expect([0, 2].map(column => columnFilterKind(kept, column))).toEqual([undefined, undefined])

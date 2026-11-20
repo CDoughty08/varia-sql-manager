@@ -830,11 +830,11 @@ export const commandCatalog = {
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {
-    title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     keybindings: [{ key: 'alt+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 1, mnemonic: 'n' }]
   },
   'edit.previousSqlIssue': {
-    title: 'Previous SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Previous SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     keybindings: [{ key: 'alt+shift+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 2, mnemonic: 'p' }]
   },
   // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the

@@ -587,7 +587,7 @@ internal sealed partial class ResultStore
     /// caller has reserved from the set's budget: they are returned when the view goes. <paramref name="replaces"/> names a
     /// view of the same set this one supersedes; past <see cref="MaxViewsPerResult"/> the set's oldest view goes. Throws
     /// RESULT_RELEASED, returning the charge, when the set was released while the view was built.</summary>
-    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue)
+    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue, long[]? unitBlocks = null)
     {
         List<ResultView> dropped = [];
         ResultView view;
@@ -606,7 +606,7 @@ internal sealed partial class ResultStore
                 views.Remove(own[i].ViewId);
                 dropped.Add(own[i]);
             }
-            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows);
+            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows) { UnitBlocks = unitBlocks };
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
