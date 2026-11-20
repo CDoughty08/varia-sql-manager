@@ -47,7 +47,7 @@ internal static partial class AgentSql
     /// <summary>What the service verbs act on: the machine SQL Server runs on (a failover cluster instance names its active node; the
     /// verbs refuse one), the instance (null for the default), and whether it is clustered.</summary>
     public const string ServiceHost = "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ComputerNamePhysicalNetBIOS')) AS machine, CONVERT(nvarchar(128), SERVERPROPERTY('InstanceName')) AS instance,\n"
-        + "CONVERT(int, SERVERPROPERTY('IsClustered')) AS clustered;";
+        + "CONVERT(int, SERVERPROPERTY('IsClustered')) AS is_clustered;";
 
     [GeneratedRegex(@"^EXEC @rc = msdb\.dbo\.(?<proc>\w+) @job_id = @job_id(?:, (?<arg>@\w+) = (?<value>@\w+))*;$", RegexOptions.CultureInvariant)]
     private static partial Regex WriteCall();

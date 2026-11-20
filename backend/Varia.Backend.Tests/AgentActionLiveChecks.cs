@@ -25,6 +25,10 @@ internal static class AgentActionLiveChecks
             Call<ActionExecuteResult>("actions.execute", new ActionArgs(action, info.Id, Guid.NewGuid().ToString(), Job(name), NewName: newName, AgentIdentity: new(created), StepName: stepName));
         async Task<string?> Enabled() => (await sql("SELECT CONVERT(nvarchar(1), enabled) FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
 
+        // The service verbs' host read runs on every server, so the Linux live job parses it too (only Windows runs the service verbs).
+        var host = await sql(AgentSql.ServiceHost, "master");
+        check(host.Status == "completed" && host.Sets is [[[_, _, "0" or "1"], ..], ..], "the service verbs' host read (machine, instance, IsClustered) runs on this server: " + host.Error);
+
         var created = (await sql("SELECT CONVERT(char(19), date_created, 126) FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar ?? "";
         var described = await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "startJobAtStep", Job(job)));
         check(described is { Error: null, AgentJob: { Enabled: true, Running: false, StepsTruncated: false, Steps: [{ Id: 1, Name: "Step 1" }] } facts } && facts.AgentIdentity.Created == created && facts.Name == job,
