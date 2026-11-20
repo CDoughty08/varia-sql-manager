@@ -55,7 +55,7 @@ export function cellText(cell: Element): string {
     }
     if (node.matches('textarea')) { add((node as HTMLTextAreaElement).value, true); return }
     // A list's blank choice (New Database's unset filegroup, a no-break space) copies as an empty cell.
-    if (node.matches('select')) { const option = (node as HTMLSelectElement).selectedOptions[0]; add(option?.value === '' ? '' : option?.textContent ?? '', true); return }
+    if (node.matches('select')) { const text = (node as HTMLSelectElement).selectedOptions[0]?.textContent ?? ''; add(text.trim() ? text : '', true); return }
     node.childNodes.forEach(walk)
   }
   walk(cell)

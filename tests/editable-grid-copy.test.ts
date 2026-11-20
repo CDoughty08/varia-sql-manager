@@ -54,6 +54,8 @@ describe('editable grid rows read from the page', () => {
     expect(cellText(html('<div><input type="hidden" value="secret"><span>shown</span></div>').firstElementChild!)).toBe('shown')
     // New Database's unset filegroup shows a blank choice (a no-break space): an empty cell, not an invisible character.
     expect(cellText(html('<div><select><option value="" selected>&nbsp;</option><option value="PRIMARY">PRIMARY</option></select></div>').firstElementChild!)).toBe('')
+    // A default choice with text (Attach's Owner, <default>) copies as it shows.
+    expect(cellText(html('<div><select><option value="" selected>&lt;default&gt;</option><option value="sa">sa</option></select></div>').firstElementChild!)).toBe('<default>')
   })
 
   it('leaves selected text and a field\'s selected text to the native copy, but copies the row from a bare caret', () => {
