@@ -42,9 +42,19 @@ export function planPropertiesMenu() {
       pressed = undefined
       if (!facts.length) return null
       const picked = selected.length ? selected : fact && facts.includes(fact as HTMLElement) ? [fact as HTMLElement] : facts
-      return { kind: 'planProperties', facts: picked.map(factText) }
+      return { kind: 'planProperties', facts: picked.map(groupedFactText) }
     }
   }
+}
+/** A fact's name and value, the name after its group's label where facts repeat (a parameter, missing index, predicate or
+ *  thread entry), so copied lines still say which item each belongs to. */
+function groupedFactText(fact: HTMLElement): readonly [string, string] {
+  const [name, value] = factText(fact)
+  const detail = fact.closest('.plan-diagnostic-detail')
+  const nested = fact.closest('details')
+  const label = detail ? detail.querySelector(':scope > strong')?.textContent
+    : nested?.parentElement?.closest('details') ? nested.querySelector(':scope > summary')?.textContent : undefined
+  return [label ? `${label} · ${name}` : name, value]
 }
 type PropertiesMenu = ReturnType<typeof planPropertiesMenu>
 const paneSelector = '.plan-properties-pane'

@@ -74,6 +74,16 @@ describe('plan properties copy', () => {
     document.dispatchEvent(new Event('pointerup'))
     expect(menu.target(element, fact(element, 'Ordered'))?.facts).toEqual([['Node ID', '3']])
   })
+
+  it('names the item a repeated fact belongs to: a parameter, index or predicate, or a thread entry', () => {
+    const element = document.createElement('div')
+    const parameter = (name: string, value: string) => `<div class="plan-diagnostic-detail"><strong>${name}</strong><dl><div class="plan-fact"><dt>Compiled value</dt><dd>${value}</dd></div></dl></div>`
+    element.innerHTML = `<details open><summary>Parameters (2)</summary>${parameter('@from', '1')}${parameter('@to', '9')}</details>`
+      + '<details open><summary>Thread runtime (1 retained entries)</summary><details open><summary>Thread 0 · entry 1</summary><dl><div class="plan-fact"><dt>Rows</dt><dd>5</dd></div></dl></details></details>'
+      + '<details open><summary>Operator properties</summary><dl><div class="plan-fact"><dt>Ordered</dt><dd>True</dd></div></dl></details>'
+    document.body.append(element)
+    expect(planPropertiesMenu().target(element)?.facts).toEqual([['@from · Compiled value', '1'], ['@to · Compiled value', '9'], ['Thread 0 · entry 1 · Rows', '5'], ['Ordered', 'True']])
+  })
 })
 
 describe('plan copy commands', () => {
