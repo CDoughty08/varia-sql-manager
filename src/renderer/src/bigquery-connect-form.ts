@@ -90,6 +90,13 @@ export function advancedCostPrompt(options: BigQueryConnectionOptions, saved: fa
   return checked === ((options.costPrompt ?? saved) !== false) ? options.costPrompt : checked
 }
 
+/** The form's settings for "changed?" checks: key order does not count, and the cost-prompt choice counts as it shows
+ *  (`costPrompt`: the form's, else the saved entry's), so a box ticked and unticked again is no change. */
+export function bigQueryFormShape(from: BigQueryConnectionOptions, autoReconnect: string | undefined, costPrompt = from.costPrompt): string {
+  const { costPrompt: _costPrompt, ...rest } = from
+  return JSON.stringify([Object.entries(rest).filter(([, value]) => value !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false])
+}
+
 /** How many projects Load projects keeps across its pages. */
 export const maxListedProjects = 10_000
 /** Adds a projects.list page to what is listed: each project once (the first spelling wins), sorted by id, at most

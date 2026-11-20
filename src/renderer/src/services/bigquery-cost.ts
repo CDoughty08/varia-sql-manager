@@ -1,5 +1,5 @@
 import type * as Monaco from 'monaco-editor'
-import type { ApiResult, BigQueryConnectionOptions, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, BigQueryConnectionOptions, ProviderConnectionOptions, VariaApi } from '../../../shared/contracts'
 import { connectionKey } from '../../../shared/connections'
 import { costPrompt, dryRunLimits, errorPosition, gibibytes, type BigQueryDryRunResult, type CostPrompt, type IncompleteReason } from '../../../shared/bigquery/dry-run'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
@@ -46,6 +46,9 @@ export interface CostOptOut {
   /** Reads the connection's saved choice again. */
   refresh(connection: LiveConnection): Promise<void>
   dontAsk(connection: LiveConnection): Promise<void>
+  /** A connect named the choice (Advanced Properties): it replaces any made here, and holds for the session if main
+   *  could not save it (`saved` false). */
+  named(options: BigQueryConnectionOptions, costPrompt: boolean, saved: boolean): void
 }
 
 /**
@@ -55,13 +58,13 @@ export interface CostOptOut {
  */
 export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBigQueryCostPrompt'>, changed: () => void = () => {}): CostOptOut {
   const declined = new Map<string, boolean>()
-  // Choices made here whose write has not landed, or failed, by the connection (id and generation) they were made on: a
-  // read of the saved entries does not undo them while it lasts. A reconnect reads the saved entry again, so turning the
-  // prompt back on in Advanced Properties works even after a failed write.
-  const local = new Map<string, string>()
-  // Bumped by each Don't ask again: a read that began before one is older than it and is dropped.
+  // Choices made here whose write has not landed, or failed: a read of the saved entries (by any connection with these
+  // settings) does not undo them this session. A choice a connect names (named, below) replaces them.
+  const local = new Set<string>()
+  // Bumped by each choice made or named: a read that began before one is older than it and is dropped.
   const writes = new Map<string, number>()
-  const identity = (connection: LiveConnection) => `${connection.id}:${connection.generation}`
+  const bump = (entry: string) => writes.set(entry, (writes.get(entry) ?? 0) + 1)
+  const keyOf = (options: BigQueryConnectionOptions) => { try { return connectionKey(options) } catch { return undefined } }
   const key = (connection: LiveConnection) => {
     try { return connection.options.provider === 'bigquery' ? connectionKey(connection.options) : undefined } catch { return undefined }
   }
@@ -71,8 +74,7 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
     async refresh(connection) {
       const entry = key(connection)
       if (entry === undefined) return
-      const made = local.get(entry)
-      if (made !== undefined) { if (made === identity(connection)) return; local.delete(entry) }
+      if (local.has(entry)) return
       const write = writes.get(entry) ?? 0
       try {
         const loaded = await api.loadConnectionLibrary()
@@ -86,14 +88,22 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
       const entry = key(connection)
       if (entry === undefined || connection.options.provider !== 'bigquery') return
       set(entry, true)
-      writes.set(entry, (writes.get(entry) ?? 0) + 1)
-      const made = identity(connection)
-      local.set(entry, made)
+      bump(entry)
+      const made = writes.get(entry)
+      local.add(entry)
       const options: BigQueryConnectionOptions = connection.options
       // Saved where a reconnect finds it; if the write fails, the choice still holds until the app closes.
       let saved = false
       try { const result = await api.setBigQueryCostPrompt({ options, costPrompt: false }); saved = result.ok && result.value } catch { /* As above. */ }
-      if (saved && local.get(entry) === made) local.delete(entry)
+      if (saved && writes.get(entry) === made) local.delete(entry)
+    },
+    named(options, costPrompt, saved) {
+      const entry = keyOf(options)
+      if (entry === undefined) return
+      bump(entry)
+      if (saved) local.delete(entry)
+      else local.add(entry)
+      set(entry, !costPrompt)
     }
   }
 }
@@ -130,7 +140,7 @@ export interface BigQueryCostDeps {
   readonly events: Pick<EventBus, 'subscribe'>
   readonly monaco: MarkerMonaco
   /** Shows a cost prompt (BigQueryCostPrompt) and resolves with the answer. */
-  readonly ask: (request: CostPromptRequest, signal?: AbortSignal) => Promise<CostPromptAnswer>
+  readonly ask: (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean) => Promise<CostPromptAnswer>
   readonly optOut: CostOptOut
   readonly schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
 }
@@ -217,7 +227,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (!this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) {
       // Nothing dry-runs the new text until Execute: the figure or error for the old text no longer stands ("checking"
       // is Execute's own dry run, which clears itself when its answer is stale).
-      if (this.getSnapshot().get(entry.id)?.phase !== 'checking') this.put(entry.id, undefined)
+      if (this.getSnapshot().get(entry.id)?.phase !== 'checking') { this.clearMarkers(entry); this.put(entry.id, undefined) }
       return
     }
     const schedule = this.deps.schedule ?? ((callback, ms) => setTimeout(callback, ms))
@@ -232,7 +242,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (entry.running) { entry.again = true; return }
     const sql = entry.model.getValue()
     if (!sql.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
-    if (sql.length > dryRunLimits.characters) { this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
+    if (sql.length > dryRunLimits.characters) { this.clearMarkers(entry); this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
     this.hold(entry, this.dryRun(entry, sql, { line: 1, column: 1 }))
   }
 
@@ -263,7 +273,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {
       // Nothing newer replaced "checking" (an edit with diagnostics off schedules no dry run): no estimate stands.
-      if (!this.disposed && this.getSnapshot().get(entry.id) === checking) this.put(entry.id, undefined)
+      if (!this.disposed && this.getSnapshot().get(entry.id) === checking) { this.clearMarkers(entry); this.put(entry.id, undefined) }
       return response.ok ? response.value : undefined
     }
     if (response.ok) {
@@ -323,7 +333,9 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       estimate = await run
     }
     if (signal?.aborted) return false
-    if (!estimate) return true
+    // Disconnected or switched while the dry run was out: no prompt about a connection the tab no longer has (Execute
+    // reports that itself).
+    if (!estimate || this.entries.get(tabId) !== entry || this.connection(tabId)?.id !== connection.id) return true
     await this.deps.optOut.refresh(connection)
     if (signal?.aborted || this.disposed) return false
     const settings = this.deps.settings, thresholdBytes = gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
@@ -335,7 +347,9 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const answer = await this.deps.ask({
       prompt, connection: connection.displayName ?? connection.server, thresholdBytes, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
       ...this.cap(connection) ? { cap: this.cap(connection) } : {}
-    }, signal)
+    }, signal, () => prompt.kind === 'threshold'
+      ? settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection)
+      : settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !entry.warnedIncomplete)
     if (signal?.aborted) return false
     if (prompt.kind === 'incomplete' && answer.run) entry.warnedIncomplete = true
     if (answer.dontAskAgain) {
@@ -358,6 +372,10 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   }
 
   /** The prompt choice for a connection changed: the chips re-render. */
+  /** A connect that names the cost-prompt choice (Advanced Properties): main saved it, and the chip shows it now. */
+  connectedWith(options: ProviderConnectionOptions, saved = true): void {
+    if (options.provider === 'bigquery' && options.costPrompt !== undefined) this.deps.optOut.named(options, options.costPrompt, saved)
+  }
   optOutChanged(): void { if (!this.disposed) this.publish(new Map(this.getSnapshot())) }
 
   /** A run finished: the chip shows what it processed (or keeps the estimate when BigQuery reported no bytes), unless the

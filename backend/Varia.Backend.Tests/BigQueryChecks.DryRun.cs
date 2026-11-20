@@ -57,6 +57,10 @@ internal static partial class BigQueryChecks
             (DryRunAnswer(10_485_760, accuracy: "UNKNOWN"), "unknown", "an unknown accuracy"),
             (DryRunAnswer(0), "zeroBytes", "0 bytes from tables that were read (external or row-level-security tables)"),
             (DryRunAnswer(0, tables: false), null, "0 bytes from no table (SELECT 1)"),
+            (DryRunAnswer(0, "DROP_TABLE"), null, "0 bytes from DDL that names a table"),
+            (DryRunAnswer(0, "TRUNCATE_TABLE"), null, "0 bytes from TRUNCATE TABLE"),
+            (DryRunAnswer(0, "CREATE_TABLE_AS_SELECT"), "zeroBytes", "0 bytes from CREATE TABLE AS SELECT over tables that were read"),
+            (DryRunAnswer(0, "MERGE"), "zeroBytes", "0 bytes from MERGE over tables that were read"),
             (DryRunAnswer(10_485_760, accuracy: "PRECISE"), null, "a precise figure")
         })
         {

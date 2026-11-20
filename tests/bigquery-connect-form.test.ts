@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects, parseExtraProjects,
-  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, savedCostPrompt, withoutCostPrompt } from '../src/renderer/src/bigquery-connect-form'
+  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, bigQueryFormShape, savedCostPrompt, withoutCostPrompt } from '../src/renderer/src/bigquery-connect-form'
 import { bigQueryAdvancedSummary, accountText } from '../src/renderer/src/BigQueryConnectFields'
 
 const keyFile = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
@@ -109,6 +109,17 @@ describe('Connect dialog: BigQuery fields', () => {
     expect(advancedCostPrompt(form, undefined, true)).toBeUndefined()
     // A change made earlier in this dialog stays when OK leaves the box as it shows.
     expect(advancedCostPrompt({ ...form, costPrompt: true }, false, true)).toBe(true)
+  })
+  it('compares the form with the saved entry by value, the cost-prompt choice as it shows', () => {
+    const saved = { provider: 'bigquery', project: 'varia-alpha', costPrompt: false, authentication: 'gcloud', displayName: 'Sales' } as const
+    // Ticked and unticked again in Advanced Properties: the form names false at the end, the saved entry earlier.
+    const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', displayName: 'Sales', costPrompt: false } as const
+    expect(bigQueryFormShape(form, 'inherit')).toBe(bigQueryFormShape(saved, 'inherit'))
+    // The form naming none shows the saved choice.
+    const { costPrompt: _costPrompt, ...unnamed } = form
+    expect(bigQueryFormShape(unnamed, 'inherit', false)).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costPrompt: true }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, displayName: 'Other' }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
     expect(accountText({ kind: 'user', account: 'ada@example.com' })).toBe('Signed in to gcloud as ada@example.com')
     expect(accountText({ kind: 'serviceAccount', account: 'reader@varia-alpha.iam.gserviceaccount.com', impersonated: 'etl@varia-alpha.iam.gserviceaccount.com' }))
       .toBe('Service account reader@varia-alpha.iam.gserviceaccount.com, acting as etl@varia-alpha.iam.gserviceaccount.com')

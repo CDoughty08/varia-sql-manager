@@ -102,7 +102,7 @@ function fixture(settings: Partial<SettingsValues> = {}) {
     api, documents: docs.documents, connections, events: docs.events, monaco: { MarkerSeverity: { Error: 8 } as never, editor: { setModelMarkers: markers } },
     settings: { get: key => values[key] as never, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) }, choose: async (key: SettingKey, value: unknown) => { values[key] = value; listeners.forEach(listener => listener()) } },
     ask: async (request, signal) => { asked.push(request); signals.push(signal); return answer },
-    optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) } },
+    optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) }, named: () => {} },
     schedule: (callback, ms) => { expect(ms).toBe(dryRunDebounceMs); timers.push(callback); return ++timerIds as unknown as ReturnType<typeof setTimeout> }
   })
   const tab = docs.documents.create('daily.sql', 'SELECT 1', 'sales', connectionId)
@@ -318,6 +318,22 @@ describe('the estimate before Execute', () => {
     f.model.edit('SELECT 2')
     expect(f.service.getSnapshot().get(f.tab.id)).toBeUndefined()
   })
+  it("clears an executed query's error marker when the text is edited with diagnostics off", async () => {
+    const f = fixture({ 'textEditor.googleSql.dryRunDiagnostics': false })
+    f.replies.push({ ok: false, error: 'Unrecognized name: x at [1:8]', code: 'SQL_ERROR' } as never)
+    await f.service.beforeExecute(f.tab.id, 'SELECT x')
+    expect(f.markers.mock.calls.at(-1)?.[2]).toHaveLength(1)
+    f.model.edit('SELECT y')
+    expect(f.markers.mock.calls.at(-1)?.[2]).toEqual([])
+  })
+  it('asks nothing when the tab lost its connection while the dry run was out', async () => {
+    const f = fixture()
+    const run = f.service.beforeExecute(f.tab.id, 'SELECT 1')
+    f.setLive(false)
+    f.pending.shift()!.resolve(estimate(20 * GiB))
+    expect(await run).toBe(true)
+    expect(f.asked).toHaveLength(0)
+  })
   it("waits for Execute's own dry run before the diagnostics one an edit asks for", async () => {
     const f = fixture()
     const run = f.service.beforeExecute(f.tab.id, 'SELECT 1')
@@ -397,18 +413,46 @@ describe('the saved prompt choice', () => {
     await fresh.refresh(connection)
     expect(fresh.asks(connection)).toBe(true)
   })
-  it("turns the prompt back on after a reconnect even when Don't ask again could not be saved", async () => {
+  it("holds a choice made here against other connections' reads until a connect names one", async () => {
+    let release!: () => void
     const api = {
-      loadConnectionLibrary: vi.fn(async () => ({ ok: true, value: { bigQuery: { profiles: [{ id: 'p', options, favorite: false }] } } }) as never),
+      loadConnectionLibrary: vi.fn(() => new Promise(resolve => { release = () => resolve({ ok: true, value: { bigQuery: { profiles: [{ id: 'p', options, favorite: false }] } } }) }) as never),
       setBigQueryCostPrompt: vi.fn(async () => ({ ok: false as const, error: 'The connection could not be kept in the saved connections.', code: 'INTERNAL' as never }))
     }
-    const optOut = costOptOut(api)
+    const changed = vi.fn()
+    const optOut = costOptOut(api, changed)
     await optOut.dontAsk(connection)
+    // Another connection with the same settings would read saved entries that still ask: the choice made here stands
+    // without a read.
+    const other = { ...connection, id: 'b2d6c1aa-0000-4000-8000-000000000001', generation: 3 } as LiveConnection
+    await optOut.refresh(other)
+    expect(api.loadConnectionLibrary).not.toHaveBeenCalled()
+    expect(optOut.asks(connection)).toBe(false)
+    // Advanced Properties turns the prompt back on at Connect and main saves it: it asks at once, and reads resume.
+    changed.mockClear()
+    optOut.named({ ...options, costPrompt: true }, true, true)
+    expect(optOut.asks(connection)).toBe(true)
+    expect(changed).toHaveBeenCalled()
+    // A read that began before a later named choice does not undo it.
+    const before = optOut.refresh(connection)
+    expect(api.loadConnectionLibrary).toHaveBeenCalledTimes(1)
+    optOut.named({ ...options, costPrompt: false }, false, true)
+    release()
+    await before
+    expect(optOut.asks(connection)).toBe(false)
+    // A named choice main could not save holds for the session: the saved entry (which asks) does not undo it.
+    optOut.named({ ...options, costPrompt: false }, false, false)
     await optOut.refresh(connection)
     expect(optOut.asks(connection)).toBe(false)
-    // Reconnected (Advanced Properties turned the prompt back on and the saved entry asks): the saved entry decides.
-    await optOut.refresh({ ...connection, generation: 2 } as LiveConnection)
-    expect(optOut.asks(connection)).toBe(true)
+  })
+  it('follows the choice a connect names, and ignores connects that name none', () => {
+    const f = fixture()
+    const named = vi.fn()
+    ;(f.service as unknown as { deps: { optOut: { named: typeof named } } }).deps.optOut.named = named
+    f.service.connectedWith({ provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud' })
+    expect(named).not.toHaveBeenCalled()
+    f.service.connectedWith({ provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud', costPrompt: true })
+    expect(named).toHaveBeenCalledWith(expect.objectContaining({ costPrompt: true }), true, true)
   })
   it("drops a read of the saved entries that began before Don't ask again", async () => {
     let release!: () => void
@@ -436,12 +480,38 @@ describe('the saved prompt choice', () => {
 })
 
 describe('the cost prompt', () => {
-  it('answers one prompt at a time; a newer one cancels the older', async () => {
+  it("answers one prompt at a time: another tab's waits its turn instead of replacing the one on screen", async () => {
     const prompts = new CostPromptService()
     const request = { prompt: { kind: 'threshold', bytes: 1 }, connection: 'c', thresholdBytes: 0, prices: true } as const
-    const first = prompts.ask(request), second = prompts.ask(request)
-    await expect(first).resolves.toEqual({ run: false })
-    prompts.answer({ run: true })
+    const first = prompts.ask(request), second = prompts.ask({ ...request, connection: 'd' })
+    expect(prompts.getSnapshot().pending?.request.connection).toBe('c')
+    const firstId = prompts.getSnapshot().pending!.id
+    prompts.answer(firstId, { run: true })
+    await expect(first).resolves.toEqual({ run: true })
+    expect(prompts.getSnapshot().pending?.request.connection).toBe('d')
+    // A second click on the first prompt's Run never answers the one now on screen.
+    prompts.answer(firstId, { run: true })
+    expect(prompts.getSnapshot().pending?.request.connection).toBe('d')
+    prompts.answer(prompts.getSnapshot().pending!.id, { run: false })
+    await expect(second).resolves.toEqual({ run: false })
+    expect(prompts.getSnapshot().pending).toBeUndefined()
+    // A waiting prompt whose run is cancelled leaves the queue without showing.
+    const stop = new AbortController()
+    const shown = prompts.ask(request), waiting = prompts.ask({ ...request, connection: 'e' }, stop.signal)
+    stop.abort()
+    await expect(waiting).resolves.toEqual({ run: false })
+    prompts.answer(prompts.getSnapshot().pending!.id, { run: true })
+    await expect(shown).resolves.toEqual({ run: true })
+    expect(prompts.getSnapshot().pending).toBeUndefined()
+  })
+  it("runs a waiting prompt without showing it once the one before it made it moot (Don't ask again)", async () => {
+    const prompts = new CostPromptService()
+    const request = { prompt: { kind: 'threshold', bytes: 1 }, connection: 'c', thresholdBytes: 0, prices: true } as const
+    let asks = true
+    const first = prompts.ask(request, undefined, () => asks), second = prompts.ask(request, undefined, () => asks)
+    asks = false
+    prompts.answer(prompts.getSnapshot().pending!.id, { run: true, dontAskAgain: true })
+    await expect(first).resolves.toEqual({ run: true, dontAskAgain: true })
     await expect(second).resolves.toEqual({ run: true })
     expect(prompts.getSnapshot().pending).toBeUndefined()
   })

@@ -12,7 +12,7 @@ import type { BigQueryConnectionProfile, BigQueryLibraryView, PickedKeyFile } fr
 import type { ProviderId } from '../../shared/providers'
 import type { BigQueryAuthenticationMode } from '../../shared/auth'
 import { BigQueryAdvanced, BigQueryConnectFields, accountText, useBigQueryLists } from './BigQueryConnectFields'
-import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState } from './bigquery-connect-form'
+import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
@@ -52,7 +52,7 @@ const palette: readonly (readonly [string, string])[] = [['Default', ''], ...con
 /** A History row of either engine. */
 type HistoryRow = { readonly sql: ConnectionProfile } | { readonly bigQuery: BigQueryConnectionProfile }
 const rowTime = (row: HistoryRow) => ('sql' in row ? row.sql : row.bigQuery).lastConnected ?? ''
-const bigQueryShape = (from: BigQueryConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect']) => JSON.stringify([from, autoReconnect])
+const bigQueryShape = bigQueryFormShape
 const bigQueryKey = (from: BigQueryConnectionOptions) => { try { return connectionKey(bigQueryFormOptions({ ...from, displayName: undefined, color: undefined, environment: undefined })) } catch { return undefined } }
 interface Props { initial: ProviderConnectionOptions; initialTargetId?: string; reviewOpen?: boolean; initialAutoReconnect?: ConnectionDetails['autoReconnect']; onConnected(info: ConnectionInfo, options: ProviderConnectionOptions, autoReconnect: ConnectionDetails['autoReconnect'], attempt: ConnectionAttempt, requestId: string, signal: AbortSignal, changedDetails: readonly ConnectionDetailField[]): Promise<void>; onClose(): void }
 type Field = { key: keyof AdvancedConnectionOptions; label: string; choices?: readonly string[]; min?: number; max?: number; boolean?: boolean; maxLength?: number }
@@ -159,7 +159,8 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   // Decision 49: a federation configuration whose token file the user has not confirmed yet.
   const [sourcePrompt, setSourcePrompt] = useState<PickedKeyFile>()
   const bigQueryEdited = useRef(false)
-  const bigQueryBaseline = useRef<string | undefined>(undefined)
+  // The form as editing began; its shape is taken when compared, against the saved choices as they are then.
+  const bigQueryBaseline = useRef<{ readonly options: BigQueryConnectionOptions; readonly autoReconnect: ConnectionDetails['autoReconnect'] } | undefined>(undefined)
   // A dialog opened with nothing chosen (no target, the default form) takes the type of the connection used last.
   const fresh = useRef(!initialTargetId && initialAutoReconnect === undefined && initial.provider !== 'bigquery' && shape({ ...initial, password: '' }, 'inherit') === shape(connectionDefaults(platform), 'inherit'))
   const [autoReconnect, setAutoReconnect] = useState(initial.provider === 'bigquery' ? 'inherit' : initialAutoReconnect ?? 'inherit')
@@ -593,8 +594,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
     if (type === 'bigquery') {
       // BigQuery's form: an edited saved entry, or a new connection whose settings no entry has yet.
       if (!bigQueryEdited.current) return undefined
-      const form = bigQueryShape(bigQuery, bigQueryReconnect)
-      if (form === bigQueryBaseline.current) return undefined
+      const form = bigQueryShape(bigQuery, bigQueryReconnect, bigQuery.costPrompt ?? bigQuerySavedCostPrompt)
+      const baseline = bigQueryBaseline.current
+      if (baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options))) return undefined
       if (bigQuerySelected) return form === bigQueryShape(bigQuerySelected.options, bigQuerySelected.autoReconnect ?? 'inherit') ? undefined : { bigQueryTarget: bigQuerySelected }
       const key = bigQueryKey(bigQuery)
       if (!loaded || !key || !bigQueryReady(bigQuery) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
@@ -654,13 +656,13 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   }
   function bigQueryUpdate(patch: Partial<BigQueryConnectionOptions>) {
     touched.current = true
-    if (!bigQueryEdited.current) bigQueryBaseline.current = bigQueryShape(currentBigQuery.current, bigQueryReconnect)
+    if (!bigQueryEdited.current) bigQueryBaseline.current = { options: currentBigQuery.current, autoReconnect: bigQueryReconnect }
     bigQueryEdited.current = true
     setBigQuery(current => ({ ...current, ...patch })); setError(''); setNotice(''); setTested(undefined)
   }
   function bigQueryAuthentication(mode: BigQueryAuthenticationMode) {
     touched.current = true
-    if (!bigQueryEdited.current) bigQueryBaseline.current = bigQueryShape(currentBigQuery.current, bigQueryReconnect)
+    if (!bigQueryEdited.current) bigQueryBaseline.current = { options: currentBigQuery.current, autoReconnect: bigQueryReconnect }
     bigQueryEdited.current = true
     setBigQuery(current => withAuthentication(current, mode)); setError(''); setNotice(''); setTested(undefined)
   }

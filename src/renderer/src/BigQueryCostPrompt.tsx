@@ -11,17 +11,17 @@ import { costPromptText } from './services/bigquery-cost-prompt'
 export default function BigQueryCostPrompt() {
   const { costPrompts } = useWorkbench()
   const { pending } = useServiceSnapshot(costPrompts)
-  return pending ? <Prompt key={JSON.stringify(pending.request)} request={pending.request} /> : null
+  return pending ? <Prompt key={pending.id} id={pending.id} request={pending.request} /> : null
 }
 
-function Prompt({ request }: { request: CostPromptRequest }) {
+function Prompt({ id, request }: { id: number; request: CostPromptRequest }) {
   const { costPrompts, commands } = useWorkbench()
   const [dontAsk, setDontAsk] = useState(false)
   const describedBy = useId()
   const text = costPromptText(request)
-  const settings = () => { costPrompts.answer({ run: false }); void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar') }
+  const settings = () => { costPrompts.answer(id, { run: false }); void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar') }
   return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
-    onOk={() => costPrompts.answer({ run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer({ run: false })}
+    onOk={() => costPrompts.answer(id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(id, { run: false })}
     status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
     <div id={describedBy}>
       <p className="bigquery-cost-sentence">{text.sentence}</p>

@@ -3,30 +3,56 @@ import { incompleteText } from '../../../shared/bigquery/dry-run'
 import { SnapshotStore } from '../core/store'
 import type { CostPromptAnswer, CostPromptRequest } from './bigquery-cost'
 
-interface Pending { readonly request: CostPromptRequest; readonly resolve: (answer: CostPromptAnswer) => void }
+interface Pending { readonly id: number; readonly request: CostPromptRequest; readonly resolve: (answer: CostPromptAnswer) => void; readonly stillAsks?: () => boolean }
 
-/** The cost prompt waiting for an answer (one at a time: it is modal), which BigQueryCostPrompt shows. */
+/**
+ * The cost prompts waiting for an answer, which BigQueryCostPrompt shows one at a time (it is modal). Another tab's prompt
+ * waits its turn rather than replacing the one on screen, so an answer always goes to the query it was shown for; a
+ * waiting prompt's run can still be cancelled.
+ */
 export class CostPromptService extends SnapshotStore<{ readonly pending?: Pending }> {
+  private readonly queue: Pending[] = []
+  private next = 0
   constructor() { super({}) }
-  /** Shows the prompt; `signal` (Cancel, or the tab closing) closes it as Cancel would. */
-  ask(request: CostPromptRequest, signal?: AbortSignal): Promise<CostPromptAnswer> {
-    // A prompt still open (another tab's Execute) is answered Cancel first, so no run waits forever.
-    this.getSnapshot().pending?.resolve({ run: false })
-    if (signal?.aborted) { this.publish({}); return Promise.resolve({ run: false }) }
+  /** Shows the prompt (after any shown before it); `signal` (Cancel, or the tab closing) closes it as Cancel would.
+   *  `stillAsks` is checked again when a waiting prompt's turn comes: an answer to the one before it (Don't ask again)
+   *  may have made it moot, and it then runs without showing. */
+  ask(request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean): Promise<CostPromptAnswer> {
+    if (signal?.aborted) return Promise.resolve({ run: false })
     return new Promise(resolve => {
-      const pending: Pending = { request, resolve }
-      signal?.addEventListener('abort', () => { if (this.getSnapshot().pending === pending) this.publish({}); resolve({ run: false }) }, { once: true })
-      this.publish({ pending })
+      const pending: Pending = { id: ++this.next, request, resolve, ...stillAsks ? { stillAsks } : {} }
+      signal?.addEventListener('abort', () => this.settle(pending, { run: false }), { once: true })
+      this.queue.push(pending)
+      this.show()
     })
   }
-  answer(answer: CostPromptAnswer): void {
+  /** Answers the prompt with this id, only while it is the one on screen: a second click or Enter never answers the
+   *  next tab's. */
+  answer(id: number, answer: CostPromptAnswer): void {
     const pending = this.getSnapshot().pending
-    if (!pending) return
-    this.publish({})
-    pending.resolve(answer)
+    if (pending?.id === id) this.settle(pending, answer)
   }
-  dispose(): void { this.answer({ run: false }); this.clearListeners() }
+  private settle(pending: Pending, answer: CostPromptAnswer): void {
+    const index = this.queue.indexOf(pending)
+    if (index < 0) return
+    this.queue.splice(index, 1)
+    pending.resolve(answer)
+    this.show()
+  }
+  private show(): void {
+    if (this.getSnapshot().pending === this.queue[0] && this.queue[0]) return
+    let head = this.queue[0]
+    while (head && head !== this.getSnapshot().pending && head.stillAsks && !safe(head.stillAsks)) {
+      this.queue.shift()
+      head.resolve({ run: true })
+      head = this.queue[0]
+    }
+    if (this.getSnapshot().pending !== head) this.publish(head ? { pending: head } : {})
+  }
+  dispose(): void { for (const pending of this.queue.splice(0)) pending.resolve({ run: false }); this.publish({}); this.clearListeners() }
 }
+
+const safe = (check: () => boolean) => { try { return check() } catch { return true } }
 
 /** "1.41 TiB (about $8.81 on demand)", or the bytes alone without prices. */
 const figure = (bytes: number, prices: boolean) => prices ? `${formatBytes(bytes)} (about ${formatDollars(bytes)} on demand)` : formatBytes(bytes)

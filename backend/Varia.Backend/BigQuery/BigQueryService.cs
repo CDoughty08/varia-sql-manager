@@ -340,9 +340,15 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         var statement = query?.StatementType is { Length: > 0 and <= 64 } type && type.All(c => char.IsAsciiLetterUpper(c) || c == '_') ? type : null;
         var incomplete = statement == "SCRIPT" ? "script"
             : query?.TotalBytesProcessedAccuracy switch { "LOWER_BOUND" => "lowerBound", "UNKNOWN" => "unknown", _ => null }
-            ?? (bytes == 0 && query?.ReferencedTables is { Count: > 0 } ? "zeroBytes" : null);
+            // Any statement that reads tables (CREATE TABLE AS SELECT, INSERT ... SELECT, MERGE too), but not DDL that reads none.
+            ?? (bytes == 0 && !ReadsNothing(statement) && query?.ReferencedTables is { Count: > 0 } ? "zeroBytes" : null);
         return new(bytes, Incomplete: incomplete, StatementType: statement);
     }
+
+    /// <summary>DDL that processes no table data whatever it names, so 0 bytes is the true figure.</summary>
+    static bool ReadsNothing(string? statement) => statement is not null && (statement.StartsWith("DROP_", StringComparison.Ordinal)
+        || statement.StartsWith("ALTER_", StringComparison.Ordinal) || statement is "CREATE_TABLE" or "CREATE_VIEW" or "CREATE_SCHEMA" or "CREATE_FUNCTION"
+        or "CREATE_TABLE_FUNCTION" or "CREATE_PROCEDURE" or "CREATE_ROW_ACCESS_POLICY" or "TRUNCATE_TABLE");
 
     static async Task<Job> DryRunAsync(BigQueryClient client, string project, string? location, string sql, string? dataset, CancellationToken token)
     {

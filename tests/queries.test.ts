@@ -783,6 +783,9 @@ describe('BigQuery cost gate', () => {
     pending.resolve(true)
     await run
     expect(readBeforeGate).toBeGreaterThan(0)
+    // The run's error locations are tied to the version read before the gate, not one read after it (an edit while the
+    // prompt was open would make them point into the edited text).
+    expect((f.queries as unknown as { sources: Map<string, { revision: number }> }).sources.get(f.tab.id)?.revision).toBe(readBeforeGate)
     revision.mockRestore()
     // A session the tab had ends while the next run waits on its estimate: Cancel does not bring it back.
     const live = { connectionId: f.connection.id, spid: 51, login: 'reader' }

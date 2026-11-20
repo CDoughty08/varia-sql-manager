@@ -220,16 +220,22 @@ Messages).
     and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
     threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
     changed, so a remembered connection never undoes a later Don't ask again, and entries with the same settings share
-    one choice. It is a preference, not part of which entry the connection is or of its target.
+    one choice (a connect that names one takes effect at once). If the choice cannot be saved, it holds for the session.
+    It is a preference, not part of which entry the connection is or of its target.
   - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
     a 0-byte estimate for a query that reads tables (right for an empty table or skipped partitions, but external and
     row-level-security tables also report 0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
-    `UNKNOWN`. **Don't warn me about incomplete estimates again** clears
-    `queryExecution.bigQuery.incompleteEstimateWarning`.
+    `UNKNOWN` (DDL that reads no table, such as DROP or TRUNCATE, never counts as 0-byte; DML and CREATE TABLE AS SELECT
+    do). **Don't warn me about incomplete estimates
+    again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
+  one that the answer before it made moot (Don't ask again) runs without showing.
 
   A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel,
-  closing the tab or disconnecting while the estimate is worked out or a prompt is open stops the run at once, closes
-  the prompt and sends nothing; its Don't ask again is not kept. Emulator mode's faked estimates never ask.
+  closing the tab or disconnecting while the estimate is worked out or a prompt is open or waiting stops the run at once,
+  closes the prompt and sends nothing; its Don't ask again is not kept. An edit with the diagnostics setting off clears
+  the chip and the marker for the old text. Emulator mode's faked estimates never ask.
 - **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
   job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
