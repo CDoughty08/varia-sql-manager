@@ -288,6 +288,7 @@ noted where it matters.
 | `ssis.catalogSetup` | invoke; `cancelSsis` | unary | ssis | 45 s, budget 40 s (lock timeout 10 s: `BLOCKED`) |
 | `activity.details` | invoke; `cancelActivity` (closing Details) | unary | live (live gates) | 15 s, budget 10 s |
 | `activity.kill` | invoke | unary | actions (own gates) | 30 s, budget 25 s, answered with the outcomes of the sessions tried. Never re-sent |
+| `agent.profile` | invoke | unary: one login's SQL Server Agent facts ([SQL Server Agent](sql-server-agent.md)); SQL Server only | explorer, on its own slot per connection (never behind the tree's paging) | 15 s, budget 10 s from when it has the slot (`agentLimits.profileMs`). Main checks the answer (`agentProfileResultSchema`) |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`) | unary | control | 10 s (note 3 below) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; only with `VARIA_BACKEND_TEST_HOOKS=1` |
@@ -700,7 +701,7 @@ a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databa
 `bigquery.projects` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
-with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `system.health`, `query.cancel`,
+with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
 `query.session.close`, `query.session.state` and every `results.*` method name no connection and are declared for both
 engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
 again first thing (`Providers.BothMethods`, compared with the policies by `tests/validation.test.ts`).
@@ -748,8 +749,12 @@ demand, within the strict CSP; a virtualized DOM outline serves keyboard, screen
 
 ## Query execution
 
-`query.execute` takes `{ connectionId, sessionId, database, sql, queryId, maxRows, timeoutSeconds, startLine?,
-maxResultSets?, stopOnError?, includeActualPlan?, discardResults? }`. `sessionId` is the query tab's UUID: its SQL session
+`query.execute` takes `{ connectionId, sessionId, database?, dataset?, sql, queryId, maxRows, timeoutSeconds, startLine?,
+maxResultSets?, stopOnError?, includeActualPlan?, discardResults? }`. `database` is required for SQL Server; `dataset`
+(≤ 1,024 characters) is a BigQuery query's default dataset, and SQL Server refuses it. A BigQuery query runs as one job
+whose rows are read into the same result store, and its summary adds `job` (`{ project, jobId, location?, statementType?,
+bytesProcessed?, bytesBilled?, cacheHit?, slotMs? }`); SQL Server's options are refused for it ([BigQuery's
+Execution](bigquery.md#execution)). `sessionId` is the query tab's UUID: its SQL session
 is one unpooled connection with connection recovery off, opened on first execution and kept until the tab closes, its
 server changes, or it is lost.
 
@@ -2254,7 +2259,9 @@ Period=NeverBlock` so a retry after `kinit` is not answered with SqlClient's cac
 configuration or ADC file Varia cannot use, naming the field and never the content), `API_DISABLED`, `BILLING_DISABLED`,
 `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED` (the permission and project), `AUTH_IDENTITY` (a credential now signing in as
 another account), `NOT_FOUND`, `BACKEND_ERROR` (Google's 5xx), `TIMEOUT`, and `CONNECTION_LOST` when Google cannot be
-reached. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
+reached. A query adds `LOCATION_MISMATCH` (its dataset is in another location; the text names both), `RESULT_TOO_LARGE`
+(over BigQuery's 10 GB result limit), `COST_CAP` (over the connection's maximum bytes billed, naming the cap) and
+`SQL_ERROR` (BigQuery's own text); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
 
 **Microsoft Entra** failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before
 opening). Connect and Load databases `details` are number 0, class 11, state 0 and the server, except AADSTS50126
@@ -2274,7 +2281,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

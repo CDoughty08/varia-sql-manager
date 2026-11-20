@@ -86,7 +86,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'databases.list': { ...metadata, ...both },
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
-  'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000 },
+  'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
   'query.session.close': { ...control, ...both, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
@@ -166,6 +166,9 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.
   'activity.details': { kind: 'unary', lane: 'live', deadlineMs: 15_000 },
   'activity.kill': { kind: 'unary', lane: 'actions', deadlineMs: 30_000 },
+  // SQL Server Agent's capability read: one small batch in msdb on the Object Explorer pool, on its own slot per connection (as
+  // Peek, never queued behind the tree's paging). Its own 10 s budget starts once it holds that slot and ends as a TIMEOUT value (unless msdb already refused the login: then the profile with no role). SQL Server only (no `providers`), so a BigQuery handle gets UNSUPPORTED_PROVIDER.
+  'agent.profile': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
@@ -203,6 +206,16 @@ export function requestProvider(method: BackendMethod, params: unknown, provider
 }
 /** Whether `method` may be sent for a request of `provider` (undefined: main cannot tell, and C# checks). */
 export function methodAllows(method: BackendMethod, provider: ProviderId | undefined): boolean { return provider === undefined || methodProviders(method).includes(provider) }
+
+/** Whether a request's options mean anything to its connection's engine: query.execute's SQL Server options (stop on
+ *  error, actual and live plans, client statistics) are not BigQuery's, and a dataset is not SQL Server's. C# checks again
+ *  (SqlService.ExecuteAsync). */
+export function optionsAllow(method: BackendMethod, provider: ProviderId | undefined, params: unknown): boolean {
+  if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
+  const options = params as Partial<BackendMethods['query.execute']['params']>
+  if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
+  return options.dataset === undefined
+}
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */
 export function deadlineFor<M extends BackendMethod>(method: M, params: BackendMethods[M]['params']): { deadlineMs: number; backstopMs: number } {

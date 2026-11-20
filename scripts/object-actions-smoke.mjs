@@ -6,7 +6,7 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions, tablePropertiesScript } from './fixtures/actions-stub.mjs'
 import {
   activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
-  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
+  errorBanner, explorerLabel, fieldHint, frameSection, gridCell, gridPart, inputShowsEnd, localGrid, localGridFrame, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
   passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf, pane
 } from './fixtures/ui.mjs'
@@ -18,6 +18,7 @@ delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
 const mac = process.platform === 'darwin'
+const eol = process.platform === 'win32' ? '\r\n' : '\n'
 let application
 let page
 const failures = []
@@ -276,6 +277,17 @@ try {
     await expect(propertyFact(table(), 'Schema')).toHaveText('dbo')
     await expect(propertyFact(table(), 'Data compression')).toHaveText('Page')
     await expect(propertyFact(table(), 'Row count')).toHaveText((1200).toLocaleString())
+    // Permissions is a page grid (LG-3): Ctrl+A then Ctrl+Shift+C copy it with headers as a results grid does, and an
+    // unpartitioned table shows no Partitions grid.
+    const permissionsGrid = localGrid(table(), 'Permissions')
+    await expect(permissionsGrid).toHaveAttribute('aria-label', 'Permissions, 1 row, 6 columns')
+    await expect(permissionsGrid.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Principal', 'Type', 'Permission', 'Column', 'State', 'Grantor'])
+    await gridCell(permissionsGrid, 0, 0).click()
+    await page.keyboard.press('ControlOrMeta+A')
+    await page.keyboard.press('ControlOrMeta+Shift+C')
+    await expect.poll(clipboard).toBe([['Principal', 'Type', 'Permission', 'Column', 'State', 'Grantor'], ['app', 'Sql user', 'SELECT', '', 'Grant', 'dbo']].map(row => row.join('\t')).join(eol))
+    await expect(localGrid(table(), 'Partitions')).toHaveCount(0)
+    await expect(table().getByRole('table')).toHaveCount(1)
     await expect(tableVerb('Apply')).toBeDisabled()
     const escalation = table().getByRole('radiogroup', { name: 'Lock escalation', exact: true })
     await expect(escalation.getByRole('radio', { name: 'Table', exact: true })).toHaveAttribute('aria-checked', 'true')
@@ -332,23 +344,8 @@ try {
   await windowSize([1280, 800])
   /** Whether any of the elements cuts its text: wider or taller content than its box. */
   const cut = locator => locator.evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1).map(element => element.textContent))
-  /** The words split across lines (Not Applicabl|e): each word of the elements' text must sit on one line, wherever the text wraps. */
-  const brokenWords = locator => locator.evaluateAll(elements => {
-    const broken = []
-    for (const cell of elements) {
-      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        for (const match of node.data.matchAll(/\S+/g)) {
-          const range = document.createRange()
-          range.setStart(node, match.index)
-          range.setEnd(node, match.index + match[0].length)
-          const lines = new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size
-          if (lines > 1) broken.push(match[0])
-        }
-      }
-    }
-    return broken
-  })
+  /** An element's bottom edge in the window. */
+  const bottomOf = locator => locator.evaluate(element => element.getBoundingClientRect().bottom)
   const properties = () => documentFrame(page, 'AppData')
   const propertiesTab = () => documentTab(page, 'Database Properties - AppData')
   const verb = name => documentVerb(properties(), 'AppData', name)
@@ -476,17 +473,65 @@ try {
   await expect(autoClose).toBeChecked()
   // Files: the owner's browse button opens Select Database Owner over the document; Escape closes only it, Enter chooses.
   await sectionList().getByRole('button', { name: 'Files' }).click()
-  await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr')).toHaveCount(2)
-  await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr').first().locator('td')).toHaveText(['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'])
-  // No cell is cut: the grids size their columns to their text and wrap what does not fit. Only a path breaks inside a
-  // word (the log file's long one takes the width the rest leave), so names and words read whole (never Not Applicabl|e),
-  // and the grid still fits its width at 1280 × 800.
-  const filesGrid = properties().getByRole('table', { name: 'Database files', exact: true })
-  expect(await cut(properties().getByRole('table').locator('th, td'))).toEqual([])
-  expect(await brokenWords(filesGrid.locator('th, td:not(:nth-child(6))'))).toEqual([])
-  expect(await brokenWords(properties().getByRole('table', { name: 'Rows', exact: true }).locator('th, td'))).toEqual([])
-  expect(await filesGrid.evaluate(grid => grid.parentElement.scrollWidth - grid.parentElement.clientWidth)).toBe(0)
+  // The files are a page grid (LG-3), as tall as its rows and no wider than the section at 1280 × 800: selection, Copy
+  // with Headers, header sort by value and Save Results As work as in a results grid.
+  const filesGrid = localGrid(properties(), 'Database files'), filesGridFrame = localGridFrame(properties(), 'Database files')
+  const fileRows = [
+    ['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'],
+    ['AppData_Archive2026_log', 'LOG', 'Not Applicable', '8', 'By 10 percent, Limited to 2097152 MB', 'C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\DATA', 'AppData_Archive2026_log.ldf']
+  ]
+  const fileColumns = ['Logical Name', 'File Type', 'Filegroup', 'Size (MB)', 'Autogrowth / Maxsize', 'Path', 'File Name']
+  await expect(filesGrid).toHaveAttribute('aria-label', 'Database files, 2 rows, 7 columns')
+  await expect(filesGridFrame).toHaveAttribute('data-local-grid', 'page')
+  await expect(gridCell(filesGrid, 0, 0)).toHaveText('AppData')
+  await expect(gridCell(filesGrid, 1, 2)).toHaveText('Not Applicable')
+  // The last row ends inside the scroller's viewport, so no horizontal scroll bar (the log's long path) covers it.
+  const viewportBottom = () => filesGridFrame.locator(gridPart.scroller).evaluate(element => element.getBoundingClientRect().top + element.clientTop + element.clientHeight)
+  expect(await bottomOf(gridCell(filesGrid, 1, 0))).toBeLessThanOrEqual(await viewportBottom() + 0.5)
+  expect(await filesGridFrame.evaluate(frame => frame.getBoundingClientRect().height)).toBeLessThan(140)
+  const rightOf = locator => locator.evaluate(element => element.getBoundingClientRect().right)
+  expect(await rightOf(filesGridFrame)).toBeLessThanOrEqual(await rightOf(frameSection(properties(), 'Files')) + 0.5)
+  await gridCell(filesGrid, 0, 0).click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.press('ControlOrMeta+Shift+C')
+  await expect.poll(clipboard).toBe([fileColumns, ...fileRows].map(row => row.join('\t')).join(eol))
+  // Logical Name descending from the grid's menu (Shift+F10), then Save Results As (Ctrl+S) writes the rows in the order shown.
+  await gridCell(filesGrid, 0, 0).click()
+  await page.keyboard.press('Shift+F10')
+  await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Sort Descending', exact: true }).click()
+  await expect(gridCell(filesGrid, 0, 0)).toHaveText('AppData_Archive2026_log')
+  const savedFiles = resolve(profile, 'appdata-files.csv')
+  await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, savedFiles)
+  await gridCell(filesGrid, 0, 0).click()
+  await page.keyboard.press('ControlOrMeta+S')
+  await expect(filesGridFrame.locator(gridPart.strip)).toHaveText('Saved 2 rows to appdata-files.csv.')
+  // The grid grows to make room for its strip: the last row still ends above it.
+  const topOf = locator => locator.evaluate(element => element.getBoundingClientRect().top)
+  expect(await bottomOf(gridCell(filesGrid, 1, 0))).toBeLessThanOrEqual(await topOf(filesGridFrame.locator(gridPart.strip)) + 0.5)
+  const savedLines = (await readFile(savedFiles, 'utf8')).replace(/^\ufeff/, '').split('\r\n').filter(line => line && !line.startsWith('Logical Name,'))
+  expect(savedLines).toEqual(['AppData_Archive2026_log,LOG,Not Applicable,8,"By 10 percent, Limited to 2097152 MB",C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\DATA,AppData_Archive2026_log.ldf',
+    'AppData,ROWS Data,PRIMARY,8,"By 64 MB, Unlimited",C:\\Data,AppData.mdf'])
+  // Editing the draft keeps the grid as it is (each table is memoized on the model): its sort and its strip stay.
+  const ownerField = properties().getByLabel('Owner', { exact: true }), ownerBefore = await ownerField.inputValue()
+  await ownerField.fill('EditedOwner')
+  await expect(ownerField).toHaveAttribute('data-changed', 'true')
+  await expect(gridCell(filesGrid, 0, 0)).toHaveText('AppData_Archive2026_log')
+  await expect(filesGridFrame.locator(gridPart.strip)).toHaveText('Saved 2 rows to appdata-files.csv.')
+  await ownerField.fill(ownerBefore)
+  await expect(ownerField).not.toHaveAttribute('data-changed', 'true')
   await page.screenshot({ path: resolve('artifacts', 'database-properties-files-dark.png') })
+  // Filegroups: SSMS's three lists as page grids; an empty one says so inside its frame.
+  await sectionList().getByRole('button', { name: 'Filegroups' }).click()
+  const rowsFilegroups = localGrid(properties(), 'Rows filegroups')
+  await expect(rowsFilegroups).toHaveAttribute('aria-label', 'Rows filegroups, 1 row, 5 columns')
+  await expect(rowsFilegroups.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Files', 'Read-Only', 'Default', 'Autogrow All Files'])
+  await gridCell(rowsFilegroups, 0, 0).click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.press('ControlOrMeta+C')
+  await expect.poll(clipboard).toBe(['PRIMARY', '1', 'No', 'Yes', 'No'].join('\t'))
+  for (const name of ['FILESTREAM filegroups', 'Memory Optimized Data filegroups']) await expect(localGridFrame(properties(), name).locator(gridPart.overlay)).toHaveText('None.')
+  await expect(properties().getByRole('table')).toHaveCount(0)
+  await sectionList().getByRole('button', { name: 'Files' }).click()
   const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
   await properties().getByRole('button', { name: 'Browse for the owner', exact: true }).click()
   await expect(owner.getByLabel('Logins:', { exact: true })).toBeFocused()

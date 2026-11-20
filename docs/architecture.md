@@ -327,6 +327,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
     chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
     mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
+    Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
+    the draft keeps a grid's selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
   (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
   (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the
@@ -490,6 +492,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 
 Every path: constant text, values as parameters, names only through server-side `QUOTENAME`, checked by its offline
 lint, on its own pool or connection with a fixed prologue (the actual-plan collector has none, below). Never log names, SQL, values or messages.
+Metadata built-ins stay out of every read: they ignore READ UNCOMMITTED, so behind another session's uncommitted DDL they
+wait out LOCK_TIMEOUT and fail with 1222, and `HAS_PERMS_BY_NAME` waits and then answers 0 without an error. The lints
+check names as SQL Server resolves them (`CatalogSql.Uses` and `SecretUses`: bracketed or quoted names unwrapped, comments
+and spaces before a parenthesis ignored, nothing outside printable ASCII), and a lint with a word list of writes also
+refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELETE` as `1` and `DELETE`).
 
 - **Object Explorer.** Structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters,
   version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and

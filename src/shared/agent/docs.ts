@@ -35,7 +35,8 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   serviceStatementMs: 'One service Start or Stop statement, in ms',
   serviceWaitMs: 'How long a Start or Stop waits for the service\'s new state, in ms',
   serviceReadMs: 'One service state read, in ms',
-  agentUpWaitMs: 'How long the live checks wait for Agent after the server is up, in ms'
+  agentUpWaitMs: 'How long the live checks wait for Agent after the server is up, in ms',
+  profileMs: 'The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role)'
 }
 
 /** The generated reference: code tables, gates, procedures and limits. */

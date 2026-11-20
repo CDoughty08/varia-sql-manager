@@ -507,6 +507,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
+    agentEnabled: api.agentPreview,
     settings,
     documents,
     queries,

@@ -47,12 +47,17 @@ internal sealed class ExplorerOptions
     public TimeSpan? PeekBudget { get; set; }
     /// <summary>Replaces User mapping's share of Peek's budget (half of it; deadline checks).</summary>
     public TimeSpan? PeekMappingBudget { get; set; }
+    /// <summary>Replaces agent.profile's budget from the Agent catalogue (timeout checks).</summary>
+    public TimeSpan? AgentProfileBudget { get; set; }
+    /// <summary>Fails every catalog statement with the error this returns for its database (null at server scope) and text once
+    /// its connection is open, in place of running it (offline checks of how a server's refusal maps); it may wait on the token.</summary>
+    public Func<string?, string, CancellationToken, Task<SqlException>>? TestStatementFailure { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
 /// catalog SQL under per-connection and global gates, paged by keyset. Catalog failures are values; a cancelled
 /// request (CANCEL frame, deadline, disconnect) throws.</summary>
-internal sealed class ExplorerService : IDisposable
+internal sealed partial class ExplorerService : IDisposable
 {
     private readonly IExplorerHost host;
     private readonly ExplorerCatalog catalog;
@@ -60,6 +65,8 @@ internal sealed class ExplorerService : IDisposable
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> peekGates = new(StringComparer.Ordinal);
+    /// <summary>agent.profile's own slot per connection, so the role read never queues behind the tree's paging.</summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> agentProfileGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
 
     /// <param name="catalog">A catalogue other than the embedded one, with <paramref name="queries"/> for the ids it lists
@@ -262,6 +269,7 @@ internal sealed class ExplorerService : IDisposable
         running.Forget(connectionId);
         gates.TryRemove(connectionId, out _);
         peekGates.TryRemove(connectionId, out _);
+        agentProfileGates.TryRemove(connectionId, out _);
     }
 
     public void Dispose()
@@ -269,6 +277,7 @@ internal sealed class ExplorerService : IDisposable
         running.ForgetAll();
         gates.Clear();
         peekGates.Clear();
+        agentProfileGates.Clear();
     }
 
     private async Task<ExplorerChildrenResult> LoadAsync(ExplorerRequest request, ExplorerProfile profile, bool vector, CursorKey? key, CancellationToken token)
@@ -428,7 +437,7 @@ internal sealed class ExplorerService : IDisposable
     /// <param name="subject">The folder or object being read, as the tree labels it, for error messages.</param>
     /// <param name="started">Runs once the slots are taken, before the connection opens (Peek starts its budget there).</param>
     private async Task<T> RunAsync<T>(string connectionId, string? requestDatabase, string subject, ExplorerProfile profile, QueryScope scope, string statement, Values values,
-        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null)
+        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null, Action? opened = null)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
         var database = scope == QueryScope.Ssis ? host.SsisCatalog : requestDatabase;
@@ -452,6 +461,8 @@ internal sealed class ExplorerService : IDisposable
                 {
                     return failed(await SsisOpenFailureAsync(connectionId, subject, database!, token));
                 }
+                opened?.Invoke();
+                if (Options.TestStatementFailure is { } failure) throw await failure(database, statement, token);
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");

@@ -28,7 +28,7 @@ internal sealed partial class BigQueryService
             using var client = Client(options.Project, credential, options.Location);
             return await ListDatasetsAsync(client, options.Project, budget.Token);
         }
-        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, DatasetsPermission, KindOf(options.Authentication), token); }
+        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, DatasetsPermission, KindOf(options.Authentication), token: token); }
     }
 
     /// <summary>databases.list for a BigQuery handle: the billing project's datasets.</summary>

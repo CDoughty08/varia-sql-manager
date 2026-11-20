@@ -22,6 +22,7 @@ import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
+import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -166,7 +167,10 @@ export interface BackendHealth {
 export interface QueryOptions {
   connectionId: string
   sessionId: string
-  database: string
+  /** SQL Server's database, required there; a BigQuery query ignores it and uses `dataset`. */
+  database?: string
+  /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
+  dataset?: string
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
@@ -281,6 +285,21 @@ export interface QueryResult {
   login?: string
   /** Per-script provider counters. Absent unless requested; separate from elapsedMs and rendering. */
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
+  /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
+  job?: BigQueryJobSummary
+}
+/** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
+ *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
+export interface BigQueryJobSummary {
+  project: string
+  jobId: string
+  location?: string
+  /** BigQuery's statement type, such as SELECT, INSERT, CREATE_TABLE or SCRIPT. */
+  statementType?: string
+  bytesProcessed?: number
+  bytesBilled?: number
+  cacheHit?: boolean
+  slotMs?: number
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
@@ -613,6 +632,8 @@ export interface RpcMethods {
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
   'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
+  /** What this login may do with SQL Server Agent (roles, permissions, Agent XPs, platform), read in msdb on the Object Explorer pool. */
+  'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -870,6 +891,8 @@ export interface VariaApi {
   executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
   /** Reads what Create Catalog would do on a server, or why it cannot (`result.error`). */
   catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
+  /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
+  agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
@@ -917,6 +940,8 @@ export interface VariaApi {
   readonly testMode: boolean
   /** True only in unpackaged smoke runs that ask for it (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1): motion follows the system's preference whatever the setting says. */
   readonly followSystemMotion: boolean
+  /** True when main was started with VARIA_AGENT_PREVIEW=1: SQL Server Agent's surfaces show (context key `agentEnabled`) until 0.11.0 removes the gate. */
+  readonly agentPreview: boolean
   /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
   openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>

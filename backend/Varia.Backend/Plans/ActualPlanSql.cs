@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Varia.Backend.Explorer;
 
 namespace Varia.Backend.Plans;
 
@@ -204,6 +205,10 @@ internal static class ActualPlanSql
             foreach (var piece in declare.Groups[2].Value.Split('+').Select(part => Regex.Replace(part, @"\s+", "")))
                 if (piece != "L" && !Pieces.Contains(piece)) problems.Add("dynamic SQL built from " + piece);
         if (Verb.IsMatch(code) || Forbidden.IsMatch(code)) problems.Add("statement outside dynamic event session DDL");
+        // The word lists' boundaries miss a keyword glued to a number (1DELETE), in the batch and in the text it runs.
+        problems.AddRange(CatalogSql.GluedNumbers(sql));
+        foreach (var literal in literals)
+            problems.AddRange(CatalogSql.GluedNumbers(literal[(literal[0] == 'N' ? 2 : 1)..^1].Replace("''", "'", StringComparison.Ordinal)).Select(problem => problem + " in its dynamic SQL"));
         foreach (var literal in literals)
         {
             if (Verb.Matches(literal).Count != SessionVerb.Matches(literal).Count) problems.Add("DDL other than an event session's");

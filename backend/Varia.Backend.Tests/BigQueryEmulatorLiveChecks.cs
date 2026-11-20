@@ -123,6 +123,8 @@ internal static class BigQueryEmulatorLiveChecks
                 [new Google.Cloud.BigQuery.V2.BigQueryParameter("minimum", Google.Cloud.BigQuery.V2.BigQueryDbType.Int64, 20), new Google.Cloud.BigQuery.V2.BigQueryParameter("skip", Google.Cloud.BigQuery.V2.BigQueryDbType.String, "customer 25")]);
             check(counted.Select(row => row["n"]?.ToString()).SingleOrDefault() == "4", "emulator: named query parameters of each type bind as values");
 
+            await ExecuteAsync(check, service, connection.Id, table);
+
             // The emulator finishes jobs synchronously, so cancel meets a finished job; it must still answer (Job History's Cancel).
             var cancelled = await api.Jobs.Cancel(Project, jobId).ExecuteAsync();
             check(cancelled.Job?.JobReference?.JobId == jobId && cancelled.Job.Status?.State == "DONE", $"emulator: jobs.cancel of a finished job answers the job, done: {cancelled.Job?.Status?.State}");
@@ -147,6 +149,66 @@ internal static class BigQueryEmulatorLiveChecks
 
         var (closed, disconnected, _) = await Call("connections.disconnect", new JsonObject { ["connectionId"] = connection.Id });
         check(closed == "ok" && disconnected.GetProperty("disconnected").GetBoolean() && service.BigQuery.Count == 0, "emulator: disconnect releases the BigQuery handle");
+    }
+
+    /// <summary>query.execute end to end (docs/bigquery.md, Execution): a job per query, results polled and paged into the
+    /// result store, every type through the converter, a script on the connection's default dataset, DML and a failure.</summary>
+    static async Task ExecuteAsync(Action<bool, string> check, SqlService service, string connectionId, string table)
+    {
+        async Task<(string Code, QueryResult? Result, string Message)> Execute(string sql, int maxRows = 0)
+        {
+            var args = new JsonObject
+            {
+                ["connectionId"] = connectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = sql, ["maxRows"] = maxRows,
+                // No execution timeout: the emulator refuses jobTimeoutMs as a JSON number (Google takes int64 fields as numbers
+                // or strings), so the offline checks hold the timeout instead.
+                ["timeoutSeconds"] = 0
+            };
+            using var document = JsonDocument.Parse(args.ToJsonString());
+            try { return ("ok", await service.DispatchAsync("query.execute", document.RootElement.Clone(), Wire) as QueryResult, ""); }
+            catch (RequestException error) { return (error.Code, null, error.Message); }
+        }
+        List<PageCell[]> Rows(ResultDescriptor descriptor)
+        {
+            var set = service.Results.Find(descriptor.ResultId)!;
+            return [.. set.SealedSnapshot().SelectMany(page => PageReader.Read(PinnedPage.Body(page), set.Wires).Rows)];
+        }
+        static string Messages(QueryResult? result) => string.Join(" | ", result?.Messages.Select(message => message.Text) ?? []);
+
+        var (code, result, message) = await Execute("SELECT 1 AS i, 1.5 AS f, NUMERIC '1.50' AS n, TRUE AS b, 'héllo' AS s, b'\\xde\\xad' AS y, DATE '2026-11-15' AS d, "
+            + "TIME '09:30:00.123' AS t, DATETIME '2026-11-15 09:30:00.5' AS dt, TIMESTAMP '2026-11-15 09:30:00.123456 UTC' AS ts, JSON '{\"k\":1}' AS j, "
+            + "STRUCT(7 AS a, 'x' AS b) AS st, [1, 2] AS ai, CAST(NULL AS INT64) AS nl");
+        var set = result?.ResultSets.SingleOrDefault();
+        var row = set is null ? null : Rows(set).SingleOrDefault();
+        var texts = row is null ? "" : string.Join("|", row.Select(cell => cell.Text ?? "NULL"));
+        check(code == "ok" && result?.Status == "completed" && row is not null && row.All(cell => (cell.Flags & PageReader.Error) == 0)
+            && texts == "1|1.5|1.5|true|héllo|0xDEAD|2026-11-15|09:30:00.123|2026-11-15T09:30:00.5|2026-11-15 09:30:00.123456 UTC|{\"k\":1}|{\"a\":\"7\",\"b\":\"x\"}|[\"1\",\"2\"]|NULL"
+            && set!.Columns.Select(column => column.DataType).SequenceEqual(["INT64", "FLOAT64", "NUMERIC", "BOOL", "STRING", "BYTES", "DATE", "TIME", "DATETIME", "TIMESTAMP", "JSON", "STRUCT<a INT64, b STRING>", "ARRAY<INT64>", "INT64"]),
+            $"emulator: query.execute reads every type through the converter into the result store: {code} {message} {texts} {string.Join(",", set?.Columns.Select(column => column.DataType) ?? [])} {Messages(result)}");
+
+        (code, result, message) = await Execute("SELECT n FROM UNNEST(GENERATE_ARRAY(1, 1200)) AS n ORDER BY n");
+        set = result?.ResultSets.SingleOrDefault();
+        var values = set is null ? [] : Rows(set).Select(cells => cells[0].Text).ToList();
+        check(code == "ok" && set is { RowsRead: 1200, RowsStored: 1200, Truncated: null } && values.SequenceEqual(Enumerable.Range(1, 1200).Select(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            && result!.Messages.Any(entry => entry.Text == "(1200 rows affected)"),
+            $"emulator: query.execute pages a result past its first page, in order: {code} {message} {set?.RowsRead} {set?.RowsStored} {Messages(result)}");
+
+        (code, result, _) = await Execute("SELECT n FROM UNNEST(GENERATE_ARRAY(1, 1200)) AS n", maxRows: 10);
+        set = result?.ResultSets.SingleOrDefault();
+        check(set is { RowsRead: 1200, RowsStored: 10, Truncated: "rowLimit" }, $"emulator: the row limit stores the first rows and counts the rest: {set?.RowsRead} {set?.RowsStored} {set?.Truncated}");
+
+        (code, result, message) = await Execute($"DECLARE minimum INT64 DEFAULT 20; SELECT COUNT(*) AS n FROM {table} WHERE id > minimum;");
+        set = result?.ResultSets.SingleOrDefault();
+        check(code == "ok" && result?.Status == "completed" && set is not null && Rows(set).Single()[0].Text == "5",
+            $"emulator: a script's variables bind and an unqualified table resolves in the connection's default dataset: {code} {message} {Messages(result)}");
+
+        (code, result, message) = await Execute($"UPDATE {table} SET customer = 'renamed' WHERE id <= 2");
+        check(code == "ok" && result is { Status: "completed", ResultSets.Count: 0 }, $"emulator: DML completes with no result set: {code} {message} {result?.RecordsAffected} {Messages(result)}");
+
+        (code, result, message) = await Execute("SELECT * FROM no_such_table_" + Guid.NewGuid().ToString("N")[..8]);
+        check(code == "ok" && result is { Status: "failed", Error: not null, ResultSets.Count: 0 } && result.Job is { JobId.Length: > 0 }
+            && result.Messages.Any(entry => entry.Kind == "error"),
+            $"emulator: a failing query is the summary's error, with its job: {code} {message} {result?.Error} {Messages(result)}");
     }
 
     static async Task<string> Outcome(Func<Task> call)

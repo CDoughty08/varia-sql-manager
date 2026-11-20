@@ -3,7 +3,7 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, allFilesType, createActionSpecs, createActions,
-  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, kindDialogActionSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
+  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, kindDialogActionSpecs, objectActions, objectActionSpecs, propertiesGridRows, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
   serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage, type FactDescribeId
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
@@ -1143,7 +1143,9 @@ function tablePropertiesDocs(): string[] {
     `principal, at most ${tableLimits.permissions.toLocaleString('en-US')} rows), Change Tracking, Storage (compression, filegroups, partitioning, rows and`,
     `space, at most ${tableLimits.partitions.toLocaleString('en-US')} partitions), Security Predicates (only when a row-level security policy names the table, SQL`,
     `Server 2016 and later) and Extended Properties (at most ${tableLimits.extendedProperties} read). SSMS\'s Quoted identifier is not shown: only`,
-    '`OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions.',
+    '`OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions. Permissions, Partitions (a partitioned',
+    'table\'s) and Security Predicates are results grids: select, copy with headers, sort and Save Results As as in query',
+    `results, each as tall as its rows up to ${propertiesGridRows} before it scrolls, with the page's own words when it is empty.`,
     '',
     'Apply changes only what differs from what was read, in one transaction (`SET XACT_ABORT ON`), with Script showing the',
     'same statements: Lock escalation (' + lockEscalationTokens.map(token => `${lockEscalationLabels[token]} = ${code(token)}`).join(', ') + '; not on a',
@@ -1218,8 +1220,11 @@ function databasePropertiesDocs(): string[] {
     'state in SMO\'s words ("Normal", "Restoring, Standby", "Normal, Read-Only"), and offers Refresh, Discard Changes and',
     'Apply; Stop replaces them while the changes run. Its sections are SSMS\'s pages. General shows read-only facts as',
     'text: backups, name, status, owner, date created, size, space available, number of users, memory-optimized memory and',
-    'collation. Files and Filegroups list the database\'s files and filegroups read-only in this version; Owner in Files is',
-    'editable (typed, suggested from the server\'s logins, or chosen in Select Database Owner). Options shows Collation,',
+    'collation. Files and Filegroups list the database\'s files and filegroups read-only in this version, as results grids',
+    '(Database files; Rows, FILESTREAM and Memory Optimized Data filegroups): select, copy with headers, sort and Save',
+    `Results As as in query results, each as tall as its rows up to ${propertiesGridRows} before it scrolls; an empty list says so in its`,
+    'frame. Owner in Files is editable (typed, suggested from the server\'s logins, or chosen in Select Database Owner).',
+    'Options shows Collation,',
     'Recovery model, Compatibility level and Containment type, then every option under its category: a boolean as a',
     'switch, an enum of four values or fewer as a segmented control, a longer or server-supplied one as a list, a number as',
     'a number field, and what Varia does not change as text. A row\'s whole description shows in a strip under the',

@@ -40,8 +40,10 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
 /// :on error exit); by default execution continues with the next batch, as SSMS does. DiscardResults reads every row
 /// and keeps none (SSMS's Discard results after execution): result sets are counted, execution plans are kept.</summary>
-internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false);
+/// <summary>query.execute. Database is SQL Server's and required there; Dataset is a BigQuery query's default dataset
+/// (the connection's when left out), which SQL Server refuses.</summary>
+internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
@@ -113,7 +115,9 @@ internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
 /// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null);
+    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null,
+    BigQuery.BigQueryJobSummary? Job = null);
+
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
@@ -829,6 +833,12 @@ internal sealed record SsisCatalogSetupArgs(string ConnectionId, string RequestI
 /// <summary>What Create Catalog will do on the server: SsisCatalogSetup in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool StartupDefault, string BackupFile, string DataFile, string LogFile);
 internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
+/// <summary>agent.profile (src/shared/agent/profile.ts): one login's SQL Server Agent facts on one server.</summary>
+internal sealed record AgentProfileArgs(string ConnectionId, string RequestId);
+/// <summary>AgentProfile in src/shared/agent/profile.ts; AgentXps and DatabaseMailXps are absent when unreadable: msdb refused the login and the server-scope read failed too.</summary>
+internal sealed record AgentProfileDto(string Platform, int EngineEdition, bool MsdbAccess, bool Sysadmin, bool UserRole, bool ReaderRole, bool OperatorRole, bool PurgeHistory,
+    bool ServerServices, bool Sessions, bool AlterAnyCredential, bool Clustered, bool? AgentXps, bool? DatabaseMailXps, bool DatabaseMail);
+internal sealed record AgentProfileResult(AgentProfileDto? Profile, long ElapsedMs, ExplorerError? Error = null);
 /// <summary>activity.details (src/shared/activity/schema.ts): one session by its id and login time (server local time,
 /// yyyy-MM-ddTHH:mm:ss.fffffff); Text asks for one text whole, Locks also reads its locks. SessionActions re-checks every bound.</summary>
 internal sealed record ActivityDetailsArgs(string ConnectionId, string RequestId, int SessionId, string LoginTime, string? Text = null, bool? Locks = null);

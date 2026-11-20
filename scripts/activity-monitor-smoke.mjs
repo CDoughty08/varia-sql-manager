@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -25,6 +25,7 @@ let step = 'launch'
 let app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
 const watchdog = setTimeout(() => { console.error(`Activity Monitor suite timed out during: ${step}.`); app.process()?.kill(); process.exit(1) }, 420_000)
 let page = await app.firstWindow()
+const readClipboard = () => app.evaluate(({ clipboard }) => clipboard.readText())
 page.setDefaultTimeout(15000)
 /** Resizes the window itself (not an emulated viewport), so container queries and the panes' measure see real sizes. */
 async function size(width, height) {
@@ -548,9 +549,27 @@ try {
   // A section a permission kept out says why; the others show.
   await expect(details.getByText('tempdb usage needs VIEW SERVER STATE.', { exact: true })).toBeVisible()
   await expect.poll(async () => (await calls('activity.details')).at(-1)?.params).toMatchObject({ sessionId: 57, loginTime: '2026-11-09T08:00:00.000' })
+  // Waits, Transactions and Locks are card grids: Select all and Copy with Headers write them as a results grid copies.
+  const eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const detailsGrid = name => details.getByRole('grid', { name: new RegExp(`^${name}(?:, |$)`) })
+  const copyGrid = async grid => {
+    await gridCell(grid, 0, 0).click()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Control+Shift+C')
+  }
+  await expect(detailsGrid('Session waits')).toHaveAttribute('aria-label', /^Session waits, 1 row, 5 columns/)
+  await copyGrid(detailsGrid('Session waits'))
+  await expect.poll(readClipboard).toBe(['Wait type\tTasks\tWait (ms)\tMax (ms)\tSignal (ms)', 'LCK_M_S\t1\t41,200\t41,200\t0'].join(eol))
+  await expect(detailsGrid('Transactions')).toHaveAttribute('aria-label', /^Transactions, 1 row, 7 columns/)
+  await copyGrid(detailsGrid('Transactions'))
+  await expect.poll(readClipboard).toBe(['ID\tName\tType\tState\tDatabase\tBegin time\tLog used (bytes)', '90211\tuser_transaction\treadWrite\tactive\tSalesDb\t2026-11-09 08:00:05.000\t2,048'].join(eol))
   await details.getByRole('button', { name: 'Load locks', exact: true }).click()
-  await expect(details.getByRole('rowheader', { name: 'KEY', exact: true })).toBeVisible()
+  await expect(detailsGrid('Locks')).toHaveAttribute('aria-label', /^Locks, 1 row, 5 columns/)
+  await copyGrid(detailsGrid('Locks'))
+  await expect.poll(readClipboard).toBe(['Resource\tDatabase\tMode\tStatus\tCount', 'KEY\tSalesDb\tX\tGRANT\t1'].join(eol))
   expect((await calls('activity.details')).at(-1).params.locks).toBe(true)
+  // Focus goes back to the flyout, whose Escape closes it below.
+  await details.focus()
   // The monitor keeps sampling beside it (nonmodal), and Escape closes it.
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   await page.keyboard.press('Escape')

@@ -164,10 +164,10 @@ internal static partial class RestoreSql
     public static List<string> LintCatalog(string text)
     {
         var problems = new List<string>();
-        foreach (var builtin in CatalogSql.Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        foreach (var builtin in CatalogSql.Uses(text, CatalogSql.Builtins)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
-        if (text.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase) || text.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || text.Contains("DB_ID(", StringComparison.OrdinalIgnoreCase))
-            problems.Add("uses a metadata function");
+        problems.AddRange(CatalogSql.GluedNumbers(text));
+        if (CatalogSql.Uses(text, ["OBJECT_ID(", "DB_NAME(", "DB_ID("]).Any()) problems.Add("uses a metadata function");
         // Words inside the allowed literals (N'CREATE ANY DATABASE') are not statements.
         var bare = LiteralPattern().Replace(text, "''");
         if (Regex.IsMatch(bare, @"\bEXEC(UTE)?\b|sp_executesql", RegexOptions.IgnoreCase)) problems.Add("runs a procedure or dynamic SQL");

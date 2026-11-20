@@ -176,7 +176,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     return {
       maxRows: settings['queryResults.grid.maxRows'], maxResultSets: settings['queryResults.grid.maxResultSets'],
       timeoutSeconds: connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout'],
-      ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {},
+      // Stop on error is SQL Server's (GO batches); a BigQuery query is one job, and main refuses the option for it.
+      ...settings['queryExecution.stopOnError'] && connection.providerId !== 'bigquery' ? { stopOnError: true } : {},
       ...settings['queryResults.grid.discardResults'] ? { discardResults: true } : {}
     }
   }
@@ -255,10 +256,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const provenance: QueryProvenance = Object.freeze({ queryId, connectionId: connection.id, generation: connection.generation, database: document.database, ...connection.targetId ? { targetId: connection.targetId } : {} })
     this.sources.set(tabId, { queryId, revision: this.documents.revision(tabId) })
     const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
+    // A BigQuery query has no SQL Server options (plans, client statistics) and takes the tab's dataset, not a database.
+    const bigQuery = connection.providerId === 'bigquery'
+    const sqlServerOnly: { includeActualPlan?: boolean; includeLivePlan?: boolean; includeClientStatistics?: boolean } = bigQuery ? {} : document
     // Reserve before the first await so repeated commands cannot start a second script.
-    const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
+    const livePlan = sqlServerOnly.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
     this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, provenance, ...livePlan ? { livePlan } : {} })
-    if (document.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
+    if (sqlServerOnly.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
       // The options are read once, so the Results view's discard notice describes what this run was asked.
@@ -270,9 +274,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           this.update(tabId, { ...state, session: { connectionId: connection.id, spid, login } })
       }, { discard: options.discardResults === true })
       this.events.emit({ type: 'query.started', tabId, queryId })
-      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId,
-        ...options, ...document.includeActualPlan ? { includeActualPlan: true } : {},
-        ...document.includeClientStatistics ? { includeClientStatistics: true } : {}, ...document.includeLivePlan ? { includeLivePlan: true } : {} })
+      const target = !bigQuery ? { database: document.database } : /^\w{1,1024}$/.test(document.database) ? { dataset: document.database } : {}
+      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, ...target, sql, startLine, queryId,
+        ...options, ...sqlServerOnly.includeActualPlan ? { includeActualPlan: true } : {},
+        ...sqlServerOnly.includeClientStatistics ? { includeClientStatistics: true } : {}, ...sqlServerOnly.includeLivePlan ? { includeLivePlan: true } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }

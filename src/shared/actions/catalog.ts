@@ -15,6 +15,9 @@ import { tablesCatalog } from './tables.ts'
 import type { ProviderId } from '../providers.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
+/** The most rows a Properties list (Table and Database Properties) shows before it scrolls; the page's sections scroll too. */
+export const propertiesGridRows = 12
+
 export const objectActions = [
   'selectTop',
   'rename',
