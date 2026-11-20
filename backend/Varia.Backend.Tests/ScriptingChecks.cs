@@ -223,6 +223,8 @@ internal static class ScriptingChecks
         var kinds = new[] { "agentJob", "agentAlert", "agentOperator", "agentProxy" };
         check(kinds.All(kind => ScriptPreflight.Agent(kind) && !ScriptPreflight.ServerScope(kind) && ScriptPreflight.Home(kind, null) == "msdb" && Catalog.Row(kind, "") is { Scriptable: true, Preflight: "agentObject" } row
                 && row.Enabled.SequenceEqual(["create", "drop", "dropAndCreate"]) && row.Disabled.Count == 0)
+            // C#'s Agent kinds are exactly the catalogue's agentObject rows, so a new Agent kind cannot run its preflight outside msdb.
+            && Catalog.Targets.Where(row => row.Scriptable).All(row => ScriptPreflight.Agent(row.Kind) == (row.Preflight == "agentObject"))
             && ScriptPreflight.Home("login", null) == "master" && ScriptPreflight.Home("table", "Sales") == "Sales" && !ScriptPreflight.Agent("login")
             && ScriptPreflight.Statement("agentJob", 16, Catalog).Contains("j.category_id AS category_id FROM dbo.sysjobs_view AS j WHERE j.name = @name", StringComparison.Ordinal)
             && ScriptPreflight.Statement("agentProxy", 16, Catalog).Contains("FROM dbo.sysproxies AS p", StringComparison.Ordinal),

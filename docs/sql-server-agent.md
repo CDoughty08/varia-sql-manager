@@ -40,6 +40,8 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   `sysjobs_view` with its category, since SMO finds a job below `JobServer` by name and category. A login in
   `SQLAgentUserRole` alone scripts its own jobs (`sysjobs_view` shows it only those); msdb refuses it the alert,
   operator and proxy tables, which Object Explorer does not list for it either. A cloud database has no Agent to script.
+  As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
+  script.
 
 ## What AG-0 found on a real server
 

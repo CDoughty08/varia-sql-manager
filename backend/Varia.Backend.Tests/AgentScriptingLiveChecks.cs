@@ -33,9 +33,10 @@ internal static class AgentScriptingLiveChecks
         var proxy = scratch.AgentObject("px");
         var credential = scratch.AgentObject("cr");
         var alerts = !profile.Linux;
-        var made = await sql("DECLARE @id uniqueidentifier;\n"
+        // The step's name would end SMO's step header early and break it over lines, were it written into the header as is.
+        var made = await sql("DECLARE @id uniqueidentifier, @step sysname = N'Step ''1'' */ --' + NCHAR(10) + N'x /*';\n"
             + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @description = " + Quote(ScratchDatabase.JobMarker) + ", @job_id = @id OUTPUT;\n"
-            + "EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = N'Step ''1''', @subsystem = N'TSQL', @command = N'SELECT 1;', @database_name = N'master';\n"
+            + "EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = @step, @subsystem = N'TSQL', @command = N'SELECT 1;', @database_name = N'master';\n"
             + "EXEC msdb.dbo.sp_add_jobschedule @job_id = @id, @name = " + Quote(schedule) + ", @freq_type = 4, @freq_interval = 1, @active_start_time = 30000;\n"
             + "EXEC msdb.dbo.sp_add_jobserver @job_id = @id;\n"
             + "EXEC msdb.dbo.sp_add_operator @name = " + Quote(op) + ", @email_address = N'dba@example.invalid';", "msdb");
@@ -80,7 +81,8 @@ internal static class AgentScriptingLiveChecks
             var jobCreate = await Script("agentJob", job, "create");
             var alertCreate = alerts ? await Script("agentAlert", alert, "create") : null;
             var proxyCreate = await Script("agentProxy", proxy, "create");
-            check(jobCreate.Text is { } jobText && jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'''", StringComparison.Ordinal)
+            check(jobCreate.Text is { } jobText && jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'' */ --", StringComparison.Ordinal)
+                && HeaderGuard.Safe(jobText)
                 && jobText.Contains("msdb.dbo.sp_add_jobschedule ", StringComparison.Ordinal) && jobText.Contains("N'" + schedule + "'", StringComparison.Ordinal)
                 && jobText.Contains("msdb.dbo.sp_add_jobserver ", StringComparison.Ordinal) && jobText.Contains("BEGIN TRANSACTION", StringComparison.Ordinal)
                 // SMO scripts an alert's condition and response job, not its notifications (AgentNotify stays off, as in SSMS's Script As).
@@ -88,7 +90,7 @@ internal static class AgentScriptingLiveChecks
                     && !alertCreate.Text.Contains("sp_add_notification", StringComparison.Ordinal))
                 && proxyCreate.Text?.Contains("N'" + credential + "'", StringComparison.Ordinal) == true && proxyCreate.Text.Contains("sp_grant_proxy_to_subsystem", StringComparison.Ordinal)
                 && !proxyCreate.Text.Contains("SECRET", StringComparison.OrdinalIgnoreCase),
-                "a job's script holds its step (quotes doubled), schedule and target server in SMO's transaction; an alert's its condition without notifications; a proxy's its "
+                "a job's script holds its step (quotes doubled; a name with */ and a line break leaves every header whole), schedule and target server in SMO's transaction; an alert's its condition without notifications; a proxy's its "
                 + "credential by name and its subsystem, never a secret: " + Excerpt(jobCreate.Text) + " " + Excerpt(alertCreate?.Text) + " " + Excerpt(proxyCreate.Text) + " "
                 + jobCreate.Error?.Message + " " + proxyCreate.Error?.Message);
 
