@@ -159,7 +159,7 @@ internal static partial class DiffChecks
         var used = budget.UsedBytes;
         store.Resize(1L << 30, used);
         var failed = Code(Args(left.ResultId, right.ResultId, old.ResultId));
-        check(failed is "DIFF_ROWS_TOO_LARGE" or "TOO_LARGE" && budget.AllowanceCount == 0 && budget.AllowedBytes == 0 && budget.UsedBytes == used,
+        check(failed == "DIFF_ROWS_TOO_LARGE" && budget.AllowanceCount == 0 && budget.AllowedBytes == 0 && budget.UsedBytes == used,
             "a replace refused even under its allowance lets the allowance go and keeps nothing: " + failed);
         store.Resize(1L << 30, used + working);
         var replaced = Call<ResultsDiffResult>(service, "results.diff", Args(right.ResultId, left.ResultId, old.ResultId, -1, "entry"));

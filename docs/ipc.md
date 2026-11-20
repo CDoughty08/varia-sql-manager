@@ -1375,7 +1375,7 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   one's charge ([Result store and memory budget](#result-store-and-memory-budget)), kept by the new comparison until
   either is released. It must be a comparison of the same query and the same two inputs, in either order
   (`INVALID_PARAMS`; released: `RESULT_RELEASED`). Main forwards it only for a comparison its port owns whose recorded
-  inputs are the request's, either way round (`RESULT_UNAVAILABLE` for one it does not own, `INVALID_REQUEST` for other
+  inputs are the request's, either way round (`RESULT_UNAVAILABLE` for a result that is not a comparison it owns, `INVALID_REQUEST` for other
   inputs). The caller releases the old comparison once the new one is shown.
 - **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it

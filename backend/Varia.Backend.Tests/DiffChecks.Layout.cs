@@ -20,6 +20,7 @@ internal static partial class DiffChecks
         EntryCutRows(check);
         EntryRowLimit(check);
         EntryRefusals(check);
+        RefusalKinds(check);
     }
 
     private static T Call<T>(SqlService service, string method, object args) =>
