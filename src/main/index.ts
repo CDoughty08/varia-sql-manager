@@ -13,7 +13,7 @@ import { appIndexUrl, appProtocolHandler, appScheme, appSchemePrivileges } from 
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
-import { ResultsJobHost, supervisorJobs } from './results-jobs'
+import { ResultsJobHost, saveHeaders, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
 import { actionProgressRelay } from './action-progress'
@@ -879,7 +879,7 @@ app.whenReady().then(async () => {
     showSaveDialog: options => pageDialog<{ canceled: boolean; filePath?: string }>(window => dialog.showSaveDialog(window, options), { canceled: true }),
     progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) },
     // While settings.json cannot be read, Options cannot open either, so the defaults apply.
-    exportHeaders: async () => (await settings.load().catch(() => ({ values: settings.current() }))).values['queryResults.grid.includeColumnHeaders']
+    exportHeaders: async () => saveHeaders((await settings.load().catch(() => ({ values: settings.current() }))).values)
   })
   const scriptingRequests = new ScriptingRequests(backend)
   const actionRequests = new ActionRequests(backend)
@@ -988,6 +988,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-save', value => library.save(value))
   handle('varia:connections-remove', value => library.remove(value))
   handle('varia:connections-environment', value => library.setEnvironment(value))
+  handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
   // name, never its path, and for a federation configuration the token file it reads (decision 49).
   handle('varia:connections-pick-key-file', async value => {

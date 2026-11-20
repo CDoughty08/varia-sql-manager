@@ -477,20 +477,21 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     scriptable: false, insert: 'none'
   },
   ssisEnvironment: { title: 'Environment', scope: 'ssisFolderObject', icon: 'symbol-variable', scriptable: false, insert: 'none' },
-  // SQL Server Agent: server-level objects named by name alone (unique per server), an error log by its archive number (0 is
-  // Current), a proxy subsystem by its subsystem name. Script As comes with AG-4, so none is scriptable yet.
+  // SQL Server Agent: server-level objects named by name alone (unique per server, except a multi-server job that shares a
+  // local job's name, which Script As refuses as ambiguous), an error log by its archive number (0 is
+  // Current), a proxy subsystem by its subsystem name. Jobs, alerts, operators and proxies are scriptable (AG-4).
   agent: {
     title: 'SQL Server Agent', scope: 'server', icon: 'agent', folders: ['agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentErrorLogs'],
     singletons: [{ kind: 'agentJobActivity', order: 2 }], platforms: agentPlatforms, scriptable: false, insert: 'none'
   },
   agentJobActivity: { title: 'Job Activity Monitor', scope: 'server', icon: 'agent-activity', opens: 'agentJobActivity', platforms: agentPlatforms, scriptable: false, insert: 'none' },
-  agentJob: { title: 'Job', scope: 'serverObject', icon: 'agent-job', platforms: agentPlatforms, scriptable: false, insert: 'raw' },
-  agentAlert: { title: 'Alert', scope: 'serverObject', icon: 'bell', platforms: agentPlatformGates.alerts.platforms, scriptable: false, insert: 'raw' },
-  agentOperator: { title: 'Operator', scope: 'serverObject', icon: 'agent-operator', platforms: agentPlatforms, scriptable: false, insert: 'raw' },
+  agentJob: { title: 'Job', scope: 'serverObject', icon: 'agent-job', platforms: agentPlatforms, smo: 'Job', insert: 'raw' },
+  agentAlert: { title: 'Alert', scope: 'serverObject', icon: 'bell', platforms: agentPlatformGates.alerts.platforms, smo: 'Alert', insert: 'raw' },
+  agentOperator: { title: 'Operator', scope: 'serverObject', icon: 'agent-operator', platforms: agentPlatforms, smo: 'Operator', insert: 'raw' },
   agentProxySubsystem: {
     title: 'Proxy Subsystem', scope: 'serverObject', icon: 'folder', list: 'agentProxies', rows: ['agentProxy'], platforms: agentPlatformGates.proxies.platforms, scriptable: false, insert: 'none'
   },
-  agentProxy: { title: 'Proxy', scope: 'serverObject', icon: 'agent-proxy', platforms: agentPlatformGates.proxies.platforms, scriptable: false, insert: 'raw' },
+  agentProxy: { title: 'Proxy', scope: 'serverObject', icon: 'agent-proxy', platforms: agentPlatformGates.proxies.platforms, smo: 'ProxyAccount', insert: 'raw' },
   agentErrorLog: { title: 'Error Log', scope: 'serverObject', icon: 'output', platforms: agentPlatformGates.errorLogs.platforms, scriptable: false, insert: 'none' }
 }
 export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {

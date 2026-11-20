@@ -35,5 +35,7 @@ describe('clipboard writes supersede a running copy', () => {
   it('starts a copy generation for a live grid copying without the menu (SSIS Operations), as output.copy does', () => {
     const source = readFileSync('src/renderer/src/live/LiveGridPane.tsx', 'utf8')
     expect(source).toMatch(/beginCopy\(\); void created\.copy\(/)
+    // Its plain Copy follows the copy column headers setting, as output.copy does; Copy with Headers always has them.
+    expect(source).toMatch(/created\.copy\(headers \?\? settings\.getSnapshot\(\)\.values\['queryResults\.grid\.copyColumnHeaders'\]\)/)
   })
 })

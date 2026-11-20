@@ -6,7 +6,8 @@ import { explorerStatics } from './explorer-tree.mjs'
 /**
  * What the stub serves below each connected server: Databases › AppData with Tables (dbo.Orders; dbo.Slow, whose
  * scripts wait until cancelled; and dbo.Warned, whose scripts carry the backend's VIEW DEFINITION warning), Views (dbo.OrderSummary), Programmability › Stored Procedures (dbo.ShipOrder, and
- * dbo.Secret, which is encrypted), and Security › Logins (sa). A script is `-- <verb> <object>`.
+ * dbo.Secret, which is encrypted), Security › Logins (sa), and SQL Server Agent › Jobs (Nightly backup), whose scripts are in msdb.
+ * A script is `-- <verb> <object>`.
  */
 export function scriptingStubData() {
   return { statics: explorerStatics() }
@@ -27,12 +28,16 @@ export function installScriptingStub({ ipcMain }, { statics }) {
     tables: owner => ['Orders', 'Slow', 'Warned'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
     storedProcedures: owner => ['ShipOrder', 'Secret'].map(name => object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'procedure', { subtype: 'sql' })),
-    logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })]
+    logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })],
+    agentJobs: () => [object({ kind: 'agentJob', name: 'Nightly backup' }, 'Nightly backup', 'agent-job', { hasChildren: false })]
   }
+  // The server's SQL Server Agent node, a singleton after its folders, as the backend lists it behind the release gate.
+  const singletons = { server: () => [object({ kind: 'agent' }, 'SQL Server Agent', 'agent')] }
   function children({ node }) {
     if (node.type === 'object') {
       const ids = statics.objects[node.object.kind] ?? []
-      return ok({ nodes: folders(node.object, ids), total: ids.length, elapsedMs: 1 })
+      const nodes = [...folders(node.object, ids), ...singletons[node.object.kind]?.() ?? []]
+      return ok({ nodes, total: nodes.length, elapsedMs: 1 })
     }
     const nodes = [...folders(node.owner, statics.folders[node.folder] ?? []), ...lists[node.folder]?.(node.owner) ?? []]
     return ok({ nodes, total: nodes.length, elapsedMs: 1 })
@@ -44,7 +49,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
       if (cancelled) return { ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' }
     }
     const warnings = target.name === 'Warned' ? [`You do not have VIEW DEFINITION permission on ${label}; parts you cannot see (for example indexes or constraints) may be missing from the script.`] : []
-    const result = { database: target.database ?? 'master', warnings, commands: 1, elapsedMs: 1 }
+    const result = { database: target.database ?? (target.kind.startsWith('agent') ? 'msdb' : 'master'), warnings, commands: 1, elapsedMs: 1 }
     if (target.name === 'Secret' && ['create', 'alter', 'createOrAlter', 'dropAndCreate'].includes(params.verb)) {
       return ok({ ...result, error: { code: 'ENCRYPTED', message: `${label} is encrypted (WITH ENCRYPTION), so its definition cannot be scripted. DROP and EXECUTE scripts still work.`, retryable: false } })
     }
@@ -64,7 +69,7 @@ export function installScriptingStub({ ipcMain }, { statics }) {
           targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlserver', authentication: params.authentication, id: principalId } } })
       }
       case 'connections.disconnect': return ok({ disconnected: true })
-      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
+      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
       case 'scripting.script': return script(params)
       case 'query.session.close': return ok({ closed: true })

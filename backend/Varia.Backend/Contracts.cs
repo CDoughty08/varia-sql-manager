@@ -44,7 +44,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    int StartColumn = 1);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,

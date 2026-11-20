@@ -8,15 +8,26 @@ internal static class UrnBuilder
 {
     private static readonly string[] ServerTypes = ["Login", "Role", "Credential", "LinkedServer", "BackupDevice", "DdlTrigger", "Audit", "ServerAuditSpecification"];
 
+    /// <summary>SQL Server Agent's objects, below the server's JobServer.</summary>
+    private static readonly string[] AgentTypes = ["Job", "Alert", "Operator", "ProxyAccount"];
+
     private static string Value(string text) => "'" + Urn.EscapeString(text) + "'";
 
     /// <param name="serverUrn">Server.Urn.Value, such as Server[@Name='HOST'].</param>
     /// <param name="urnType">The row's URN type from the catalogue (Column/Default is a default constraint).</param>
     /// <param name="parentUrnType">Table or View, for child kinds.</param>
     /// <param name="column">The column a default constraint belongs to (from the preflight).</param>
-    public static string Build(string serverUrn, string kind, string urnType, ObjectRefDto target, string? parentUrnType = null, string? column = null)
+    /// <param name="category">A job's category_id (from the preflight): SMO keys a job by its name and category.</param>
+    public static string Build(string serverUrn, string kind, string urnType, ObjectRefDto target, string? parentUrnType = null, string? column = null, int? category = null)
     {
         if (kind == "database") return serverUrn + "/Database[@Name=" + Value(target.Name!) + "]";
+        if (AgentTypes.Contains(urnType))
+        {
+            if (target.Database is not null) throw new InvalidOperationException("Agent objects have no database.");
+            var key = urnType == "Job" ? " and @CategoryID=" + Value((category ?? throw new InvalidOperationException("A job needs its category."))
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)) : "";
+            return serverUrn + "/JobServer/" + urnType + "[@Name=" + Value(target.Name!) + key + "]";
+        }
         // Server-level kinds have no database; the same URN types below a database (Role, DdlTrigger) are database-level.
         if (target.Database is null)
         {

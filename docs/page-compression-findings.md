@@ -120,6 +120,53 @@ same budget (counting the sidecar, below the table). The other integer packings 
 128-value frame-of-reference bit packing) came within 1.5 % of LEB128 once Zstandard ran, and rebuilding offsets costs
 about 1 ns a cell against Zstandard's 150 µs a page, so SIMD decoding buys nothing measurable.
 
+<a id="typed-form"></a>
+
+**Typed form.** Inside the lengths form, a text column whose every non-NULL cell on the page is the exact text of one
+value shape is kept as values instead of lengths and text (`PageCodec.Typed.cs`):
+
+- **Shapes:** an integer, a decimal with between n and m fraction digits (money's 2 to 4 and floats that read as
+  decimals too), up to 18 digits in all; a GUID in one letter case; `yyyy-MM-dd` with an optional time, 0 to 7 fraction
+  digits and offset; a time.
+- **Encoding:** each value is the zigzag LEB128 of its difference from the one before, or of its distance from the
+  page's least value when that is shorter (scattered values); a GUID is its 16 bytes.
+- **Exact by construction:** the shape is read from the text alone, never from the column's type, and a column is typed
+  only when every cell is the one text its value writes back: no leading zeros, plus sign or negative zero, trailing
+  zeros only down to the column's fewest fraction digits, valid dates and times, one fixed layout. Anything else (an
+  exponent, 19 digits, a lowercase GUID among uppercase, an offset of `-00:00`) leaves the column as text, so the page
+  comes back byte for byte. One-character columns (bits) stay text: they pack as well and typing only slows unpacking.
+- **Two frames:** the typed values go in a Zstandard frame of their own, ahead of the form's frame. In one frame their
+  bytes spoil Zstandard's literal tables for the text digits beside them: `numeric` packed 2 % larger typed in one frame,
+  and 7 % smaller in two. Unpacking reads the values' frame into a pooled room, then expands the form in place as before.
+
+Measured with `--typed` (both forms timed page by page in turn), counting the lengths sidecar:
+
+| Shape | Lengths form | Typed form | Smaller by | Unpack a page |
+| --- | ---: | ---: | ---: | ---: |
+| `orders` | 2.53× | 2.96× | 15 % | 144 → 178 µs |
+| `wide` | 3.21× | 4.33× | 26 % | 143 → 232 µs |
+| `log` | 2.27× | 2.39× | 5 % | 133 → 136 µs |
+| `numeric` | 2.88× | 3.07× | 7 % | 146 → 220 µs |
+
+SQL Server's own catalog and DMV rows (`--typed-form-bench`: `sys.messages`, `sys.all_columns`, `sys.all_objects`,
+`sys.all_parameters`, `sys.dm_exec_query_stats`, `sys.dm_os_performance_counters`, msdb's objects with their columns)
+pack 5 to 21 % smaller, and unpack in 0.03 to 0.3 ms a page instead of 0.02 to 0.1 ms. Typed packing compresses as
+fast as before (310 to 640 MB/s on one thread).
+
+What the slower unpack costs where it shows (0.5 GiB, typed against untyped):
+
+| | `orders` | `wide` |
+| --- | ---: | ---: |
+| Budget charged once the policy packed the result (`--policy`) | 229 → 195 MiB | 178 → 119 MiB |
+| A read while scrolling, six-page cache | 0.31 → 0.34 ms | 0.27 → 0.42 ms |
+| Three pages at random positions, cold | 0.6 → 0.8 ms | 0.5 → 0.8 ms |
+| Sorted view's 256-row screen, 16 workers (p99) | 4.0 → 5.1 ms (5.6 → 13.5) | 4.1 → 6.5 ms (6.1 → 8.3) |
+| The same screen on one thread | 44 → 44 ms | 35 → 72 ms |
+| Find over every packed page, 16 workers (0.25 GiB) | 39 → 40 ms | 96 → 117 ms |
+
+Find over every packed page of a 0.25 GiB result, with no page filters, takes 2 % longer on `orders` and `log` and
+20 to 23 % on `wide` and `numeric`; over the catalog rows it takes 0 to 15 % longer.
+
 1 GiB of each realistic shape on .NET 11, page window 256 KiB (a 4 MiB window gave the same ratio). Ranges run across
 the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 
@@ -128,7 +175,8 @@ the four shapes (`orders`, `wide`, `log`, `numeric`; see [Shapes](#shapes)):
 | zstd −1 | 1.15–1.66 | 420–940 MB/s | 2.0–3.8 GB/s | 0.02–0.04 s |
 | zstd 1 | 1.86–2.70 | 370–780 MB/s | 1.4–1.8 GB/s | 0.04–0.05 s |
 | zstd 2 | 1.93–2.80 | 310–380 MB/s | 1.3–1.9 GB/s | 0.05 s |
-| **zstd 2, lengths form** (`page`) | **2.29–3.24** | **270–330 MB/s** | **1.4–1.7 GB/s** | **0.05 s** |
+| zstd 2, lengths form (`lengths`) | 2.29–3.24 | 270–330 MB/s | 1.4–1.7 GB/s | 0.05 s |
+| **zstd 2, typed form** (`page`, the store's) | **2.40–4.39** | **310–640 MB/s** | **1.1–1.9 GB/s** | |
 | zstd 3 | 1.93–2.82 | 170–190 MB/s | 1.1–1.7 GB/s | 0.05–0.06 s |
 | LZ4 | 1.13–1.51 | 450–680 MB/s | 3.0–3.8 GB/s | 0.02–0.04 s |
 | LZ4 HC 3 | 1.43–2.11 | 67–81 MB/s | 3.1–4.2 GB/s | 0.02 s |
@@ -274,11 +322,16 @@ not part of `npm run check` or CI. Every run warms the JIT with an untimed pass 
 - `--codecs name,name` picks the codecs run over all pages; `--keep name` (default `brotli1`) is the one kept for the
   memory and rehydrate steps; `--no-ops` skips the operations. Codec names: `brotli<quality>`, `deflate<level>`,
   `zlib<level>`, `zstd<level>` (`zstdm1` is level −1), `zstd<level>r` (one encoder and decoder kept per thread),
-  `lz4`, `lz4hc3`, `w22` for a 4 MiB window, and `page` for the store's own codec (`PageCodec`: zstd 2 over the
-  lengths form).
+  `lz4`, `lz4hc3`, `w22` for a 4 MiB window, `page` for the store's own codec (`PageCodec`: zstd 2 over the
+  lengths form with typed columns) and `lengths` for it without typed columns.
 - `--fused`: each operation raw, rehydrated and fused, with budget and heap peaks. `--fused --whole`: distinct lists,
   row identities, search and diffs.
 - `--policy`: the real `ResultPacker` over one result. `--stage2`: four results of 256 MiB, the first shown.
+  `--untyped` with either, or with `--fused`, packs without typed columns.
+- `--typed`: the result's pages packed with and without typed columns, both timed page by page in turn, then Find over
+  every page of each. `--columns`: each column of a sample of pages packed on its own, with and without typing.
+- `--typed-form-bench <server>` (`TypedFormBench.cs`, its own entry point): the same comparison over SQL Server's own
+  catalog and DMV rows, read with SELECTs and Windows authentication.
 - `VARIA_BENCH_CORES=n` holds the process to n cores and the workers to what such a machine would have.
 
 The LZ4 package (`K4os.Compression.LZ4`, managed) is referenced only by the test project, for the comparison.

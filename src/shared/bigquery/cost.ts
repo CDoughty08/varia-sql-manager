@@ -36,5 +36,6 @@ export function formatDollars(bytes: number): string {
   return `$${whole}.${String(cents % 100).padStart(2, '0')}`
 }
 
-/** "1.24 GiB processed · < $0.01": the Results status's figure for a finished BigQuery job. */
-export function processedFact(bytes: number): string { return `${formatBytes(bytes)} processed · ${formatDollars(bytes)}` }
+/** "1.24 GiB processed · < $0.01": the Results status's figure for a finished BigQuery job; bytes alone without prices
+ *  (Show cost as Bytes only). */
+export function processedFact(bytes: number, prices = true): string { return prices ? `${formatBytes(bytes)} processed · ${formatDollars(bytes)}` : `${formatBytes(bytes)} processed` }

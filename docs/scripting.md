@@ -103,6 +103,10 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 | `trigger` | — | Script Trigger as | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | ✓ | `Trigger` | `child` |
 | `index` | none, `clustered`, `nonclustered`, `clusteredColumnstore`, `nonclusteredColumnstore`, `xml`, `spatial`, `hash`, `other` | Script Index as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Index` | `child` |
 | `statistic` | — | Script Statistics as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Statistic` | `child` |
+| `agentJob` | — | Script Job as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Job` | `agentObject` |
+| `agentAlert` | — | Script Alert as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Alert` | `agentObject` |
+| `agentOperator` | — | Script Operator as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Operator` | `agentObject` |
+| `agentProxy` | — | Script Proxy as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `ProxyAccount` | `agentObject` |
 
 Children are scripted only below these parents: `key` below `table`; `constraint` below `table`; `trigger` below `table` or `view`; `index` below `table` or `view`; `statistic` below `table` or `view`. A table type's keys, constraints and indexes are not.
 
@@ -110,7 +114,7 @@ Module preflights find the object by these `sys.objects.type` codes: `view`: V; 
 
 Deferred, with no Script submenu yet (key material, binaries or external integrations): `cryptographicProvider`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `externalDataSource`, `externalFileFormat`, `table` (`droppedLedger`), `view` (`droppedLedger`), `procedure` (`extended`), `procedure` (`replicationFilter`).
 
-Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog`.
+Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`.
 
 ## Options
 

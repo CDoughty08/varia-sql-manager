@@ -661,9 +661,9 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 var name = Intern(reader.GetString(0));
                 var modified = reader.GetDateTime(1);
-                var (text, longer) = definitions ? Text(reader, 2) : ("", false);
+                var (text, longer) = definitions ? Text(reader, 2) : (None, false);
                 var guide = Add(new IndexedObject("planGuide", "planGuides", null, name, Modified: modified));
-                if (text.Length > 0) objects.SetDefinition(guide, text, longer);
+                if (text is not null) objects.SetDefinition(guide, text, longer);
             }
             if (children)
             {
@@ -716,7 +716,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         {
             if (!byId.TryGetValue(reader.GetInt32(0), out var at) || objects.Removed(at)) continue;
             var (text, longer) = Text(reader, 1);
-            if (text.Length > 0) objects.SetDefinition(at, text, longer);
+            if (text is not null) objects.SetDefinition(at, text, longer);
         }
     }
 
@@ -740,10 +740,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             if (parent < 0 || name.Length == 0) continue;
             var held = Intern(name);
             if (!Lists(kind, parent)) continue;
-            var (text, longer) = definition && !reader.IsDBNull(2) ? Text(reader, 2) : ("", false);
+            var (text, longer) = definition && !reader.IsDBNull(2) ? Text(reader, 2) : (None, false);
             var child = Add(new(kind, folder, null, held, Subtype: subtype));
             objects.Attach(child, parent, objects.System(parent));
-            if (text.Length > 0) objects.SetDefinition(child, text, longer);
+            if (text is not null) objects.SetDefinition(child, text, longer);
         }
     }
 
@@ -879,8 +879,9 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 if (!byId.TryGetValue(reader.GetInt32(0), out var at)) continue;
                 var (text, longer) = ReadText(reader, 1, ref buffer, limits.DefinitionChars);
                 if (text.Length == 0) continue;
-                objects.Text(text);
-                objects.SetDefinition(at, text, longer);
+                var held = DefinitionText.Hold(text);
+                objects.Text(held);
+                objects.SetDefinition(at, held, longer);
             }
         }
         return objects.Build();
@@ -899,6 +900,16 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
 
     /// <summary>The pool's copy of <paramref name="value"/>, taking the read's one reference to it and charging its slot when the
     /// read does not hold it yet; null when either would leave less than <paramref name="keepFree"/> free.</summary>
+    private PackedText? Pooled(PackedText value, long keepFree)
+    {
+        if (objects.TryText(value, out var copy)) return copy;
+        var acquired = pool.TryAcquire(value, keepFree);
+        if (acquired is null) return null;
+        if (!TryCharge(IndexMemory.SlotBytes, keepFree)) { pool.Release([acquired]); return null; }
+        objects.Text(acquired);
+        return acquired;
+    }
+
     private string? Pooled(string value, long keepFree)
     {
         if (objects.TryText(value, out var copy)) return copy;
@@ -909,18 +920,22 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return acquired;
     }
 
-    /// <summary>A text column read only as far as the per-module limit and charged to the budget: empty when the budget is spent
-    /// (counted as cut), and whether it goes on past the limit.</summary>
-    private (string Text, bool Longer) Text(DbDataReader reader, int ordinal)
+    /// <summary>No definition (a typed null for the tuples below).</summary>
+    private static readonly object? None = null;
+
+    /// <summary>A definition column read only as far as the per-module limit and charged to the budget, held as the index holds it
+    /// (packed when long, <see cref="PackedText"/>): null when there is none or the budget is spent (counted as cut), and whether it
+    /// goes on past the limit.</summary>
+    private (object? Text, bool Longer) Text(DbDataReader reader, int ordinal)
     {
-        if (reader.IsDBNull(ordinal)) return ("", false);
+        if (reader.IsDBNull(ordinal)) return (None, false);
         // Below the names' reserve with no credit for a slot, the pool refuses every definition the read does not hold yet: read
         // no more than a short one's length, which finds a repeated default or computed column expression (((0)), (getdate()))
         // the read already holds at no cost, rather than stream a long one only to throw it away.
         if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) return Repeated(reader, ordinal);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
-        if (text.Length == 0) return ("", false);
-        if (Pooled(text, limits.NamesReserveBytes) is not { } copy) { cut++; return ("", false); }
+        if (text.Length == 0) return (None, false);
+        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, limits.NamesReserveBytes) : Pooled(text, limits.NamesReserveBytes)) is not { } copy) { cut++; return (None, false); }
         modules++;
         if (longer) cut++;
         return (copy, longer);
@@ -931,21 +946,21 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
 
     /// <summary>A definition read below the names' reserve: the read's own copy when it is at most <see cref="RepeatChars"/> long
     /// and the read already holds it, else left out (counted as cut) after at most that many characters.</summary>
-    private (string Text, bool Longer) Repeated(DbDataReader reader, int ordinal)
+    private (object? Text, bool Longer) Repeated(DbDataReader reader, int ordinal)
     {
         var most = Math.Min(RepeatChars, buffer.Length - 1);
         // As ReadText, read until the value ends or one character past the longest repeat: a provider may answer a GetChars call
         // short of what it asked, and a short read taken as the value's end would match a held prefix of a longer text.
         var read = 0;
         for (int got; read <= most && (got = (int)reader.GetChars(ordinal, read, buffer, read, most + 1 - read)) > 0;) read += got;
-        if (read <= 0) return ("", false);
+        if (read <= 0) return (None, false);
         if (read <= most && objects.TryText(buffer.AsSpan(0, read), out var copy))
         {
             modules++;
             return (copy, false);
         }
         cut++;
-        return ("", false);
+        return (None, false);
     }
 
     private static (string Text, bool Longer) ReadText(DbDataReader reader, int ordinal, ref char[] buffer, int limit)

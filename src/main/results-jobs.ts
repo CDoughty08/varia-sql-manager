@@ -12,6 +12,10 @@ import { sanitizeFileName } from './file-names'
 import { localExportBytes, localSaveBytes, localTableLimits } from '../shared/results/local-table'
 import { writeBytesAtomic } from './json-file'
 import { localSaveRequestSchema, resultsCopyRequestSchema, resultsSaveRequestSchema } from './validation'
+import type { SettingsValues } from '../shared/settings/catalog'
+
+/** Whether Save Results As writes a header row: its own setting, not the one Copy reads. */
+export const saveHeaders = (values: SettingsValues): boolean => values['queryResults.grid.saveColumnHeaders']
 
 /** How Save Results As writes NULL: CSV as an empty field (an empty string is ""), tab-delimited text as NULL; JSON always
  *  writes null. Copy keeps SSMS's NULL. The header row follows Tools › Options (`exportHeaders`). */
@@ -83,7 +87,7 @@ export interface JobHostDeps {
   documentsDir(): string
   /** Pushes progress to the renderer (varia:results-job). */
   progress(progress: ResultsJobProgress): void
-  /** Include column headers when copying or saving the results (Tools › Options › Query Results › Results to Grid). */
+  /** Include column headers when saving the results (Tools › Options › Query Results › Results to Grid). */
   exportHeaders(): Promise<boolean>
   platform: NodeJS.Platform
   now?: () => number

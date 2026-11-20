@@ -16,11 +16,11 @@ describe('menu targets', () => {
       { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { id: 7, lost: false, kind: 'table', connectionId: 'c', label: 's.n', ref: { type: 'object', object: { kind: 'table', database: 'd', schema: 's', name: 'n' } } } }, { kind: 'tableDesigner', tabId: 't4' },
       { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' },
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } },
-      { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }
+      { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }, { kind: 'planOutline' }, { kind: 'planProperties', facts: [] }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
     const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeNameless: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none])
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
@@ -49,7 +49,7 @@ describe('menu targets', () => {
     const columns = { id: 3, lost: false, kind: 'folder', folder: 'columns', connectionId: 'c', label: 'Columns', ref: { type: 'folder', owner: { kind: 'table', database: 'd', schema: 's', name: 'n' }, folder: 'columns' }, insertable: true } as const
     expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerProvider: 'sqlserver', explorerNode: 'folder', explorerFolder: 'columns', explorerFolderInsertable: true })
     // File commands act on the tab the menu is for.
-    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't4', 't2', 't3', undefined, undefined, 't5', undefined, 't6', undefined])
+    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't4', 't2', 't3', undefined, undefined, 't5', undefined, 't6', undefined, undefined, undefined])
     // The results toolbar's ⋯ runs its items as the toolbar's buttons do: the query, and no target to read a grid from.
     expect(argsFor(targets[9])).toEqual({ tabId: 't6' })
     expect(argsFor(targets[5])).toEqual({ target: targets[5] })

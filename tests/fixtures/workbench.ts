@@ -37,6 +37,7 @@ import { PivotService } from '../../src/renderer/src/results/PivotService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
+import { plansContribution } from '../../src/renderer/src/contributions/plans'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
@@ -497,9 +498,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
+  // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).
+  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true }
   const workbench = {
     sqlLanguage,
     sqlDiagnostics,
+    bigQueryCost,
     platform,
     commands,
     context,
@@ -576,6 +580,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    plansContribution(workbench, api),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),
@@ -655,6 +660,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   return {
     ...doc,
     sqlLanguage,
+    bigQueryCost,
     api,
     connections,
     backend,

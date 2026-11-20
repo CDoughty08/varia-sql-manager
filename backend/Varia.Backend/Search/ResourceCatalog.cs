@@ -145,7 +145,7 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
         pool.Budget.Force(bytes);
         var names = table.NameTexts();
         var texts = table.Texts;
-        var copies = new string?[texts.Count];
+        var copies = new object?[texts.Count];
         for (var at = 0; at < copies.Length; at++)
             if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, keepFree);
         var shared = table.WithTexts(copies);
@@ -153,8 +153,8 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
         var cut = 0;
         for (var at = 0; at < shared.Count; at++)
         {
-            if (shared.Definition(at) is not null) { modules++; if (shared.DefinitionCut(at)) cut++; }
-            else if (table.Definition(at) is not null) cut++;
+            if (shared.HasDefinition(at)) { modules++; if (shared.DefinitionCut(at)) cut++; }
+            else if (table.HasDefinition(at)) cut++;
         }
         return new ResourceSet(key, shared, modules, cut, bytes);
     }

@@ -17,6 +17,7 @@ import type { PeekPropertiesTarget } from '../menus/targets'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
+import { selectedFacts as selectedPaneFacts } from '../menus/selected-facts'
 import { formatPeekValue, peekObjectName, peekPropertiesText, placePeek, placePeekAt } from './peek-format'
 import { PeekListGrid } from './PeekListGrid'
 import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekAnchor, type PeekDefinition, type PeekDependencies, type PeekPart, type PeekRows, type PeekView } from './PeekService'
@@ -91,22 +92,7 @@ export function nextStop(stops: readonly HTMLElement[], at: Element | null, back
   return back ? [...stops].reverse().find(stop => !after(stop)) ?? stops[stops.length - 1] : stops.find(after) ?? stops[0]
 }
 
-/** Whether a range covers some of a fact's text: a triple-click's paragraph ends at the next fact's start, which touches it
- *  without selecting any of it. */
-function covers(range: Range, fact: HTMLElement): boolean {
-  if (!range.intersectsNode(fact)) return false
-  const part = fact.ownerDocument.createRange()
-  part.selectNodeContents(fact)
-  if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset)
-  if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset)
-  return part.toString().trim() !== ''
-}
-function selectedFacts(pane: HTMLElement): HTMLElement[] {
-  const selection = pane.ownerDocument.getSelection()
-  if (!selection || selection.isCollapsed) return []
-  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index))
-  return [...pane.querySelectorAll<HTMLElement>('.peek-fact')].filter(fact => ranges.some(range => covers(range, fact)))
-}
+const selectedFacts = (pane: HTMLElement) => selectedPaneFacts(pane, '.peek-fact')
 
 /**
  * The Properties menu's target: Copy writes the facts whose text is selected in the pane, else every fact it shows, as

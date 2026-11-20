@@ -332,7 +332,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     Designer, New Database, Restore, object dialog pages, Shortcut Mapping, Extended properties), trees (Object Explorer,
     the plan outline, View Dependencies, server files), listboxes whose rows are actions (Search Objects hits, pickers,
     Peek Dependencies), Messages (a log), fact lists (`<dl>`: Peek Properties, plan properties), the column profile's
-    cards, and prose.
+    cards, and prose. Where such a list copies, it still formats through the TypeScript writer (`localTableCopyText`):
+    the plan outline's Copy (its row with a header line per the copy setting) and plan properties' Copy and Copy Value
+    (`plans/plan-copy.ts`). An editable grid copies its selected rows on the copy event (Ctrl+C, Edit › Copy) through
+    `grid/row-copy.ts`: Table Designer, User Mapping and Securables (whose rows are virtualized) from their models, the others from the row as shown (`domCopyRows`, a cell's
+    `data-copy` overriding its text), unless the copy is of selected text.
     Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
     the draft keeps a grid's selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
@@ -360,7 +364,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   (`tests/result-page-access.test.ts`), and the .NET checks refuse reads of an unpinned, unleased set
   (`ResultSetBuffer.RequirePins`).
 - **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`),
-  over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
+  over the page's lengths form (each column's offsets as cell lengths) with typed columns (a column whose every cell is
+  the exact text of one number, date, time or GUID shape kept as values in a frame of their own, `PageCodec.Typed.cs`);
+  unpacking always returns the page as sealed, byte for byte.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
   - Find filters: packing a page of 32 KiB or more also builds its n-gram filter (`PageFilter`), which lets Find pass the
@@ -535,7 +541,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
   `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database, names, definitions, by
   `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
-  held once in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue)
+  held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
   `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
   the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by
@@ -639,6 +645,11 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `BigQuerySql` (`COMMIT TRANSACTION` in the tab's session; `CALL BQ.ABORT_SESSION(@session_id)` outside it, the id a
   STRING parameter), held to constant text by `BigQuerySessionChecks`; a session id is kept only when `BigQuerySql.SessionId`
   accepts it, and never leaves the backend.
+- **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
+  the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
+  beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes
+  (never by itself after a restore or a provider switch), and Text Editor › GoogleSQL turns the automatic one off; Execute
+  still dry-runs what it is about to send.
 
 ## UI structure
 

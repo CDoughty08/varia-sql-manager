@@ -1,4 +1,6 @@
-import { bothProviders } from '../providers'
+import { bothProviders, type ProviderId } from '../providers'
+
+const bigQueryOnly: readonly ProviderId[] = ['bigquery']
 import type { SettingPage } from './types'
 
 /**
@@ -12,7 +14,7 @@ export const settingPages = [
   { id: 'environment.autoRecover', providers: bothProviders, title: 'AutoRecover', parent: 'environment', layout: 'form', description: 'Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.' },
   { id: 'environment.documents', providers: bothProviders, title: 'Documents', parent: 'environment', layout: 'form', sections: [{ label: 'Startup' }, { label: 'Files changed outside Varia' }, { label: 'Saving' }] },
   { id: 'environment.fontsAndColors', providers: bothProviders, title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).', sections: [{ label: 'Text Editor' }] },
-  { id: 'environment.shortcuts', providers: bothProviders, title: 'Shortcuts', parent: 'environment', layout: 'shortcuts', description: 'Keyboard and mouse shortcuts: SSMS\'s defaults, your changes, and the scope each works in. Changes apply when you choose OK.' },
+  { id: 'environment.shortcuts', providers: bothProviders, title: 'Shortcuts', parent: 'environment', layout: 'shortcuts', description: 'Keyboard and mouse shortcuts: SSMS\'s defaults, your changes, and the scope each works in. Changes apply when you choose OK. Copy on a row copies its columns as shown.' },
   { id: 'environment.productUpdates', providers: bothProviders, title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.', sections: [{ label: 'Hidden views', description: 'Live views in tabs that are not shown, or in a minimized window.' }, { label: 'Object Explorer' }, { label: 'Charts' }] },
   { id: 'environment.objectExplorer', title: 'Object Explorer', parent: 'environment', layout: 'form' },
@@ -24,10 +26,16 @@ export const settingPages = [
   { id: 'textEditor.transactSql.general', title: 'General', parent: 'textEditor.transactSql', layout: 'form', sections: [{ label: 'Settings' }, { label: 'Display' }] },
   { id: 'textEditor.transactSql.intelliSense', title: 'IntelliSense', parent: 'textEditor.transactSql', layout: 'form', sections: [{ label: 'IntelliSense' }] },
   { id: 'textEditor.transactSql.tabs', title: 'Tabs', parent: 'textEditor.transactSql', layout: 'form', sections: [{ label: 'Tab' }] },
+  { id: 'textEditor.googleSql', providers: bigQueryOnly, title: 'GoogleSQL', parent: 'textEditor' },
+  { id: 'textEditor.googleSql.general', providers: bigQueryOnly, title: 'General', parent: 'textEditor.googleSql', layout: 'form', description: 'BigQuery query tabs. Not in SSMS.' },
   { id: 'queryExecution', title: 'Query Execution' },
   { id: 'queryExecution.sqlServer', title: 'SQL Server', parent: 'queryExecution' },
   { id: 'queryExecution.sqlServer.general', title: 'General', parent: 'queryExecution.sqlServer', layout: 'form' },
   { id: 'queryExecution.sqlServer.advanced', title: 'Advanced', parent: 'queryExecution.sqlServer', layout: 'form' },
+  { id: 'queryExecution.bigQuery', providers: bigQueryOnly, title: 'BigQuery', parent: 'queryExecution' },
+  { id: 'queryExecution.bigQuery.cost', providers: bigQueryOnly, title: 'Cost', parent: 'queryExecution.bigQuery', layout: 'form', description: 'Estimates come from a free dry run before Execute. Prices are on-demand estimates: projects that use reserved capacity are not billed per byte. Not in SSMS.',
+    sections: [{ label: 'Prompt', description: 'Execute asks before running only in these cases.' }, { label: 'Limit', description: 'The hard guard: BigQuery fails a job past it, at no charge.' }, { label: 'Estimates' }] },
+  { id: 'queryExecution.bigQuery.sessions', providers: bigQueryOnly, title: 'Sessions', parent: 'queryExecution.bigQuery', layout: 'form', description: 'Each BigQuery query tab runs in its own BigQuery session, created by its first execution at no charge, so temporary tables, variables and transactions carry across executions. Temporary tables are billed as storage until the session ends: when the tab closes or disconnects, or after 24 hours idle (7 days at most). Not in SSMS.' },
   { id: 'queryResults', title: 'Query Results' },
   { id: 'queryResults.sqlServer', title: 'SQL Server', parent: 'queryResults' },
   { id: 'queryResults.sqlServer.grid', title: 'Results to Grid', parent: 'queryResults.sqlServer', layout: 'form', sections: [{ label: 'Grid display', description: 'How results look in the grid.' }, { label: 'Copy and save' }, { label: 'Limits and memory', description: 'Rows past a limit are still read and counted, but not kept.' }, { label: 'Execution plan', description: 'The panes beside a graphical execution plan.' }] },

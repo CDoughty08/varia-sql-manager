@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "agent.profile"
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "agent.profile"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -485,6 +485,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
+        "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -1178,6 +1179,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
+        if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);

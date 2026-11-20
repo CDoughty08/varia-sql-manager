@@ -20,7 +20,7 @@ export interface ScriptError { readonly code: ScriptErrorCode; readonly message:
 export interface ScriptResult {
   /** Absent with `error`; at most `scriptLimits.maxScriptChars` characters. */
   readonly text?: string
-  /** The database a new query window should use: the object's, or `master` for databases and server objects. */
+  /** The database a new query window should use: the object's, `master` for databases and server objects, or `msdb` for SQL Server Agent's. */
   readonly database: string
   readonly warnings: readonly string[]
   /** SQL commands the job sent, which the backend's performance checks bound. */

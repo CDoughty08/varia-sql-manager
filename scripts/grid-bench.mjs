@@ -587,8 +587,8 @@ try {
     await stopIfLowMemory(page, 'live save')
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
     // Copy above uses the default without headers; this export measures a CSV with its column names included.
-    expect(await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true })))
-      .toMatchObject({ ok: true, value: { values: { 'queryResults.grid.includeColumnHeaders': true } } })
+    expect(await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.saveColumnHeaders': true })))
+      .toMatchObject({ ok: true, value: { values: { 'queryResults.grid.saveColumnHeaders': true } } })
     await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, file)
     await cell(0, 0).click()
     const saveStarted = performance.now()
