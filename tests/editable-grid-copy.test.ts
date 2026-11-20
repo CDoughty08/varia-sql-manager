@@ -2,6 +2,7 @@
 // Editable grids (Table Designer, New Database, Restore, object dialog pages, Shortcut Mapping, Extended properties) copy
 // their selected rows with Ctrl+C through the results text writer, headers as the copy setting says.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { cellText, copiesText, domCopyRows, useDomRowCopy } from '../src/renderer/src/grid/row-copy'
@@ -123,5 +124,26 @@ describe('editable grid Copy', () => {
     await act(async () => { input.dispatchEvent(event) })
     expect(event.defaultPrevented).toBe(false)
     expect(writeClipboardText).not.toHaveBeenCalled()
+  })
+})
+
+// Each grid's copy reaches its rows only through its onCopy: losing one would leave Ctrl+C there copying nothing, silently.
+describe('editable grid Copy wiring', () => {
+  const grids: Readonly<Record<string, number>> = {
+    'src/renderer/src/new-database/NewDatabase.tsx': 2, 'src/renderer/src/dialogs/pages/AttachDatabasePage.tsx': 2, 'src/renderer/src/dialogs/pages/NewLoginPages.tsx': 1,
+    'src/renderer/src/dialogs/pages/UserMappingPage.tsx': 1, 'src/renderer/src/dialogs/pages/SecurablesPage.tsx': 2, 'src/renderer/src/properties/TableProperties.tsx': 1,
+    'src/renderer/src/restore/RestoreDatabase.tsx': 2, 'src/renderer/src/restore/RestoreFiles.tsx': 2, 'src/renderer/src/settings/shortcuts/ShortcutTable.tsx': 1
+  }
+  it('gives every editable grid a row Copy', () => {
+    for (const [file, count] of Object.entries(grids)) {
+      const source = readFileSync(file, 'utf8')
+      expect(source.match(/onCopy=\{copyRow\}/g)?.length ?? 0, file).toBe(count)
+      expect(source, file).toMatch(/const copyRow = use(Dom)?RowCopy\(/)
+    }
+    // An unbound command's Shortcut and Scope both show a muted dash and both copy as empty cells.
+    const shortcuts = readFileSync('src/renderer/src/settings/shortcuts/ShortcutTable.tsx', 'utf8')
+    expect(shortcuts).toContain("data-copy={binding?.label.text ?? ''}")
+    expect(shortcuts).toContain("data-copy={binding ? binding.scopeTitle : ''}")
+    expect(readFileSync('src/renderer/src/designer/DesignerGrid.tsx', 'utf8')).toMatch(/useRowCopy\(\(\) => designerCopyRows\(state, live\.current\)\)[\s\S]*onCopy=\{copy\}/)
   })
 })

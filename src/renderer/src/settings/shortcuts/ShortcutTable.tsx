@@ -100,7 +100,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
           return <td key={item} data-copy={keys.map(entry => entry.label.text).join(', ')}>{keys.length ? keys.map((entry, index) => <KeyCaps key={index} label={entry.label} source={entry.source} />) : <span className="shortcuts-muted" title="Not bound on this platform">—</span>}</td>
         })
         : [<td key="keys" data-copy={binding?.label.text ?? ''}>{binding ? <KeyCaps label={binding.label} source={binding.source} /> : <span className="shortcuts-muted">—</span>}</td>,
-          <td key="scope" title={binding?.rule.whenSource ? `When: ${binding.rule.whenSource}` : undefined}>{binding ? binding.scopeTitle : <span className="shortcuts-muted">—</span>}</td>]
+          <td key="scope" data-copy={binding ? binding.scopeTitle : ''} title={binding?.rule.whenSource ? `When: ${binding.rule.whenSource}` : undefined}>{binding ? binding.scopeTitle : <span className="shortcuts-muted">—</span>}</td>]
       rows.push(<tr key={key} data-row={key} aria-selected={isSelected} tabIndex={isSelected ? 0 : -1} data-locked={row.lock ? true : undefined}
         onClick={() => onSelect(selection)} onFocus={() => { if (!isSelected) onSelect(selection) }}>{command}{cells}{source}</tr>)
     }
