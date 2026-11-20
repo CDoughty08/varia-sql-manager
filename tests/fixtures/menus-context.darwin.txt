@@ -351,8 +351,22 @@ explorer.context, for a login
   Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
+explorer.context, for the SQL Server Agent node
+  &Start  -+++
+  Sto&p  -+++
+  R&estart  -+++
+  ---
+  Re&fresh  F5  -+++
 explorer.context, for a SQL Server Agent job
+  S&tart Job at Step…  -+++
+  Sto&p Job  -+++
+  ---
   Copy N&ame  -+++
+  ---
+  Disa&ble  -+++
+  ---
+  Rena&me  F2  -+++
+  D&elete  ⌘⌫  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a SQL Server Agent error log

@@ -24,6 +24,7 @@
     <PackageReference Include="Microsoft.Identity.Client" Version="4.92.0" />
     <PackageReference Include="Microsoft.SqlServer.SqlManagementObjects" Version="181.38.1" />
     <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.154.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.21" />
   </ItemGroup>
   <ItemGroup>
     <!-- The column-name casing table the renderer and the fake backend share (OrdinalNames reads its ranges). -->

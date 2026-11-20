@@ -599,6 +599,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   of typed parameters; only known variables; no DDL but event sessions'. All DDL values are parameters. It has no
   prologue: besides a permission check and a connection-id read it only creates, starts, reads and drops its event
   session, and drops abandoned Varia collectors it recovers.
+- **Agent service control** (`AgentServiceControl`, docs/sql-server-agent.md). The Agent node's Start, Stop and Restart are
+  the only object actions that run outside SQL Server: Windows' Service Control Manager, through the `IServiceControl` seam
+  (offline checks use its fake), as the Windows user Varia runs as. The machine and service names come only from the
+  server (`SERVERPROPERTY`) and pass strict patterns before any call; every call and wait is bounded by the Agent catalogue's
+  limits, and refusals are values (`PERMISSION_DENIED`, `SERVICE_UNREACHABLE`, `NOT_FOUND`, `NOT_SUPPORTED` off Windows, on
+  Linux, Managed Instance and clustered instances). `xp_servicecontrol` only reads the state; `AgentSql.LintExecutable`
+  admits it nowhere. The job verbs' msdb batches pass the same lint and resolve the job by its tree identity first.
 - **SSIS Catalog.** Code tables, `ssis.describe` views, `ssis.execute` verbs, Explorer verbs and commands, documents,
   error codes, features and limits live only in `src/shared/ssis/catalog.ts` (tree kinds and folders are Object
   Explorer's); it generates `docs/integration-services.md` below its marker line only.

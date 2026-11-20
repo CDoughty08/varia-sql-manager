@@ -18,6 +18,7 @@ import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from
 import SecurablesPage from './pages/SecurablesPage'
 import UserMappingPage from './pages/UserMappingPage'
 import UnlockLoginPage from './pages/UnlockLoginPage'
+import { AgentServicePage, StartJobPage } from './pages/AgentPages'
 import { findInWindows, returnFocusTo } from '../core/focus'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
@@ -33,7 +34,12 @@ export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Reco
   detachDatabase: { general: DetachDatabasePage },
   unlockLogin: { general: UnlockLoginPage },
   // Login Properties (D2c) shows New Login's pages on the login, each in its properties form.
-  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage }
+  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage },
+  // SQL Server Agent (AG-2): a job's Start Job at Step, and the Agent node's service confirmations.
+  startJobAtStep: { general: StartJobPage },
+  startAgent: { general: AgentServicePage },
+  stopAgent: { general: AgentServicePage },
+  restartAgent: { general: AgentServicePage }
 }
 /** The pages "Select a page" lists for a model: the spec's, less those the definition hides for it (definition.hiddenPages). */
 export function shownPages(pages: readonly DialogPageSpec[], hidden: readonly PageId[]): readonly DialogPageSpec[] {
@@ -255,7 +261,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         </section>
       </div>
       <div className="object-dialog-main">
-        <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>
+        {!definitionOf(open.dialog).noScript && <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>}
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
         {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}

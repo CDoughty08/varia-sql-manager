@@ -1,0 +1,61 @@
+name: SQL Server Agent service
+
+# SQL Server Agent's Start, Stop and Restart (AG-2, docs/sql-server-agent.md) go through the Windows Service Control Manager,
+# which no Linux container has. This job installs SQL Server 2022 Developer as a named instance on a Windows runner and runs the
+# Agent live suite with VARIA_TEST_SQL_AGENT_SERVICE=1, so the service checks stop, start and restart the real SQLAgent$VARIA
+# as the runner's administrator. Not a required check: pull requests that touch service control, daily on main, and on demand.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/agent-service.yml
+      - backend/Varia.Backend/Agent/**
+      - backend/Varia.Backend/Actions/AgentJobs.cs
+      - backend/Varia.Backend.Tests/AgentActionLiveChecks.cs
+      - backend/Varia.Backend.Tests/AgentLiveChecks.cs
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  agent-service:
+    name: Agent service control (Windows, named instance)
+    # The schedule runs on the default branch only; a fork's pull request has no reason to install SQL Server.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      # Windows authentication as the runner's account, which setup makes sysadmin; shared memory needs no SQL Browser.
+      VARIA_TEST_SQL_SERVER: lpc:.\VARIA
+      VARIA_TEST_SQL_SCRATCH: '1'
+      VARIA_TEST_SQL_AGENT: '1'
+      VARIA_TEST_SQL_AGENT_SERVICE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - name: Install SQL Server 2022 Developer (instance VARIA)
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          choco install sql-server-2022 -y --no-progress --params "'/IgnorePendingReboot /INSTANCENAME:VARIA /FEATURES:SQLENGINE /SQLSYSADMINACCOUNTS:BUILTIN\Administrators /AGTSVCSTARTUPTYPE:Manual'"
+          Start-Service 'SQLAgent$VARIA'
+          Get-Service 'MSSQL$VARIA', 'SQLAgent$VARIA' | Format-Table -AutoSize Name, Status, StartType
+      - name: Agent live suites with service control
+        timeout-minutes: 15
+        run: dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-suite Agent,AgentService

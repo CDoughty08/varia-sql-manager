@@ -13,8 +13,9 @@ namespace Varia.Backend.Tests;
 /// result or a value; a capped read is cut and cancelled with its connection still usable; with VARIA_TEST_SQL_SCRATCH=1 a
 /// scratch job of this run's own runs once and its history, row and activity are read back through msdb's procedures, and
 /// a scratch login in SQLAgentUserRole alone (impersonated) is refused the error logs but reads its own jobs and Agent's
-/// properties, as AG-0 found. Only this run's job and login are created, each dropped in finally. Later lanes add the
-/// Agent, AgentJobs, AgentActions and AgentRoles suites (docs/agent-plan.md › Testing).</summary>
+/// properties, as AG-0 found. Only this run's job and login are created, each dropped in finally. AG-2's job verbs run on the
+/// same scratch job (AgentActionLiveChecks); its service verbs are the AgentService suite. Later lanes add the
+/// Agent, AgentJobs and AgentRoles suites (docs/agent-plan.md › Testing).</summary>
 internal static class AgentLiveChecks
 {
     /// <summary>Agent is up when Agent XPs is on and an Agent session is connected (Agent starts after the container's health
@@ -203,6 +204,8 @@ internal static class AgentLiveChecks
                     + JsonSerializer.Serialize(open.Hits) + " " + JsonSerializer.Serialize(shut.Hits) + " " + JsonSerializer.Serialize(open.Index.Skipped));
             }
             finally { service.Search.AgentEnabled = Varia.Backend.Agent.AgentGate.Enabled; }
+            // AG-2's job verbs end with Delete, so the finally below finds nothing left to drop.
+            await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }

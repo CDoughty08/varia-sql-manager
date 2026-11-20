@@ -36,6 +36,13 @@ the Measurements below with the new baseline.
   archive installed copies stage from, and its installer smoke stages and swaps that archive into the installation it
   made. Every workflow a pull request triggers cancels its superseded runs.
 - `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- `agent-service.yml` (held by `tests/agent-service-workflow.test.ts`) installs SQL Server 2022 Developer as the named
+  instance `VARIA` on a Windows runner and runs the `Agent` and `AgentService` live suites, which stop, start and restart
+  its real SQL Server Agent through the Service Control Manager (docs/sql-server-agent.md). It runs on pull requests that
+  change its `paths` (the Agent backend, the job verbs, its live checks, the workflow), daily on main, and by hand, kept
+  out of `ci.yml` so every other pull request's validation is unchanged. It is not a required check: a pull request on
+  which it ran merges only when it is green. Measured time: to be recorded from its first runs (most of it the SQL Server
+  install).
 - **SQL Tools Service** is a build-time dependency pinned in `build/sqltools-service.json` for every release RID.
   Preparation verifies the official archive's SHA-256 before extraction and keeps upstream notices, the MIT license and
   an inventory of file hashes. Development commands prepare the host's distribution; packaging prepares its exact target

@@ -76,8 +76,8 @@ internal static class SeamChecks
             && !catalog.Serves("delete", "onPrem")
             && DesignerCatalog.Current.Engines.SequenceEqual(["box", "managedInstance"]),
             "each action declares its engines: Select Top everywhere, Rename, Delete, Properties and the designer's createTable on SQL Server and Managed Instance");
-        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(action == "restore" ? 30_000 : catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
-            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own (Restore Database's 30 s, to drop a partly restored database)");
+        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(action == "restore" ? 30_000 : action is "startAgent" or "stopAgent" or "restartAgent" ? 100_000 : catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
+            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own (Restore Database's 30 s, to drop a partly restored database; the Agent service verbs' 100 s, to see the service settle)");
 
         // A later action that Managed Instance cannot run (Detach, Restore) is refused before any connection opens; the message names the engine.
         var mi = new Host(8);

@@ -42,8 +42,8 @@ export interface ObjectActionServiceOptions {
   readonly newId?: () => string
 }
 
-/** The actions that run on a tree node as a status-bar job: a rename, and a login's Disable and Enable. */
-export type StateVerb = 'rename' | 'disable' | 'enable'
+/** The actions that run on a tree node as a status-bar job: a rename, a login's or a job's Disable and Enable, and a job's Stop. */
+export type StateVerb = 'rename' | 'disable' | 'enable' | 'stopJob'
 /**
  * A running state action, shown in the status bar with Stop once it has run for `actionLimits.statusDelayMs`: its verb,
  * the object as the tree names it, a rename's new name, and the step it is on when it has several (a rename that closes
@@ -52,7 +52,7 @@ export type StateVerb = 'rename' | 'disable' | 'enable'
 export interface StateJob { readonly id: string; readonly verb: StateVerb; readonly label: string; readonly newName?: string; readonly step?: string; readonly visible: boolean; readonly stopping: boolean }
 export interface ObjectActionSnapshot { readonly jobs: readonly StateJob[] }
 const verbText: { readonly [V in StateVerb]: { readonly running: string; readonly noun: string } } = {
-  rename: { running: 'Renaming', noun: 'rename' }, disable: { running: 'Disabling', noun: 'disable' }, enable: { running: 'Enabling', noun: 'enable' }
+  rename: { running: 'Renaming', noun: 'rename' }, disable: { running: 'Disabling', noun: 'disable' }, enable: { running: 'Enabling', noun: 'enable' }, stopJob: { running: 'Stopping', noun: 'stop' }
 }
 /** What the status bar says for a job, and its Stop button's accessible name. */
 export function stateJobText(job: Pick<StateJob, 'verb' | 'label' | 'newName' | 'step' | 'stopping'>): { readonly text: string; readonly stop: string } {
@@ -105,7 +105,17 @@ export const loginActionMessages = {
   renameConnections: 'cannot reconnect under the old name',
   unavailable: { disable: 'Select an enabled login in Object Explorer.', enable: 'Select a disabled login in Object Explorer.' }
 } as const
-const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable' } as const satisfies { readonly [V in StateVerb]: string }
+/** What a SQL Server Agent job's Stop, Disable and Enable say (AG-2). */
+export const jobActionMessages = {
+  stopped: (label: string) => `Asked SQL Server Agent to stop the job ${label}.`,
+  enabled: (label: string) => `Enabled the job ${label}.`,
+  disabled: (label: string) => `Disabled the job ${label}.`,
+  stoppedUnknown: (verb: 'disable' | 'enable' | 'stopJob') => `The ${verb === 'stopJob' ? 'stop' : verb} was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.`,
+  unavailable: { disable: 'Select an enabled job in Object Explorer.', enable: 'Select a disabled job in Object Explorer.', stopJob: 'Select a job in Object Explorer.' },
+  /** The tree's row carries the job's creation time, which the backend checks before it changes the job; a row without it is refused. */
+  unidentified: 'Refresh Object Explorer: this job row does not say when the job was created.'
+} as const
+const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable', stopJob: 'Stop Job' } as const satisfies { readonly [V in StateVerb]: string }
 const isLoginSubtype = (subtype: string | undefined): subtype is LoginSubtype => (loginSubtypes as readonly string[]).includes(subtype ?? '')
 const isLoginVerb = (action: ObjectAction): action is ObjectAction & LoginVerb => (loginVerbs as readonly string[]).includes(action)
 const sameText = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
@@ -248,7 +258,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
         if (!plan || !this.running(requestId)) return undefined
         this.setJobStep(requestId, plan.closeConnections ? renameMessages.closing : plan.facts.sessions !== 0 ? renameMessages.waiting : undefined)
       }
-      return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {} })
+      return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {}, ...object.kind === 'agentJob' && node.created ? { agentIdentity: { created: node.created } } : {} })
     })
     if (!outcome) return true
     const { result, thrown, dropped, stopped } = outcome
@@ -321,6 +331,29 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   }
 
   /**
+   * A SQL Server Agent job's Stop, Disable or Enable (AG-2): one status-bar job with Stop that sends the job's creation time from the
+   * tree, so the backend refuses a job that has since been replaced under the name. Disable and Enable reconcile the Jobs folder, so
+   * the row's badge follows; each says what it did. SQL Server Agent's own refusals (the job not running, Agent stopped) come back
+   * from the backend in Varia's words.
+   */
+  async changeJobState(node: ExplorerMenuNode, verb: 'disable' | 'enable' | 'stopJob'): Promise<void> {
+    const object = objectOf(node)
+    if (!this.canRun(verb, node) || object?.kind !== 'agentJob' || object.name === undefined) throw new Error(jobActionMessages.unavailable[verb])
+    if (!node.created) { this.options.report.error(jobActionMessages.unidentified); return }
+    const running = this.jobs.get(node.id)
+    if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return }
+    const folder = verb === 'stopJob' ? undefined : this.options.explorer.listingFolderOf(node.id)
+    const agentIdentity = { created: node.created }
+    const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction(verb === 'stopJob'
+      ? { action: 'stopJob', connectionId: node.connectionId, requestId, target: object, agentIdentity }
+      : { action: verb, connectionId: node.connectionId, requestId, target: object, agentIdentity }))
+    if (!this.succeeded(node, verb, outcome)) return
+    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: node.ref })
+    const label = displayText(object.name)
+    this.options.report.notice(verb === 'stopJob' ? jobActionMessages.stopped(label) : verb === 'disable' ? jobActionMessages.disabled(label) : jobActionMessages.enabled(label))
+  }
+
+  /**
    * The login's facts as the backend's preflight reads them, read as the verb's status-bar job, or undefined after reporting
    * why not; nothing is said when the server went or Stop ended the read.
    */
@@ -360,7 +393,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (dropped || this.disposed || !result) return undefined
     if (!result.ok) {
       // A Stop the backend could not confirm in time; otherwise CANCELLED is a disconnect, which drops the job first.
-      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(verb === 'rename' ? renameMessages.stoppedUnknown : loginActionMessages.stoppedUnknown(verb)); return undefined }
+      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(verb === 'rename' ? renameMessages.stoppedUnknown : verb === 'stopJob' || objectOf(node)?.kind === 'agentJob' ? jobActionMessages.stoppedUnknown(verb) : loginActionMessages.stoppedUnknown(verb)); return undefined }
       this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `${failed}: ${result.error}`)
       return undefined
     }

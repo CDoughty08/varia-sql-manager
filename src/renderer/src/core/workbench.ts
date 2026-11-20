@@ -315,7 +315,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)

@@ -2124,6 +2124,57 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
+  // SQL Server Agent (AG-2, behind the release gate the smoke runs open). A job's menu offers Start Job at Step… and Stop Job,
+  // then Disable, Rename and Delete. Start Job at Step… lists the job's steps, the first chosen; choosing the second sends its
+  // name with the job's identity from the tree. Stop Job runs as a status-bar job and says what it did, and Disable flips the
+  // row's badge. The Agent node's Start, Stop and Restart are offered with Varia on Windows and greyed with the reason
+  // elsewhere; Restart asks, then stays open on its four steps.
+  const jobPath = ['server-a', 'SQL Server Agent', 'Jobs', 'Nightly']
+  const startJobDialog = () => page.getByRole('dialog', { name: 'Start Job at Step - Nightly', exact: true })
+  await expandExplorerPath(page, 'server-a', 'SQL Server Agent', 'Jobs')
+  const jobMenu = await explorerMenuItems(page, ...jobPath)
+  for (const name of ['Start Job at Step…', 'Stop Job', 'Disable', 'Rename', 'Delete']) expect(jobMenu.names).toContain(name)
+  expect(jobMenu.names).not.toContain('Enable')
+  await closeMenu()
+  await chooseExplorerMenuItem(page, jobPath, 'Start Job at Step…')
+  await expect(startJobDialog().getByRole('radio')).toHaveCount(2)
+  await expect(startJobDialog().getByRole('radio', { name: '1. Extract', exact: true })).toBeChecked()
+  await startJobDialog().getByRole('radio', { name: '2. Load', exact: true }).check()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-start-job-dark.png') })
+  await startJobDialog().getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(startJobDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'startJob', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' }, stepName: 'Load' })
+  await expect(toastMessage(toasts(page).last())).toHaveText('Started the job Nightly.')
+  await chooseExplorerMenuItem(page, jobPath, 'Stop Job')
+  await expect(toastMessage(toasts(page).last())).toHaveText('Asked SQL Server Agent to stop the job Nightly.')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'stopJob', agentIdentity: { created: '2026-01-02T03:04:05' } })
+  await chooseExplorerMenuItem(page, jobPath, 'Disable')
+  await expect(toastMessage(toasts(page).last())).toHaveText('Disabled the job Nightly.')
+  await expect.poll(async () => (await explorerMenuItems(page, ...jobPath)).names, 'a disabled job offers Enable').toContain('Enable')
+  await closeMenu()
+  const agentMenu = await explorerMenuItems(page, 'server-a', 'SQL Server Agent')
+  expect(agentMenu.names).toEqual(expect.arrayContaining(['Start', 'Stop', 'Restart']))
+  if (process.platform === 'win32') {
+    // No status sample in the stub, so the state is unknown and the dialog's describe decides: all three are offered.
+    expect(agentMenu.disabled).not.toContain('Restart')
+    await closeMenu()
+    const restartDialog = () => page.getByRole('dialog', { name: 'Restart SQL Server Agent', exact: true })
+    await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Restart')
+    await expect(restartDialog().getByText('Are you sure you want to restart the SQLSERVERAGENT service on DB01?', { exact: true })).toBeVisible()
+    await expect(restartDialog().getByRole('button', { name: 'Script', exact: true })).toHaveCount(0)
+    await restartDialog().getByRole('button', { name: 'Restart', exact: true }).click()
+    await expect(objectDialogProgress(restartDialog())).toHaveText('Success')
+    await expect(objectDialogStepItems(restartDialog())).toHaveCount(4)
+    expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'restartAgent', target: { kind: 'agent' } })
+    await page.screenshot({ path: resolve('artifacts', 'object-actions-restart-agent-dark.png') })
+    await restartDialog().getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(restartDialog()).toHaveCount(0)
+  } else {
+    expect(agentMenu.disabled).toEqual(expect.arrayContaining(['Start', 'Stop', 'Restart']))
+    await closeMenu()
+  }
+  console.log('Object action checks: a job\'s Start Job at Step…, Stop Job and Disable, and the Agent node\'s Restart (on Windows; greyed elsewhere).')
+
   // Tasks › Detach… (D3b). Detach Database lists AppData with Drop Connections and Update Statistics (both unchecked, as SSMS
   // opens it) and the files that stay on the server; OK waits for Drop Connections while sessions are connected. Script Action
   // shows SINGLE_USER and sp_detach_db's @skipchecks; Success stays open on its steps, AppData leaves Databases, and a toast says

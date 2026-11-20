@@ -7,7 +7,8 @@ import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
 
 /**
  * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, a
- * login's Disable, Enable and Unlock…, and
+ * login's Disable, Enable and Unlock…, a SQL Server Agent job's Start Job at Step…, Stop Job, Disable and Enable and the Agent
+ * node's Start, Stop and Restart (AG-2), and
  * Tasks › Take Offline and Bring Online, and Integration Services Catalogs › Create Catalog… (S9a), and Security › New ›
  * Login… (D2a). Each acts on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a
  * live server. The Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) and the restore documents'
@@ -34,6 +35,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   })
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // An action that needs no tree row also takes a Search Objects result's object (`searchResults` in the catalogue).
+  const isJob = (node: ExplorerMenuNode) => node.ref.type === 'object' && node.ref.object.kind === 'agentJob'
   const objectOf = (args?: CommandArgs): ObjectMenuNode | undefined => args?.target ? objectNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // Integration Services Catalogs on a live server; the dialog itself says when the server cannot have a catalog.
   const catalogs = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && node.folder === 'integrationServicesCatalogs'
@@ -61,17 +63,34 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       unavailable: args => actions.unavailable('rename', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) actions.beginRename(node) }
     }),
-    // A login's state: the facts, Disable's confirmation and the job run in ObjectActionService.
+    // A login's or a job's state: the facts, Disable's confirmation and the job run in ObjectActionService.
     commands.register('explorer.disable', {
       when: args => actions.canRun('disable', nodeOf(args)),
       unavailable: args => actions.unavailable('disable', nodeOf(args)),
-      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'disable') }
+      run: async args => { const node = nodeOf(args); if (node) await (isJob(node) ? actions.changeJobState(node, 'disable') : actions.changeLoginState(node, 'disable')) }
     }),
     commands.register('explorer.enable', {
       when: args => actions.canRun('enable', nodeOf(args)),
       unavailable: args => actions.unavailable('enable', nodeOf(args)),
-      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'enable') }
+      run: async args => { const node = nodeOf(args); if (node) await (isJob(node) ? actions.changeJobState(node, 'enable') : actions.changeLoginState(node, 'enable')) }
     }),
+    // SQL Server Agent (AG-2): Start Job at Step... is a modal; Stop Job is a status-bar job; the Agent node's Start, Stop and Restart
+    // are modals that stay open on their steps.
+    commands.register('explorer.startJob', {
+      when: args => actions.canRun('startJob', nodeOf(args)) && !dialogs.current,
+      unavailable: args => actions.unavailable('startJob', nodeOf(args)),
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('startJobAtStep', node) }
+    }),
+    commands.register('explorer.stopJob', {
+      when: args => actions.canRun('stopJob', nodeOf(args)),
+      unavailable: args => actions.unavailable('stopJob', nodeOf(args)),
+      run: async args => { const node = nodeOf(args); if (node) await actions.changeJobState(node, 'stopJob') }
+    }),
+    ...(['startAgent', 'stopAgent', 'restartAgent'] as const).map(action => commands.register(`explorer.${action}`, {
+      when: args => actions.canRun(action, nodeOf(args)) && !dialogs.current,
+      unavailable: args => actions.unavailable(action, nodeOf(args)),
+      run: args => { const node = nodeOf(args); if (node) dialogs.open(action, node) }
+    })),
     // Unlock… (D4d): the modal reads the login's lock-out state; the listing cannot know it, so every SQL Server login offers it.
     commands.register('explorer.unlock', {
       when: args => actions.canRun('unlock', nodeOf(args)) && !dialogs.current,

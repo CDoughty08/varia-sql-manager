@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (350)
+## Commands (355)
 
 ### File
 
@@ -270,6 +270,11 @@ keys it uses are listed below.
 | Disable Login | `explorer.disable` | — | — | — | `backendReady && explorerActionDisable == 'enabled'` | Object Explorer context menu › Disable |
 | Enable Login | `explorer.enable` | — | — | — | `backendReady && explorerActionEnable == 'enabled'` | Object Explorer context menu › Enable |
 | Unlock Login… | `explorer.unlock` | — | — | — | `backendReady && explorerActionUnlock == 'enabled'` | Object Explorer context menu › Unlock… |
+| Start Job at Step… | `explorer.startJob` | — | — | — | `backendReady && explorerActionStartJob == 'enabled'` | Object Explorer context menu › Start Job at Step… |
+| Stop Job | `explorer.stopJob` | — | — | — | `backendReady && explorerActionStopJob == 'enabled'` | Object Explorer context menu › Stop Job |
+| Start SQL Server Agent | `explorer.startAgent` | — | — | — | `backendReady && explorerActionStartAgent == 'enabled'` | Object Explorer context menu › Start |
+| Stop SQL Server Agent | `explorer.stopAgent` | — | — | — | `backendReady && explorerActionStopAgent == 'enabled'` | Object Explorer context menu › Stop |
+| Restart SQL Server Agent | `explorer.restartAgent` | — | — | — | `backendReady && explorerActionRestartAgent == 'enabled'` | Object Explorer context menu › Restart |
 | New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
@@ -709,8 +714,13 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
+| `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
+| `2_job` | Sto**p** Job | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
+| `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background'` |
+| `2_service` | Sto**p** | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
+| `2_service` | R**e**start | `explorer.restartAgent` | `explorerActionRestartAgent != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `4_tasks` | **T**asks › | Submenu: Object Explorer context menu › Tasks | `explorerNode == 'database' && !explorerServerLost` |
@@ -1053,7 +1063,7 @@ Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `peek.copyProperties` | Always |
 
-## Context keys (168)
+## Context keys (173)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1197,6 +1207,11 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionDisable` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Disable Login: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionEnable` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Enable Login: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionUnlock` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Unlock Login…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionStartJob` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Start Job at Step…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionStopJob` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Stop Job: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionStartAgent` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Start SQL Server Agent: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionStopAgent` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Stop SQL Server Agent: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionRestartAgent` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restart SQL Server Agent: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

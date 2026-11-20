@@ -376,6 +376,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const open = this.current
     if (!open || !open.model || !open.draft || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
     const definition = definitionOf(open.dialog)
+    // A dialog that runs no T-SQL has nothing to script (SQL Server Agent's service).
+    if (definition.noScript) return
     const built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     // As SSMS says when nothing changed in a properties dialog.
     if (!built) { this.update(open, { error: undefined, notice: noScriptNotice }); return }
@@ -561,7 +563,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.patch = undefined
     this.update(open, { phase: 'ready', model, draft: open.draft ?? { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
-    if (definition.runOnOpen && !open.model) await this.ok()
+    if ((definition.runOnOpen === true || (typeof definition.runOnOpen === 'function' && definition.runOnOpen(model))) && !open.model) await this.ok()
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
       const labels = this.context(open).loginConnections
       if (labels) this.update(open, { loginConnections: labels })

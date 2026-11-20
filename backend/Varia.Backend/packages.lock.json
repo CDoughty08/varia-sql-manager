@@ -68,6 +68,15 @@
         "resolved": "180.154.0",
         "contentHash": "epYZJ+0ZSx/u1KZwF8e8wfqPO3KS67EijVJi+EgveLuQaU3a4GRNP5R6kOUrGBv8K+kDpAtCcGBjn5c9NwWW6A=="
       },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Direct",
+        "requested": "[9.0.21, )",
+        "resolved": "9.0.21",
+        "contentHash": "RjiRdRtPhJBhMBrCslytDzH1/wOEsQY8RTgXcYTEYExfuaVfVkV+IO4JliKSeC+RcLSEtrU+ZVzR1qCQkQapqw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "9.0.21"
+        }
+      },
       "Azure.Core": {
         "type": "Transitive",
         "resolved": "1.53.0",
@@ -346,6 +355,15 @@
           "System.Threading.RateLimiting": "9.0.21"
         }
       },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Direct",
+        "requested": "[9.0.21, )",
+        "resolved": "9.0.21",
+        "contentHash": "RjiRdRtPhJBhMBrCslytDzH1/wOEsQY8RTgXcYTEYExfuaVfVkV+IO4JliKSeC+RcLSEtrU+ZVzR1qCQkQapqw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "9.0.21"
+        }
+      },
       "Microsoft.Data.SqlClient.SNI.runtime": {
         "type": "Transitive",
         "resolved": "7.1.2",
@@ -410,6 +428,15 @@
           "System.Configuration.ConfigurationManager": "9.0.21",
           "System.Security.Cryptography.Pkcs": "9.0.21",
           "System.Threading.RateLimiting": "9.0.21"
+        }
+      },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Direct",
+        "requested": "[9.0.21, )",
+        "resolved": "9.0.21",
+        "contentHash": "RjiRdRtPhJBhMBrCslytDzH1/wOEsQY8RTgXcYTEYExfuaVfVkV+IO4JliKSeC+RcLSEtrU+ZVzR1qCQkQapqw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "9.0.21"
         }
       },
       "Microsoft.Data.SqlClient.SNI.runtime": {
@@ -478,6 +505,15 @@
           "System.Threading.RateLimiting": "9.0.21"
         }
       },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Direct",
+        "requested": "[9.0.21, )",
+        "resolved": "9.0.21",
+        "contentHash": "RjiRdRtPhJBhMBrCslytDzH1/wOEsQY8RTgXcYTEYExfuaVfVkV+IO4JliKSeC+RcLSEtrU+ZVzR1qCQkQapqw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "9.0.21"
+        }
+      },
       "Microsoft.Data.SqlClient.SNI.runtime": {
         "type": "Transitive",
         "resolved": "7.1.2",
@@ -542,6 +578,15 @@
           "System.Configuration.ConfigurationManager": "9.0.21",
           "System.Security.Cryptography.Pkcs": "9.0.21",
           "System.Threading.RateLimiting": "9.0.21"
+        }
+      },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Direct",
+        "requested": "[9.0.21, )",
+        "resolved": "9.0.21",
+        "contentHash": "RjiRdRtPhJBhMBrCslytDzH1/wOEsQY8RTgXcYTEYExfuaVfVkV+IO4JliKSeC+RcLSEtrU+ZVzR1qCQkQapqw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "9.0.21"
         }
       },
       "Microsoft.Data.SqlClient.SNI.runtime": {
