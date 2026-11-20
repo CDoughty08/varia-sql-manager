@@ -958,13 +958,24 @@ internal static class UnifiedDiff
         return shown;
     }
 
+    /// <summary>The rows the unified result stores for <paramref name="context"/>: each entry shown, a changed one twice.</summary>
+    public static long StoredRows(DiffModel model, int context)
+    {
+        var shown = Shown(model, context);
+        long rows = 0;
+        for (var k = 0; k < shown.Length; k++)
+            if (shown[k]) rows += model.Entries[k].Kind == DiffKind.Changed ? 2 : 1;
+        return rows;
+    }
+
     /// <summary>Writes the rows into <paramref name="set"/> (opened with <see cref="Columns"/> and <see cref="Wires"/>), then
     /// completes it. Returns the unchanged entries left out after the last row stored (trailingHidden).</summary>
     /// <param name="tooLarge">What it answers (TOO_LARGE) when the budget has no room for the rooms a packed result is
     /// read through: each side's rows are read fused, a few pages kept unpacked (<see cref="ResultDiffer.LeftSlots"/>), in
     /// about the order the comparison read them.</param>
+    /// <param name="index">Records each row stored, in order (<see cref="DiffIndex.Builder"/>), sized by <see cref="StoredRows"/>.</param>
     public static long Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token,
-        string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null)
+        string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null, DiffIndex.Builder? index = null)
     {
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
@@ -1008,14 +1019,34 @@ internal static class UnifiedDiff
                 var partner = model.Possible.TryGetValue(k, out var row) ? row : -1;
                 var gap = omitted;
                 omitted = 0;
-                var stored = entry.Kind switch
+                bool stored;
+                switch (entry.Kind)
                 {
-                    DiffKind.Same => Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty && !repeated && gap == 0 ? null : Tone(tone, "same", Flags(repeated, -1, gap), cells)),
-                    DiffKind.Added => Row(set, sides.Right, entry.Right, Added, -1, entry.Right, Tone(tone, "added", Flags(repeated, partner, gap), [])),
-                    DiffKind.Removed => Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, Tone(tone, "removed", Flags(repeated, partner, gap), [])),
-                    // The gap is on the first row stored after the run: the old half.
-                    _ => Pair(set, sides, entry, Tone(tone, "changedOld", Flags(repeated, -1, gap), cells), Tone(tone, "changedNew", Flags(repeated, -1, 0), cells))
-                };
+                    case DiffKind.Same:
+                        stored = Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty && !repeated && gap == 0 ? null : Tone(tone, "same", Flags(repeated, -1, gap), cells));
+                        if (stored) index?.Add(DiffRowKind.Same, repeated, false, 0);
+                        break;
+                    case DiffKind.Added:
+                        stored = Row(set, sides.Right, entry.Right, Added, -1, entry.Right, Tone(tone, "added", Flags(repeated, partner, gap), []));
+                        if (stored) index?.Add(DiffRowKind.Added, repeated, false, 1, DiffIndex.Builder.Key(entry.Right, true), partner < 0 ? -1 : DiffIndex.Builder.Key(partner, false));
+                        break;
+                    case DiffKind.Removed:
+                        stored = Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, Tone(tone, "removed", Flags(repeated, partner, gap), []));
+                        if (stored) index?.Add(DiffRowKind.Removed, repeated, false, 1, DiffIndex.Builder.Key(entry.Left, false), partner < 0 ? -1 : DiffIndex.Builder.Key(partner, true));
+                        break;
+                    default:
+                        // The gap is on the first row stored after the run: the old half. The units are on the new half,
+                        // where navigation lands: the cells its tone lists, and one more when it was cut.
+                        var oldTone = Tone(tone, "changedOld", Flags(repeated, -1, gap), cells, out _, out var oldCut);
+                        var newTone = Tone(tone, "changedNew", Flags(repeated, -1, 0), cells, out var listed, out var newCut);
+                        stored = Pair(set, sides, entry, oldTone, newTone);
+                        if (stored)
+                        {
+                            index?.Add(DiffRowKind.ChangedOld, repeated, oldCut, 0);
+                            index?.Add(DiffRowKind.ChangedNew, repeated, newCut, listed + (newCut ? 1 : 0));
+                        }
+                        break;
+                }
                 if (!stored) break;
             }
             return omitted;
@@ -1047,8 +1078,14 @@ internal static class UnifiedDiff
     /// differing cells' pair indexes in order, each run of adjacent columns of one kind (changed, or soft with "~") as
     /// "first-last", cut at a whole entry with " …" so that the whole text, kind and flags included, is at most
     /// <see cref="MaxToneChars"/>.</summary>
-    internal static string Tone(System.Text.StringBuilder tone, string kind, ToneFlags flags, ReadOnlySpan<int> cells)
+    internal static string Tone(System.Text.StringBuilder tone, string kind, ToneFlags flags, ReadOnlySpan<int> cells) => Tone(tone, kind, flags, cells, out _, out _);
+
+    /// <summary>As above, and the changed (not soft) cells it lists and whether it was cut: the row's change units
+    /// (<see cref="DiffIndex"/>) are those cells, and one more for a cut.</summary>
+    internal static string Tone(System.Text.StringBuilder tone, string kind, ToneFlags flags, ReadOnlySpan<int> cells, out int listed, out bool cut)
     {
+        listed = 0;
+        cut = false;
         tone.Clear().Append(kind);
         if (flags.Repeated) tone.Append(" dup");
         if (flags.Partner >= 0) tone.Append(" poss=").Append((flags.Partner + 1L).ToString(CultureInfo.InvariantCulture));
@@ -1072,8 +1109,9 @@ internal static class UnifiedDiff
                 last.TryFormat(entry[length..], out written, provider: CultureInfo.InvariantCulture);
                 length += written;
             }
-            if (tone.Length + length > MaxToneChars - 2) { tone.Append(" …"); break; }
+            if (tone.Length + length > MaxToneChars - 2) { tone.Append(" …"); cut = true; break; }
             tone.Append(entry[..length]);
+            if (!soft) listed += last - first + 1;
             i = j;
         }
         return tone.ToString();

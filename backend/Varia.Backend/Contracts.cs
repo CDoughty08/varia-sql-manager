@@ -148,15 +148,17 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 /// <summary>One results.view filter (ViewFilter): Op "in", "notIn" or "between" on Column, with its values as base Rows
 /// (and Nulls) or as the selected Cells; Op "duplicates" on Columns; Op "groups" on Column: the values a distinct
 /// snapshot of that column (SnapshotId) ticks; or Op "keepRows", which names no column: the base Rows to keep (1 to 4,095),
-/// or the rows the selected Cells cover.</summary>
-internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null);
+/// or the rows the selected Cells cover; or Op "kind", only on a comparison (kind diff), which names no column: the Kinds of
+/// row it keeps (1 to 4 of "same", "changed", "added", "removed"; a changed entry's halves are changed).</summary>
+internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null, string[]? Kinds = null);
 /// <summary>Selected cells: 1 to 256 [first, count] ranges of positions in ViewId's order, or in the result's own.</summary>
 internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
 /// and highest). A "groups" filter comes back as it was asked, with whether it keeps (else drops) the Values it names, NULL
 /// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL. A "keepRows" filter
-/// comes back as the base Rows it keeps, ascending.</summary>
-internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null, string? Digest = null);
+/// comes back as the base Rows it keeps, ascending; a "kind" filter as its Kinds, in the order same, changed, added, removed.</summary>
+internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null, string? Digest = null,
+    string[]? Kinds = null);
 /// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
 /// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
 /// or an estimated length.</summary>
@@ -195,7 +197,15 @@ internal sealed record DiffColumnChange(long Changed, long Soft);
 /// (flagged poss), PossibleSkipped that too many unmatched rows were left to look; NothingPaired that both results have
 /// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row.</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, DiffMatchResult Match, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
-    string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden);
+    string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden,
+    int[] Overview, long Units);
+/// <summary>results.diffSeek: either From (a position, -1 before the first) and Direction "next" or "previous", or PartnerOf
+/// (a look-alike row's position); positions are a view's with ViewId, else stored rows of the comparison.</summary>
+internal sealed record ResultsDiffSeekArgs(uint ResultId, uint? ViewId = null, long? From = null, string? Direction = null, long? PartnerOf = null);
+/// <summary>The position landed on (Row), the pair index of its cell (Column: an added, removed or cut unit's is 0), the
+/// unit's number (Index, 1 to Total), the change units in the view (Total) and the rows shown (Rows: the set's or the
+/// view's, which main checks Row against); or None (nothing found), or Hidden (the partner exists but the view hides it).</summary>
+internal sealed record ResultsDiffSeekResult(long? Row = null, int? Column = null, long? Index = null, long? Total = null, bool? None = null, bool? Hidden = null, long? Rows = null);
 /// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
 /// without a column counts rows.</summary>
 internal sealed record PivotValueArgs(string Aggregate, int? Column = null);
