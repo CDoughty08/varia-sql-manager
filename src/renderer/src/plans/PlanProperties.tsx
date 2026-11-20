@@ -43,7 +43,9 @@ export function planPropertiesMenu() {
       const selected = (press ?? selectedFacts(pane, '.plan-fact')).filter(item => facts.includes(item))
       // The press saw no selection, so any selection now is the word macOS selects under a right-click: drop it, or the
       // next right-click's press would take it for the user's selection and copy this fact again.
-      if (press && !press.length) pane.ownerDocument.getSelection()?.removeAllRanges()
+      // A selection elsewhere in the window (Messages) is the user's and stays.
+      const selection = pane.ownerDocument.getSelection()
+      if (press && !press.length && selection && !selection.isCollapsed && pane.contains(selection.anchorNode)) selection.removeAllRanges()
       if (!facts.length) return null
       const picked = selected.length ? selected : fact && facts.includes(fact as HTMLElement) ? [fact as HTMLElement] : facts
       return { kind: 'planProperties', facts: picked.map(groupedFactText) }

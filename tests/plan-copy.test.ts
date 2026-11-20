@@ -73,6 +73,17 @@ describe('plan properties copy', () => {
     expect(getSelection()!.rangeCount).toBe(0)
     menu.press(element)
     expect(menu.target(element, fact(element, 'Node ID'))?.facts).toEqual([['Node ID', '3']])
+    // A selection elsewhere in the window (Messages) is the user's, and stays.
+    const messages = document.createElement('p')
+    messages.textContent = 'Commands completed successfully.'
+    document.body.append(messages)
+    const elsewhere = document.createRange()
+    elsewhere.selectNodeContents(messages)
+    getSelection()!.addRange(elsewhere)
+    menu.press(element)
+    expect(menu.target(element, fact(element, 'Ordered'))?.facts).toEqual([['Ordered', 'True']])
+    expect(getSelection()!.toString()).toBe('Commands completed successfully.')
+    getSelection()!.removeAllRanges()
     // Once the press ends, the selection as it is.
     getSelection()!.addRange(range)
     menu.press(element)
