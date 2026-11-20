@@ -845,8 +845,9 @@ export const liveGridNewRows = frame => frame.getByRole('button', { name: /new r
 // Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid, named by its owner.
 
 export const localGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
-/** Its frame: the strip (a truncation, a failed copy, a save) and the overlay an empty table's words show in. */
-export const localGridFrame = (page, name) => page.locator(part.localGrid).filter({ has: localGrid(page, name) })
+/** Its frame: the strip (a truncation, a failed copy, a save) and the overlay an empty table's words show in. `scope` is the
+ *  page or a locator (a document) to look in; the grid it holds is matched from the page, as `has` resolves inside the frame. */
+export const localGridFrame = (scope, name) => scope.locator(part.localGrid).filter({ has: localGrid(typeof scope.page === 'function' ? scope.page() : scope, name) })
 
 // Object Explorer
 
