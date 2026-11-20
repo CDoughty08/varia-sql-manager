@@ -118,7 +118,9 @@ npm run test:smoke:wsl -- --all
 - **BigQuery.** `VARIA_TEST_BIGQUERY_ENDPOINT` (a loopback http address such as `http://localhost:9050`, honoured only by
   unpackaged builds) puts the backend in emulator mode against `ghcr.io/goccy/bigquery-emulator`, and
   `-- --bigquery-emulator-live` runs the emulator checks (docs/bigquery.md#testing has the `docker run` line; on Windows use
-  `127.0.0.1`). The offline checks need nothing: `-- --bigquery-checks` runs them alone. No check ever contacts a real
+  `127.0.0.1`). `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (the emulator's gRPC port, such as `http://localhost:9060`, read only
+  by the backend and only with the emulator endpoint) adds the Storage Read checks. The offline checks need nothing:
+  `-- --bigquery-checks` runs them alone, and `-- --bigquery-read-bench` is the hand-run read throughput benchmark. No check ever contacts a real
   Google Cloud project, and none reads a project id or credential from the environment.
 - **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
   Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.

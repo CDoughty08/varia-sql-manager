@@ -37,10 +37,12 @@ export function jobText(job: ResultJob): { readonly what: string; readonly done:
 /** The run summary, from the run's state; elapsed time ticks while it runs. SSMS's sentence is its tooltip. A run that ended
  *  without a summary took until it ended, not until now. */
 function RunSummaryView({ tab, now }: { tab: TabResults; now: number }) {
+  const { settings } = useWorkbench()
+  const prices = useServiceSnapshot(settings).values['queryExecution.bigQuery.showCost'] !== 'bytes'
   const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? Math.max(0, (tab.endedAt ?? tab.startedAt) - tab.startedAt)
   const summary = runSummary({
     status: tab.status, closedFrom: tab.closedFrom, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt,
-    bytesProcessed: tab.summary?.job?.bytesProcessed
+    bytesProcessed: tab.summary?.job?.bytesProcessed, prices
   })
   return <span className="output-status" data-status={tab.status} data-tone={summary.tone} title={summary.sentence}>
     <Icon name={summary.icon} spin={summary.icon === 'loading'} /><strong>{summary.outcome}</strong>{summary.facts.map((fact, index) => <span key={index}> · {fact}</span>)}

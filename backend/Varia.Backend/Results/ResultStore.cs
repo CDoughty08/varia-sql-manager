@@ -425,14 +425,25 @@ internal sealed partial class ResultStore
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
         var queryLimit = Math.Min(budget.Query, query.MaxBytes);
-        if (Interlocked.Read(ref query.used) + bytes > queryLimit) { query.Refused(queryLimit); reason = TruncationReason.QueryBudget; return false; }
+        // Each share is claimed before the next is checked and given back on a later refusal, so concurrent reservations (a
+        // query's Storage Read streams) never pass a limit together. The query's share is claimed only when it fits.
+        for (var current = Interlocked.Read(ref query.used); ; current = Interlocked.Read(ref query.used))
+        {
+            if (current + bytes > queryLimit)
+            {
+                query.Refused(queryLimit);
+                reason = TruncationReason.QueryBudget;
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref query.used, current + bytes, current) == current) break;
+        }
         var live = query.Live;
-        // Added first and taken back on a refusal, so concurrent reservations never pass a limit together.
         if (live is not null)
         {
             if (Interlocked.Add(ref live.used, bytes) > live.Limit)
             {
                 Interlocked.Add(ref live.used, -bytes);
+                Interlocked.Add(ref query.used, -bytes);
                 query.Refused(live.Limit);
                 reason = TruncationReason.QueryBudget;
                 return false;
@@ -441,6 +452,7 @@ internal sealed partial class ResultStore
             {
                 Interlocked.Add(ref liveUsed, -bytes);
                 Interlocked.Add(ref live.used, -bytes);
+                Interlocked.Add(ref query.used, -bytes);
                 query.Refused(budget.Live);
                 reason = TruncationReason.GlobalBudget;
                 return false;
@@ -450,6 +462,7 @@ internal sealed partial class ResultStore
         {
             if (current + bytes > budget.Global)
             {
+                Interlocked.Add(ref query.used, -bytes);
                 query.Refused(budget.Global);
                 if (live is not null)
                 {
@@ -461,7 +474,6 @@ internal sealed partial class ResultStore
             }
             if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) break;
         }
-        Interlocked.Add(ref query.used, bytes);
         reason = TruncationReason.None;
         return true;
     }
@@ -552,7 +564,7 @@ internal sealed partial class ResultStore
     /// caller has reserved from the set's budget: they are returned when the view goes. <paramref name="replaces"/> names a
     /// view of the same set this one supersedes; past <see cref="MaxViewsPerResult"/> the set's oldest view goes. Throws
     /// RESULT_RELEASED, returning the charge, when the set was released while the view was built.</summary>
-    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue)
+    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue, long[]? unitBlocks = null)
     {
         List<ResultView> dropped = [];
         ResultView view;
@@ -571,7 +583,7 @@ internal sealed partial class ResultStore
                 views.Remove(own[i].ViewId);
                 dropped.Add(own[i]);
             }
-            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows);
+            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows) { UnitBlocks = unitBlocks };
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);

@@ -1,5 +1,5 @@
 import type { BigQueryConnectionOptions, BigQueryProject, ProviderConnectionOptions } from '../../shared/contracts'
-import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema } from '../../shared/connections'
+import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema, connectionKey } from '../../shared/connections'
 import { usesKeyFile, type BigQueryAuthenticationMode } from '../../shared/auth'
 import type { ProviderId } from '../../shared/providers'
 import { bigQueryAuthenticationLabels, type BigQueryConnectionProfile } from '../../shared/bigquery-connections'
@@ -61,11 +61,42 @@ export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryCo
     ...location ? { location } : {}, ...dataset ? { dataset } : {}, ...extraProjects?.length ? { extraProjects } : {},
     ...usesKeyFile(form.authentication) && form.keyFile ? { keyFile: form.keyFile } : {},
     ...impersonate ? { impersonateServiceAccount: impersonate } : {}, ...form.maximumBytesBilled ? { maximumBytesBilled: form.maximumBytesBilled } : {},
+    ...form.costPrompt !== undefined ? { costPrompt: form.costPrompt } : {},
     ...form.displayName?.trim() ? { displayName: form.displayName } : {}, ...form.color ? { color: form.color } : {}, ...form.environment ? { environment: form.environment } : {}
   }
   const parsed = bigQueryConnectionOptionsSchema.safeParse(value)
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Check the connection settings.')
   return value
+}
+
+/**
+ * The cost-prompt choice (docs/bigquery.md, Cost) belongs to the saved entry: the form starts without one, shows the saved
+ * entry's, and names one only when Advanced Properties changes it, so a remembered or stale value never overwrites
+ * "Don't ask again" made since.
+ */
+export function withoutCostPrompt(options: BigQueryConnectionOptions): BigQueryConnectionOptions {
+  const { costPrompt: _costPrompt, ...rest } = options
+  return { ...rest }
+}
+/** The saved choice for these settings: false when an entry with them chose "Don't ask again". */
+export function savedCostPrompt(profiles: readonly { readonly options: BigQueryConnectionOptions }[], options: BigQueryConnectionOptions): false | undefined {
+  let key: string
+  // The form as Connect would send it: a field typed into and cleared again ('' or spaces) is no field.
+  try { key = connectionKey(bigQueryFormOptions(options)) } catch { return undefined }
+  return profiles.some(profile => { try { return profile.options.costPrompt === false && connectionKey(profile.options) === key } catch { return false } }) ? false : undefined
+}
+/** What Advanced Properties' OK names: the form's choice when the box is as it was, else the box (true clears a saved
+ *  "Don't ask again", false sets it). */
+export function advancedCostPrompt(options: BigQueryConnectionOptions, saved: false | undefined, checked: boolean): boolean | undefined {
+  return checked === ((options.costPrompt ?? saved) !== false) ? options.costPrompt : checked
+}
+
+/** The form's settings for "changed?" checks: key order does not count, and the cost-prompt choice counts as it shows
+ *  (`costPrompt`: the form's, else the saved entry's), so a box ticked and unticked again is no change. */
+export function bigQueryFormShape(from: BigQueryConnectionOptions, autoReconnect: string | undefined, costPrompt = from.costPrompt): string {
+  const { costPrompt: _costPrompt, ...rest } = from
+  // A field typed into and cleared again holds '' where the saved entry has none: both are empty.
+  return JSON.stringify([Object.entries(rest).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value] as const).filter(([, value]) => value !== undefined && value !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false])
 }
 
 /** How many projects Load projects keeps across its pages. */

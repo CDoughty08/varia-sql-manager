@@ -38,7 +38,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "agent.profile"
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "agent.profile",
+        "results.diffSeek"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -399,7 +400,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -485,6 +486,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
+        "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -514,6 +516,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
         "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
         "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
+        "results.diffSeek" => await DiffSeekAsync(Read<ResultsDiffSeekArgs>(parameters, json), Token(context)),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), context),
         "results.pivot" => await PivotAsync(Read<ResultsPivotArgs>(parameters, json), context),
@@ -1178,6 +1181,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
+        if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -1939,15 +1943,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A key per column the filters compare and per sort key (a Value key on a filtered column is the filter's), and what the
         // running filter needs (FilterBytes a row at most).
         var working = ViewSorter.WorkingBytes(rows, ViewSorter.KeyCount(keys, filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
-        var kept = 4 * rows + ResultStore.ViewOverhead;
+        // A diff's view keeps its running totals of change units too (DiffIndex.ViewBlocks), at most one block's for its rows.
+        var index = set.DiffIndex;
+        var kept = 4 * rows + ResultStore.ViewOverhead + (index is null ? 0 : DiffIndex.ViewBlockBytes(rows));
         if (!store.TryReserveWork(set.Budget, working + kept))
             throw TooLarge(filters.Length > 0
                 ? "There is not enough result memory to filter these rows. Close other results and try again."
                 : "There is not enough result memory to sort these rows. Close other results and try again.");
         (int[] Order, bool Approximate, ViewFilter[] Filters) built;
+        long[]? unitBlocks = null;
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
         var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-        try { built = await UntilReleased(work => ViewSorter.Build(set, pages, keys, filters, work, keyMemory), token, ProgressOf(context), set); }
+        try
+        {
+            built = await UntilReleased(work =>
+            {
+                var order = ViewSorter.Build(set, pages, keys, filters, work, keyMemory);
+                unitBlocks = index?.ViewBlocks(order.Order, work);
+                return order;
+            }, token, ProgressOf(context), set);
+        }
         // A packed result's rooms or extracts (a fused read) refused: the result released meanwhile, or low system memory,
         // answers as it would anywhere else.
         // Only those: a limit with its own reason (too many values, rows or comparisons) is answered as it is.
@@ -1962,10 +1977,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             store.Return(set.Budget, working + kept);
             throw;
         }
-        // A filtered view keeps only its rows' order.
-        var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
+        // A filtered view keeps only its rows' order (and a diff's, their running totals).
+        var charged = 4L * built.Order.Length + ResultStore.ViewOverhead + (unitBlocks is null ? 0 : 8L * unitBlocks.Length);
         store.Return(set.Budget, working + kept - charged);
-        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces, rows);
+        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces, rows, unitBlocks);
         return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
@@ -1982,6 +1997,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         for (var i = 0; i < filters.Length; i++)
         {
             var filter = args.Filters[i];
+            if (filter.Kinds is not null && filter.Op != "kind") throw new RequestException("INVALID_PARAMS", "Only a kind filter names kinds.");
             if (filter.Op == "duplicates")
             {
                 if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null
@@ -2002,6 +2018,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 filters[i] = new ViewFilter(kept, listed, rows, nulls, null, [], snapshotId, snapshot.Digest());
                 continue;
             }
+            if (filter.Op == "kind")
+            {
+                // A comparison's rows of 1 to 4 kinds, read from its change index; no column, rows or cells.
+                if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null || filter.Columns is not null || filter.SnapshotId is not null
+                    || filter.Kinds is not { Length: >= 1 and <= DiffIndex.MaxKinds } kindNames || kindNames.Distinct(StringComparer.Ordinal).Count() != kindNames.Length)
+                    throw new RequestException("INVALID_PARAMS", "A kind filter names 1 to 4 different kinds: same, changed, added or removed.");
+                if (set.Kind != "diff" || set.DiffIndex is null) throw new RequestException("INVALID_PARAMS", "Only a comparison's rows can be filtered by kind.");
+                filters[i] = new ViewFilter(FilterOp.Kind, -1, null, false, null, [], Kinds: DiffIndex.KindsOf(kindNames));
+                continue;
+            }
             if (filter.SnapshotId is not null) throw new RequestException("INVALID_PARAMS", "Only a groups filter names a value list.");
             if (filter.Op == "keepRows")
             {
@@ -2017,7 +2043,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 "in" => FilterOp.In,
                 "notIn" => FilterOp.NotIn,
                 "between" => FilterOp.Between,
-                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates, groups or keepRows.")
+                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates, groups, keepRows or kind.")
             };
             if (filter.Column is not { } column || !Shown(set, column) || filter.Columns is not null
                 || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
@@ -2043,6 +2069,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
         FilterOp.KeepRows => new ViewFilterResult("keepRows", Rows: filter.Rows),
+        FilterOp.Kind => new ViewFilterResult("kind", Kinds: DiffIndex.NamesOf(filter.Kinds)),
         _ when filter.Snapshot is { } snapshot => new ViewFilterResult("groups", filter.Column, Nulls: filter.Nulls, SnapshotId: snapshot, Keep: filter.Op == FilterOp.In,
             Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null, Digest: filter.Digest),
         _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)
@@ -2401,6 +2428,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw TooLarge(ResultDiffer.TooLarge);
         // The differing cells are charged a chunk at a time, asking the system's memory load once for every 64 MiB of them.
         var cells = new WorkSteps(store, left.Budget);
+        // The change index's reservation until the diff's set takes it over.
+        long indexHeld = 0;
         try
         {
             DiffModel model;
@@ -2414,6 +2443,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
+            // The change index is reserved before any row is written, so the rows never take its room; refused, the diff is
+            // refused whole, as its rows are. (Comparison plan PR 6 answers DIFF_ROWS_TOO_LARGE here for context -1.)
+            var storedRows = UnifiedDiff.StoredRows(model, args.Context);
+            if (storedRows > Array.MaxLength) throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
+            var indexBytes = DiffIndex.BytesFor(storedRows, model.Possible.Count);
+            if (!store.TryReserveWork(left.Budget, indexBytes)) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+            indexHeld = indexBytes;
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model), derived: true)
                 ?? throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
@@ -2426,12 +2462,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 progress?.Phase("write", 0.98);
                 long trailing;
-                try { trailing = await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge), token, progress, left, right); }
+                var builder = new DiffIndex.Builder((int)storedRows, model.Possible.Count, indexBytes);
+                try { trailing = await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge, index: builder), token, progress, left, right); }
                 catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right)); }
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
                 var written = set.Describe();
-                if (written.RowsStored < written.RowsRead) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+                if (written.RowsStored < written.RowsRead || builder.Build() is not { } index) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+                // The set takes over the index's reservation: returned when it is freed.
+                set.KeepDiffIndex(index);
+                indexHeld = 0;
                 var (same, changed, added, removed, soft) = model.Counts();
                 var paired = model.Pairs;
                 string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
@@ -2441,7 +2481,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     [.. model.KeyPairs.Select(pair => right.Columns[paired[pair].Right].Name)]);
                 var answer = new ResultsDiffResult(set.Describe(), used, same, changed, added, removed, soft,
                     model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right), model.Repeated(), model.Possible.Count / 2,
-                    model.PossibleSkipped, same + changed == 0 && leftRows > 0 && rightRows > 0, [.. model.ColumnChanges().Select(change => new DiffColumnChange(change.Changed, change.Soft))], trailing);
+                    model.PossibleSkipped, same + changed == 0 && leftRows > 0 && rightRows > 0, [.. model.ColumnChanges().Select(change => new DiffColumnChange(change.Changed, change.Soft))], trailing,
+                    index.Overview(), index.Units);
                 // Main owns the diff only once it has the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
                 return answer;
@@ -2452,7 +2493,48 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(left.Budget, working + cells.Held); }
+        finally { store.Return(left.Budget, working + cells.Held + indexHeld); }
+    }
+
+    /// <summary>results.diffSeek: the next or previous change unit from a position of a comparison (stored rows, or a view's
+    /// positions with ViewId), wrapping round, or the position of a look-alike row's partner. Reads the change index's running
+    /// totals and per-row counts (the view's own totals under a view), and a tone only for the one row it lands on; finding a
+    /// partner under a view is one pass over its order. Answers None when nothing is found, Hidden when the partner exists
+    /// but the view does not show it. (A remote result's refusal, REMOTE_RESULT, belongs here once results can be remote.)</summary>
+    private async Task<ResultsDiffSeekResult> DiffSeekAsync(ResultsDiffSeekArgs args, CancellationToken token)
+    {
+        var seeking = args.From is not null || args.Direction is not null;
+        if (args.ResultId == 0 || args.ViewId == 0 || seeking == (args.PartnerOf is not null)
+            || (seeking && (args.From is not (>= -1 and <= MaxSafeInteger) || args.Direction is not ("next" or "previous"))) || args.PartnerOf is < 0 or > MaxSafeInteger)
+            throw new RequestException("INVALID_PARAMS", "A seek names a position and a direction (next or previous), or the position whose possible match it finds.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (set.Kind != "diff" || set.DiffIndex is not { } index) throw new RequestException("INVALID_PARAMS", "Only a comparison's changes can be sought.");
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var answer = await Task.Run(() =>
+        {
+            using var pin = set.Pin();
+            var totals = view is null ? null : view.UnitBlocks ?? index.ViewBlocks(view.Order, token);
+            var positions = index.Over(view?.Order, totals);
+            if (args.PartnerOf is { } of)
+            {
+                if (of >= positions.Count || index.PartnerOf(positions.RowAt((int)of)) is not (>= 0 and var partner)) return new ResultsDiffSeekResult(None: true);
+                var at = view is null ? partner : Array.IndexOf(view.Order, partner);
+                if (at < 0) return new ResultsDiffSeekResult(Hidden: true);
+                // A partner is an added or removed row: one unit, its first column.
+                return new ResultsDiffSeekResult(at, 0, positions.Before(at) + 1, positions.Total, Rows: positions.Count);
+            }
+            var forward = args.Direction == "next";
+            var found = positions.Seek(args.From!.Value, forward);
+            if (found < 0) return new ResultsDiffSeekResult(None: true);
+            var row = positions.RowAt(found);
+            var kind = index.KindOf(row);
+            var cut = index.IsCut(row);
+            var tone = kind is DiffRowKind.Added or DiffRowKind.Removed ? null : DiffIndex.ToneOf(set, row);
+            var before = positions.Before(found);
+            return new ResultsDiffSeekResult(found, DiffIndex.Column(kind, cut, tone, forward), forward ? before + 1 : before + positions.UnitsAt(found), positions.Total, Rows: positions.Count);
+        }, token);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        return answer;
     }
 
     /// <summary>results.diff's match parameter: absent is Auto; Columns takes 1 to 16 distinct pair indexes (checked against

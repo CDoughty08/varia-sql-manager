@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -182,6 +182,7 @@ const filterIdentity = (filter: ResolvedViewFilter): string => {
     case 'groups': return `groups:${filter.digest}`
     case 'duplicates': return `duplicates:${filter.columns.join(',')}`
     case 'keepRows': return `keepRows:${[...filter.rows].sort((a, b) => a - b).join(',')}`
+    case 'kind': return `kind:${[...filter.kinds].sort().join(',')}`
     case 'between': return `between:${filter.column}:${filter.nulls}:${filter.rows.join(',')}`
     default: return `${filter.op}:${filter.column}:${filter.nulls}:${[...filter.rows].sort((a, b) => a - b).join(',')}`
   }
@@ -1788,6 +1789,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const named = sort.filters.map(async (item): Promise<GridFilter> => {
       const filter = item.filter
       if (item.named || filter.op === 'duplicates') return item
+      if (filter.op === 'kind') return { ...item, label: filterLabel(filter, columns), named: true }
       // Its words are its rows' count, known once the view resolved its cells.
       if (filter.op === 'keepRows') return 'rows' in filter ? { ...item, label: filterLabel(filter, columns), named: true } : item
       if (filter.op === 'groups') {
@@ -2139,6 +2141,7 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
 export function filterLabel(filter: ResolvedViewFilter, columns: readonly ResultColumn[], texts: readonly (string | undefined)[] = []): string {
   if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => !isHiddenColumn(column)).length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
   if (filter.op === 'keepRows') return keptLabel(filter.rows.length)
+  if (filter.op === 'kind') return kindLabel(filter.kinds)
   const name = columnName(columns, filter.column)
   if (filter.op === 'between') return texts[0] && texts[1] ? `${name} between ${texts[0]} and ${texts[1]}` : `${name} between 2 values`
   const values = (filter.op === 'groups' ? filter.values : filter.rows.length) + (filter.nulls ? 1 : 0), not = filter.op === 'notIn' || (filter.op === 'groups' && !filter.keep)
@@ -2150,11 +2153,19 @@ export function filterLabel(filter: ResolvedViewFilter, columns: readonly Result
 }
 
 /** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it.
- *  Duplicates span columns and Keep Selected Rows names none, so neither marks a funnel. */
+ *  Duplicates span columns, and Keep Selected Rows and a comparison's kind filter name none, so none marks a funnel. */
 export function filteredColumns(sort: GridSort | undefined): ReadonlySet<number> {
   const columns = new Set<number>()
-  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates' && item.filter.op !== 'keepRows') columns.add(item.filter.column)
+  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates' && item.filter.op !== 'keepRows' && item.filter.op !== 'kind') columns.add(item.filter.column)
   return columns
+}
+
+/** A comparison's kind filter's words: "Changed rows", "Changed or added rows", "Changed, added or removed rows". */
+export function kindLabel(kinds: readonly DiffKindName[]): string {
+  const order: readonly DiffKindName[] = ['same', 'changed', 'added', 'removed']
+  const words = order.filter(kind => kinds.includes(kind)).map(kind => kind === 'same' ? 'unchanged' : kind)
+  const listed = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`
+  return `${listed.charAt(0).toUpperCase()}${listed.slice(1)} rows`
 }
 
 /** The column a filter change works on, for its header's ring: the first filter that is new among `filters`. */

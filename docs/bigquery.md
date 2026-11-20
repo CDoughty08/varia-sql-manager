@@ -21,7 +21,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, and Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project). |
+| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -36,8 +36,8 @@ token path asks again.
 ## Saved connections
 
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
-most recent connects, each keyed by its settings, with environment labels per entry, written atomically and
-quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
+most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
+[Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
 target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
@@ -59,7 +59,8 @@ replace it with a fake.
   Google's libraries are Apache-2.0 and BSD-3-Clause.
 - **Size.** The win-x64 self-contained ReadyToRun backend grows by 4.6 MB (1.9 MB compressed) with the REST client.
   Adding the Storage Read API and Arrow (`Google.Cloud.BigQuery.Storage.V1` 3.20.0 with gRPC, `Apache.Arrow` 23.0.0, for
-  windowed results) adds 5.4 MB more (2.2 MB compressed).
+  Storage Read) adds 5.4 MB more (2.2 MB compressed); `Apache.Arrow.Compression` 23.0.0 (Zstandard through
+  `ZstdSharp.Port`, which brings K4os's LZ4) adds about 0.6 MB of assemblies.
 
 ## Authentication
 
@@ -179,7 +180,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
   is NULL with the read-error flag and one message for its column. Discard results reads no rows.
 - **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
-  (binary), DATE, TIME, DATETIME and INTERVAL as BigQuery writes them, TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
+  (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
+  INTERVAL in canonical form (`1-2 3 4:05:06.5`), TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
   (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
@@ -189,11 +191,90 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
 - **Stop and the timeout.** Stop ends the request with status `cancelled` and, when the job had not finished, says it keeps
   running in BigQuery (Stop's `jobs.cancel` comes with scripts and sessions). A tab runs one query at a time (`SESSION_BUSY`).
 
+### Storage Read
+
+A large result is read through the BigQuery Storage Read API (Arrow over gRPC) into the same result set, budget and
+limits as REST's (`SqlService.BigQueryStorageRead.cs`, `ArrowColumnPlan`). REST and Arrow write identical text for every
+type.
+
+- **When.** After the first page: the rest of the rows remain, the job is a single SELECT (a script's rows come through
+  REST) and the rows the row limit keeps are estimated at 20 MB or more (the destination table's bytes per row, else the
+  first page's). The first page is then dropped and every row read from the job's temporary destination table. Reads
+  of temporary tables are free (Google's pricing page), so there is no setting for it.
+- **Streams.** The backend's own GoogleSQL scanner (`GoogleSqlScanner`, which skips comments, strings and nested
+  queries) decides the order: a top-level `ORDER BY` (or pipe syntax's `GROUP BY k DESC`) reads one stream in order;
+  anything else asks for up to four, appended as their batches come. When unsure it reads one stream, which is only
+  slower. Each stream is read on its own task; each batch is charged to the query's budget (twice its size) before it
+  is queued, and a compressed batch's decoded buffers are charged too while its rows are stored (a refusal stops the
+  read at the budget), at most two batches are charged but not yet stored (so the budget holds as much as REST's; each other stream
+  holds at most the one batch it received while it waits), and one reader
+  appends rows, so the store keeps one writer. A stream that fails transiently is read again from its offset; one that
+  fails for good fails the query at once, with REST's error (an expired sign-in is `AUTH_EXPIRED`).
+- **Compression.** The session asks for Zstandard buffer compression: in the offline benchmark it sends a fifth to two
+  fifths of the uncompressed bytes for at most about 15% more decoding time, against LZ4's 55% for the same time
+  (Throughput below). The reader also reads LZ4 and uncompressed batches, which an endpoint that ignores the option
+  sends.
+- **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
+  connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
+  be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
+  REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
+  (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
+  fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
+- **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
+  settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
+
 ### Cost
 
 Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
 beside them, "< $0.01" below a cent. The price is an estimate: projects with capacity reservations do not pay per byte.
 `BigQueryCost` (C#) and `src/shared/bigquery/cost.ts` write the same text, pinned by `tests/fixtures/bigquery/cost.json`.
+Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`prices: false` for
+Messages).
+
+- **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A query tab shows it in a chip
+  beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (its tooltip says whether
+  Execute asks on this connection), and after a run what the job processed and cost, unless the text changed while it
+  ran. Its tooltip says the estimate is free and on demand, and why it may be low.
+- **Diagnostics.** After a 1 s pause in editing, a dry run (one in flight per tab; the latest text wins) marks the error
+  BigQuery reports at its `[line:column]` (owner `varia.googlesql.dryRun`, so Alt+F8 reaches it) and updates the chip; the
+  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Executing a selection marks its error where the
+  selection puts it in the document. Nothing dry-runs after a restore, a provider switch, a connection or dataset change,
+  or once the setting is off, until the user edits or executes (decision 44): an edit's dry run queued behind one in
+  flight is dropped too, as is one Execute makes redundant. A table or dataset that does not exist is the query's
+  error (`SQL_ERROR` with Google's text), a dataset in another location is `LOCATION_MISMATCH` as Execute says, a missing
+  project stays `NOT_FOUND`, and a refused table keeps Google's text, since connecting already proved the account can
+  create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
+  while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
+- **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
+  first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
+  Cancel as an alert dialog with a **Cost settings…** link:
+  - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
+    kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
+    and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
+    threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
+    changed, so a remembered connection never undoes a later Don't ask again, and entries with the same settings share
+    one choice (a connect that names one takes effect at once). If the choice cannot be saved, it holds for the session.
+    It is a preference, not part of which entry the connection is or of its target.
+  - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
+    a 0-byte estimate for a query that reads tables (right for an empty table or skipped partitions, but external and
+    row-level-security tables also report 0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
+    `UNKNOWN` (DDL that reads no table, such as DROP or TRUNCATE, never counts as 0-byte; DML and CREATE TABLE AS SELECT
+    do). **Don't warn me about incomplete estimates
+    again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
+  one that the answer before it made moot (Don't ask again) is not shown; the incomplete-estimate warning it was
+  hiding still asks.
+
+  A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel,
+  closing the tab or disconnecting while the estimate is worked out or a prompt is open or waiting stops the run at once,
+  closes the prompt and sends nothing; its Don't ask again is not kept. An edit with the diagnostics setting off clears
+  the chip and the marker for the old text. Emulator mode's faked estimates never ask.
+- **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
+  `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
+  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
 
 ## Errors
 
@@ -214,7 +295,7 @@ beside them, "< $0.01" below a cent. The price is an estimate: projects with cap
 | `SQL_ERROR` | `invalidQuery`, or a job error with no other row | BigQuery's text, with its line and column |
 | `LOCATION_MISMATCH` | A query's dataset is in another location (`notFound`, then `datasets.get` says where) | Names both locations |
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
-| `COST_CAP` | `bytesBilledLimitExceeded` | Names the connection's maximum bytes billed and Google's figure; raise the cap or read less |
+| `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
 
 ## Emulator mode
@@ -229,6 +310,11 @@ in one page whatever `maxResults` asks, finishes jobs synchronously, and reports
 It also refuses `jobTimeoutMs` sent as a JSON number, answers a repeated job id with 400 rather than 409, reports query
 errors (syntax errors included) as `jobInternalError`, and reports no bytes statistics.
 
+Storage Read against the emulator needs its gRPC port: `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (a loopback http address,
+honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main does not forward it, so the app reads the emulator through REST).
+The emulator serves one stream per session, sends each batch as a whole Arrow stream (schema first), fails on DATETIME
+and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; the offline golden check covers those.
+
 ## Testing
 
 - **Offline.** `BigQueryChecks` and `BigQueryCredentialChecks` (in the offline .NET run; alone with
@@ -238,22 +324,42 @@ errors (syntax errors included) as `jobInternalError`, and reports no bytes stat
   request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
   credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
   scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
-  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text.
+  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text. Its Storage
+  Read part runs `BigQueryStorageFake` (Arrow batches through an in-process `IBigQueryStorageRead`): a golden of every
+  type read through REST and Arrow to identical cells, the scanner, the session's request and thresholds, each fallback,
+  the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
+  CONNECT.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
-  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text.
+  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text. The dry-run
+  checks in `BigQueryChecks` cover `bigquery.dryRun` (the body, each incomplete reason, a refused query's `[line:column]`,
+  the limits); `tests/bigquery-dry-run.test.ts` the cost rules, the prompts, the chip and the diagnostics loop, and
+  `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
-  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure). CI
-  runs it in live group 1 (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
+  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).
+  With `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (the emulator's port 9060) it also reads results through Storage Read and
+  compares them with REST's. CI runs it in live group 1 with both ports (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
   against it when the variable is set (CI's Linux smoke shards set it; elsewhere that phase skips). Locally, start the emulator with Docker or Podman:
 
   ```bash
   docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
   ```
 
-  On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+  Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+- **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
+  REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
+  it measures decoding and storing, not the network, and prints the Arrow bytes each sent. It is run by hand, prints
+  medians and has no floors. On a 2026 desktop, 500,000 rows:
+
+  | Table | REST | Arrow | Arrow, LZ4 | Arrow, Zstandard |
+  | --- | --- | --- | --- | --- |
+  | numbers (INT64 counter, short strings) | 0.78 M rows/s | 10.7 M rows/s, 11.0 MB | 9.7 M, 6.1 MB | 9.1 M, 2.2 MB |
+  | mixed (ids, amounts, countries, emails, text, flags) | 0.17 M rows/s | 0.36 M rows/s, 45.7 MB | 0.37 M, 26.1 MB | 0.37 M, 17.5 MB |
+
+  Downloading and decoding overlap, so a read takes about the longer of the two: at 100 Mbit/s the mixed table takes
+  about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s decoding bounds it either way.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
   cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.

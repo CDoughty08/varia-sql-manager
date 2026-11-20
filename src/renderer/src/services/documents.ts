@@ -506,13 +506,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** The active document's editor: the one that follows it, else the editor group's that shows it. */
   get boundEditor(): editor.IStandaloneCodeEditor | undefined { return this.follower ?? this.editorOf(this.getSnapshot().activeId) }
-  getExecuteText(id = this.getSnapshot().activeId): { sql: string; startLine: number } {
+  getExecuteText(id = this.getSnapshot().activeId): { sql: string; startLine: number; startColumn: number } {
     const model = this.entries.get(id)?.model
-    if (!model) return { sql: '', startLine: 1 }
+    if (!model) return { sql: '', startLine: 1, startColumn: 1 }
     const view = this.editorOf(id) ?? this.follower
     const selection = view?.getModel() === model ? view.getSelection() : null
     // Any non-empty selection wins, even whitespace: an accidental one-character selection must not run the whole document.
-    return selection && !selection.isEmpty() ? { sql: model.getValueInRange(selection), startLine: selection.startLineNumber } : { sql: model.getValue(), startLine: 1 }
+    return selection && !selection.isEmpty() ? { sql: model.getValueInRange(selection), startLine: selection.startLineNumber, startColumn: selection.startColumn } : { sql: model.getValue(), startLine: 1, startColumn: 1 }
   }
   async runTask(action: () => Promise<void>): Promise<void> {
     if (this.disposed || this.getSnapshot().busy) return

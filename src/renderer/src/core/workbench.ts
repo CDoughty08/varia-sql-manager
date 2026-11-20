@@ -1,6 +1,8 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
+import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
+import { CostPromptService } from '../services/bigquery-cost-prompt'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
@@ -151,6 +153,9 @@ export interface Workbench extends Disposable {
   readonly documents: DocumentService
   readonly sqlLanguage: SqlLanguageService
   readonly sqlDiagnostics: SqlDiagnosticsService
+  /** BigQuery tabs' estimates, dry-run diagnostics and cost prompts (docs/bigquery.md, Cost). */
+  readonly bigQueryCost: BigQueryCostService
+  readonly costPrompts: CostPromptService
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly connectionTargets: ConnectionTargetService
@@ -369,6 +374,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
+  const costPrompts = new CostPromptService()
+  // The saved choice is read after the service exists, so it re-renders the chips once a choice is known.
+  let costChoiceChanged = () => {}
+  const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
+  costChoiceChanged = () => bigQueryCost.optOutChanged()
+  queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -590,6 +601,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     documents,
     sqlLanguage,
     sqlDiagnostics,
+    bigQueryCost,
+    costPrompts,
     queries,
     connections,
     backend,
@@ -722,6 +735,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       newDatabase.dispose()
       restore.dispose()
       sqlDiagnostics.dispose()
+      bigQueryCost.dispose()
+      costPrompts.dispose()
       sqlLanguage.dispose()
       documents.dispose()
       backend.dispose()

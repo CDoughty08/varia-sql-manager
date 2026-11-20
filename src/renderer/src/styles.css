@@ -800,6 +800,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-database-scope > .chip { min-width: 0; max-width: 100%; gap: var(--varia-space-1); }
 .object-search-database-scope > .chip > bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @container (max-width: 700px) { .query-bar .query-scope { display: none; } }
+/* A BigQuery tab's estimate beside Execute (BigQueryCostChip): the pill's own tone says neutral, amber or ran. */
+.bigquery-cost-chip { display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 18em; }
 .query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
   background: var(--varia-list-activeSelectionBackground);
   color: var(--varia-list-activeSelectionForeground);
@@ -2111,6 +2113,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-modal.sub-dialog.server-file-picker { width: min(700px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); }
 .server-file-picker .sub-dialog-body { flex: 1; min-height: 0; }
 .server-file-picker .object-dialog-message { margin: 0; }
+.bigquery-cost-prompt .sub-dialog-body { gap: var(--varia-space-2); }
+.bigquery-cost-sentence { margin: 0; }
+.bigquery-cost-prompt .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+@media (forced-colors: active) { .bigquery-cost-prompt .link-button { color: LinkText; } }
 .sub-dialog-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .server-files-banner { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); overflow-wrap: anywhere; }
 .server-files-label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
