@@ -7,7 +7,7 @@ import { exportDefaults, formatFromPath, jobSentences, removeExportLeftovers, Re
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { BackendSupervisor } from '../src/main/backend/supervisor'
 import type { DiffMatch, ResultsCopyParams, ResultsExportParams, ResultsJobProgress, ResultsJobResult } from '../src/shared/contracts'
-import { diffResultSchema } from '../src/shared/ipc/port-messages'
+import { diffResultSchema, diffSeekResultSchema, viewResultSchema } from '../src/shared/ipc/port-messages'
 import { cancelReasons } from '../src/shared/ipc/wire/protocol'
 import type { StreamSink } from '../src/main/backend/connection'
 
@@ -424,6 +424,31 @@ describe('ResultsJobHost over the fake backend', () => {
     expect(await failure(ask({ mode: 'columns', columns: [99] }))).toMatchObject({ code: 'INVALID_PARAMS' })
     // N1's fourth column holds stored prefixes: a key there is refused, as the real backend refuses it.
     expect(await failure(ask({ mode: 'columns', columns: [3] }))).toMatchObject({ code: 'DIFF_KEY_TRUNCATED' })
+  })
+  it("answers a comparison's overview, change units, seek and kind filter in the fake, in the shapes the port accepts", async () => {
+    const { supervisor, execute } = await workbench()
+    const [first, second] = (await execute('-- varia-fake: sets=N1*10,N1*12\nSELECT 1')).resultSets
+    const diff = await supervisor.request('results.diff', { left: first.resultId, right: second.resultId, context: 100 })
+    expect(diffResultSchema.safeParse(diff).error).toBeUndefined()
+    expect([diff.same, diff.added, diff.units, diff.overview.length, diff.overview.filter(bits => bits & 2).length > 0]).toEqual([10, 2, 2, 12, true])
+    const resultId = diff.descriptor.resultId
+    const seeks = [
+      await supervisor.request('results.diffSeek', { resultId, from: -1, direction: 'next' }),
+      await supervisor.request('results.diffSeek', { resultId, from: 10, direction: 'next' }),
+      await supervisor.request('results.diffSeek', { resultId, from: -1, direction: 'previous' }),
+      await supervisor.request('results.diffSeek', { resultId, partnerOf: 0 })
+    ]
+    for (const seek of seeks) expect(diffSeekResultSchema.safeParse(seek).error).toBeUndefined()
+    // Forward from before the first row lands on the first added row; past the last it wraps round; a same row has no partner.
+    expect(seeks).toEqual([{ row: 10, column: 0, index: 1, total: 2 }, { row: 11, column: 0, index: 2, total: 2 }, { row: 11, column: 0, index: 2, total: 2 }, { none: true }])
+    const view = await supervisor.request('results.view', { resultId, sort: [], filters: [{ op: 'kind', kinds: ['added'] }] })
+    expect(viewResultSchema.safeParse(view).error).toBeUndefined()
+    expect([view.rows, view.filters]).toEqual([2, [{ op: 'kind', kinds: ['added'] }]])
+    // Under the view, positions are the view's: its first row is the first added row, the first of the two units.
+    expect(await supervisor.request('results.diffSeek', { resultId, viewId: view.viewId, from: -1, direction: 'next' })).toEqual({ row: 0, column: 0, index: 1, total: 2 })
+    // A kind filter or a seek on a result that is not a comparison is refused.
+    expect(await failure(supervisor.request('results.diffSeek', { resultId: first.resultId, from: -1, direction: 'next' }))).toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(await failure(supervisor.request('results.view', { resultId: first.resultId, sort: [], filters: [{ op: 'kind', kinds: ['added'] }] }))).toMatchObject({ code: 'INVALID_PARAMS' })
   })
   it('passes BUDGET_STOPPED from a pivot or diff of a stopped query through main with its sentence', async () => {
     const { control, supervisor, execute } = await workbench()

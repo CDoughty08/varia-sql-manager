@@ -28,8 +28,10 @@ export const limits = {
    *  lists (SqlService.MaxRowIds, MaxFindIds and MaxFindMatches in C#); identities are below 2^53. */
   identity: { maxRows: 16_384, maxFind: 10_000, maxMatches: 100_000 },
   /** results.diff: unchanged rows shown around a change (-1 for all), names listed of the columns only one result has, and
-   *  the pairs a match by columns takes (SqlService.MaxDiffContext, MaxDiffColumnNames and ResultDiffer.MaxKeyColumns in C#). */
-  diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16 },
+   *  the pairs a match by columns takes (SqlService.MaxDiffContext, MaxDiffColumnNames and ResultDiffer.MaxKeyColumns in C#);
+   *  the answer's overview buckets, the rows one running total of the change index covers, and the kinds a `kind` filter
+   *  names (DiffIndex.OverviewBuckets and BlockRows in C#). */
+  diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16, overviewBuckets: 512, indexBlockRows: 4096, maxKinds: 4 },
   /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
    *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */
   search: { maxText: 1024, maxMatches: 10_000 },

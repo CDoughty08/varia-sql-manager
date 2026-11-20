@@ -537,7 +537,7 @@ checks in `ViewSorter`/`KindOf`, `ResultTextWriter`, `RowIdentity`, `HighlightsS
   comparison's commands, context keys, menu entries and settings are engine-neutral and declare both engines, as BQ-0's
   lint asks for neutral entries.
 - **BQ-3c-1's remote-result refusal.** Every page reader refuses a remote result with `REMOTE_RESULT`. `results.diffSeek`
-  and the change index are new readers: whichever of PR 5 and BQ-3c-1 merges second adds the case, and
+  and the change index are new readers (PR 5 has landed, so BQ-3c-1 adds the case), and
   `tests/result-page-access.test.ts` covers it. BigQuery already disables Compare on a windowed result, so a diff's
   inputs are always in memory.
 - **PR 6 before BQ-3c-1 starts.** PR 6 changes `ResultStore`'s limit readers (`store.Allow`, `QueryLimit`); BQ-3c-1

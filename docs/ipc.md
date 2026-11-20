@@ -261,6 +261,7 @@ noted where it matters.
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows |
 | `results.findRows` | port | unary | results | 60 s; 1 – 10,000 identities in a result or view |
 | `results.diff` | port | unary | results | 120 s; stored as a new result ([Result diffs](#result-diffs)) |
+| `results.diffSeek` | port | unary | results | 10 s; the next or previous change, or a look-alike's partner, in a comparison or its view ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; stored as a new result ([Pivots](#pivots)) |
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
@@ -1139,6 +1140,11 @@ view is an order of some or all of a result's base rows, read through the result
   - `{ op: 'groups', column, snapshotId }`: a distinct snapshot's ticks ([Distinct values](#distinct-values)).
   - `{ op: 'duplicates', columns }`: rows whose values in those columns (1 – 4,096, distinct) equal another row's (NULL = NULL), grouped in
     order of each group's first row.
+  - `{ op: 'kind', kinds }`: a comparison's rows of 1 – 4 distinct kinds (`same`, `changed`, `added`, `removed`;
+    `limits.diff.maxKinds`), read from its change index ([Result diffs](#result-diffs)); both halves of a changed entry
+    are `changed`. No `column`, `rows`, `nulls`, `cells`, `columns` or `snapshotId`; `kinds` on another op, or a kind
+    filter on a result that is not a diff, is `INVALID_PARAMS`. It answers `{ op: 'kind', kinds }` in that order. It names
+    no column, so no header funnel shows it.
   - Equality is the sort's (the collation decides text matches; `2` = `2.0` in float; truncated by prefix, `approximate`).
     A named view that is gone: `VIEW_NOT_FOUND`.
 - **Keep Selected Rows.** `{ op: 'keepRows', cells: { ranges: 1 – 256 [first, count], viewId? } }` keeps rows by position,
@@ -1257,7 +1263,7 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
 
 - **`results.diff { left, right, exact?, context?, match? }`** answers `{ descriptor, match, same, changed, added, removed,
   soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired, columnChanges,
-  trailingHidden }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
+  trailingHidden, overview, units }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
   own result sets can be compared: not a pivot, a comparison or an execution plan set."), complete (`RESULT_OPEN`,
   "Compare the results after they finish loading."), and the query must not have stopped storing (`BUDGET_STOPPED`, see
   [Pivots](#pivots)). Columns pair by name case-insensitively (`src/shared/ordinal-casing.ts`), in `left`'s order, when
@@ -1283,7 +1289,27 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   never change. `possibleSkipped`: more than 1,000 removed or added rows, more than 4,000,000 comparisons (removed ×
   added × columns), or the values' working memory refused. `nothingPaired`: both inputs have rows and none matched.
   `columnChanges`: each pair's `{ changed, soft }` cells, in pair order (the true counts, whatever a cut tone lists).
-  `trailingHidden`: unchanged entries left out after the last stored row (with `context` ≥ 0).
+  `trailingHidden`: unchanged entries left out after the last stored row (with `context` ≥ 0). `overview`: up to 512
+  buckets (`limits.diff.overviewBuckets`; one a row when fewer rows are stored, empty for none) over the stored rows in
+  order, each the bits of the kinds in it: 1 changed, 2 added, 4 removed. `units`: the stored rows' change units (below).
+- **The change index** (`Results/DiffIndex.cs`) is built with the stored rows and kept with the diff until it is
+  released. Per stored row: its kind (both halves of a changed entry are `changed`), whether its key repeats, whether its
+  tone was cut, and its change units: each changed cell the tone lists, plus one for a cut tone, on a changed entry's
+  `changedNew` half (its `changedOld` half has none); one for an added or removed row; none for an unchanged row (soft
+  cells are not changes). Running totals of units every 4,096 rows (`limits.diff.indexBlockRows`) let a seek skip empty
+  stretches. A look-alike row holds its partner as a stored row (none when the partner was not stored). It is charged
+  to the query's budget before the rows are written, and refused with the diff (`TOO_LARGE`, the diff's sentence). A
+  view of a diff keeps its own running totals over its order, charged with the view. The one-row layout's cut-row
+  bitsets join this index later; a cut row is already marked.
+- **`results.diffSeek { resultId, viewId?, from, direction }`** (`direction`: `next` or `previous`; `from`: a position,
+  -1 before the first) finds the nearest row with change units after or before `from`, wrapping round, in stored order
+  or the view's. It answers `{ row, column, index, total }`: the position, the column to land on (the first listed
+  changed cell going forward, the last going back; 0 for an added or removed row, or going back onto a cut row), the
+  1-based unit it lands on among the `total` units of the rows shown (the row's first unit going forward, its last going
+  back), or `{ none: true }` when no row shown has a change. **`results.diffSeek { resultId, viewId?, partnerOf }`**
+  answers the look-alike partner of the row at that position: `{ row, column: 0, index, total }`, `{ hidden: true }`
+  when the view does not show the partner, or `{ none: true }` when it has none (or the position is past the end).
+  Both forms on a result that is not a diff are `INVALID_PARAMS`, on a released one `RESULT_RELEASED`; both engines.
 - **The unified result** (`kind: 'diff'`, stamped with the generation and owned by main) is in the later result's order,
   each removed row after the row it followed, a changed row as old (−) then new (+). Columns: the shared columns with
   `right`'s names and types (the data columns, in pair order), then a hidden suffix: `Change` (role `mark`: " ", "−",
@@ -2199,7 +2225,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (plus a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused; the change index at 3 bytes a stored row, 8 bytes per 4,096 rows of running totals, 32 bytes a look-alike row and 1 KiB, under the same budget and refused with the diff (`DiffIndex.BytesFor`), and 8 bytes per 4,096 positions of a view's totals; `overview` at most 512 buckets; a kind filter 1 – 4 kinds | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters (at least one), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (plus ranked or whole text, date or binary key values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transposed Copy and Save | `transposed` boolean; `headerColumn` 0 – 4,095, a shown column, only with `transposed`; at most 4,095 source rows a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |

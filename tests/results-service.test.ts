@@ -1567,7 +1567,7 @@ describe('results service filters', () => {
     const resolving = (handle: FakeHandle) => {
       let viewId = 0
       handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, ++viewId, (o?.filters ?? []).map((filter): ResolvedViewFilter => {
-        if (filter.op === 'duplicates' || filter.op === 'groups') return filter as ResolvedViewFilter
+        if (filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'kind') return filter as ResolvedViewFilter
         if (filter.op === 'keepRows') return { op: 'keepRows', rows: 'rows' in filter ? filter.rows : filter.cells.ranges.flatMap(([first, count]) => Array.from({ length: count }, (_, at) => 100 + first + at)) }
         return { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false }
       })))
@@ -1779,7 +1779,7 @@ describe('results service filters', () => {
 
   it('takes at most 16 filters, saying so, and filters only by selections whose runs of rows fit a request', async () => {
     const { service, handle, select, flush, tab } = filtered(1000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
-    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'keepRows' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
+    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'keepRows' || filter.op === 'kind' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
     for (let column = 0; column < 16; column++) {
       select([{ top: 0, bottom: 0, left: column, right: column }])
       await settle()

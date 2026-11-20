@@ -594,6 +594,14 @@ function buildView(result, sort, filters = []) {
       resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {}, digest })
       continue
     }
+    if (filter.op === 'kind') {
+      // A comparison's rows of some kinds, read from its change index (a changed entry's halves are changed).
+      if (!result.diffIndex) throw Object.assign(new Error("Only a comparison's rows can be filtered by kind."), { code: 'INVALID_PARAMS' })
+      const kinds = new Set(filter.kinds)
+      order = order.filter(row => kinds.has(result.diffIndex[row]?.kind))
+      resolved.push({ op: 'kind', kinds: ['same', 'changed', 'added', 'removed'].filter(kind => kinds.has(kind)) })
+      continue
+    }
     if (filter.op === 'keepRows') {
       // Keep Selected Rows: the base rows at the positions a selection covers (each once), or the rows it resolved to.
       let kept = filter.rows
@@ -798,15 +806,25 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
   const rowOf = (result, row, side, marker, r1, r2, toneText) => [...pairs.map(pair => result.rowAt(row)[pair[side]]), marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), toneText]
   const rows = []
   let omitted = 0
+  // The change index (DiffIndex): each stored row's kind, change units (a changed entry's on its new half; the fake lists
+  // every cell, so it never cuts a tone), hard cells, and a look-alike row's partner as a stored row.
+  const index = [], storedOf = new Map()
   entries.forEach((entry, k) => {
     if (!shown[k]) { omitted++; return }
     const flags = flagsOf(entry, omitted)
     omitted = 0
+    const hard = entry.cells.filter(cell => cell >= 0)
     if (entry.kind === 'same') rows.push(rowOf(right, entry.right, 1, ' ', entry.left, entry.right, entry.cells.length || flags.length ? tone('same', entry.cells, flags) : null))
     else if (entry.kind === 'added') rows.push(rowOf(right, entry.right, 1, '+', -1, entry.right, tone('added', [], flags)))
     else if (entry.kind === 'removed') rows.push(rowOf(left, entry.left, 0, '−', entry.left, -1, tone('removed', [], flags)))
     else rows.push(rowOf(left, entry.left, 0, '−', entry.left, entry.right, tone('changedOld', entry.cells, flags)), rowOf(right, entry.right, 1, '+', entry.left, entry.right, tone('changedNew', entry.cells, flagsOf(entry, 0))))
+    if (entry.kind === 'changed') index.push({ kind: 'changed', units: 0, cells: [] }, { kind: 'changed', units: hard.length, cells: hard })
+    else index.push({ kind: entry.kind, units: entry.kind === 'same' ? 0 : 1, cells: [], ...entry.poss === undefined ? {} : { partnerKey: (entry.kind === 'removed' ? 'r' : 'l') + entry.poss } })
+    if (entry.poss !== undefined) storedOf.set((entry.kind === 'removed' ? 'l' : 'r') + (entry.kind === 'removed' ? entry.left : entry.right), index.length - 1)
   })
+  for (const item of index) if (item.partnerKey !== undefined) { item.partner = storedOf.get(item.partnerKey) ?? -1; delete item.partnerKey }
+  const buckets = Math.min(512, index.length), overview = new Array(buckets).fill(0)
+  index.forEach((item, row) => { overview[Math.floor(row * buckets / index.length)] |= item.kind === 'changed' ? 1 : item.kind === 'added' ? 2 : item.kind === 'removed' ? 4 : 0 })
   const columns = [...pairs.map(pair => right.columns[pair[1]]), { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
     { ...column('', 'nvarchar(500)'), role: 'tone', maxLength: 500 }]
   const count = kind => entries.filter(entry => entry.kind === kind).length
@@ -818,7 +836,8 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
     leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1), repeated: entries.filter(entry => entry.dup).length,
     possible: entries.filter(entry => entry.kind === 'removed' && entry.poss !== undefined).length, possibleSkipped,
     nothingPaired: count('same') + count('changed') === 0 && leftRows > 0 && rightRows > 0,
-    columnChanges: pairs.map((_, p) => ({ changed: cellsOf(cell => cell === p), soft: cellsOf(cell => cell === ~p) })), trailingHidden: omitted
+    columnChanges: pairs.map((_, p) => ({ changed: cellsOf(cell => cell === p), soft: cellsOf(cell => cell === ~p) })), trailingHidden: omitted,
+    overview, units: index.reduce((sum, item) => sum + item.units, 0), index
   }
 }
 // results.pivot: a result's (or a view's) rows grouped by the row columns and the column group, values compared ordinally
@@ -1986,8 +2005,34 @@ async function workbench(id, method, params, credit) {
       if (diff.keyTruncated) return fail(id, 'DIFF_KEY_TRUNCATED', diff.keyTruncated)
       const result = storeResult(diff.set, right.index)
       result.inputs = { left: params.left, right: params.right }
-      const { set: _set, ...counts } = diff
+      result.diffIndex = diff.index
+      const { set: _set, index: _index, ...counts } = diff
       return respond(id, { descriptor: describe(result), ...counts, approximate: false })
+    }
+    case 'results.diffSeek': {
+      // DiffSeekAsync: the next or previous change unit from a position, wrapping round, or a look-alike row's partner.
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const index = stored.get(params.resultId).diffIndex
+      if (!index) return fail(id, 'INVALID_PARAMS', "Only a comparison's changes can be sought.")
+      const order = source.order ?? index.map((_, row) => row)
+      const unitsAt = position => index[order[position]]?.units ?? 0
+      const before = position => order.slice(0, position).reduce((sum, _, at) => sum + unitsAt(at), 0)
+      const total = before(order.length)
+      if (params.partnerOf !== undefined) {
+        const partner = index[order[params.partnerOf]]?.partner ?? -1
+        if (partner < 0) return respond(id, { none: true })
+        const at = order.indexOf(partner)
+        return respond(id, at < 0 ? { hidden: true } : { row: at, column: 0, index: before(at) + 1, total })
+      }
+      const forward = params.direction === 'next', from = Math.max(-1, Math.min(params.from, order.length))
+      const candidates = forward
+        ? [...Array.from({ length: Math.max(0, order.length - from - 1) }, (_, k) => from + 1 + k), ...Array.from({ length: Math.min(from + 1, order.length) }, (_, k) => k)]
+        : [...Array.from({ length: Math.max(0, from) }, (_, k) => from - 1 - k), ...Array.from({ length: Math.max(0, order.length - Math.max(from, 0)) }, (_, k) => order.length - 1 - k)]
+      const found = candidates.find(position => unitsAt(position) > 0)
+      if (found === undefined) return respond(id, { none: true })
+      const cells = index[order[found]].cells
+      return respond(id, { row: found, column: cells.length ? (forward ? cells[0] : cells.at(-1)) : 0, index: before(found) + (forward ? 1 : unitsAt(found)), total })
     }
     case 'results.pivot': {
       const source = sourceOf(id, params.resultId, params.viewId)

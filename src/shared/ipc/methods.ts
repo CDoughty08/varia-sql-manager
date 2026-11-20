@@ -125,6 +125,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Ticks in a kept snapshot; ticking a search's values scans them once, as a read does.
   'results.distinctTick': { kind: 'unary', lane: 'results', deadlineMs: 30_000, ...both },
   'results.distinctClose': { ...control, ...both },
+  // Reads a comparison's change index and one row's tone; finding a partner under a view is one pass over its order.
+  'results.diffSeek': { kind: 'unary', lane: 'results', deadlineMs: 10_000, ...both },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

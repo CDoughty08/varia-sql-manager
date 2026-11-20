@@ -140,7 +140,7 @@ describe('result diffs', () => {
     const comparing = compare.compare('t1', keyAt(results, 't1', 1))
     run(2, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
-    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
+    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0 })
     await comparing
     expect(client.released()).toContain(950)
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
