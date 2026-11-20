@@ -13,7 +13,8 @@ namespace Varia.Backend;
 /// query.execute for a BigQuery handle (docs/bigquery.md, Execution): one query job with a client job id, polled with
 /// jobs.getQueryResults, its rows read through REST into the result store as SQL Server's are (BigQueryColumnPlan into
 /// ResultSetBuffer), truncated by the row limit and the budget as SQL Server's are, then the job's statistics and cost in
-/// Messages and the summary. Results stay in memory: windowed results, Storage Read, scripts' child jobs, sessions and
+/// Messages and the summary. A large result that did not arrive whole is read through Storage Read instead
+/// (SqlService.BigQueryStorageRead.cs). Results stay in memory: windowed results, scripts' child jobs, sessions and
 /// Stop's jobs.cancel are later lanes (docs/bigquery-plan.md).
 /// </summary>
 internal sealed partial class SqlService
@@ -140,7 +141,14 @@ internal sealed partial class SqlService
                 {
                     sets.Add(currentSet);
                     events.Opened(currentSet);
-                    await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, page, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                    // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                    var session = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
+                    if (session is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, page, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                    else
+                    {
+                        page.Dispose();
+                        await ReadBigQueryArrowAsync(args, session, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                    }
                     currentSet.Complete();
                     events.Closed(currentSet);
                     currentSet = null;

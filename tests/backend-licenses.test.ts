@@ -9,8 +9,15 @@ const lock = JSON.parse(readFileSync('backend/Varia.Backend/packages.lock.json',
 
 /** Licenses any backend package may carry; anything else needs a named, reviewed exception below. */
 const allowed = new Set(['MIT', 'Apache-2.0', 'BSD-3-Clause'])
-/** Reviewed exceptions: SqlClient's native SNI ships under Microsoft's own license file. */
-const exceptions = new Map([['Microsoft.Data.SqlClient.SNI.runtime', 'file:LICENSE.txt']])
+/** Reviewed exceptions: SqlClient's native SNI ships under Microsoft's own license file; K4os's LZ4 and xxHash (which
+ * Apache.Arrow.Compression brings) are MIT but name it only by URL. */
+const lz4 = 'https://github.com/MiloszKrajewski/K4os.Compression.LZ4/blob/master/LICENSE?raw=true'
+const exceptions = new Map([
+  ['Microsoft.Data.SqlClient.SNI.runtime', 'file:LICENSE.txt'],
+  ['K4os.Compression.LZ4', lz4],
+  ['K4os.Compression.LZ4.Streams', lz4],
+  ['K4os.Hash.xxHash', 'https://raw.githubusercontent.com/MiloszKrajewski/K4os.Hash.xxHash/master/LICENSE']
+])
 
 describe('backend package licenses', () => {
   it('lists every package the backend resolves at its locked version (node scripts/package-licenses.mjs regenerates it)', () => {
