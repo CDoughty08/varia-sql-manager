@@ -1553,7 +1553,7 @@ escaping is ASCII (plus U+2028/U+2029 as their three bytes).
 | --- | --- | --- | --- | --- |
 | Encoding | UTF-8 to main, then the clipboard | UTF-8 with BOM | UTF-8 with BOM | UTF-8, no BOM |
 | Separator, end of line | TAB; CRLF on Windows, LF elsewhere; none after the last line | TAB; CRLF after every line | `,`; CRLF after every line | `[` LF, one compact object per line joined by `,` LF, then LF `]` LF; an empty result is `[]` LF |
-| Header | Copy with Headers only; one header line per part | on | on | object keys |
+| Header | Copy with Headers, or Copy with `queryResults.grid.copyColumnHeaders` on (off by default); one header line per part | with `queryResults.grid.saveColumnHeaders` (on by default) | same | object keys |
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |

@@ -136,6 +136,14 @@ try {
   await node('Shortcuts').click()
   await expect(dialog().getByRole('heading', { name: 'Keyboard and mouse shortcuts', exact: true })).toBeVisible()
   await expect(shortcutsTable(dialog())).toBeVisible()
+  // Ctrl+C on a row copies it as shown, its command by title: Command, Shortcut, Scope and Source, tab-separated.
+  const firstCommand = shortcutsTable(dialog()).getByRole('row').filter({ has: options.getByRole('gridcell') }).first()
+  await firstCommand.click()
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await options.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
+  await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^[^\t\r\n]+\t[^\t\r\n]*\t[^\t\r\n]*\t[^\t\r\n]+$/)
+  const copiedCommand = (await application.evaluate(({ clipboard }) => clipboard.readText())).split('\t')[0]
+  expect((await firstCommand.getByRole('gridcell').first().innerText()).startsWith(copiedCommand)).toBe(true)
   await expect(optionsDescription(dialog())).toHaveCount(0)
   // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
   await node('Fonts and Colors').click()
@@ -331,6 +339,9 @@ try {
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
   for (const name of ['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan']) await expect(optionsSection(dialog(), name)).toBeVisible()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('checkbox', { name: 'Show outline', exact: true })).toBeChecked()
+  // Copy and Save Results As have their own header settings: copy without by default, save with.
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when copying the results', exact: true })).not.toBeChecked()
+  await expect(optionsSection(dialog(), 'Copy and save').getByRole('checkbox', { name: 'Include column headers when saving the results', exact: true })).toBeChecked()
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true })).toHaveValue('220')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('0 = no limit')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('GiB · 0 = automatic')

@@ -127,9 +127,10 @@ try {
   expect([12, 13]).toContain(result.value.rows)
   expect((await live('grid')).revision).toBeGreaterThanOrEqual(shownRevision + 2)
   const lines = (await readFile(saved, 'utf8')).trim().split(/\r?\n/)
-  // Column headers are off by default (Tools › Options), and the tone column is never saved.
-  expect(lines).toHaveLength(result.value.rows)
-  expect(lines.filter(line => !/^\d+,G\d,Item \d+,\d+$/.test(line))).toEqual([])
+  // Saves start with column headers by default (Tools › Options, its own setting, unlike Copy above), and the tone column is never saved.
+  expect(lines).toHaveLength(result.value.rows + 1)
+  expect(lines[0]).toBe('itemId,group,name,amount')
+  expect(lines.slice(1).filter(line => !/^\d+,G\d,Item \d+,\d+$/.test(line))).toEqual([])
   console.log('Save passed: a dialog open across samples saved the newest revision.')
 
   step = 'sort'

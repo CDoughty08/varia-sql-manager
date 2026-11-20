@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useDomRowCopy } from '../grid/row-copy'
 import { dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
 import { tableLimits, type TablePropertiesModel } from '../../../shared/actions/tables.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
@@ -109,6 +110,7 @@ function SecurityPredicatesSection({ state, model }: Pick<SectionProps, 'state' 
 }
 
 function ExtendedPropertiesSection({ state, model, draft, editable: documentEditable, errors, service }: SectionProps) {
+  const copyRow = useDomRowCopy()
   // A truncated list cannot be diffed safely (an add could collide with a property not listed), so it is read-only.
   const editable = documentEditable && !model.extendedPropertiesTruncated
   const heading = `${state.id}-extended-grid`, problem = errors.get('extendedProperties')
@@ -119,7 +121,7 @@ function ExtendedPropertiesSection({ state, model, draft, editable: documentEdit
   return <div className="properties-extended">
     <h3 className="properties-group-title" id={heading}>Extended properties</h3>
     {draft.extendedProperties.length === 0 ? <p className="field-note">The table has no extended properties.</p> : <div className="properties-table">
-      <table className="object-dialog-grid" aria-labelledby={heading}>
+      <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={heading}>
         <thead><tr><th scope="col">Name</th><th scope="col">Value</th><th scope="col"><span className="visually-hidden">Remove</span></th></tr></thead>
         <tbody>{draft.extendedProperties.map((row, index) => {
           const nameId = fieldId(state.id, `${row.key}-name`), valueId = fieldId(state.id, `${row.key}-value`), rowEdit = editable && rowEditable(row) && !row.removed

@@ -4,6 +4,11 @@ import { createElement } from 'react'
 import { planDocumentSchema, planNodeSchema, operatorDiagnosticsSchema } from '../src/shared/plans'
 import { discrepancyLabel, estimatedTotalRows, formatPlanMetric, rankOperators, rowComparison } from '../src/renderer/src/plans/diagnostics'
 import { PlanProperties } from '../src/renderer/src/plans/PlanProperties'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+
+// Each fact registers its Copy menu with the workbench's menu targets.
+const properties = (props: Parameters<typeof PlanProperties>[0]) => createElement(WorkbenchProvider, { workbench: { menuTargets: { register() {} } } as unknown as Workbench, children: createElement(PlanProperties, props) })
 
 const diagnostic = operatorDiagnosticsSchema.parse({ estimatedExecutions: 5, parallel: true, estimatedExecutionMode: 'Row', predicates: [], outputColumns: [], warnings: [], spills: [], threads: [], runtimeDetailsAvailable: true })
 const node = (id: string, cpu: number | null = null) => planNodeSchema.parse({ id, nodeId: id, physicalOp: 'Seek', logicalOp: 'Seek', object: '', estimatedRows: 2, cpuMs: cpu, actualRows: 10, executions: 10, warnings: [], properties: [], diagnostics: diagnostic })
@@ -38,7 +43,7 @@ describe('plan diagnostics', () => {
   it('keeps old normalized plans valid without synthesizing unavailable diagnostics', () => {
     const parsed = planDocumentSchema.parse({ version: '1.0', build: '', statements: [{ id: 's', text: '', type: '', warnings: [], nodes: [{ ...node('old'), diagnostics: undefined }] }], notices: [] })
     expect(parsed.statements[0].nodes[0].diagnostics).toBeUndefined()
-    const markup = renderToStaticMarkup(createElement(PlanProperties, { statement: { ...parsed.statements[0], sourceKey: 'old' }, node: parsed.statements[0].nodes[0] }))
+    const markup = renderToStaticMarkup(properties({ statement: { ...parsed.statements[0], sourceKey: 'old' }, node: parsed.statements[0].nodes[0] }))
     expect(markup).toContain('Unavailable')
     expect(markup).toContain('Costs are optimizer estimates')
     expect(markup).toContain('Detailed data unavailable in this view')
@@ -50,7 +55,7 @@ describe('plan diagnostics', () => {
     const statement = planDocumentSchema.parse({ version: '', build: '', notices: [], statements: [{ id: 's', text: '', type: '', warnings: [], nodes: [], diagnostics: {
       degreeOfParallelism: 0, memoryGrant: [], warnings: [], missingIndexes: [], parameters: [{ name: '@p', dataType: 'int', compiledValue: '(0)', runtimeValue: null }]
     } }] }).statements[0]
-    const markup = renderToStaticMarkup(createElement(PlanProperties, { statement: { ...statement, sourceKey: 'a' }, node: entry }))
+    const markup = renderToStaticMarkup(properties({ statement: { ...statement, sourceKey: 'a' }, node: entry }))
     expect(markup).toContain('&lt;img')
     expect(markup).not.toContain('<img')
     expect(markup).toContain('Runtime value</dt><dd>Unavailable')

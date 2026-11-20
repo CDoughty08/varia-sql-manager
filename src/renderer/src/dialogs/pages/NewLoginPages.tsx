@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from 'react'
+import { useDomRowCopy } from '../../grid/row-copy'
 import { actionLimits } from '../../../../shared/actions/catalog.ts'
 import {
   checkNamesText, loginDetailWords, loginPropertiesMessages, newLoginAuthLabels, newLoginMessages, publicRole, windowsLoginName, type NewLoginAuth, type NewLoginModel
@@ -65,6 +66,7 @@ function SigningRows({ model, draft, editable }: { model: NewLoginModel; draft: 
  * (Credential and Provider); Remove takes the selected row out. The grid is one tab stop: arrows move its selection, Delete removes.
  */
 function CredentialRows({ model, draft, enabled, editable }: { model: NewLoginModel; draft: NewLoginDraft; enabled: { readonly mapCredential: boolean; readonly credential: boolean }; editable: boolean }) {
+  const copyRow = useDomRowCopy()
   const { dialogs } = useWorkbench()
   const [selected, setSelected] = useState<string>()
   const current = selected !== undefined && draft.credentials.includes(selected) ? selected : draft.credentials[0]
@@ -101,7 +103,7 @@ function CredentialRows({ model, draft, enabled, editable }: { model: NewLoginMo
       </div></div>
     <div className="new-login-credentials">
       <span className="new-login-caption" id="new-login-credentials-label">Mapped Credentials</span>
-      <table className="new-login-credentials-grid" role="grid" aria-labelledby="new-login-credentials-label" aria-rowcount={draft.credentials.length + 1} tabIndex={0}
+      <table onCopy={copyRow} className="new-login-credentials-grid" role="grid" aria-labelledby="new-login-credentials-label" aria-rowcount={draft.credentials.length + 1} tabIndex={0}
         aria-activedescendant={current === undefined ? undefined : `new-login-credential-${draft.credentials.indexOf(current)}`} onKeyDown={keyDown}>
         <thead><tr role="row"><th role="columnheader">Credential</th><th role="columnheader">Provider</th></tr></thead>
         <tbody>

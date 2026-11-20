@@ -136,6 +136,15 @@ export async function localCopyText(table: LocalTableData, parts: readonly TextP
   return { text: decoder.decode(copied.text), rows: copied.rows }
 }
 
+/**
+ * Copy of a whole local table, as a grid copies all of its cells: a list that is not a grid (a plan outline row, plan
+ * properties, an editable grid's selected rows) formats its copy through the same writer.
+ */
+export async function localTableCopyText(table: LocalTableData, o: { headers: boolean; crlf: boolean }): Promise<string> {
+  if (!table.columns.length || !table.rows.length) return ''
+  return (await localCopyText(table, [{ rows: [[0, table.rows.length - 1]], columns: [[0, table.columns.length - 1]] }], o)).text
+}
+
 /** Save Results As of a whole local table in the rows' order, as a results grid saves (a BOM and CRLF for CSV and TSV). */
 /** Rows, and cell characters, a save formats between yields: main stays responsive while it writes a large table. */
 export const localSavePageRows = 512

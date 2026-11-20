@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useDomRowCopy } from '../grid/row-copy'
 import {
   isRestoreSystemDatabase, restoreFilesSections, restoreLimits, restoreMessages, restoreDevicePickerTitles, restoreModeTitles, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery
 } from '../../../shared/actions/restore.ts'
@@ -34,6 +35,7 @@ export type { SectionProps } from './fields'
 
 /** General: Source (Database, or Device and the database on it), Destination (Database, Restore to and Timeline…), and the Restore plan's sets. */
 function GeneralSection({ state, draft, facts, service, problems }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const update = (patch: Partial<RestoreDraft>) => service.updateDraft(state.id, patch)
   const plan = draftPlan(draft, facts)
   const databases = facts.historyDatabases.includes(draft.database) || !draft.database ? facts.historyDatabases : [draft.database, ...facts.historyDatabases]
@@ -91,7 +93,7 @@ function GeneralSection({ state, draft, facts, service, problems }: SectionProps
     {state.sets === 'loading' ? <Skeleton rows={3} label="Reading the backup sets" />
       // The grid is wider than the column: its scroller is a tab stop, so the keyboard reaches the columns past the edge.
       : <div className="properties-table restore-sets" role="region" aria-labelledby={gridId} tabIndex={0}>
-        <table className="object-dialog-grid" aria-labelledby={gridId}>
+        <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={gridId}>
           <thead><tr>{setColumns.map(column => <th key={column} scope="col" data-wrap="never">{column}</th>)}</tr></thead>
           <tbody>{sets.map(set => {
             const checked = plan.ids.includes(set.id), cells = setCells(set), reason = setReason(set), reasonId = `${gridId}-${set.id}-reason`
@@ -114,6 +116,7 @@ function GeneralSection({ state, draft, facts, service, problems }: SectionProps
 
 /** Files: Relocate all files to folder, and each file's Restore As (SSMS's grid, recalled). */
 function FilesSection({ state, draft, facts, service, problems, browse }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const update = (patch: Partial<RestoreDraft>) => service.updateDraft(state.id, patch)
   const rows = fileRows(draft, facts), gridId = fieldId(state.id, 'files')
   return <div className="restore-files">
@@ -125,7 +128,7 @@ function FilesSection({ state, draft, facts, service, problems, browse }: Sectio
     </div>
     <h3 className="properties-group-title" id={gridId}>Restore the database files as</h3>
     {state.files === 'loading' ? <Skeleton rows={2} label="Reading the backup's files" /> : <div className="properties-table restore-files-table">
-      <table className="object-dialog-grid" aria-labelledby={gridId}>
+      <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={gridId}>
         <thead><tr><th scope="col">Logical File Name</th><th scope="col" data-wrap="never">File Type</th><th scope="col">Original File Name</th><th scope="col">Restore As</th></tr></thead>
         <tbody>{rows.map(row => <tr key={row.file.logical} data-problem={row.problem ? true : undefined}>
           <td><bdi>{displayText(row.file.logical)}</bdi></td><td data-wrap="never">{row.file.type === 'log' ? 'Log' : row.file.type === 'data' ? 'Rows Data' : row.file.type === 'filestream' ? 'FILESTREAM Data' : row.file.type === 'fulltext' ? 'Full-text' : 'Other'}</td>
