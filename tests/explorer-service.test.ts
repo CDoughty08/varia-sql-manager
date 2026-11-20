@@ -62,7 +62,9 @@ function fakeBackend() {
      */
     viewsChain: false, viewColumnsEmpty: false, viewsSystemOnly: false,
     /** sa's row fields in Logins. */
-    sa: {} as Partial<ExplorerNode>
+    sa: {} as Partial<ExplorerNode>,
+    /** The server lists SQL Server Agent's node after its folders, as the backend does where Agent runs. */
+    agentNode: false
   }
   const sent: Sent[] = []
   const holds: ((params: ExplorerChildrenParams) => boolean)[] = []
@@ -74,7 +76,7 @@ function fakeBackend() {
     if (node.type === 'object') {
       const value = node.object
       switch (value.kind) {
-        case 'server': return ok([folder(value, 'databases'), folder(value, 'serverSecurity'), folder(value, 'serverObjects')])
+        case 'server': return ok([folder(value, 'databases'), folder(value, 'serverSecurity'), folder(value, 'serverObjects'), ...state.agentNode ? [object({ kind: 'agent' }, 'SQL Server Agent')] : []])
         case 'database': return value.name === 'Locked' && state.lockedDenied ? failure('NO_DB_ACCESS', 'The current login cannot access database Locked.') : ok([folder(value, 'tables'), folder(value, 'views')])
         case 'view': return ok([folder(value, 'columns')])
         case 'table': return state.dropped.has(`${value.schema}.${value.name}`) ? failure('NOT_FOUND', `${value.schema}.${value.name} no longer exists.`) : ok([folder(value, 'columns'), folder(value, 'keys')])
@@ -141,7 +143,7 @@ const isPage = (id: FolderId) => (params: ExplorerChildrenParams) => isFolder(id
 const disposals: (() => void)[] = []
 afterEach(() => { disposals.splice(0).forEach(dispose => dispose()) })
 
-function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
+function fixture(limits: Partial<ExplorerServiceLimits> = {}, agentEnabled = false) {
   const backend = fakeBackend()
   const connections = new ConnectionService(), events = new EventBus(), emitted: WorkbenchEvent[] = []
   events.subscribe(event => emitted.push(event))
@@ -149,7 +151,7 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   let ids = 0
   // The wall clock listings are stamped with; tests move it by hand.
   const wall = { now: 1_800_000_000_000 }
-  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
+  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now, agentEnabled })
   disposals.push(() => explorer.dispose())
   const connect = (name = 'server-a', profile: Partial<ConnectionInfo> = {}) => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa', ...profile }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
@@ -224,6 +226,18 @@ async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, mat
     return pages
   } finally { table.get = get }
 }
+
+describe('ExplorerService: the Agent release gate', () => {
+  it('drops the SQL Server Agent node while the gate is off, and lists it after the server folders while it is on (AG-1)', async () => {
+    for (const enabled of [false, true]) {
+      const f = fixture({}, enabled)
+      f.state.agentNode = true
+      f.connect()
+      await settle()
+      expect(f.labels().slice(1), String(enabled)).toEqual(['  Databases', '  Security', '  Server Objects', ...enabled ? ['  SQL Server Agent'] : []])
+    }
+  })
+})
 
 describe('ExplorerService: expanding as the user', () => {
   const appData = async (f: ReturnType<typeof fixture>) => {

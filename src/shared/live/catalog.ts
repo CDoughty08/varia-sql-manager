@@ -130,7 +130,8 @@ export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.c
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
-  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators'
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
+  'explorer.agentService'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -148,7 +149,7 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
     description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), opened in master on box servers and Managed Instance so it never holds the database a connection opened in (except for a contained database user, or when the connect could not read the server\'s profile: then it keeps the connection\'s database). Its probes, tables, columns and series come from the Activity Monitor\'s catalogue (docs/activity-monitor.md). Each probe runs several statements (Activity/ActivitySql.cs), and one the login may not run fails alone, naming what it feeds. Args: one filter per table (Sessions\' view chip and toggles, the filter box, column value filters, Hide benign waits) and the Details flyout\'s session (focusSession).'
   },
   explorer: {
-    id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'],
+    id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'explorer.agentService'],
     description: 'The states Object Explorer shows as chips on its nodes (docs/object-explorer.md, Live status): one view per connected server and login while Object Explorer shows, on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master on box servers and Managed Instance, so it never holds the database a connection opened in (except for a contained database user, or when the connect could not read the server\'s profile: then it keeps the connection\'s database). It never reloads the tree.'
   },
   'ssis.catalog': {
@@ -272,6 +273,11 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'explorer.agent', source: 'explorer', label: 'Running Agent jobs', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
     description: 'How many SQL Server Agent jobs are running: msdb.dbo.sysjobactivity rows of the Agent\'s current session (the newest in msdb.dbo.syssessions) that started and have not stopped, as Job Activity Monitor counts them. A login msdb refuses gets PERMISSION_DENIED as a value.',
     series: [{ id: 'runningJobs', unit: 'count', label: 'Running jobs', counter: 'gauge' }]
+  },
+  'explorer.agentService': {
+    id: 'explorer.agentService', source: 'explorer', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
+    description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only where HAS_PERMS_BY_NAME says the login may (so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services (VIEW SERVER STATE before SQL Server 2022, VIEW SERVER SECURITY or PERFORMANCE STATE from it), or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected (VIEW SERVER STATE before 2022, VIEW SERVER PERFORMANCE STATE from it). Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows.',
+    status: ['agentXps', 'serviceState', 'startupType']
   },
   'explorer.availability': {
     id: 'explorer.availability', source: 'explorer', label: 'Availability group health', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [2, 3] }, permission: 'serverState',

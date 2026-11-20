@@ -48,6 +48,9 @@ internal sealed class ExplorerQuery
 {
     public required string Id { get; init; }
     public required QueryScope Scope { get; init; }
+    /// <summary>The database a Database-scope listing reads whatever the request's (msdb, for SQL Server Agent's listings below
+    /// the server).</summary>
+    public string? Database { get; init; }
     public Keyset Keyset { get; init; } = Keyset.Name;
     /// <summary>A child folder: the statement first resolves the parent object by (schema, name).</summary>
     public bool ChildFolder { get; init; }
@@ -509,7 +512,7 @@ internal static class ExplorerQueries
             Map = row => Node(row.Context, new ObjectRefDto("ssisPackage", Name: row.S(0), SsisFolder: row.Context.Owner.SsisFolder, SsisProject: row.Context.Owner.Name), row.S(0)!,
                 row.B(1) ? "entryPoint" : "child", detail: ExplorerLabels.Join([row.B(1) ? null : "Not an entry point", row.S(2)]))
         }
-    }.ToDictionary(query => query.Id, StringComparer.Ordinal);
+    }.Concat(AgentListings.Queries).ToDictionary(query => query.Id, StringComparer.Ordinal);
 
     // --- SSIS Catalog (D-ssis 3.2) ---------------------------------------------------------------------------------------
 

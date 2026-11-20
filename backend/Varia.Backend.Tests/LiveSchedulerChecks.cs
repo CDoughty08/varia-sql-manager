@@ -159,7 +159,7 @@ internal static class LiveSchedulerChecks
         // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
         // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints.
         var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe).ToList();
-        check(oneBatch.Count == 5 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
+        check(oneBatch.Count == 6 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
         // theirs to read (the clock names the monitor's session, and Active Expensive Queries leaves it out).
@@ -183,7 +183,7 @@ internal static class LiveSchedulerChecks
         // Object Explorer's status probes read one table each (the Agent count a metrics row), fit their catalogue entries,
         // and look up a restore's database lock only for RESTORE requests: a database recovering at startup is its request's
         // own, and only the RESTORE branch, whose outer rows are RESTORE requests alone, reads the lock DMV, once per request.
-        var statusProblems = new[] { LiveSql.DatabasesProbe, LiveSql.ProgressProbe, LiveSql.AgentProbe, LiveSql.AvailabilityProbe }
+        var statusProblems = new[] { LiveSql.DatabasesProbe, LiveSql.ProgressProbe, LiveSql.AgentProbe, LiveSql.AvailabilityProbe, LiveSql.AgentServiceProbe }
             .SelectMany(probe => LiveSql.For(probe, LiveSql.MaxBand) is { } query ? query.Problems(catalog.Probes[probe]).Select(problem => probe + ": " + problem) : [probe + ": no query"]).ToList();
         var progress = LiveSql.For(LiveSql.ProgressProbe, LiveSql.MaxBand)!.Body.Split("UNION ALL\n");
         check(statusProblems.Count == 0 && LiveSql.For(LiveSql.AgentProbe, LiveSql.MaxBand) is { Columns: ["running_jobs"], Tables.Length: 0 } && progress.Length == 2
@@ -735,13 +735,14 @@ internal static class LiveSchedulerChecks
             [(1222, 16)] = "BLOCKED", [(1205, 13)] = "BLOCKED", [(297, 16)] = "PERMISSION_DENIED", [(300, 14)] = "PERMISSION_DENIED", [(229, 14)] = "PERMISSION_DENIED",
             [(208, 16)] = "NOT_SUPPORTED", [(207, 16)] = "NOT_SUPPORTED", [(4060, 11)] = "DATABASE_UNAVAILABLE", [(942, 14)] = "DATABASE_UNAVAILABLE",
             [(-2, 11)] = "TIMEOUT", [(10054, 20)] = "CONNECTION_LOST", [(0, 20)] = "CONNECTION_LOST", [(233, 16)] = "CONNECTION_LOST", [(8134, 16)] = "SQL_ERROR",
-            [(18456, 14)] = "LOGIN_FAILED", [(18486, 14)] = "LOGIN_FAILED", [(18487, 14)] = "LOGIN_FAILED", [(18488, 14)] = "LOGIN_FAILED", [(18452, 14)] = "LOGIN_FAILED"
+            [(18456, 14)] = "LOGIN_FAILED", [(18486, 14)] = "LOGIN_FAILED", [(18487, 14)] = "LOGIN_FAILED", [(18488, 14)] = "LOGIN_FAILED", [(18452, 14)] = "LOGIN_FAILED",
+            [(15281, 16)] = "AGENT_DISABLED"
         };
         var wrong = expected.Where(item => LiveErrors.Classify(item.Key.Item1, item.Key.Item2) != item.Value).Select(item => item.Key.Item1 + "/" + item.Key.Item2).ToList();
         check(wrong.Count == 0 && LiveErrors.IsTerminal("PERMISSION_DENIED") && LiveErrors.IsTerminal("NOT_SUPPORTED") && LiveErrors.IsTerminal("LOGIN_FAILED") && LiveErrors.IsTerminal("CATALOG_MISSING")
-            && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
+            && LiveErrors.IsTerminal("AGENT_DISABLED") && !LiveErrors.IsTerminal("BLOCKED") && !LiveErrors.IsTerminal("DATABASE_UNAVAILABLE")
             && LiveErrors.Breaks("CONNECTION_LOST") && LiveErrors.Breaks("TIMEOUT") && !LiveErrors.Breaks("BLOCKED"),
-            "SQL errors map to live codes: lock timeouts and deadlocks BLOCKED, permission errors PERMISSION_DENIED (terminal), unknown objects NOT_SUPPORTED (terminal), offline databases DATABASE_UNAVAILABLE, transport errors CONNECTION_LOST, a refused sign-in (failed, locked out, expired, untrusted) LOGIN_FAILED (terminal, so a reconnect never repeats it alone): " + string.Join(", ", wrong));
+            "SQL errors map to live codes: lock timeouts and deadlocks BLOCKED, permission errors PERMISSION_DENIED (terminal), unknown objects NOT_SUPPORTED (terminal), offline databases DATABASE_UNAVAILABLE, transport errors CONNECTION_LOST, a refused sign-in (failed, locked out, expired, untrusted) LOGIN_FAILED (terminal, so a reconnect never repeats it alone), Agent XPs off (15281) AGENT_DISABLED (terminal, restarted by a refresh): " + string.Join(", ", wrong));
         var long_ = LiveErrors.Create("activity.overview", "SQL_ERROR", new string('x', 5000));
         var signIn = LiveErrors.SignIn("activity.overview", new RequestException("AUTH_UNSUPPORTED", "Install the GSSAPI library."));
         check(long_.Message.Length == 2000 && !long_.Terminal && signIn is { Code: "AUTH_KERBEROS", Terminal: false } && signIn.Message == "Install the GSSAPI library."

@@ -11,6 +11,8 @@ internal enum ErrorPhase { Scope, Statement }
 internal static class ExplorerErrors
 {
     public const int MaxMessage = 512;
+    /// <summary>Platform-neutral: neither Create nor From knows the platform, so it names both ways to turn the option on.</summary>
+    public const string AgentDisabled = "SQL Server Agent is stopped or its Agent XPs option is 0. Start SQL Server Agent (or turn Agent XPs on with sp_configure, or mssql-conf on Linux), then Refresh.";
     private static readonly int[] Permission = [229, 230, 262, 297, 300];
     private static readonly int[] NoAccess = [916, 4060];
     private static readonly int[] Unavailable = [922, 924, 926, 927, 942, 945, 952, 976, 978];
@@ -23,6 +25,8 @@ internal static class ExplorerErrors
         _ when NoAccess.Contains(number) => "NO_DB_ACCESS",
         _ when Unavailable.Contains(number) => "DATABASE_UNAVAILABLE",
         911 => "NOT_FOUND",
+        // Agent XPs is off: SQL Server Agent is stopped or disabled (Refresh once it runs).
+        15281 => "AGENT_DISABLED",
         2812 when phase == ErrorPhase.Scope => "NOT_FOUND",
         _ when Blocked.Contains(number) => "BLOCKED",
         -2 => "TIMEOUT",
@@ -54,6 +58,7 @@ internal static class ExplorerErrors
             "BLOCKED" => "Another session holds a lock on this metadata (for example an uncommitted CREATE or ALTER). Retry after it commits.",
             "TIMEOUT" => "Loading took longer than 30 seconds. Retry, or filter this folder.",
             "CONNECTION_LOST" => "The connection to the server was lost.",
+            "AGENT_DISABLED" => AgentDisabled,
             // What the server cannot have (the SSIS Catalog on Linux): the caller words it.
             "NOT_SUPPORTED" => serverText ?? subject,
             _ => "Msg " + number + ": " + serverText

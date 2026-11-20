@@ -49,6 +49,8 @@ internal sealed class ExplorerOptions
     public TimeSpan? PeekMappingBudget { get; set; }
     /// <summary>Replaces agent.profile's budget from the Agent catalogue (timeout checks).</summary>
     public TimeSpan? AgentProfileBudget { get; set; }
+    /// <summary>Replaces the reader the Error Logs listing runs xp_enumerrorlogs through (offline checks).</summary>
+    public Varia.Backend.Agent.AgentReader? AgentReader { get; set; }
     /// <summary>Fails every catalog statement with the error this returns for its database (null at server scope) and text once
     /// its connection is open, in place of running it (offline checks of how a server's refusal maps); it may wait on the token.</summary>
     public Func<string?, string, CancellationToken, Task<SqlException>>? TestStatementFailure { get; set; }
@@ -299,20 +301,34 @@ internal sealed partial class ExplorerService : IDisposable
                 if (error is not null) return new(nodes, 0, Error: error);
                 if (history is not null) nodes.Add(history);
             }
+            // The SQL Server Agent node reads Agent XPs and the login's Agent role first: they decide which children it has.
+            var agentRole = AgentListings.Role.Sysadmin;
+            if (target.Kind == "agent")
+            {
+                var (role, error) = await AgentAccessAsync(request, profile, token);
+                if (error is not null) return new(nodes, 0, Error: error);
+                agentRole = role;
+            }
             // Group by Schema: a database keeps the folders of its database-scoped objects and lists its schemas after them, and
-            // a schema row has the folders of the objects in it.
-            var folders = target.Kind == "database" && request.Grouped ? catalog.GroupedDatabaseFolders(profile)
-                : target.Kind == "schema" ? catalog.SchemaGroupFolders(profile)
-                : catalog.StaticFolders(target.Kind, request.Subtype, profile);
-            nodes.AddRange(folders.Select(id => FolderNode(target, id)));
+            // a schema row has the folders of the objects in it. Other kinds merge their folders and singletons by order.
+            if (target.Kind == "database" && request.Grouped) nodes.AddRange(catalog.GroupedDatabaseFolders(profile).Select(id => FolderNode(target, id)));
+            else if (target.Kind == "schema") nodes.AddRange(catalog.SchemaGroupFolders(profile).Select(id => FolderNode(target, id)));
+            else nodes.AddRange(catalog.Children(target.Kind, request.Subtype, profile).Where(child => target.Kind != "agent" || AgentListings.Reads(agentRole, child))
+                .Select(child => child.Folder is { } id ? FolderNode(target, id) : SingletonNode(child.Singleton!, profile)));
         }
-        else if (key is null) nodes.AddRange(catalog.Subfolders(request.Folder!.Id, target.Kind, request.Grouped, profile).Select(id => FolderNode(target, id)));
-        if (request.List is null) return new(nodes, 0, Total: nodes.Count);
+        else if (key is null) nodes.AddRange(catalog.Subfolders(request.Folder!.Id, target.Kind, request.Grouped, profile).Where(id => !catalog.Folder(id)!.AfterRows).Select(id => FolderNode(target, id)));
+        // Subfolders SSMS shows after the folder's rows (Unassigned Proxies), on its last page.
+        List<ExplorerNode> after = request.Folder is { } parent
+            ? [.. catalog.Subfolders(parent.Id, target.Kind, request.Grouped, profile).Where(id => catalog.Folder(id)!.AfterRows).Select(id => FolderNode(target, id))]
+            : [];
+        if (request.List is null) return new([.. nodes, .. after], 0, Total: nodes.Count + after.Count);
+        if (AgentListings.ReaderLists.Contains(request.List)) return await AgentErrorLogsAsync(request, profile, nodes, token);
         var query = queries[request.List];
         var render = new SqlRender(profile.Band, vector, FilterShape.From(request.Filter), query.ChildFolder ? target.Kind : null);
         var first = key is null;
-        var statics = nodes.Count;
-        return await RunAsync(request, profile, query.Scope, query.Render(render), Parameters(request, key, first) with { SsisCatalog = host.SsisCatalog }, async (command, reader) =>
+        var statics = nodes.Count + after.Count;
+        return await RunAsync(request.ConnectionId, query.Database ?? request.Database, Subject(request), profile, query.Scope, query.Render(render),
+            Parameters(request, key, first) with { SsisCatalog = host.SsisCatalog }, async (command, reader) =>
         {
             if ((query.ChildFolder || query.OwnerLookup is not null) && !await ParentExistsAsync(reader, token)) return new(nodes, 0, Error: NotFound(target));
             var context = new RowContext(catalog, profile, request.Database, target);
@@ -343,8 +359,9 @@ internal sealed partial class ExplorerService : IDisposable
             if (more) TryCancel(command);
             else if (first && count == 0 && query.WhenEmpty?.Invoke(context) is { } empty) return new(nodes, 0, Error: empty);
             else if (query.Tail?.Invoke(context) is { } tail) nodes.Add(tail);
+            if (!more) nodes.AddRange(after);
             return new(nodes, 0, more ? ExplorerCursor.Encode(query.Id, last) : null, total);
-        }, token, nodes);
+        }, error => new ExplorerChildrenResult(nodes, 0, Error: error), token);
     }
 
     private async Task<ExplorerError?> DatabaseProblemAsync(ExplorerRequest request, ExplorerProfile profile, CancellationToken token)

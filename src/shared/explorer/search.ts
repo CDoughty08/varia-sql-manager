@@ -47,9 +47,14 @@ export const searchKinds = [
   'database', 'user', 'databaseRole', 'applicationRole', 'schema', 'assembly', 'asymmetricKey', 'certificate', 'symmetricKey', 'columnMasterKey',
   'columnEncryptionKey', 'databaseAuditSpecification', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme',
   'partitionFunction', 'searchPropertyList', 'planGuide', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
-  'column', 'key', 'constraint', 'index', 'statistic', 'parameter'
+  'column', 'key', 'constraint', 'index', 'statistic', 'parameter', 'agentJob', 'agentAlert', 'agentOperator'
 ] as const satisfies readonly NodeKind[]
 export type SearchKind = typeof searchKinds[number]
+/** SQL Server Agent's indexed kinds: searched only behind the Agent release gate (ObjectSearchService.ask). */
+export const agentSearchKinds = ['agentJob', 'agentAlert', 'agentOperator'] as const satisfies readonly SearchKind[]
+/** Kinds Object Explorer lists that the index does not hold (ObjectSearchService.Unindexed): Agent's proxies, their
+ *  subsystems and error logs, which only a sysadmin may read. */
+export const unindexedKinds = ['agentProxySubsystem', 'agentProxy', 'agentErrorLog'] as const satisfies readonly NodeKind[]
 export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
 /** exact: the text as typed (with Match Case, Whole Word, wildcards or Regex); fuzzy: names also match approximately, word by
@@ -77,7 +82,7 @@ export const searchTypes = [
   ] },
   { id: 'other', label: 'Other', kinds: [
     'synonym', 'sequence', 'database', 'assembly', 'backupDevice', 'linkedServer', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist',
-    'partitionScheme', 'partitionFunction', 'searchPropertyList', 'planGuide'
+    'partitionScheme', 'partitionFunction', 'searchPropertyList', 'planGuide', 'agentJob', 'agentAlert', 'agentOperator'
   ] }
 ] as const satisfies readonly { readonly id: string; readonly label: string; readonly kinds: readonly SearchKind[] }[]
 export type SearchType = typeof searchTypes[number]['id']
@@ -96,7 +101,8 @@ const kindLetters: Record<SearchKind, string> = {
   serverTrigger: 'G', database: 'D', user: 'U', databaseRole: 'R', applicationRole: 'R', schema: 'S', assembly: 'A', asymmetricKey: 'K', certificate: 'C',
   symmetricKey: 'K', columnMasterKey: 'K', columnEncryptionKey: 'K', databaseAuditSpecification: 'A', externalDataSource: 'E', externalFileFormat: 'E',
   fullTextCatalog: 'X', fullTextStoplist: 'X', partitionScheme: 'P', partitionFunction: 'P', searchPropertyList: 'X', planGuide: 'G',
-  xmlSchemaCollection: 'X', rule: 'R', default: 'D', securityPolicy: 'P', column: 'C', key: 'K', constraint: 'K', index: 'I', statistic: 'S', parameter: 'A'
+  xmlSchemaCollection: 'X', rule: 'R', default: 'D', securityPolicy: 'P', column: 'C', key: 'K', constraint: 'K', index: 'I', statistic: 'S', parameter: 'A',
+  agentJob: 'J', agentAlert: 'A', agentOperator: 'O'
 }
 /** A kind the renderer does not know (a newer backend's) still gets a badge, so one row can never take the list down. */
 export const unknownKindBadge = { letters: '?', tone: 'other' } as const satisfies { readonly letters: string; readonly tone: SearchKindTone }
@@ -119,7 +125,8 @@ export function searchTypeKinds(types: readonly SearchType[]): SearchKind[] | un
 export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
 export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
-export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string }
+/** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). */
+export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string; readonly agent?: boolean }
 /** none: never built; building: a build is reading; ready: the last build ended. `indexed` counts the databases read so far. */
 export interface ObjectIndexStatus {
   readonly state: 'none' | 'building' | 'ready'

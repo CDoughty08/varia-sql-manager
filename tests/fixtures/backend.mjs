@@ -46,7 +46,8 @@
 // the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
 // count as protocol violations. Object Explorer's `explorer` source runs only while the control directory holds
 // explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
-// jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
+// jobs?: number, groups?: [name, health, role][], agent?: [agentXps, serviceState, startupType] }` (agent defaults to Agent XPs on,
+// running and automatic), read again at every sample; without it the source is refused as an
 // unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
 // The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
 // a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
@@ -341,7 +342,7 @@ const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadm
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
 // exists. The SSIS Catalog has one folder, Finance, with the project Loads (an entry point and a child package) and the
 // environment Test.
-const explorerProfile = { band: 16, engine: 'box' }
+const explorerProfile = { band: 16, engine: 'box', edition: 3, linux: false }
 // Search Objects' fixture index: AppData's dbo.Orders, a procedure whose definition names it, and a trigger on it.
 const searchObjects = [
   { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' },
@@ -1259,10 +1260,11 @@ function explorerStatus() {
   if (!controlDirectory) return undefined
   try { return JSON.parse(readFileSync(join(controlDirectory, 'explorer-status.json'), 'utf8')) } catch { return undefined }
 }
-/** One explorer probe's sample: its table as a new stored revision (two kept per probe), or the Agent count. */
+/** One explorer probe's sample: its table as a new stored revision (two kept per probe), the Agent count, or Agent's state. */
 function explorerSample(live, probe) {
   const status = explorerStatus() ?? {}
   if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
+  if (probe.probe === 'explorer.agentService') { const [agentXps, serviceState, startupType] = status.agent ?? [1, 4, 2]; return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }] } }
   const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
   const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)

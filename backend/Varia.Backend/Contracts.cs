@@ -363,7 +363,8 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null);
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
-internal sealed record ObjectIndexSkip(string Database, string Code, string Message);
+/// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
+internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
