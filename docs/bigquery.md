@@ -201,15 +201,19 @@ type.
   first page's). The first page is then dropped and every row read from the job's temporary destination table. Reads
   of temporary tables are free (Google's pricing page), so there is no setting for it.
 - **Streams.** The backend's own GoogleSQL scanner (`GoogleSqlScanner`, which skips comments, strings and nested
-  queries) decides the order: a top-level `ORDER BY` reads one stream in order; anything else asks for up to four,
-  appended as their batches come. Each stream is read on its own task; each batch is charged to the query's budget
-  (twice its size) before it is queued, and one reader appends rows, so the store keeps one writer. A stream that fails
-  transiently is read again from its offset.
+  queries) decides the order: a top-level `ORDER BY` (or pipe syntax's `GROUP BY k DESC`) reads one stream in order;
+  anything else asks for up to four, appended as their batches come. When unsure it reads one stream, which is only
+  slower. Each stream is read on its own task; each batch is charged to the query's budget (twice its size) before it
+  is queued, at most two batches are charged but not yet stored (so the budget holds as much as REST's; each other stream
+  holds at most the one batch it received while it waits), and one reader
+  appends rows, so the store keeps one writer. A stream that fails transiently is read again from its offset; one that
+  fails for good fails the query at once, with REST's error (an expired sign-in is `AUTH_EXPIRED`).
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
   connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
   in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
-  be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2), or Google refused the session
-  or sent columns that are not the result's (asked again on the next query). A stream that fails after reading has begun
+  be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
+  REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
+  (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
   fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.

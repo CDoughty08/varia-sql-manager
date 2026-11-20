@@ -124,7 +124,7 @@ internal static partial class BigQueryExecutionChecks
 
         string Id(BigQueryFake.Request request) => request.Url[(request.Url.LastIndexOf('/') + 1)..];
 
-        BigQueryFake.Reply Get(BigQueryFake.Request request)
+        public BigQueryFake.Reply Get(BigQueryFake.Request request)
         {
             var id = Id(request);
             bool known;
@@ -179,12 +179,12 @@ internal static partial class BigQueryExecutionChecks
         public SqlService Service { get; }
         public string ConnectionId { get; private set; } = "";
 
-        public Harness(Jobs jobs, ResultStore? store = null, IBigQueryStorageRead? storage = null)
+        public Harness(Jobs jobs, ResultStore? store = null, IBigQueryStorageRead? storage = null, Func<BigQueryEnvironment, BigQueryEnvironment>? environment = null)
         {
             Jobs = jobs;
             Fake = jobs.Fake();
-            Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]),
-                Storage: storage is null ? null : _ => storage));
+            var settings = new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]), Storage: storage is null ? null : _ => storage);
+            Service = new SqlService(store: store, bigQuery: environment is null ? settings : environment(settings));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             Service.BigQuery.PollMs = 50;
         }

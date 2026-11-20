@@ -639,8 +639,12 @@ internal sealed class BigQueryColumnPlan
             }
             case BigQueryKind.Json: WriteJsonMember(writer, Encoding.UTF8.GetString(text)); break;
             case BigQueryKind.Date or BigQueryKind.Time or BigQueryKind.DateTime or BigQueryKind.Interval:
-                writer.WriteStringValue(scratch.AsSpan(0, Temporal(field.Kind, text, Room(text.Length + 64))));
+            {
+                // Room may replace the scratch buffer, so the span is taken after Temporal wrote into it.
+                var written = Temporal(field.Kind, text, Room(text.Length + 64));
+                writer.WriteStringValue(scratch.AsSpan(0, written));
                 break;
+            }
             case BigQueryKind.Range: writer.WriteStringValue(RangeText(Encoding.UTF8.GetString(text), field.RangeElement)); break;
             default: writer.WriteStringValue(text); break;
         }

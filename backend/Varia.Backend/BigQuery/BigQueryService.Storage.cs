@@ -6,7 +6,7 @@ using Grpc.Core;
 namespace Varia.Backend.BigQuery;
 
 /// <summary>An open read session over a query's destination table: its streams, and the plan that decodes their batches.</summary>
-internal sealed record BigQueryReadSession(IBigQueryStorageRead Client, IReadOnlyList<string> Streams, ArrowColumnPlan Plan, bool Ordered);
+internal sealed record BigQueryReadSession(IBigQueryStorageRead Client, IReadOnlyList<string> Streams, ArrowColumnPlan Plan, bool Ordered, string Project);
 
 /// <summary>Why a result is read through REST rather than Storage Read, with the sentence Messages gives once per connection.
 /// <see cref="Lasting"/> reasons hold for the connection, which then stops asking.</summary>
@@ -31,6 +31,9 @@ internal sealed partial class BigQueryService
     internal int StorageSessions;
     /// <summary>How many times creating a session is tried before reading through REST.</summary>
     internal int SessionAttempts { get; set; } = 2;
+    /// <summary>How long a connection reads through REST after the Storage API could not be reached, so each large result
+    /// does not wait for it again.</summary>
+    internal TimeSpan UnreachablePause { get; set; } = TimeSpan.FromMinutes(10);
 
     /// <summary>tables.get (free): a destination table's size and row count.</summary>
     internal Task<Table> TableAsync(BigQueryConnection connection, TableReference table, CancellationToken token) =>
@@ -77,7 +80,11 @@ internal sealed partial class BigQueryService
         var arrow = ArrowColumnPlan.From(plan, session.ArrowSchema?.SerializedSchema.Memory ?? ReadOnlyMemory<byte>.Empty);
         if (arrow is null) return (null, Refused(project));
         Interlocked.Increment(ref StorageSessions);
-        return (new BigQueryReadSession(client, [.. session.Streams.Select(stream => stream.Name)], arrow, ordered), null);
+        // Never more streams than asked for (each is a task and a queue slot): an endpoint that answers more is refused, since
+        // reading only some of its streams would lose rows.
+        var streams = session.Streams.Select(stream => stream.Name).ToList();
+        if (streams.Count == 0 || streams.Count > request.MaxStreamCount) return (null, Refused(project));
+        return (new BigQueryReadSession(client, streams, arrow, ordered, project), null);
     }
 
     /// <summary>The streams a session asks for: one keeps a top-level ORDER BY's order; the emulator serves only one.</summary>
@@ -89,8 +96,11 @@ internal sealed partial class BigQueryService
     /// <summary>The fallback for a failed CreateReadSession; null for a failure that is not about Storage Read.</summary>
     internal static BigQueryStorageFallback? Fallback(Exception error, string project)
     {
-        if (error is TimeoutException) return Unreachable();
-        if (error is not RpcException rpc) return error is HttpRequestException or IOException ? Unreachable() : null;
+        if (error is TimeoutException or HttpRequestException or IOException) return Unreachable();
+        // Anything else (a disconnect's disposed client, say) leaves the result to REST, which reports what it finds.
+        if (error is not RpcException rpc) return error is OperationCanceledException ? null : Refused(project);
+        // A sign-in failure is not about Storage Read: REST reads the result and reports it.
+        if (SignIn(rpc) is not null || rpc.StatusCode == StatusCode.Unauthenticated) return null;
         var detail = rpc.Status.Detail ?? "";
         return rpc.StatusCode switch
         {
@@ -101,7 +111,8 @@ internal sealed partial class BigQueryService
                 => new("permission", Slower + "the account may not create read sessions in project " + project
                     + " (bigquery.readsessions.create, which the BigQuery Read Session User role grants).", true),
             StatusCode.Unavailable or StatusCode.DeadlineExceeded or StatusCode.Internal or StatusCode.Unknown => Unreachable(),
-            StatusCode.Cancelled => null,
+            // Called only while the query runs: a call the library cancelled at its own limit, as an endpoint it never reached.
+            StatusCode.Cancelled => Unreachable(),
             _ => Refused(project)
         };
     }
@@ -126,14 +137,25 @@ internal sealed partial class BigQueryService
     /// <summary>A ReadRows failure after which the stream is read again from its offset.</summary>
     internal static bool TransientRead(Exception error, CancellationToken token) => !token.IsCancellationRequested && error switch
     {
-        RpcException rpc => rpc.StatusCode is StatusCode.Unavailable or StatusCode.Internal or StatusCode.Unknown or StatusCode.ResourceExhausted or StatusCode.DeadlineExceeded,
+        RpcException rpc => SignIn(rpc) is null
+            && rpc.StatusCode is StatusCode.Unavailable or StatusCode.Internal or StatusCode.Unknown or StatusCode.ResourceExhausted or StatusCode.DeadlineExceeded,
         _ => error is TimeoutException or HttpRequestException or IOException
     };
 
-    /// <summary>The error value for a stream that failed past its retries: the network, or Google's refusal in its words.</summary>
-    internal static RequestException ReadFailure(RpcException error) => error.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded
-        ? new RequestException("CONNECTION_LOST", BigQueryErrors.Unreachable)
-        : new RequestException("BACKEND_ERROR", "Reading the result through the BigQuery Storage API failed: " + BigQueryErrors.Sanitize(error.Status.Detail is { Length: > 0 } detail ? detail : error.StatusCode.ToString()));
+    /// <summary>A sign-in failure behind an RPC's status: the channel refreshes the connection's token itself, and a refused
+    /// refresh reaches Varia only as the status's debug exception (with status Internal), which REST's mapping reads.</summary>
+    internal static RequestException? SignIn(RpcException rpc) =>
+        rpc.Status.DebugException is { } cause && BigQueryErrors.Map(cause) is RequestException { Code: "AUTH_EXPIRED" or "AUTH_KEY_FILE" or "AUTH_IDENTITY" } mapped ? mapped : null;
+
+    /// <summary>The error value for a stream that failed past its retries, as REST would report it: a sign-in, the network,
+    /// a refused permission, or Google's refusal in its words.</summary>
+    internal static RequestException ReadFailure(RpcException error, string project) => SignIn(error) ?? error.StatusCode switch
+    {
+        StatusCode.Unavailable or StatusCode.DeadlineExceeded => new RequestException("CONNECTION_LOST", BigQueryErrors.Unreachable),
+        StatusCode.Unauthenticated => new RequestException("AUTH_EXPIRED", BigQueryErrors.Expired),
+        StatusCode.PermissionDenied => new RequestException("PERMISSION_DENIED", "The account may not read this result through the BigQuery Storage API in project " + project + "."),
+        _ => new RequestException("BACKEND_ERROR", "Reading the result through the BigQuery Storage API failed: " + BigQueryErrors.Sanitize(error.Status.Detail is { Length: > 0 } detail ? detail : error.StatusCode.ToString()))
+    };
 
     /// <summary>The backoff before reading a stream again.</summary>
     internal TimeSpan ReadBackoff(int attempt) => Backoff(attempt);

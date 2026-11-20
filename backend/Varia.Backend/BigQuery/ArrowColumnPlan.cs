@@ -60,7 +60,8 @@ internal sealed class ArrowColumnPlan
         // The emulator sends a whole stream (its schema, then the batch) where Google sends the batch's message alone.
         var own = IsSchema(batch);
         var length = (own ? 0 : schema.Length) + batch.Length;
-        if (message.Length < length) message = new byte[Math.Max(length, message.Length * 2)];
+        // Exactly the size needed, so the buffer is never more than the largest batch (which its charge covers).
+        if (message.Length < length) message = new byte[length];
         if (!own) schema.CopyTo(message, 0);
         batch.CopyTo(message.AsSpan(length - batch.Length));
         using var reader = new ArrowStreamReader(message.AsMemory(0, length));
@@ -74,15 +75,16 @@ internal sealed class ArrowColumnPlan
     internal static bool IsSchema(ReadOnlySpan<byte> message)
     {
         if (message.Length < 16 || BinaryPrimitives.ReadUInt32LittleEndian(message) != 0xFFFFFFFF) return false;
+        // Offsets in long: a malformed message's offsets near int.MaxValue must answer false, not overflow past the checks.
         var flat = message[8..];
-        var table = (int)BinaryPrimitives.ReadUInt32LittleEndian(flat);
-        if (table < 0 || table + 4 > flat.Length) return false;
-        var vtable = table - BinaryPrimitives.ReadInt32LittleEndian(flat[table..]);
+        long table = BinaryPrimitives.ReadUInt32LittleEndian(flat);
+        if (table + 4 > flat.Length) return false;
+        var vtable = table - BinaryPrimitives.ReadInt32LittleEndian(flat[(int)table..]);
         if (vtable < 0 || vtable + 4 > flat.Length) return false;
-        var size = BinaryPrimitives.ReadUInt16LittleEndian(flat[vtable..]);
+        var size = BinaryPrimitives.ReadUInt16LittleEndian(flat[(int)vtable..]);
         if (size < 8 || vtable + size > flat.Length) return false;
-        var field = BinaryPrimitives.ReadUInt16LittleEndian(flat[(vtable + 6)..]);
-        return field != 0 && table + field < flat.Length && flat[table + field] == 1;
+        var field = BinaryPrimitives.ReadUInt16LittleEndian(flat[(int)(vtable + 6)..]);
+        return field != 0 && table + field < flat.Length && flat[(int)(table + field)] == 1;
     }
 
     /// <summary>Appends one row of a batch. Returns the number of cells stored as truncated prefixes.</summary>

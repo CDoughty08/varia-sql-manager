@@ -20,6 +20,9 @@ internal sealed partial class SqlService
     [GeneratedRegex(@"^[A-Za-z0-9_\-$]{1,1024}$")]
     private static partial Regex StorageTableId();
 
+    /// <summary>Batches charged to the budget but not yet stored, at most: a little more than REST's one page.</summary>
+    internal const int InFlightBatches = 2;
+
     /// <summary>A batch a stream read, with the bytes charged for it; or a refusal of the budget, which stops the read.</summary>
     private sealed record ArrowChunk(ReadOnlyMemory<byte> Batch, long Rows, long Charge, TruncationReason Refusal = TruncationReason.None);
 
@@ -29,7 +32,16 @@ internal sealed partial class SqlService
     private async Task<BigQueryReadSession?> BigQueryStorageSessionAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location,
         BigQueryColumnPlan plan, BigQueryPage first, QueryMessages messages, CancellationToken token)
     {
-        if (!bigQuery.Environment.StorageRead || connection.StorageRefused is not null || first.PageToken is null) return null;
+        if (!bigQuery.Environment.StorageRead || connection.StorageRefused is not null || first.PageToken is null
+            || Environment.TickCount64 < Interlocked.Read(ref connection.StoragePausedUntil)) return null;
+        // Storage Read only speeds a result up: a failure deciding on it leaves the result to REST, which reports what it finds.
+        try { return await OpenStorageSessionAsync(args, connection, project, jobId, location, plan, first, messages, token); }
+        catch (Exception error) when (!token.IsCancellationRequested && error is not OutOfMemoryException) { return null; }
+    }
+
+    private async Task<BigQueryReadSession?> OpenStorageSessionAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location,
+        BigQueryColumnPlan plan, BigQueryPage first, QueryMessages messages, CancellationToken token)
+    {
         var job = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
         if (job.Statistics?.Query?.StatementType is { } statement && statement != "SELECT") return null;
         if (job.Configuration?.Query?.DestinationTable is not { } table || !BigQueryLimits.IsProject(table.ProjectId) || table.DatasetId is not { Length: > 0 and <= BigQueryLimits.Dataset } dataset
@@ -41,7 +53,7 @@ internal sealed partial class SqlService
             numBytes = details.NumBytes is >= 0 ? (long)details.NumBytes.Value : null;
             numRows = details.NumRows is { } rows ? (long)rows : null;
         }
-        catch (GoogleApiException) when (!token.IsCancellationRequested) { }
+        catch (Exception error) when (!token.IsCancellationRequested && error is GoogleApiException or TimeoutException or HttpRequestException or IOException) { }
         // BigQuery's size when it reports one, else the first page's JSON per row; only the rows the row limit keeps count.
         var total = first.TotalRows ?? numRows ?? 0;
         var wanted = args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
@@ -51,6 +63,7 @@ internal sealed partial class SqlService
         if (fallback is not null)
         {
             if (fallback.Lasting) connection.StorageRefused = fallback.Reason;
+            else if (fallback.Reason == "unreachable") Interlocked.Exchange(ref connection.StoragePausedUntil, Environment.TickCount64 + (long)bigQuery.UnreachablePause.TotalMilliseconds);
             if (connection.StorageNotices.TryAdd(fallback.Reason, 0)) messages.Add(fallback.Sentence);
         }
         return session;
@@ -62,8 +75,16 @@ internal sealed partial class SqlService
         QueryEventSink events, Action<string> warn, CancellationToken token)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var queue = Channel.CreateBounded<ArrowChunk>(new BoundedChannelOptions(Math.Max(1, session.Streams.Count)) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
-        var producers = session.Streams.Select(stream => Task.Run(() => ProduceArrowAsync(session.Client, stream, budget, queue.Writer, stop.Token))).ToArray();
+        // Batches charged but not yet stored, whatever the stream count: one being read and one ready. A stream takes a slot
+        // before it charges a batch and the reader gives it back after storing it, so waiting streams hold no budget.
+        using var slots = new SemaphoreSlim(InFlightBatches);
+        var queue = Channel.CreateBounded<ArrowChunk>(new BoundedChannelOptions(InFlightBatches) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+        // A stream's failure ends the queue at once (after the batches already queued), not when the other streams end.
+        var producers = session.Streams.Select(stream => Task.Run(async () =>
+        {
+            try { await ProduceArrowAsync(session, stream, budget, slots, queue.Writer, stop.Token); }
+            catch (Exception error) { queue.Writer.TryComplete(error); throw; }
+        })).ToArray();
         var finished = Task.WhenAll(producers).ContinueWith(done => queue.Writer.TryComplete(done.Exception?.GetBaseException()), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         long counted = 0;
         long storedRows = 0;
@@ -102,7 +123,11 @@ internal sealed partial class SqlService
                         if (set.SealedPages != sealedBefore) events.Sealed(set);
                     }
                 }
-                finally { store.Return(budget, chunk.Charge); }
+                finally
+                {
+                    store.Return(budget, chunk.Charge);
+                    slots.Release();
+                }
                 events.RowsChanged();
                 // The rows so far become readable while the next batch arrives.
                 if (set.HasPendingRows)
@@ -132,8 +157,9 @@ internal sealed partial class SqlService
 
     /// <summary>One stream's batches into the queue, each charged first (its message and the decoded copy). A refused charge
     /// ends the read; a transient failure reads the stream again from the rows already queued.</summary>
-    private async Task ProduceArrowAsync(IBigQueryStorageRead client, string stream, QueryBudget budget, ChannelWriter<ArrowChunk> queue, CancellationToken token)
+    private async Task ProduceArrowAsync(BigQueryReadSession session, string stream, QueryBudget budget, SemaphoreSlim slots, ChannelWriter<ArrowChunk> queue, CancellationToken token)
     {
+        var client = session.Client;
         long offset = 0;
         for (var attempt = 1; ; attempt++)
         {
@@ -148,13 +174,21 @@ internal sealed partial class SqlService
                     }
                     var bytes = batch.SerializedRecordBatch.Memory;
                     var charge = 2L * bytes.Length;
+                    await slots.WaitAsync(token);
+                    // The slot goes with the chunk to the reader, which gives it back; a chunk never queued gives it back here.
                     if (!store.TryReserve(budget, charge, true, out var refusal))
                     {
-                        await queue.WriteAsync(new ArrowChunk(default, 0, 0, refusal), token);
+                        try { await queue.WriteAsync(new ArrowChunk(default, 0, 0, refusal), token); }
+                        catch { slots.Release(); throw; }
                         return;
                     }
                     try { await queue.WriteAsync(new ArrowChunk(bytes, response.RowCount, charge), token); }
-                    catch { store.Return(budget, charge); throw; }
+                    catch
+                    {
+                        store.Return(budget, charge);
+                        slots.Release();
+                        throw;
+                    }
                     offset += response.RowCount;
                     attempt = 0;
                 }
@@ -164,7 +198,7 @@ internal sealed partial class SqlService
             {
                 await Task.Delay(bigQuery.ReadBackoff(Math.Max(1, attempt)), token);
             }
-            catch (Grpc.Core.RpcException error) when (!token.IsCancellationRequested) { throw BigQueryService.ReadFailure(error); }
+            catch (Grpc.Core.RpcException error) when (!token.IsCancellationRequested) { throw BigQueryService.ReadFailure(error, session.Project); }
         }
     }
 }

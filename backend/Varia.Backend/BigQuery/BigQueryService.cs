@@ -131,6 +131,8 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
     /// <summary>Why Storage Read cannot be used on this handle (the API is off, or the principal may not create read
     /// sessions); results are then read through REST without asking again.</summary>
     public volatile string? StorageRefused;
+    /// <summary>Until when (Environment.TickCount64) results are read through REST because the Storage API could not be reached.</summary>
+    public long StoragePausedUntil;
     /// <summary>The Storage Read fallback reasons Messages has named on this handle, so each is said once.</summary>
     public readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> StorageNotices = new();
 

@@ -25,6 +25,10 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
     public Func<CreateReadSessionRequest, Exception?>? SessionFault { get; set; }
     /// <summary>Thrown before a ReadRows response (its request and the index of the response in that call), when set.</summary>
     public Func<ReadRowsRequest, int, Exception?>? ReadFault { get; set; }
+    /// <summary>Awaited before a ReadRows response (its request and index), when set: a stream that is slow to answer.</summary>
+    public Func<ReadRowsRequest, int, CancellationToken, Task>? ReadWait { get; set; }
+    /// <summary>How many streams the session answers, whatever was asked (an endpoint that answers more).</summary>
+    public int? AnswerStreams { get; set; }
     /// <summary>The most streams a session gets, whatever the request asks.</summary>
     public int MaxStreams { get; set; } = int.MaxValue;
     /// <summary>The schema the session reports, when it should differ from the batches'.</summary>
@@ -75,6 +79,7 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
         if (SessionFault?.Invoke(request) is { } fault) return Task.FromException<ReadSession>(fault);
         var asked = request.MaxStreamCount <= 0 ? 1000 : request.MaxStreamCount;
         streams = Math.Max(batches.Count == 0 ? 0 : 1, Math.Min(Math.Min(asked, MaxStreams), batches.Count));
+        if (AnswerStreams is { } answer) streams = answer;
         var session = new ReadSession
         {
             Name = "projects/varia-emulator/locations/us/sessions/fake", Table = request.ReadSession.Table, DataFormat = DataFormat.Arrow,
@@ -100,6 +105,7 @@ internal sealed class BigQueryStorageFake(Schema schema, IReadOnlyList<RecordBat
                 continue;
             }
             await Task.Yield();
+            if (ReadWait is not null) await ReadWait(request, answered, token);
             token.ThrowIfCancellationRequested();
             if (ReadFault?.Invoke(request, answered) is { } fault) throw fault;
             answered++;

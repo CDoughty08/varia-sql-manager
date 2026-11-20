@@ -4,49 +4,52 @@ namespace Varia.Backend.BigQuery;
 /// The backend's own GoogleSQL scanner (docs/bigquery.md, Storage Read): whether a statement orders its rows at the top
 /// level, so its result is read through one Storage Read stream and keeps that order. It knows GoogleSQL's comments
 /// (<c>--</c>, <c>#</c>, <c>/* */</c>), strings (quoted, triple-quoted, raw and bytes), backtick identifiers and nesting,
-/// so an <c>ORDER BY</c> in a subquery, a window, an aggregate, a string or a comment does not count. A query wrapped
-/// whole in parentheses counts its outer level as the top. Not the renderer's tokenizer: the backend decides alone.
+/// so an <c>ORDER BY</c> in a subquery, a window, an aggregate, a string or a comment does not count. A query in
+/// parentheses at the statement's start (a set operation's first branch too), or a WITH clause's main query in
+/// parentheses, counts as the top. Pipe syntax's
+/// <c>AGGREGATE ... GROUP BY k DESC</c> orders too, so a top-level ASC or DESC counts. When unsure it answers ordered:
+/// one stream is only slower, while rows appended from several streams would lose an order. Not the renderer's
+/// tokenizer: the backend decides alone.
 /// </summary>
 internal static class GoogleSqlScanner
 {
-    enum Kind : byte { Word, Open, Close, Other }
+    enum Kind : byte { Word, Open, Close, Semicolon, Other }
 
     readonly record struct Token(Kind Kind, int Depth, int Start, int Length);
 
-    /// <summary>Whether <paramref name="sql"/> has an <c>ORDER BY</c> outside every parenthesis (or inside only the
-    /// parentheses that wrap the whole statement).</summary>
+    /// <summary>Whether <paramref name="sql"/> orders its rows at the top level: an <c>ORDER BY</c> (or a pipe aggregate's
+    /// ASC or DESC) outside every parenthesis, or inside parentheses that hold the statement's own query.</summary>
     public static bool HasTopLevelOrderBy(string sql)
     {
         var tokens = Tokens(sql);
-        var wrap = Wrapping(tokens);
-        for (var i = 0; i + 1 < tokens.Count; i++)
+        // Whether each open level holds the statement's own query: the top, and parentheses that open the statement, open
+        // right inside such a parenthesis, or follow a closing one (a WITH clause's main query), whatever follows them
+        // (LIMIT and pipe operators keep their input's order). Parentheses after a word (IN, FROM, AS, UNION ALL, OVER, a
+        // function's name) or an operator hold something else.
+        var outer = new Stack<bool>();
+        var query = true;
+        for (var i = 0; i < tokens.Count; i++)
         {
-            var (order, by) = (tokens[i], tokens[i + 1]);
-            if (order.Kind == Kind.Word && by.Kind == Kind.Word && order.Depth <= wrap && by.Depth == order.Depth
-                && Is(sql, order, "ORDER") && Is(sql, by, "BY")) return true;
+            var token = tokens[i];
+            switch (token.Kind)
+            {
+                case Kind.Open:
+                    outer.Push(query);
+                    query = query && (i == 0 || tokens[i - 1].Kind is Kind.Open or Kind.Close or Kind.Semicolon);
+                    break;
+                case Kind.Close:
+                    query = outer.Count == 0 || outer.Pop();
+                    break;
+                case Kind.Word when query:
+                    if (Is(sql, token, "ASC") || Is(sql, token, "DESC")) return true;
+                    if (Is(sql, token, "ORDER") && i + 1 < tokens.Count && tokens[i + 1] is { Kind: Kind.Word } by && Is(sql, by, "BY")) return true;
+                    break;
+            }
         }
         return false;
     }
 
     static bool Is(string sql, Token token, string word) => token.Length == word.Length && string.Compare(sql, token.Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
-
-    /// <summary>How many leading parentheses close only at the statement's end (a trailing semicolon aside).</summary>
-    static int Wrapping(List<Token> tokens)
-    {
-        var last = tokens.Count - 1;
-        var wrap = 0;
-        while (wrap <= last && tokens[wrap].Kind == Kind.Open)
-        {
-            // The first closing parenthesis back at this one's depth must be the last token.
-            var depth = tokens[wrap].Depth;
-            var closes = -1;
-            for (var i = wrap + 1; i <= last; i++)
-                if (tokens[i].Kind == Kind.Close && tokens[i].Depth == depth) { closes = i; break; }
-            if (closes != last - wrap) break;
-            wrap++;
-        }
-        return wrap;
-    }
 
     /// <summary>Words and parentheses with their depth; strings, identifiers in backticks and comments are skipped, and
     /// anything else is one <see cref="Kind.Other"/> token, so two words are adjacent only when nothing came between.</summary>
@@ -74,14 +77,14 @@ internal static class GoogleSqlScanner
             if (c == '`')
             {
                 var start = i;
-                i = Quoted(sql, i, '`', raw: false, triple: false);
+                i = Quoted(sql, i, '`', triple: false);
                 tokens.Add(new(Kind.Other, depth, start, i - start));
                 continue;
             }
             if (c is '\'' or '"')
             {
                 var start = i;
-                i = String(sql, i, raw: false);
+                i = String(sql, i);
                 tokens.Add(new(Kind.Other, depth, start, i - start));
                 continue;
             }
@@ -92,7 +95,7 @@ internal static class GoogleSqlScanner
                 // A string prefix: r, b, rb or br directly before a quote.
                 if (i < n && sql[i] is '\'' or '"' && i - start <= 2 && IsPrefix(sql.AsSpan(start, i - start)))
                 {
-                    i = String(sql, i, raw: sql.AsSpan(start, i - start).ContainsAny('r', 'R'));
+                    i = String(sql, i);
                     tokens.Add(new(Kind.Other, depth, start, i - start));
                     continue;
                 }
@@ -101,8 +104,7 @@ internal static class GoogleSqlScanner
             }
             if (c == '(') { tokens.Add(new(Kind.Open, depth, i, 1)); depth++; i++; continue; }
             if (c == ')') { depth = Math.Max(0, depth - 1); tokens.Add(new(Kind.Close, depth, i, 1)); i++; continue; }
-            // A statement's trailing semicolon does not separate anything Varia reads here.
-            if (c == ';' && sql.AsSpan(i + 1).Trim().IsEmpty) { i = n; continue; }
+            if (c == ';') { tokens.Add(new(Kind.Semicolon, depth, i, 1)); i++; continue; }
             tokens.Add(new(Kind.Other, depth, i, 1));
             i++;
         }
@@ -117,20 +119,21 @@ internal static class GoogleSqlScanner
     };
 
     /// <summary>The index after a string literal starting at <paramref name="at"/> (its quote).</summary>
-    static int String(string sql, int at, bool raw)
+    static int String(string sql, int at)
     {
         var quote = sql[at];
         var triple = at + 2 < sql.Length && sql[at + 1] == quote && sql[at + 2] == quote;
-        return Quoted(sql, at, quote, raw, triple);
+        return Quoted(sql, at, quote, triple);
     }
 
-    static int Quoted(string sql, int at, char quote, bool raw, bool triple)
+    static int Quoted(string sql, int at, char quote, bool triple)
     {
         var i = at + (triple ? 3 : 1);
         while (i < sql.Length)
         {
             var c = sql[i];
-            if (c == '\\' && !raw) { i += 2; continue; }
+            // In a raw string too a backslash keeps the quote after it (r'\'' is one string).
+            if (c == '\\') { i += 2; continue; }
             if (c == quote)
             {
                 if (!triple) return i + 1;

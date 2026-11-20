@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.CompilerServices;
+using Google.Api.Gax;
 using Google.Api.Gax.Grpc;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.BigQuery.Storage.V1;
@@ -50,7 +51,16 @@ internal sealed class GrpcStorageRead : IBigQueryStorageRead
             // A request is never sent twice by the channel; Varia resumes a stream itself from its offset.
             MaxRetryAttempts = 0
         });
-        client = new BigQueryReadClientBuilder { CallInvoker = channel.CreateCallInvoker() }.Build();
+        client = new BigQueryReadClientBuilder { CallInvoker = channel.CreateCallInvoker(), Settings = Settings() }.Build();
+    }
+
+    /// <summary>CreateReadSession without the library's own retry (Unavailable for up to ten minutes), so an unreachable
+    /// endpoint fails within one call's limit and REST reads the result; Varia retries a session itself, boundedly.</summary>
+    internal static BigQueryReadSettings Settings()
+    {
+        var settings = BigQueryReadSettings.GetDefault();
+        settings.CreateReadSessionSettings = CallSettings.FromExpiration(Expiration.None);
+        return settings;
     }
 
     /// <summary>The channel's handler: the system proxy (or the one given), the platform's certificate store, keep-alive
@@ -60,7 +70,8 @@ internal sealed class GrpcStorageRead : IBigQueryStorageRead
         Proxy = proxy ?? HttpClient.DefaultProxy,
         UseProxy = true,
         EnableMultipleHttp2Connections = true,
-        ConnectTimeout = TimeSpan.FromSeconds(30),
+        // Short: an endpoint a firewall drops costs this much before REST reads the result.
+        ConnectTimeout = TimeSpan.FromSeconds(10),
         KeepAlivePingDelay = TimeSpan.FromSeconds(60),
         KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),

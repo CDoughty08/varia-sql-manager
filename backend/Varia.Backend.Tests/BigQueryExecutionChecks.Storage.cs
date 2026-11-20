@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -247,6 +248,8 @@ internal static partial class BigQueryExecutionChecks
         await StorageFailuresAsync(check);
         Trace("StorageProxyAsync");
         await StorageProxyAsync(check);
+        Trace("StorageEdgesAsync");
+        await StorageEdgesAsync(check);
     }
 
     /// <summary>BigQueryText: the writers both readers share, against independently written text.</summary>
@@ -289,13 +292,24 @@ internal static partial class BigQueryExecutionChecks
         [
             "SELECT * FROM t ORDER BY a", "select a from t order\n  by a desc limit 10", "SELECT a FROM t ORDER /* c */ BY a", "(SELECT a FROM t ORDER BY a)", "((SELECT a FROM t ORDER BY a));",
             "WITH c AS (SELECT 1 a) SELECT a FROM c ORDER BY a", "FROM t |> ORDER BY a", "SELECT ')' AS x FROM t ORDER BY x", "SELECT a FROM t -- note\nORDER BY a",
-            "SELECT r'\\' x FROM t ORDER BY x", "SELECT \"\"\"a ( b\"\"\" FROM t ORDER BY 1", "SELECT `weird ( name` FROM t ORDER BY 1", "SELECT 1 AS order_ FROM t ORDER BY order_"
+            "SELECT r'\\\\' x FROM t ORDER BY x", "SELECT \"\"\"a ( b\"\"\" FROM t ORDER BY 1", "SELECT `weird ( name` FROM t ORDER BY 1", "SELECT 1 AS order_ FROM t ORDER BY order_",
+            // A backslash keeps the quote after it in a raw string too; pipe syntax orders through a grouping's DESC.
+            "SELECT r'x\\'' AS s, a FROM t ORDER BY a", "SELECT r'''a\\'''' , a FROM t ORDER BY a", "FROM t |> AGGREGATE SUM(v) AS s GROUP BY k DESC",
+            "FROM t |> AGGREGATE SUM(v) AS s ASC GROUP BY k", "(SELECT a FROM t ORDER BY a); -- done", "SELECT a FROM t ORDER BY a; /* done */ ;",
+            "WITH c AS (SELECT 1 a) (SELECT a FROM c ORDER BY a)", "WITH c AS (SELECT 1 a) ((SELECT a FROM c ORDER BY a))",
+            // LIMIT, OFFSET and pipe operators keep a parenthesised query's order.
+            "(SELECT x FROM t ORDER BY x) LIMIT 1000000", "(SELECT x FROM t ORDER BY x) LIMIT 10 OFFSET 5", "WITH a AS (SELECT 1 x) (SELECT x FROM a ORDER BY x) LIMIT 100",
+            "((SELECT x FROM t) ORDER BY x) LIMIT 5", "(FROM t |> ORDER BY x) |> LIMIT 100", "(SELECT x FROM t ORDER BY x) |> SELECT x",
+            // A first set-operation branch's own ORDER BY counts too: one stream is only slower.
+            "(SELECT a FROM t ORDER BY a) UNION ALL (SELECT b FROM u)"
         ];
         string[] unordered =
         [
             "SELECT * FROM t", "SELECT * FROM (SELECT a FROM t ORDER BY a)", "SELECT ARRAY_AGG(a ORDER BY a) FROM t", "SELECT ROW_NUMBER() OVER (ORDER BY a) FROM t",
             "SELECT 'ORDER BY a' FROM t", "SELECT a FROM t -- ORDER BY a", "SELECT a FROM t /* ORDER BY a */", "SELECT a FROM t # ORDER BY a", "SELECT `order` FROM t",
-            "SELECT \"\"\"\nORDER BY a\n\"\"\" FROM t", "(SELECT a FROM t ORDER BY a) UNION ALL (SELECT b FROM u)", "SELECT a.order, b FROM t", "SELECT b'ORDER BY' FROM t", "SELECT a FROM t WHERE b IN (SELECT c FROM u ORDER BY c LIMIT 1)"
+            "SELECT \"\"\"\nORDER BY a\n\"\"\" FROM t", "SELECT (a + b) * (SELECT MAX(c) FROM u ORDER BY 1) FROM t", "SELECT a.order, b FROM t", "SELECT b'ORDER BY' FROM t", "SELECT a FROM t WHERE b IN (SELECT c FROM u ORDER BY c LIMIT 1)",
+            "SELECT ROW_NUMBER() OVER (ORDER BY a DESC) FROM t", "WITH c AS (SELECT a FROM t ORDER BY a) SELECT a FROM c", "SELECT a FROM t UNION ALL (SELECT b FROM u ORDER BY b)",
+            "SELECT 'desc' FROM t", "SELECT r'a\\' ORDER BY' FROM t"
         ];
         var missed = ordered.Where(sql => !GoogleSqlScanner.HasTopLevelOrderBy(sql)).Concat(unordered.Where(GoogleSqlScanner.HasTopLevelOrderBy)).ToList();
         check(missed.Count == 0, "the backend's scanner finds a top-level ORDER BY and only that one: " + string.Join(" | ", missed));
@@ -463,8 +477,8 @@ internal static partial class BigQueryExecutionChecks
             var retold = (again?.Messages ?? []).Count(entry => entry.Text.Contains(says, StringComparison.Ordinal));
             check(code == "ok" && second == "ok" && result?.ResultSets.Single() is { RowsStored: 1500, Truncated: null } && again?.ResultSets.Single().RowsStored == 1500 && told == 1 && retold == 0
                 && result!.Messages.Single(entry => entry.Text.Contains(says, StringComparison.Ordinal)).Text.StartsWith("Large results are read through the BigQuery API, which is slower: ", StringComparison.Ordinal)
-                && sessions == (name == "unreachable" ? 2 : 1) && storage.Sessions.Count == sessions + (lasting ? 0 : name == "unreachable" ? 2 : 1),
-                $"Storage Read {name}: the result is read through REST, Messages says why once per connection, and the connection {(lasting ? "stops asking" : "asks again")}: {code} {message} {sessions} {storage.Sessions.Count} {told} {retold} {Texts(result?.Messages ?? [])}");
+                && sessions == (name == "unreachable" ? 2 : 1) && storage.Sessions.Count == sessions + (lasting || name == "unreachable" ? 0 : 1),
+                $"Storage Read {name}: the result is read through REST, Messages says why once per connection, and the connection {(lasting ? "stops asking" : name == "unreachable" ? "pauses" : "asks again")}: {code} {message} {sessions} {storage.Sessions.Count} {told} {retold} {Texts(result?.Messages ?? [])}");
         }
 
         var (mismatchJobs, mismatch) = Numbers(1500, 500);
@@ -539,12 +553,12 @@ internal static partial class BigQueryExecutionChecks
                 $"a stream cut off mid-read is read again from the rows already queued, and no row is stored twice: {code} {message} {set?.RowsStored} {string.Join(",", resumed.Select(r => r.Offset))}");
         }
         (jobs, storage) = Numbers(3000, 250);
-        storage.ReadFault = (_, index) => index == 2 ? Rpc(StatusCode.PermissionDenied, "Access Denied: Table anon_result_1 ya29.abcdefghijklmnop") : null;
+        storage.ReadFault = (_, index) => index == 2 ? Rpc(StatusCode.FailedPrecondition, "Read session expired: Table anon_result_1 ya29.abcdefghijklmnop") : null;
         using (var harness = StorageHarness(jobs, storage))
         {
             await harness.ConnectAsync();
             var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
-            check(code == "ok" && result is { Status: "failed", Error.Code: "BACKEND_ERROR" } && result.Error!.Message.StartsWith("Reading the result through the BigQuery Storage API failed: Access Denied", StringComparison.Ordinal)
+            check(code == "ok" && result is { Status: "failed", Error.Code: "BACKEND_ERROR" } && result.Error!.Message.StartsWith("Reading the result through the BigQuery Storage API failed: Read session expired", StringComparison.Ordinal)
                 && !result.Error!.Message.Contains("ya29.", StringComparison.Ordinal) && result.ResultSets.Single().Incomplete,
                 $"a stream that fails for good fails the query with Google's words, tokens redacted, and its set marked incomplete: {code} {message} {result?.Status} {result?.Error?.Message}");
         }
@@ -554,7 +568,9 @@ internal static partial class BigQueryExecutionChecks
         {
             await harness.ConnectAsync();
             var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
-            check(code == "ok" && result is { Status: "failed", Error.Code: "CONNECTION_LOST" } && storage.Reads.Count == BigQueryService.MaxStreams * harness.Service.BigQuery.ReadAttempts,
+            check(code == "ok" && result is { Status: "failed", Error.Code: "CONNECTION_LOST" } 
+                // The first stream to give up ends the read, so the others may stop before their last attempt.
+                && storage.Reads.Count >= harness.Service.BigQuery.ReadAttempts && storage.Reads.Count <= BigQueryService.MaxStreams * harness.Service.BigQuery.ReadAttempts,
                 $"a stream that stays unreachable is tried a bounded number of times, then fails as the network: {result?.Error?.Code} {storage.Reads.Count}");
         }
 
@@ -633,5 +649,202 @@ internal static partial class BigQueryExecutionChecks
             "Storage Read goes through an HTTP proxy with CONNECT to Google's endpoint: " + request.Split("\r\n")[0]);
         check(failure is not null && BigQueryService.Fallback(failure, "varia-emulator")?.Reason == "unreachable",
             $"a proxy that refuses the tunnel is the unreachable fallback (REST reads the result): {failure?.GetType().Name} {(failure as RpcException)?.StatusCode}");
+    }
+
+    /// <summary>The edges an adversarial review found: an endpoint that cannot be reached through the real channel (refused
+    /// or silent) falls back within one call's limit and pauses the connection; a disposed client, a cancelled call and a
+    /// failed jobs.get leave the result to REST; one stream's failure ends the read without waiting for the others;
+    /// concurrent reservations never pass the query's budget; and malformed input never throws where it should not.</summary>
+    static async Task StorageEdgesAsync(Action<bool, string> check)
+    {
+        check(GrpcStorageRead.Settings().CreateReadSessionSettings?.Retry is null,
+            "CreateReadSession runs without the library's own retry, so an unreachable endpoint fails within Varia's call limit");
+
+        // The real gRPC channel against a closed loopback port and against a listener that never answers.
+        var closed = new TcpListener(IPAddress.Loopback, 0);
+        closed.Start();
+        var closedPort = ((IPEndPoint)closed.LocalEndpoint).Port;
+        closed.Stop();
+        var silent = new TcpListener(IPAddress.Loopback, 0);
+        silent.Start();
+        var silentPort = ((IPEndPoint)silent.LocalEndpoint).Port;
+        var held = new ConcurrentQueue<TcpClient>();
+        var accepting = Task.Run(async () =>
+        {
+            try { while (true) held.Enqueue(await silent.AcceptTcpClientAsync()); }
+            catch (Exception error) when (error is SocketException or ObjectDisposedException) { }
+        });
+        try
+        {
+            foreach (var (name, port) in new[] { ("refused", closedPort), ("silent", silentPort) })
+            {
+                var (jobs, _) = Numbers(1500, 500);
+                using var harness = new Harness(jobs, environment: settings => settings with { StorageEndpoint = new Uri("http://127.0.0.1:" + port.ToString(Inv) + "/") });
+                harness.Service.BigQuery.StorageReadMinBytes = 0;
+                harness.Service.BigQuery.CallLimit = TimeSpan.FromSeconds(3);
+                await harness.ConnectAsync();
+                var (code, result, message) = await harness.Execute("SELECT n, s FROM t").WaitAsync(TimeSpan.FromSeconds(60));
+                var (again, second, _) = await harness.Execute("SELECT n, s FROM t").WaitAsync(TimeSpan.FromSeconds(60));
+                check(code == "ok" && result?.ResultSets.Single().RowsStored == 1500 && Says(result, "could not reach the BigQuery Storage API")
+                    && again == "ok" && second?.ResultSets.Single().RowsStored == 1500 && harness.Service.BigQuery.StorageSessions == 0,
+                    $"a Storage endpoint that is {name} falls back to REST through the real channel, and the connection pauses Storage Read: {code} {message} {Texts(result?.Messages ?? [])}");
+            }
+        }
+        finally
+        {
+            silent.Stop();
+            await accepting.WaitAsync(TimeSpan.FromSeconds(20));
+            foreach (var client in held) client.Dispose();
+        }
+
+        // The pause ends: a later query asks again.
+        {
+            var (jobs, storage) = Numbers(1500, 500);
+            storage.SessionFault = _ => Rpc(StatusCode.Unavailable, "failed to connect to all addresses");
+            using var harness = StorageHarness(jobs, storage);
+            harness.Service.BigQuery.UnreachablePause = TimeSpan.Zero;
+            await harness.ConnectAsync();
+            await harness.Execute("SELECT n, s FROM t");
+            var first = storage.Sessions.Count;
+            await harness.Execute("SELECT n, s FROM t");
+            check(first == 2 && storage.Sessions.Count == 4, $"once the pause after an unreachable endpoint ends, Storage Read is tried again: {first} {storage.Sessions.Count}");
+        }
+
+        // A call cancelled by the library (not by Stop), a disposed client and a failed jobs.get each leave the result to REST.
+        foreach (var (name, fault, says) in new (string, Exception, string)[]
+        {
+            ("a call the library cancelled", Rpc(StatusCode.Cancelled, "Call canceled by the client."), "could not reach the BigQuery Storage API"),
+            ("a disposed client", new ObjectDisposedException("GrpcChannel"), "could not read this result")
+        })
+        {
+            var (jobs, storage) = Numbers(1500, 500);
+            storage.SessionFault = _ => fault;
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
+            check(code == "ok" && result?.ResultSets.Single().RowsStored == 1500 && Says(result, says), $"{name} while opening a session leaves the result to REST: {code} {message}");
+        }
+        {
+            var (jobs, storage) = Numbers(1500, 500);
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            // Only the decision's jobs.get fails; the summary's after the read answers.
+            var failed = 0;
+            var denied = new BigQueryFake.Reply(403, "{\"error\":{\"code\":403,\"message\":\"Access Denied\",\"errors\":[{\"reason\":\"accessDenied\",\"message\":\"Access Denied\"}]}}");
+            harness.Fake.On("GET", Base + "/jobs/[^/]+", request => Interlocked.Increment(ref failed) == 1 ? denied : jobs.Get(request));
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
+            check(code == "ok" && result is { Status: "completed" } && result.ResultSets.Single().RowsStored == 1500 && storage.Sessions.IsEmpty && failed >= 2,
+                $"a jobs.get that fails while deciding on Storage Read leaves the result to REST: {code} {message}");
+        }
+
+        // One stream fails for good while the others are still reading: the query fails without waiting for them.
+        {
+            var (jobs, storage) = Numbers(8000, 250);
+            var never = new TaskCompletionSource();
+            storage.ReadFault = (request, index) => request.ReadStream.EndsWith("/0", StringComparison.Ordinal) && index == 1 ? Rpc(StatusCode.InvalidArgument, "bad stream") : null;
+            storage.ReadWait = (request, index, token) => !request.ReadStream.EndsWith("/0", StringComparison.Ordinal) && index >= 2 ? never.Task.WaitAsync(token) : Task.CompletedTask;
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var harness = StorageHarness(jobs, storage, store);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t").WaitAsync(TimeSpan.FromSeconds(60));
+            check(result is { Status: "failed", Error.Code: "BACKEND_ERROR" },
+                $"one stream's failure fails the read at once, while the other streams are still reading: {code} {result?.Status} {result?.Error?.Code} {store.UsedBytes}");
+        }
+
+        // Concurrent reservations against one query never pass its half of the budget.
+        {
+            var store = new ResultStore(1L << 30, 10_000);
+            var budget = store.BeginQuery("edges");
+            var over = 0;
+            var holders = 0;
+            // Holders of 1,000 bytes on every core against a 10,000-byte query limit: only ten fit at once.
+            Parallel.For(0, 64, new ParallelOptions { MaxDegreeOfParallelism = 64 }, _ =>
+            {
+                for (var i = 0; i < 2000; i++)
+                {
+                    if (!store.TryReserve(budget, 1_000, false, out TruncationReason _)) continue;
+                    if (Interlocked.Increment(ref holders) > 10) Interlocked.Exchange(ref over, 1);
+                    Thread.SpinWait(50);
+                    Interlocked.Decrement(ref holders);
+                    store.Return(budget, 1_000);
+                }
+            });
+            check(over == 0 && budget.UsedBytes == 0 && store.UsedBytes == 0, "concurrent reservations against one query never pass its half of the budget, and all come back");
+        }
+
+        // Malformed input: an IPC header whose offsets overflow is not a schema; a long unreadable DATE inside a STRUCT is
+        // copied as sent rather than failing the query.
+        byte[] overflow = [0xFF, 0xFF, 0xFF, 0xFF, 0x08, 0, 0, 0, 0xFE, 0xFF, 0xFF, 0x7F, 0, 0, 0, 0];
+        bool schema;
+        try { schema = ArrowColumnPlan.IsSchema(overflow); }
+        catch (ArgumentOutOfRangeException) { schema = true; }
+        check(!schema, "an IPC message whose offsets overflow is not taken for a schema and does not throw");
+        {
+            var longText = new string('x', 2000);
+            var jobs = new Jobs
+            {
+                Schema = Schema(Field("st", "RECORD", fields: new JsonArray(Field("d", "DATE")))),
+                Rows = [Row(new JsonObject { ["f"] = new JsonArray(new JsonObject { ["v"] = longText }) })]
+            };
+            using var harness = new Harness(jobs);
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT st FROM t");
+            var cell = result?.ResultSets.Single() is { } set ? harness.Rows(set)[0][0].Text : null;
+            check(code == "ok" && cell == "{\"d\":\"" + longText + "\"}", $"a long unreadable DATE inside a STRUCT is copied as sent: {code} {message} {cell?.Length}");
+        }
+
+        // A sign-in failure inside the channel (a refused token refresh, status Internal with the cause attached) is the
+        // sign-in error REST gives, never retried, and never a Storage fallback; Google's own refusals map as REST's do.
+        var refresh = new RpcException(new Status(StatusCode.Internal, "Error starting gRPC call.", new Google.Apis.Auth.OAuth2.Responses.TokenResponseException(
+            new Google.Apis.Auth.OAuth2.Responses.TokenErrorResponse { Error = "invalid_grant", ErrorDescription = "reauth related error" })));
+        check(BigQueryService.ReadFailure(refresh, "varia-emulator").Code == "AUTH_EXPIRED" && !BigQueryService.TransientRead(refresh, CancellationToken.None)
+            && BigQueryService.Fallback(refresh, "varia-emulator") is null && BigQueryService.Fallback(Rpc(StatusCode.Unauthenticated, "expired"), "varia-emulator") is null
+            && BigQueryService.ReadFailure(Rpc(StatusCode.Unauthenticated, "expired"), "varia-emulator").Code == "AUTH_EXPIRED"
+            && BigQueryService.ReadFailure(Rpc(StatusCode.PermissionDenied, "no getData"), "varia-emulator").Code == "PERMISSION_DENIED"
+            && BigQueryService.TransientRead(Rpc(StatusCode.Internal, "RST_STREAM"), CancellationToken.None),
+            "a refused token refresh inside the channel is AUTH_EXPIRED and not retried; Unauthenticated and PermissionDenied map as REST's do");
+        {
+            var (jobs, storage) = Numbers(1500, 500);
+            storage.ReadFault = (_, _) => refresh;
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+            check(result is { Status: "failed", Error.Code: "AUTH_EXPIRED" } && storage.Reads.Count == 3,
+                $"a sign-in that expires during a Storage read fails the query with AUTH_EXPIRED, without retries: {code} {result?.Error?.Code} {storage.Reads.Count}");
+        }
+
+        // An endpoint that answers more streams than asked is refused (reading only some would lose rows); REST reads it.
+        {
+            var (jobs, storage) = Numbers(1500, 100);
+            storage.AnswerStreams = 9;
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+            check(code == "ok" && result?.ResultSets.Single().RowsStored == 1500 && storage.Reads.IsEmpty && Says(result, "could not read this result"),
+                $"a session with more streams than asked is not read; REST reads the result: {code} {storage.Reads.Count}");
+        }
+
+        // Streams waiting for the reader hold no budget: a query budget a little over the stored result (five batches'
+        // charges) is enough, as for REST, however many streams are read.
+        {
+            var (jobs, storage) = Numbers(100_000, 2_000);
+            long stored;
+            {
+                var roomy = new ResultStore(1L << 32, 1L << 31);
+                using var harness = StorageHarness(jobs, storage, roomy);
+                await harness.ConnectAsync();
+                await harness.Execute("SELECT n, s FROM t");
+                stored = roomy.UsedBytes;
+            }
+            var charge = 2L * BigQueryStorageFake.BatchBytes(storage.Batches[0]).Length;
+            var tight = new ResultStore(1L << 32, stored + 5 * charge);
+            using (var harness = StorageHarness(jobs, storage, tight))
+            {
+                await harness.ConnectAsync();
+                var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+                check(code == "ok" && result?.ResultSets.Single() is { RowsStored: 100_000, Truncated: null },
+                    $"batches waiting for the reader hold no budget: a budget of the result and five batches stores it whole: {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated}");
+            }
+        }
     }
 }
