@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -16,6 +16,10 @@ export type IdentityRequest =
   | { readonly method: 'findRows'; readonly ids: readonly number[] }
   /** results.diff: this result (the earlier) against `right` (the later), of the same generation. */
   | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number; readonly match?: DiffMatch }
+  /** results.diffSeek: this comparison's next or previous change unit from a position (its view's, when the key names one),
+   *  or a look-alike row's partner. */
+  | { readonly method: 'diffSeek'; readonly from: number; readonly direction: 'next' | 'previous' }
+  | { readonly method: 'diffSeek'; readonly partnerOf: number }
   /** results.pivot: this result's rows (its view's, when the key names one) grouped and aggregated, stored as a new result. */
   | { readonly method: 'pivot'; readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
 
@@ -113,7 +117,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
   | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly baseRows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
-  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult }
+  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult | ResultsDiffSeekResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
   | { readonly type: 'distinct'; readonly id: number; readonly result: DistinctAnswer }

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects, parseExtraProjects,
-  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication
-} from '../src/renderer/src/bigquery-connect-form'
+  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, bigQueryFormShape, savedCostPrompt, withoutCostPrompt } from '../src/renderer/src/bigquery-connect-form'
 import { bigQueryAdvancedSummary, accountText } from '../src/renderer/src/BigQueryConnectFields'
 
 const keyFile = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
@@ -88,6 +87,45 @@ describe('Connect dialog: BigQuery fields', () => {
   it('summarises Advanced and the account line', () => {
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha' })).toBe('')
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', maximumBytesBilled: 1, extraProjects: ['varia-beta'] })).toBe('2 properties set')
+    // Don't ask again counts as a property set; the prompt left on (or turned back on) does not.
+    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: false })).toBe('1 property set')
+    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: true })).toBe('')
+    // The form sends the choice when it names one, so Connect keeps or clears the saved entry's.
+    expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false })).toMatchObject({ costPrompt: false })
+    expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' })).not.toHaveProperty('costPrompt')
+  })
+  it("shows the saved entry's cost-prompt choice and names one only when Advanced Properties changes it", () => {
+    const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    // The dialog's form never starts with a choice: a remembered true from an earlier connect cannot undo a later opt-out.
+    expect(withoutCostPrompt({ ...form, costPrompt: true })).toEqual(form)
+    const entries = [{ options: { ...form, dataset: 'other' } }, { options: { ...form, costPrompt: false as const } }]
+    expect(savedCostPrompt(entries, form)).toBe(false)
+    expect(savedCostPrompt(entries, { ...form, project: 'varia-beta' })).toBeUndefined()
+    // Saved off, the box shows off: ticking it names true (turns the prompt back on); OK unchanged names nothing.
+    expect(advancedCostPrompt(form, false, true)).toBe(true)
+    expect(advancedCostPrompt(form, false, false)).toBeUndefined()
+    // Saved on: unticking names false; left ticked names nothing, so the saved entry's choice stands.
+    expect(advancedCostPrompt(form, undefined, false)).toBe(false)
+    expect(advancedCostPrompt(form, undefined, true)).toBeUndefined()
+    // A change made earlier in this dialog stays when OK leaves the box as it shows.
+    expect(advancedCostPrompt({ ...form, costPrompt: true }, false, true)).toBe(true)
+  })
+  it('compares the form with the saved entry by value, the cost-prompt choice as it shows', () => {
+    const saved = { provider: 'bigquery', project: 'varia-alpha', costPrompt: false, authentication: 'gcloud', displayName: 'Sales' } as const
+    // Ticked and unticked again in Advanced Properties: the form names false at the end, the saved entry earlier.
+    const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', displayName: 'Sales', costPrompt: false } as const
+    expect(bigQueryFormShape(form, 'inherit')).toBe(bigQueryFormShape(saved, 'inherit'))
+    // The form naming none shows the saved choice.
+    const { costPrompt: _costPrompt, ...unnamed } = form
+    expect(bigQueryFormShape(unnamed, 'inherit', false)).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, costPrompt: true }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(bigQueryFormShape({ ...form, displayName: 'Other' }, 'inherit')).not.toBe(bigQueryFormShape(saved, 'inherit'))
+    // Default dataset typed into and cleared again is no change, as the dialog compares it: the form names no choice and
+    // shows the saved entry's.
+    const cleared = { ...unnamed, dataset: '' }
+    expect(savedCostPrompt([{ options: saved }], cleared)).toBe(false)
+    expect(bigQueryFormShape(cleared, 'inherit', savedCostPrompt([{ options: saved }], cleared))).toBe(bigQueryFormShape(saved, 'inherit'))
+    expect(savedCostPrompt([{ options: saved }], { ...unnamed, dataset: '  ' })).toBe(false)
     expect(accountText({ kind: 'user', account: 'ada@example.com' })).toBe('Signed in to gcloud as ada@example.com')
     expect(accountText({ kind: 'serviceAccount', account: 'reader@varia-alpha.iam.gserviceaccount.com', impersonated: 'etl@varia-alpha.iam.gserviceaccount.com' }))
       .toBe('Service account reader@varia-alpha.iam.gserviceaccount.com, acting as etl@varia-alpha.iam.gserviceaccount.com')

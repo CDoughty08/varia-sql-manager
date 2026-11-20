@@ -108,6 +108,8 @@ internal sealed class ResultSetBuffer
     private volatile bool incomplete;
     /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
     private SearchMemo? searchMemo;
+    /// <summary>A diff's change index (<see cref="Results.DiffIndex"/>), its bytes counted in <see cref="charged"/>.</summary>
+    private DiffIndex? diffIndex;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -542,6 +544,22 @@ internal sealed class ResultSetBuffer
         }
     }
 
+    /// <summary>A diff's change index, kept from when results.diff wrote it until the set is freed; null for other sets.</summary>
+    internal DiffIndex? DiffIndex => Volatile.Read(ref diffIndex);
+
+    /// <summary>Keeps a diff's change index, taking over the bytes its writer reserved for it (<see cref="DiffIndex.Bytes"/>);
+    /// a freed set keeps none and returns them.</summary>
+    internal void KeepDiffIndex(DiffIndex index)
+    {
+        lock (gate)
+        {
+            if (gone) { store.Return(Budget, index.Bytes); return; }
+            if (diffIndex is { } last) ReturnLocked(last.Bytes);
+            charged += index.Bytes;
+            Volatile.Write(ref diffIndex, index);
+        }
+    }
+
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
     public const int CachePages = 6;
@@ -909,8 +927,9 @@ internal sealed class ResultSetBuffer
         gone = true;
         pages.Clear();
         cache.Clear();
-        // Its bytes are in charged, returned below.
+        // Their bytes are in charged, returned below.
         Volatile.Write(ref searchMemo, null);
+        Volatile.Write(ref diffIndex, null);
         store.Held(-packedBytes, -packedLogical, -cacheBytes);
         packedBytes = packedLogical = cacheBytes = 0;
         var freed = charged;

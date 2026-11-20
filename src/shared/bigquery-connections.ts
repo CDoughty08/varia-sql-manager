@@ -48,6 +48,9 @@ export const bigQueryProfileInputSchema = z.object({
   id: z.uuid().optional(), options: savedOptionsSchema, favorite: z.boolean().optional(), saved: z.boolean().optional(), autoReconnect: connectionAutoReconnectSchema.optional()
 }).strict()
 export const bigQueryEnvironmentInputSchema = z.object({ options: savedOptionsSchema, environment: environmentSchema.optional() }).strict()
+/** "Don't ask again for this connection" (docs/bigquery.md, Cost): the entry's cost-prompt choice, and nothing else, changes. */
+export const bigQueryCostPromptInputSchema = z.object({ options: savedOptionsSchema, costPrompt: z.boolean() }).strict()
+export type BigQueryCostPromptInput = z.infer<typeof bigQueryCostPromptInputSchema>
 
 /** connections.pickKeyFile's answer: the reference to name the file by from now on, its name, and for a federation
  *  configuration with a file source, the source's resolved path and whether the user already confirmed it (decision 49). */

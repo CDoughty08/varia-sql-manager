@@ -37,6 +37,7 @@ internal static partial class DiffChecks
         Refusals(check);
         LowMemorySteps(check);
         Matches(check);
+        IndexChecks(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")

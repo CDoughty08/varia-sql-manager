@@ -27,10 +27,15 @@ from Microsoft's documentation, so Varia keeps its own.
     - General (`textEditor.transactSql.general`)
     - IntelliSense (`textEditor.transactSql.intelliSense`)
     - Tabs (`textEditor.transactSql.tabs`)
+  - GoogleSQL
+    - General (`textEditor.googleSql.general`)
 - Query Execution
   - SQL Server
     - General (`queryExecution.sqlServer.general`)
     - Advanced (`queryExecution.sqlServer.advanced`)
+  - BigQuery
+    - Cost (`queryExecution.bigQuery.cost`)
+    - Sessions (`queryExecution.bigQuery.sessions`)
 - Query Results
   - SQL Server
     - Results to Grid (`queryResults.sqlServer.grid`)
@@ -188,6 +193,14 @@ Sections: **Tab**.
 | Tab | `textEditor.sql.indentSize` | Indent size | Integer 1–60 | 4 |  | All | At once | The number of columns Tab and automatic indentation indent by. |
 | Tab | `textEditor.sql.tabs` | Tab characters | One of `spaces` (Insert spaces), `tabs` (Keep tabs) | Keep tabs |  | All | At once | Whether Tab and indentation insert spaces or tab characters, as SSMS's Insert spaces and Keep tabs. The indentation already in a query is not detected. |
 
+### Text Editor › GoogleSQL › General
+
+BigQuery query tabs. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `textEditor.googleSql.dryRunDiagnostics` | Check queries with a dry run while editing | Boolean | True |  | All | At once | After a pause in typing, a free BigQuery dry run marks the query's error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate. Not in SSMS. |
+
 ### Query Execution › SQL Server › General
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
@@ -199,6 +212,26 @@ Sections: **Tab**.
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `queryExecution.stopOnError` | Stop the script at the first batch that raises an error | Boolean | False |  | All | Next execution | Skips the remaining batches of a script after a batch fails. Otherwise every batch runs, as in SSMS. Not in SSMS. |
+
+### Query Execution › BigQuery › Cost
+
+Estimates come from a free dry run before Execute. Prices are on-demand estimates: projects that use reserved capacity are not billed per byte. Not in SSMS.
+
+Sections: **Prompt** (Execute asks before running only in these cases), **Limit** (The hard guard: BigQuery fails a job past it, at no charge), **Estimates**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Prompt | `queryExecution.bigQuery.costPrompt` | Ask before running a query that processes more than the threshold | Boolean | True |  | All | Next execution | Execute dry-runs a BigQuery query first (free) and asks before running one estimated to process more than the threshold. A connection where you chose "Don't ask again" in the prompt never asks; its Advanced Properties turn the prompt back on. Not in SSMS. |
+| Prompt | `queryExecution.bigQuery.costThreshold` | Threshold | Integer 1–1,048,576 GiB | 10 GiB |  | All | Next execution | Queries estimated to process more than this ask before running. The estimate beside Execute turns amber above it. Not in SSMS. Greyed while `queryExecution.bigQuery.costPrompt` is False. |
+| Prompt | `queryExecution.bigQuery.incompleteEstimateWarning` | Warn when an estimate may be low | Boolean | True |  | All | Next execution | Asks once per query tab before running a query whose estimate may be low: a script (estimated only up to its first DDL or control statement), external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks as a lower bound or could not make accurate. Not in SSMS. |
+| Limit | `queryExecution.bigQuery.maximumBytesBilled` | Maximum bytes billed per query | Integer 0–1,048,576 GiB | 0 GiB |  | All | Next execution | Every BigQuery job carries this limit, so BigQuery fails a query that would bill more, at no charge. A connection's own limit (Advanced Properties) wins over this one. Shown after the field: 0 = no limit. Not in SSMS. |
+| Estimates | `queryExecution.bigQuery.showCost` | Show cost as | One of `onDemand` (On-demand US rate ($6.25 per TiB)), `bytes` (Bytes only) | On-demand US rate ($6.25 per TiB) |  | All | At once | Dollars beside every byte figure (the estimate, the Results status, Messages and the prompts), at the US on-demand rate. Projects that use reserved capacity are not billed per byte; Bytes only leaves the dollars out. Not in SSMS. |
+
+### Query Execution › BigQuery › Sessions
+
+Each BigQuery query tab runs in its own BigQuery session, created by its first execution at no charge, so temporary tables, variables and transactions carry across executions. Temporary tables are billed as storage until the session ends: when the tab closes or disconnects, or after 24 hours idle (7 days at most). Not in SSMS.
+
+_No settings yet._
 
 ### Query Results › SQL Server › Results to Grid
 
@@ -349,4 +382,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (123 today).
+A patch holds at most one entry per setting (129 today).

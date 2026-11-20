@@ -4,6 +4,7 @@ import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView,
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -103,6 +104,8 @@ export interface BigQueryConnectionOptions {
   keyFile?: string
   impersonateServiceAccount?: string
   maximumBytesBilled?: number
+  /** false: Execute does not ask above the cost threshold on this connection (Don't ask again). Not part of its identity. */
+  costPrompt?: boolean
   displayName?: string
   color?: string
   environment?: string
@@ -187,6 +190,11 @@ export interface QueryOptions {
   includeClientStatistics?: boolean
   /** Read every row and keep none (SSMS's Discard results after execution): sets count in `discardedResultSets` (with those past a limit or the budget), plans are kept. */
   discardResults?: boolean
+  /** BigQuery: Tools › Options' maximum bytes billed (Query Execution › BigQuery › Cost), sent as the job's
+   *  `maximumBytesBilled` when the connection sets none of its own. SQL Server refuses it. */
+  maximumBytesBilled?: number
+  /** BigQuery: false for Show cost as Bytes only, so the job's Messages line leaves out the dollars (default true). SQL Server refuses it. */
+  prices?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -369,6 +377,13 @@ export type ViewFilter =
   | { op: 'groups'; column: number; snapshotId: number }
   | { op: 'keepRows'; rows: number[] }
   | { op: 'keepRows'; cells: ViewCells }
+  | KindFilter
+/** A comparison row's kind as a `kind` filter names it; a changed entry's halves are `changed`. */
+export type DiffKindName = 'same' | 'changed' | 'added' | 'removed'
+/** `kind` keeps a comparison's (kind `diff`) rows of 1 to `limits.diff.maxKinds` distinct kinds, read from its change index;
+ *  it names no column, and is refused on any other result. Its resolved form lists the kinds in the order same, changed,
+ *  added, removed. */
+export interface KindFilter { op: 'kind'; kinds: DiffKindName[] }
 /** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), the
  *  one value's representative `row` when it names exactly one besides NULL, and `digest`, 32 hex digits naming what it
  *  keeps: two value lists over the same rows that tick the same values have the same digest whatever their snapshots. */
@@ -380,6 +395,7 @@ export type ResolvedViewFilter =
   | { op: 'duplicates'; columns: number[] }
   | ResolvedGroupsFilter
   | { op: 'keepRows'; rows: number[] }
+  | KindFilter
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
@@ -427,7 +443,21 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; match: DiffMatchUsed; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]; repeated: number; possible: number; possibleSkipped: boolean; nothingPaired: boolean
   columnChanges: { changed: number; soft: number }[]; trailingHidden: number
+  /** Up to `limits.diff.overviewBuckets` even buckets of the stored rows, each the bits of the kinds in it: 1 changed, 2
+   *  added, 4 removed (0: unchanged rows only). */
+  overview: number[]
+  /** The change units over every stored row: each changed cell a tone lists (a cut tone one more) and each added or removed row. */
+  units: number
 }
+/** results.diffSeek on a comparison: the next or previous change unit from `from` (-1: before the first), wrapping round,
+ *  or the position of a look-alike row's partner (`partnerOf`). Positions are `viewId`'s when given, else stored rows. */
+export type ResultsDiffSeekParams =
+  | { resultId: number; viewId?: number; from: number; direction: 'next' | 'previous' }
+  | { resultId: number; viewId?: number; partnerOf: number }
+/** The position landed on, the pair index (data column) of its cell (0 for an added, removed or cut unit), the unit's number
+ *  (`index`, 1 to `total`), the change units in the view and the rows it shows (`rows`, above `row`); or `none` (nothing
+ *  found), or `hidden` (the partner exists but the view hides it; `partnerOf` only). */
+export type ResultsDiffSeekResult = { row: number; column: number; index: number; total: number; rows: number } | { none: true } | { hidden: true }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
  *  SUM, AVG, MIN or MAX. */
 export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'
@@ -601,6 +631,7 @@ export interface RpcMethods {
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
+  'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -667,6 +698,8 @@ export interface PortMethods {
   'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
   'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
+  /** A comparison's next or previous change unit, or a look-alike row's partner, from its change index. */
+  'results.diffSeek': { params: ResultsDiffSeekParams; result: ResultsDiffSeekResult }
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
@@ -860,6 +893,12 @@ export interface VariaApi {
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
   bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
+  /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
+   *  cost prompts and dry-run diagnostics). It sends the text to Google. */
+  bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
+  /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
+   *  resolves whether the entry holds it. */
+  setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */

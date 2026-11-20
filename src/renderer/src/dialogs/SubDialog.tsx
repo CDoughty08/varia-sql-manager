@@ -20,6 +20,10 @@ export interface SubDialogProps {
   readonly destructive?: boolean
   /** A third choice between OK and Cancel (Don't Save in Save / Don't Save / Cancel). */
   readonly alternative?: { readonly label: string; run(): void }
+  /** A question that needs an answer (BigQuery's cost prompt): announced as an alert dialog with `describedBy` read out,
+   *  Cancel takes focus as it opens, and OK runs only from its own button, as for a destructive OK, without the danger style. */
+  readonly alert?: boolean
+  readonly describedBy?: string
   readonly children: ReactNode
 }
 
@@ -28,18 +32,18 @@ export interface SubDialogProps {
  * OK and Cancel. Tab stays inside it, and Escape and Enter are handled here, so only this dialog closes; focus returns
  * to where it was.
  */
-export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, children }: SubDialogProps) {
+export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, alert, describedBy, children }: SubDialogProps) {
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   // Read while rendering, before the dialog takes focus.
   const returnFocus = useRef(focusToReturn())
   useEffect(() => {
-    const target = (destructive ? cancel.current : null) ?? (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
+    const target = (destructive || alert ? cancel.current : null) ?? (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
     target?.focus()
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
-  }, [initialFocus, destructive])
+  }, [initialFocus, destructive, alert])
   // OK disabled while its work runs (Killing…) drops focus to the page: keep it in the dialog, where Tab and Escape work.
   useEffect(() => {
     const active = document.activeElement
@@ -53,13 +57,13 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     else if (event.key === 'Enter') {
       // A button presses itself and a drop-down list opens; a list box (Select Database Owner's) chooses, as OK does.
       // A destructive OK runs only from its own button.
-      if (event.target instanceof HTMLButtonElement || (event.target instanceof HTMLSelectElement && event.target.size <= 1) || destructive) return
+      if (event.target instanceof HTMLButtonElement || (event.target instanceof HTMLSelectElement && event.target.size <= 1) || destructive || alert) return
       event.preventDefault()
       if (!okDisabled) onOk()
     }
   }
   // In a portal: a form cannot hold another form.
-  return createPortal(<div className="modal-backdrop sub-dialog-backdrop"><form ref={form} className={className ? `connection-modal sub-dialog ${className}` : 'connection-modal sub-dialog'} role="dialog" aria-modal="true" aria-labelledby={titleId} noValidate tabIndex={-1}
+  return createPortal(<div className="modal-backdrop sub-dialog-backdrop"><form ref={form} className={className ? `connection-modal sub-dialog ${className}` : 'connection-modal sub-dialog'} role={alert ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId} aria-describedby={describedBy} noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); event.stopPropagation(); if (!okDisabled) onOk() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id={titleId}>{title}</h2></div>
     <div className="sub-dialog-body">{children}</div>

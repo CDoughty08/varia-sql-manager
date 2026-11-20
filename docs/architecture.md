@@ -274,6 +274,10 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   marks, never kinds: the tone is `<kind> [flag…] [cell…]` (kinds `same`, `changed`, `added`, `removed`, `changedOld`,
   `changedNew`; flags `dup`, `poss=<row>`, `gap=<n>`), kept within 500 characters, and readers ignore unknown flags.
   The look-alike search is bounded (1,000 rows a side, 4,000,000 comparisons) and skipped, not slowed, past its bounds.
+  A diff keeps a change index (`Results/DiffIndex.cs`) beside its rows, charged with them and refused with them: each
+  stored row's kind, marks, change units and look-alike partner, with running totals per 4,096 rows that each view of
+  the diff keeps over its own order. The `kind` view filter, `results.diffSeek` and the answer's `overview` and `units`
+  read only this index (a seek reads one tone, of the row it lands on), never the tone column's text row by row.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
@@ -642,6 +646,11 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
 - **BigQuery** (`BigQueryService`, docs/bigquery.md) runs GoogleSQL through its REST client, never legacy SQL
   (`useLegacySql` false; `#legacySQL` is refused before a job exists). The connect probe dry-runs the constant
   `BigQueryService.ProbeSql`; every job carries `BigQueryService.Labels`.
+- **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
+  the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
+  beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes
+  (never by itself after a restore or a provider switch), and Text Editor › GoogleSQL turns the automatic one off; Execute
+  still dry-runs what it is about to send.
 
 ## UI structure
 

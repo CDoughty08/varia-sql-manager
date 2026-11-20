@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
-import { type OperationProgressEvent, diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
+import { type OperationProgressEvent, diffResultSchema, diffSeekResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -36,6 +36,8 @@ export interface ResultsBackend {
   identify(generation: number, params: ResultsIdentifyParams): { readonly done: Promise<ResultsIdentifyResult>; cancel(reason: CancelReason): void }
   rowIds(generation: number, params: ResultsRowIdsParams): Promise<ResultsRowIdsResult>
   findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
+  /** A comparison's change index read: milliseconds, so not cancelled. */
+  diffSeek(generation: number, params: ResultsDiffSeekParams): Promise<ResultsDiffSeekResult>
   /** Comparing two results may take seconds: the worker's cancel stops it, as it does a sort. */
   diff(generation: number, params: ResultsDiffParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
   /** Pivoting a result may take seconds: the worker's cancel stops it, as it does a sort. */
@@ -283,6 +285,7 @@ export class ResultsPortHost {
       case 'identify': return this.identify(request)
       case 'rowIds': return this.rowIds(request)
       case 'findRows': return this.findRows(request)
+      case 'diffSeek': return this.diffSeek(request)
       case 'diff': return this.diff(request)
       case 'pivot': return this.pivot(request)
       case 'search': return this.search(request)
@@ -738,6 +741,21 @@ export class ResultsPortHost {
     })
   }
 
+  /** A comparison's next or previous change unit, or a look-alike row's partner (results.diffSeek), copied member by member;
+   *  only a partner request may be answered `hidden`, and a partner (an added or removed row) lands on the first column. */
+  private diffSeek(request: Extract<PortRequest, { t: 'diffSeek' }>): void {
+    const view = request.viewId === undefined ? {} : { viewId: request.viewId }
+    const params: ResultsDiffSeekParams = request.partnerOf === undefined
+      ? { resultId: request.resultId, ...view, from: request.from ?? -1, direction: request.direction ?? 'next' }
+      : { resultId: request.resultId, ...view, partnerOf: request.partnerOf }
+    this.counted(request.rid, request.generation, request.resultId, () => this.backend.diffSeek(request.generation, params), result => {
+      const parsed = diffSeekResultSchema.safeParse(result)
+      if (!parsed.success) return undefined
+      if ('hidden' in parsed.data) return request.partnerOf === undefined ? undefined : parsed.data
+      return 'row' in parsed.data && request.partnerOf !== undefined && parsed.data.column !== 0 ? undefined : parsed.data
+    })
+  }
+
   /** A unified diff of two results this renderer owns (results.diff); cancelled like a sort, and counted with sorts. The
    *  diff is a new result: the port owns it once answered, and main closes one answered after its port went (a reload). */
   private diff(request: Extract<PortRequest, { t: 'diff' }>): void {
@@ -896,6 +914,7 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     rowIds: (generation, params) => supervisor.request('results.rowIds', params, { generation }),
     findRows: (generation, params) => supervisor.request('results.findRows', params, { generation }),
+    diffSeek: (generation, params) => supervisor.request('results.diffSeek', params, { generation }),
     diff: (generation, params, onProgress) => {
       let id = 0
       const done = supervisor.request('results.diff', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
@@ -961,6 +980,7 @@ function copyFilter(filter: ViewFilter): ViewFilter {
   if (filter.op === 'duplicates') return { op: 'duplicates', columns: [...filter.columns] }
   if (filter.op === 'groups') return { op: 'groups', column: filter.column, snapshotId: filter.snapshotId }
   if (filter.op === 'keepRows') return 'cells' in filter ? { op: 'keepRows', cells: copyCells(filter.cells) } : { op: 'keepRows', rows: [...filter.rows] }
+  if (filter.op === 'kind') return { op: 'kind', kinds: [...filter.kinds] }
   if ('cells' in filter) return { op: filter.op, column: filter.column, cells: copyCells(filter.cells) }
   return { op: filter.op, column: filter.column, rows: [...filter.rows], ...(filter.nulls === undefined ? {} : { nulls: filter.nulls }) }
 }
