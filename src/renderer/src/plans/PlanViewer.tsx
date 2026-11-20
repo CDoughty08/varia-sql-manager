@@ -7,7 +7,6 @@ import type { CanvasColors, HoveredOperator, PlanCanvas } from './PlanCanvas'
 import type { Camera, PlanLayout } from './geometry'
 import { loadPlanSources, type PlanSource, type SourceStatement } from './sources'
 import { PlanHoverCard } from './PlanHoverCard'
-import { PlanProperties } from './PlanProperties'
 import { discrepancyLabel, formatPlanMetric, rankOperators, rankingValue, type OperatorRanking } from './diagnostics'
 import type { QueryPlanState } from './QueryPlansService'
 import { completedPlanView, planTopology, queryPlanStatements } from './live-model'
@@ -15,6 +14,11 @@ import { revealAncestors, rowFlow, visibleOperators, operatorIcon } from './pres
 import { PlanPaneSizer } from './PlanPaneSizer'
 import Icon from '../Icon'
 import type { PlanXmlTarget } from './navigation'
+import { useMenuTarget } from '../menus/useMenuTarget'
+import type { PlanOutlineTarget } from '../menus/targets'
+import { isCopyKey } from '../search/hit-actions'
+import { outlineCopyText } from './plan-copy'
+import { PlanPropertiesPane } from './PlanProperties'
 
 export interface PlanViewerHandle { getCamera(): Camera | undefined; setCamera(camera: Camera): void; getSelectedOperator(): string
   /** Selects a known operator, or clears the selection when given ''. Unknown non-empty ids are ignored. `onSelectionChanged` fires only when the selection changes, so linked viewers can echo it. */
@@ -44,7 +48,7 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
 export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, controllerRef, onSelectionChanged, onCameraChanged, navigateXml, xmlNavigation,
   prepared, navigation, marks, compact = false, transient = false }: PlanViewerProps) {
-  const { theme, planPreparation, resultClient, documents, settings } = useWorkbench()
+  const { theme, planPreparation, resultClient, documents, settings, commands, platform } = useWorkbench()
   const preferences = useServiceSnapshot(settings).values
   const [generation, setGeneration] = useState(resultClient.backendGeneration)
   useEffect(() => {
@@ -330,7 +334,23 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     revealPending.current = true
     setCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next })
   }
+  /** The outline's menu and Copy: the operator `id` (the selected one, else none) as one tab-separated row. */
+  const outlineTarget = (id: string): PlanOutlineTarget => {
+    const entry = allNodes.get(id)
+    if (!entry) return { kind: 'planOutline' }
+    const partial = !!content.statements[entry.statement]?.partial
+    return { kind: 'planOutline', copy: headers => outlineCopyText([{ node: entry.node, partial }], { headers, crlf: platform === 'win32' }) }
+  }
+  // A right-click on a row selects it first, as Object Explorer's tree does; the outline's empty space and Shift+F10 copy the selection.
+  const outlineMenu = useMenuTarget<HTMLElement>(() => outlineTarget(selected))
+  const rowMenu = useMenuTarget<HTMLElement>(element => {
+    const id = element.getAttribute('data-operator') ?? ''
+    if (allNodes.has(id) && id !== selected) choose(id)
+    return outlineTarget(id)
+  }, () => tree.current ?? undefined)
   const navigate = (event: KeyboardEvent<HTMLElement>) => {
+    // Copy (Ctrl+C, ⌘C on macOS) copies the selected operator; the key is the catalogue's plan.copyOperator, which Chromium dispatches.
+    if (event.currentTarget === tree.current && isCopyKey(event, platform)) { event.preventDefault(); void commands.execute('plan.copyOperator', undefined, 'keybinding'); return }
     if (event.altKey || event.ctrlKey || event.metaKey || !shown.length) return
     const selectedIndex = shown.findIndex(match => match.node.id === selected)
     const at = Math.max(0, selectedIndex)
@@ -410,12 +430,16 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           <select className="plan-ranking" aria-label="Operator ranking" aria-description="Descending available values, including measured zero. CPU sums threads; elapsed is the maximum thread in milliseconds. Operator times may overlap. Row discrepancy compares total rows to all estimated executions. Live totals are partial." value={ranking} onChange={event => { setRanking(event.target.value as OperatorRanking); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }}>
             <option value="plan">Plan order</option><option value="cpu">CPU · summed threads</option><option value="elapsed">Elapsed · max thread</option><option value="rows">Row-estimate discrepancy</option>
           </select></div>
-        <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate} onScroll={event => {
+        <div className="plan-operator-tree" ref={element => { tree.current = element; if (element) outlineMenu(element) }} data-plan-outline="" role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate}
+          // Edit › Copy (Electron's copy role) reaches the focused outline as a copy event; Ctrl+C is handled as a key above.
+          onCopy={event => { event.preventDefault(); void commands.execute('plan.copyOperator', undefined, 'keybinding') }}
+          // Edit › Copy goes to where a text selection starts, so a selection left in Properties would take the outline's copy.
+          onFocus={event => { const selection = event.currentTarget.ownerDocument.getSelection(); if (selection && !selection.isCollapsed && !event.currentTarget.contains(selection.anchorNode)) selection.removeAllRanges() }} onScroll={event => {
           // Scrolling a visible outline by hand replaces any reveal still waiting for its row.
           if (event.currentTarget.clientHeight) { reveal.current = undefined; outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
         }}
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
-          <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
+          <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id} ref={rowMenu} data-operator={node.id}
             role="treeitem" aria-selected={selected === node.id} aria-expanded={branches.has(node.id) ? !collapsed.has(node.id) : undefined} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}
             className="plan-operator-item" data-comparison-change={marks?.has(node.id) && marks.get(node.id) !== 'Paired' || undefined} style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
             <span><Icon name={operatorIcon(node.physicalOp, node.logicalOp)} />{node.physicalOp}{collapsed.has(node.id) ? ' · Inputs collapsed' : ''}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{marks?.get(node.id) ? `${marks.get(node.id)} · ` : ''}{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`} · {rowFlow(node, content.statements[allNodes.get(node.id)!.statement].partial).label}</small>
@@ -442,7 +466,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       </div>
       {inspector && <PlanPaneSizer name="properties" value={propertiesWidth} minimum={140} reverse resize={setPropertiesWidth} commit={value => void settings.choose('queryResults.plan.propertiesWidth', value)} />}
       <aside className="plan-inspector" aria-label="Plan properties" hidden={!inspector} style={{ flexBasis: propertiesWidth }}>
-        <PlanProperties statement={current} node={selectedNode} liveRunning={live?.running && mode === 'live'} />
+        <PlanPropertiesPane statement={current} node={selectedNode} liveRunning={live?.running && mode === 'live'} />
       </aside>
     </div>
   </section>

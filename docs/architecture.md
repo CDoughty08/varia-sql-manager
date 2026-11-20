@@ -332,7 +332,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     Designer, New Database, Restore, object dialog pages, Shortcut Mapping, Extended properties), trees (Object Explorer,
     the plan outline, View Dependencies, server files), listboxes whose rows are actions (Search Objects hits, pickers,
     Peek Dependencies), Messages (a log), fact lists (`<dl>`: Peek Properties, plan properties), the column profile's
-    cards, and prose.
+    cards, and prose. Where such a list copies, it still formats through the TypeScript writer (`localTableCopyText`):
+    the plan outline's Copy (its row with a header line per the copy setting) and plan properties' Copy and Copy Value
+    (`plans/plan-copy.ts`).
     Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
     the draft keeps a grid's selection.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin

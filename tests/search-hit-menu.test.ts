@@ -134,6 +134,11 @@ describe('a Search Objects result\'s Copy key', () => {
       // Ctrl+Shift+C is Copy Fully Qualified Name, a keybinding of its own.
       expect(isCopyKey(key({ ctrlKey: true, shiftKey: true }), platform)).toBe(false)
       expect(isCopyKey(key({ ctrlKey: true, altKey: true }), platform)).toBe(false)
+      // A Cyrillic layout reports the letter it types; the key's position is still C, as KeybindingService reads it.
+      expect(isCopyKey({ ...key({ ctrlKey: true }, 'с'), code: 'KeyC' }, platform)).toBe(true)
+      expect(isCopyKey({ ...key({ ctrlKey: true }, 'м'), code: 'KeyV' }, platform)).toBe(false)
+      // A Latin layout that moves C (Dvorak) copies with its C, wherever it is.
+      expect(isCopyKey({ ...key({ ctrlKey: true }, 'j'), code: 'KeyC' }, platform)).toBe(false)
     }
   })
 })
