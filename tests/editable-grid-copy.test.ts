@@ -52,6 +52,8 @@ describe('editable grid rows read from the page', () => {
     expect(cellText(field)).toBe(' C:\\My  Data ')
     expect(cellText(html('<div>  Read  only <input type="text" value="x"> after  </div>').firstElementChild!)).toBe('Read only x after')
     expect(cellText(html('<div><input type="hidden" value="secret"><span>shown</span></div>').firstElementChild!)).toBe('shown')
+    // New Database's unset filegroup shows a blank choice (a no-break space): an empty cell, not an invisible character.
+    expect(cellText(html('<div><select><option value="" selected>&nbsp;</option><option value="PRIMARY">PRIMARY</option></select></div>').firstElementChild!)).toBe('')
   })
 
   it('leaves selected text and a field\'s selected text to the native copy, but copies the row from a bare caret', () => {

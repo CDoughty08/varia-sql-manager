@@ -335,7 +335,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     cards, and prose. Where such a list copies, it still formats through the TypeScript writer (`localTableCopyText`):
     the plan outline's Copy (its row with a header line per the copy setting) and plan properties' Copy and Copy Value
     (`plans/plan-copy.ts`). An editable grid copies its selected rows on the copy event (Ctrl+C, Edit › Copy) through
-    `grid/row-copy.ts`: Table Designer from its model, the others from the row as shown (`domCopyRows`, a cell's
+    `grid/row-copy.ts`: Table Designer, User Mapping and Securables (whose rows are virtualized) from their models, the others from the row as shown (`domCopyRows`, a cell's
     `data-copy` overriding its text), unless the copy is of selected text.
     Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
     the draft keeps a grid's selection.
