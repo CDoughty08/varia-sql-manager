@@ -430,7 +430,9 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           <select className="plan-ranking" aria-label="Operator ranking" aria-description="Descending available values, including measured zero. CPU sums threads; elapsed is the maximum thread in milliseconds. Operator times may overlap. Row discrepancy compares total rows to all estimated executions. Live totals are partial." value={ranking} onChange={event => { setRanking(event.target.value as OperatorRanking); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }}>
             <option value="plan">Plan order</option><option value="cpu">CPU · summed threads</option><option value="elapsed">Elapsed · max thread</option><option value="rows">Row-estimate discrepancy</option>
           </select></div>
-        <div className="plan-operator-tree" ref={element => { tree.current = element; if (element) outlineMenu(element) }} data-plan-outline="" role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate} onScroll={event => {
+        <div className="plan-operator-tree" ref={element => { tree.current = element; if (element) outlineMenu(element) }} data-plan-outline="" role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate}
+          // Edit › Copy (Electron's copy role) reaches the focused outline as a copy event; Ctrl+C is handled as a key above.
+          onCopy={event => { event.preventDefault(); void commands.execute('plan.copyOperator', undefined, 'keybinding') }} onScroll={event => {
           // Scrolling a visible outline by hand replaces any reveal still waiting for its row.
           if (event.currentTarget.clientHeight) { reveal.current = undefined; outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
         }}
