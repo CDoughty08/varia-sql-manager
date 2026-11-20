@@ -2921,7 +2921,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (bigQuery.OwnsSession(args.SessionId))
         {
             // A plain close stops the tab's running query (Stop), then waits for its job before ending the session.
-            return await bigQuery.CloseSessionAsync(args.SessionId, args.Transaction, args.AbortOnRefusedCommit ?? true, token);
+            return await bigQuery.CloseAsync(args.SessionId, args.Transaction, args.AbortOnRefusedCommit ?? true, token);
         }
         // A rollback is the close itself: SQL Server rolls back what a closed session left open, on its own time. An explicit
         // ROLLBACK would hold this request until the rollback finished, since an attention waits for it too.

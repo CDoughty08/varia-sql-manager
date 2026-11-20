@@ -82,6 +82,8 @@ export class TargetService {
     const document = this.documents.get(tabId), connectionId = document?.connectionId
     const from = this.queries.sessionLocation?.(tabId), to = connectionId ? this.datasetLocation?.(connectionId, database) : undefined
     if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase() || document.database === database) { this.update(tabId, { database }); return }
+    // The switch is a document task, so it cannot start beside another one; say so rather than drop the choice.
+    if (this.documents.getSnapshot().busy) { this.files.reportError(`The dataset was not changed: wait for the current task to finish, then choose ${database} again.`); return }
     void this.switchLocation(tabId, connectionId, database, from, to)
   }
   private async switchLocation(tabId: string, connectionId: string, dataset: string, from: string, to: string): Promise<void> {

@@ -268,6 +268,18 @@ describe('file commands', () => {
     expect(api.closeQuerySession.mock.calls).toEqual([[first.id], [open.id, { transaction: 'rollback' }]])
     expect(documents.getSnapshot().documents.map(document => document.id)).toEqual([busy.id])
   })
+  it('skips a query that closed while its save prompt was open when closing many', async () => {
+    const { documents, api, commands, files } = fixture()
+    const gone = documents.create('gone.sql', 'SELECT 1', 'master', 'server-a', true), after = documents.create('after.sql', '', 'master')
+    api.confirmClose.mockImplementationOnce(async () => {
+      await documents.close(gone.id)
+      return { ok: true, value: 'discard' }
+    })
+    await commands.run('file.closeAll')
+    expect(files.getSnapshot().error).toBeFalsy()
+    expect(documents.get(gone.id)).toBeUndefined()
+    expect(documents.get(after.id)).toBeUndefined()
+  })
   it('keeps running queries open when closing many, and says how many', async () => {
     const { documents, queries, commands, files } = fixture()
     const running = [documents.create('a.sql', '', 'master'), documents.create('b.sql', '', 'master')]

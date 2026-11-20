@@ -312,7 +312,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.queries.isRunning(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
-        const { file, name } = this.documents.get(id)!
+        // The query may have closed while its prompt was open.
+        const document = this.documents.get(id)
+        if (!document) continue
+        const { file, name } = document
         const note = await this.documents.close(id, plan.get(id))
         if (note) this.queries.sessionNote?.(id, note, name)
         if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])

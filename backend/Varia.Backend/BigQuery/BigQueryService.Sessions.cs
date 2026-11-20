@@ -13,12 +13,14 @@ internal enum BigQueryTransaction { None, Open, Unknown }
 
 /// <summary>A session job that had not reached DONE when its request ended: one Varia cancelled (Stop, the execution
 /// timeout), or one cut off by a network failure, which the session still holds. The session runs nothing else until it
-/// is DONE and its children are read.</summary>
-internal sealed class BigQueryTail(string jobId, string? location, bool cancelled)
+/// is DONE and its children are read. <c>Created</c> says BigQuery answered that the job exists; one it never confirmed
+/// (an insert cut off in flight) and that jobs.get does not find ran nothing, and no longer holds the session.</summary>
+internal sealed class BigQueryTail(string jobId, string? location, bool cancelled, bool created = true)
 {
     public string JobId { get; } = jobId;
     public string? Location { get; } = location;
     public bool Cancelled { get; set; } = cancelled;
+    public bool Created { get; } = created;
 }
 
 /// <summary>One finished or running child of a script job, as jobs.list reports it (statement type and status only).</summary>
@@ -194,7 +196,14 @@ internal sealed partial class BigQueryService
         if (session.Tail is not { } tail) return new(true, false);
         var connection = session.Connection;
         var project = connection.Options.Project;
-        var job = await WaitDoneAsync(connection, project, tail.JobId, tail.Location, token);
+        Job job;
+        try { job = await WaitDoneAsync(connection, project, tail.JobId, tail.Location, token); }
+        catch (GoogleApiException error) when (!tail.Created && error.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            // The insert never created the job, so nothing ran and the session is free.
+            session.Tail = null;
+            return new(true, false);
+        }
         CaptureSession(session, job, tail.Location);
         var committed = false;
         if (session.Id is not null)
@@ -251,6 +260,12 @@ internal sealed partial class BigQueryService
         }
         return false;
     }
+
+    /// <summary>An insert that created no job: refused outright (a 4xx other than a timeout, a conflict or a rate limit), or
+    /// never sent.</summary>
+    internal static bool NeverCreated(Exception error) =>
+        NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
+            && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests);
 
     Job SessionJob(BigQueryTabSession session, string sql, string jobId) => new()
     {
@@ -411,6 +426,7 @@ internal sealed partial class BigQueryService
                         var job = await GetJobAsync(connection, connection.Options.Project, tail.JobId, tail.Location, look.Token);
                         finished = job.Status?.State == "DONE";
                     }
+                    catch (GoogleApiException error) when (!tail.Created && error.HttpStatusCode == HttpStatusCode.NotFound) { finished = true; }
                     catch (Exception) when (!token.IsCancellationRequested) { }
                     if (!finished)
                     {
@@ -433,8 +449,18 @@ internal sealed partial class BigQueryService
             }
             if (commit && session.Transaction != BigQueryTransaction.None && session.Id is not null)
             {
-                var committed = await CommitAsync(session, abortOnRefusedCommit, token);
-                if (committed is not null) return committed;
+                try
+                {
+                    var committed = await CommitAsync(session, abortOnRefusedCommit, token);
+                    if (committed is not null) return committed;
+                }
+                catch (FallThrough fall)
+                {
+                    // A refused commit on an unchecked session ends it, still holding the queue; an end that fails answers
+                    // abortFailed, carrying BigQuery's commit message.
+                    var ended = await EndAsync(session, fall.Note, token);
+                    return ended.Note?.Code == "abortFailed" ? new SessionCloseResult(true, Note("abortFailed", fall.Note.Message)) : ended;
+                }
             }
             return await EndAsync(session, note, token);
         }
@@ -517,6 +543,8 @@ internal sealed partial class BigQueryService
         }
         catch (Exception) when (!token.IsCancellationRequested && limit.IsCancellationRequested)
         {
+            // The budget ran out while only retrying an insert that never left: nothing was submitted.
+            if (!maySent) throw new RequestException("CONNECTION_LOST", "The transaction was not committed, and the query stays open: " + BigQueryErrors.Unreachable);
             return Unknown(session, jobId, location);
         }
         catch (Exception) when (token.IsCancellationRequested)
@@ -552,7 +580,7 @@ internal sealed partial class BigQueryService
             ?? new RequestException("SQL_ERROR", "BigQuery refused the commit.");
         if (retryable || session.Transaction == BigQueryTransaction.Open || !abortOnRefusedCommit)
             return new RequestException(mapped.Code, "The transaction was not committed, and the query stays open. " + mapped.Message);
-        // Answered by CloseSessionAsync's end of the session, which may turn this into abortFailed.
+        // Answered by CloseAsync's end of the session, which may turn this into abortFailed.
         return new FallThrough(Note("commitNotApplied", mapped.Message));
     }
 
@@ -567,17 +595,5 @@ internal sealed partial class BigQueryService
     internal sealed class FallThrough(SessionCloseNote note) : Exception(note.Message)
     {
         public SessionCloseNote Note { get; } = note;
-    }
-
-    /// <summary>The close's entry point: <see cref="CloseAsync"/>, with a fall-through ending the session.</summary>
-    internal async Task<SessionCloseResult> CloseSessionAsync(string tabId, string? transaction, bool abortOnRefusedCommit, CancellationToken token)
-    {
-        try { return await CloseAsync(tabId, transaction, abortOnRefusedCommit, token); }
-        catch (FallThrough fall) when (sessions.TryGetValue(tabId, out var session))
-        {
-            var ended = await EndAsync(session, fall.Note, token);
-            // The end failed: abortFailed, carrying BigQuery's commit message.
-            return ended.Note?.Code == "abortFailed" ? new SessionCloseResult(true, Note("abortFailed", fall.Note.Message)) : ended;
-        }
     }
 }

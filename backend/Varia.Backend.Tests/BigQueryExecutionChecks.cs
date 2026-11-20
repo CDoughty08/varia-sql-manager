@@ -178,7 +178,6 @@ internal static class BigQueryExecutionChecks
             Fake = jobs.Fake();
             Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
-            Service.BigQuery.PollMs = 50;
             Service.BigQuery.ChildPollMs = 50;
         }
 

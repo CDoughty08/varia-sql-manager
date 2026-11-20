@@ -208,7 +208,8 @@ rows and says so. A failing statement names its editor position and how many sta
 Each query tab has its own BigQuery session, so temp tables, variables and transactions carry from one Execute to the
 next. The tab's first job creates it (`createSession`); later jobs carry its id (`session_id`), which never leaves the
 backend. Emulator mode has no sessions. A session runs one job at a time: a job Varia stopped, or lost track of after a
-network failure, must reach DONE before the next one runs, and Messages says the tab is waiting for it.
+network failure, must reach DONE before the next one runs, and Messages says the tab is waiting for it. A job BigQuery
+refused, or whose request never left the machine, holds nothing; nor does one cut off in flight that jobs.get never finds.
 
 - **Location.** A session lives in one location. A tab's first job runs in its dataset's location when the connection's
   location is Automatic (`datasets.get`, cached), else the connection's. Choosing a dataset in another location asks

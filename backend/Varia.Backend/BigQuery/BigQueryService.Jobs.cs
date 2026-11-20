@@ -61,8 +61,6 @@ internal sealed partial class BigQueryService
     internal TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(1);
     internal int InsertAttempts { get; set; } = 3;
     internal int ReadAttempts { get; set; } = 4;
-    /// <summary>How long one getQueryResults call waits for the job on BigQuery's side (its <c>timeoutMs</c>, a long poll).</summary>
-    internal int PollMs { get; set; } = 10_000;
     /// <summary>Rows asked per result page; BigQuery also cuts a page at about 10 MB.</summary>
     internal int PageRows { get; set; } = 10_000;
     /// <summary>The largest response body Varia reads; a larger one fails the read rather than being buffered.</summary>

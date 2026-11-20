@@ -258,7 +258,6 @@ internal static class BigQuerySessionChecks
             Fake = bq.Fake();
             Service = new SqlService(bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
-            BigQuery.PollMs = 50;
             BigQuery.ChildPollMs = 50;
             BigQuery.DonePoll = TimeSpan.FromMilliseconds(10);
             BigQuery.PendingPoll = TimeSpan.FromMilliseconds(20);
@@ -540,6 +539,34 @@ internal static class BigQuerySessionChecks
             $"a commit whose insert never reached BigQuery is refused and keeps the session: {lost.Code} {lost.Message}");
         var again = await harness.Close(lostTab, "commit");
         check(again is { Code: "ok", Result.Note: null }, $"the same close succeeds on the next try: {again.Code} {again.Message}");
+
+        // The commit budget runs out during a retry's backoff: still nothing was sent, so still CONNECTION_LOST.
+        var (delay, budget) = (harness.BigQuery.RetryDelay, harness.BigQuery.CommitLimit);
+        harness.BigQuery.RetryDelay = TimeSpan.FromSeconds(10);
+        harness.BigQuery.CommitLimit = TimeSpan.FromMilliseconds(300);
+        harness.Fake.Fault = request => request.Method == "POST" && request.Body.Contains("COMMIT TRANSACTION", StringComparison.Ordinal)
+            ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var backoffTab = await Open(false);
+        var pending = harness.BigQuery.PendingAborts;
+        var backoff = await harness.Close(backoffTab, "commit");
+        harness.Fake.Fault = null;
+        (harness.BigQuery.RetryDelay, harness.BigQuery.CommitLimit) = (delay, budget);
+        check(backoff.Code == "CONNECTION_LOST" && (await harness.State(backoffTab)).State is { TransactionCount: 1 } && harness.BigQuery.PendingAborts == pending,
+            $"a commit budget spent between retries of an insert that never left is CONNECTION_LOST, not an unknown outcome: {backoff.Code} {backoff.Result}");
+        await harness.Close(backoffTab, "rollback");
+
+        // A session query whose insert never left (or BigQuery refused) created no job, so it does not hold the session.
+        var unsentTab = Tab();
+        await harness.Execute(unsentTab, "SELECT 1");
+        harness.Fake.Fault = request => request.Method == "POST" && request.Body.Contains("SELECT 2", StringComparison.Ordinal)
+            ? new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.") : null;
+        var unsent = await harness.Execute(unsentTab, "SELECT 2");
+        harness.Fake.Fault = null;
+        var after = await harness.Execute(unsentTab, "SELECT 3");
+        var unsentState = await harness.State(unsentTab);
+        check(unsent.Code == "ok" && unsent.Result?.Status == "failed" && after is { Code: "ok", Result.Status: "completed" } && !Says(after.Result, "Waiting for BigQuery job")
+            && unsentState.State is { Checked: true },
+            $"an insert that never reached BigQuery leaves the session free for the next query: {unsent.Result?.Status} {after.Code} {after.Result?.Status} {Texts(after.Result?.Messages ?? [])}");
 
         // A 500 after BigQuery created the COMMIT: the outcome is found by its job id.
         bq.CommitReply = job => new(500, Bq.Error(500, "Backend error.", "backendError"));

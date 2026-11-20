@@ -263,4 +263,15 @@ describe('BigQuery location switch (decision 18)', () => {
     await vi.waitFor(() => expect(f.files.reportError).toHaveBeenCalledWith('The transaction was not committed, and the query stays open.'))
     expect(f.documents.get(f.tab.id)?.database).toBe('sales_us')
   })
+  it('says the dataset was not changed while another document task runs, rather than dropping the choice', async () => {
+    const f = bigQueryFixture('US')
+    let finish!: () => void
+    const task = f.documents.runTask(() => new Promise<void>(resolve => { finish = resolve }))
+    f.targets.changeDatabase(f.tab.id, 'sales_eu')
+    expect(f.files.reportError).toHaveBeenCalledExactlyOnceWith('The dataset was not changed: wait for the current task to finish, then choose sales_eu again.')
+    expect(f.queries.confirmLocationSwitch).not.toHaveBeenCalled()
+    finish()
+    await task
+    expect(f.documents.get(f.tab.id)?.database).toBe('sales_us')
+  })
 })
