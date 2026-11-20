@@ -15,7 +15,7 @@ import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
  * palette on the server of the Object Explorer selection, else of the active document, else the only connected one. The
  * document's own commands act on the document whose menu or header runs them (`tabId`), else the active one.
  */
-export function ssisContribution({ commands, explorer, ssisProperties, operations, documents, connections }: Pick<Workbench, 'commands' | 'explorer' | 'ssisProperties' | 'operations' | 'documents' | 'connections'>): Disposable {
+export function ssisContribution({ commands, explorer, ssisProperties, operations, documents, connections, settings }: Pick<Workbench, 'commands' | 'explorer' | 'ssisProperties' | 'operations' | 'documents' | 'connections' | 'settings'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const connectionFor = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
@@ -67,7 +67,7 @@ export function ssisContribution({ commands, explorer, ssisProperties, operation
     commands.register('ssis.stopOperation', on(id => operations.requestStop(id), id => operations.stoppable(id))),
     commands.register('ssis.refreshOperations', on(id => operations.refresh(id), id => operations.refreshable(id))),
     commands.register('ssis.pauseOperations', on(id => operations.togglePause(id), id => operations.pausable(id))),
-    commands.register('ssis.copyOperations', on(id => operations.copy(id, false))),
+    commands.register('ssis.copyOperations', on(id => operations.copy(id, settings.getSnapshot().values['queryResults.grid.copyColumnHeaders']))),
     commands.register('ssis.copyOperationsWithHeaders', on(id => operations.copy(id, true)))
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
