@@ -54,7 +54,7 @@ internal static class PackingChecks
 
     /// <summary>What the set's pages are charged now, packed or not, with its metadata (W1's) and no cache.</summary>
     private static long PageCharges(ResultSetBuffer set) => 512 + set.Columns.Sum(column => 2L * column.Name.Length + 64)
-        + set.SealedSnapshot().Sum(page => (page.Stored is PackedPage packed ? packed.Bytes.Length : page.Length) + ResultStore.PageOverhead + page.Lengths.MemoryBytes);
+        + set.SealedSnapshot().Sum(page => (page.Stored is PackedPage packed ? packed.Charged : page.Length) + ResultStore.PageOverhead + page.Lengths.MemoryBytes);
 
     public static void Run(Action<bool, string> check)
     {
@@ -246,16 +246,18 @@ internal static class PackingChecks
         var after = Bodies(set);
         var counters = store.PackingSnapshot();
         var logical = pages.Sum(page => (long)page.Length);
-        var packedBytes = pages.Sum(page => (long)((PackedPage)page.Stored).Bytes.Length);
+        // A packed page is charged its bytes and its Find filter's (PageFilter).
+        var packedBytes = pages.Sum(page => ((PackedPage)page.Stored).Charged);
+        check(pages.Any(page => page.Filter is not null), "packing builds Find filters for the result's pages");
         check(saved > logical / 2 && pages.All(page => page.Stored is PackedPage) && set.HasPacked && usedPacked == used - saved
             && usedPacked - open.Budget.UsedBytes == charges && saved == logical - packedBytes,
-            "packing a complete result charges each page its packed length, overhead and sidecar, and gives the saving back to the budget at once: " + saved + " of " + logical);
+            "packing a complete result charges each page its packed length, filter, overhead and sidecar, and gives the saving back to the budget at once: " + saved + " of " + logical);
         check(store.FreedSinceCollect == collect + saved && store.FreedSinceCompact == compact,
             "the saving counts toward the next collection but never toward a compacting one");
         check(before.Length == after.Length && before.Zip(after).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)),
             "a packed page reads through the accessor as the bytes it sealed");
         check(counters is { PagesPacked: > 0, PagesKeptRaw: 0 } && counters.PackedBytes == packedBytes && counters.PackedLogicalBytes == logical && counters.PackTicks > 0
-            && counters.PackedInBytes == logical && counters.PackedOutBytes == packedBytes && counters.UnpackTicks > 0 && counters.PagesUnpacked >= pages.Length,
+            && counters.PackedInBytes == logical && counters.PackedOutBytes == pages.Sum(page => (long)((PackedPage)page.Stored).Bytes.Length) && counters.UnpackTicks > 0 && counters.PagesUnpacked >= pages.Length,
             "the store counts what it packed and unpacked, and the time it took");
         check(set.Pack() == 0 && store.PackingSnapshot().PagesPacked == counters.PagesPacked, "packing again finds nothing to pack");
         var freed = store.Release(set.ResultId);

@@ -898,7 +898,7 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | --- | --- |
 | `logicalBytes` | Every stored result's pages uncompressed |
 | `storedBytes` | Raw pages plus compressed ones: `logicalBytes` − `packedLogicalBytes` + `compressedBytes` |
-| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the uncompressed rows they hold |
+| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size with their Find filters, and the uncompressed rows they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
@@ -958,7 +958,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   error (the pivot sorts by cell and value instead), and a profile refused on several threads is read again on one.
   Nothing more is stored while the OS reports high memory load (checked at every page seal; the load is the runtime's
   reading at its last GC, refreshed by a gen0 collection when more than a second old).
-- **Charges.** A sealed page costs its length (packed length once packed) + 96 bytes + its cell lengths
+- **Charges.** A sealed page costs its length (packed length plus its Find filter's bytes once packed, [Search in results](#search-in-results)) + 96 bytes + its cell lengths
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a set's metadata 512 bytes + 2 per name character + 64
   per column; the page builder's space in 256 KiB steps. A failed reservation rolls back the current row; later rows
   are counted in `rowsRead` but not stored, later sets count in `discardedResultSets`, and execution continues.
@@ -1418,6 +1418,27 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   key fold alike, and asks the compare itself about pairs of sample characters under all sixteen option sets for root
   and the cultures that tailor Latin, kana or Arabic (an out-of-tree scan covers every verified culture). The column
   filter's value search uses the same matcher.
+- **Page filters** (`Results/PageFilter.cs`). Packing a page of 32 KiB or more also builds a filter for each searchable
+  column: which ASCII characters its cells hold (and whether any other), and a Bloom filter of its trigrams (4-grams for
+  binary and `uniqueidentifier`, whose hex holds every trigram; two hashes, at the smallest power-of-two size up to 16 KiB
+  its grams leave at most 40 % full, left out when fuller) in the matcher's own compare space: code points for _BIN/_BIN2, .NET's ignore-case classes
+  for no collation and for binary's `0x` hex, and the culture's search fold for a verified culture (packing waits for the
+  fold's first build, so a page packed before any search still gets the column's filter). A text of 4 or more
+  characters that a page's filter rules out in every searched column cannot match there, so the search passes the page
+  over without unpacking it. A column of only NULLs on the page rules any text out; a column with a cell the fold does
+  not vouch for, or of a culture without a fold, has no filter and the page is read. A page passed over that holds a
+  truncated cell keeps the answer `approximate`; through a view such a page is read, as the view may leave that row out.
+  Ruling out by filter is ruling out by fold, so a narrowed search after it must meet the fold rule (below). A filter is
+  charged to the budget with its packed page ([Charges](#result-store-and-memory-budget)), dropped when the page is
+  unpacked and freed with its result. It takes at most an eighth of the page's packed bytes, and never so much that the
+  page with it saves under a tenth (a page of GUIDs or random text would otherwise cost more than it saved): over that,
+  the largest gram filters are left out, then the whole filter. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
+  2.8 KiB a page (4.6 % of the packed bytes) and build at about 240 MB/s on the packer's thread; specific words pass over
+  40 – 66 % of the pages (8152, xp_cmdshell, Datenbank, データベース: Find 1.3 – 1.9 times faster), common words
+  (database, error) none, and pages holding cells the fold cannot vouch for (Thai, Indic, Chinese punctuation) are always
+  read. `PageFilterChecks` compares filtered searches with reading every page over fuzzed multilingual pages, in base
+  order and through filtered and shuffled views, both ways and while typing, and checks the budget to the byte; the
+  packed pass of the .NET checks gives every page a filter however small.
 - **Narrowing while typing** (`Results/SearchNarrowing.cs`). Each search keeps a memo on its result: its text, view and
   rows, what each column's ruling out needs, and two bits a position (matched; did not match but must be looked at
   again). The next search reads only the matched positions when its text is the same (Find Next and Previous), or the

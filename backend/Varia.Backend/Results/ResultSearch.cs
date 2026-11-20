@@ -63,6 +63,9 @@ internal static class ResultSearcher
     /// <summary>How many positions the calling thread's last search was offered to pass over, for the checks.</summary>
     [ThreadStatic] internal static long LastSkipped;
 
+    /// <summary>How many packed pages the calling thread's last search passed over by their filters, for the checks.</summary>
+    [ThreadStatic] internal static int LastFiltered;
+
     /// <summary>The positions are read in runs on several threads (one per <see cref="MinSlice"/> positions, up to the
     /// sort's threads, or <paramref name="workers"/>), each keeping what the outcome may take of it, joined in order: the
     /// outcome is the one a single pass gives.</summary>
@@ -70,7 +73,9 @@ internal static class ResultSearcher
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
     /// <param name="narrow">Whether the search may read only the rows the result's last search kept (<see cref="SearchMemo"/>)
     /// and keep what it finds for the next; false searches every row and keeps nothing (the checks' reference).</param>
-    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool narrow = true)
+    /// <param name="filters">Whether the search may pass over packed pages their filters rule out (<see cref="PageFilter"/>);
+    /// false reads them (the checks' reference).</param>
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null, bool narrow = true, bool filters = true)
     {
         var columns = set.Wires.Count;
         using var pin = set.Pin();
@@ -85,7 +90,7 @@ internal static class ResultSearcher
         {
             plan = narrow ? Narrowing.Plan(set, view, text, matchers, rows) : null;
             LastNarrowing = plan?.Repeated;
-            var found = Search(set, pages, view, matchers, baseRows, rows, text, fromRow, backward, maxMatches, token, stopped, workers, gate, plan);
+            var found = Search(set, pages, view, matchers, baseRows, rows, text, fromRow, backward, maxMatches, token, stopped, workers, gate, plan, filters);
             if (found is not null && plan is not null) found = plan.Finish(set, found);
             return found;
         }
@@ -96,7 +101,7 @@ internal static class ResultSearcher
         }
     }
 
-    private static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, Matcher?[] matchers, long baseRows, long rows, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, int? workers, ViewSorter.WorkerGate? gate, Narrowing? plan)
+    private static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, Matcher?[] matchers, long baseRows, long rows, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, int? workers, ViewSorter.WorkerGate? gate, Narrowing? plan, bool filters)
     {
         var columns = matchers.Length;
         // A packed result is read fused: each run unpacks the pages it reaches into rooms of its own (two at most, as a run
@@ -104,12 +109,13 @@ internal static class ResultSearcher
         // in page order instead, each row placed at its view position (ByPages), so it is never unpacked whole; that reads
         // every base row, so its threads are sized by them, not by the view's rows.
         var byPages = view is not null && !Local(pages, view.Order, token);
+        var skips = filters ? Skips(pages, matchers, text, view is null) : null;
         var read = byPages ? baseRows : rows;
         // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
         // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
         using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(read / MinSlice, ViewSorter.Workers)));
         if (byPages)
-            return ByPages(set, pages, view!, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads, plan);
+            return ByPages(set, pages, view!, matchers, baseRows, text.Length, fromRow, backward, maxMatches, token, stopped, threads, plan, skips);
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
@@ -120,7 +126,7 @@ internal static class ResultSearcher
         {
             var part = parts[run] = new Part();
             using var source = new Source(pages, columns, slots, rooms);
-            Scan(part, source, view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped, plan);
+            Scan(part, source, view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped, plan, skips);
         }
         threads.For(runs, Read);
         long total = 0, before = 0, first = -1;
@@ -164,8 +170,10 @@ internal static class ResultSearcher
         return new SearchOutcome(rows, total, before - kept, keptRows.GetRange(start, kept).ToArray(), keptColumns.GetRange(start, kept).ToArray(), approximate);
     }
 
-    private static void Scan(Part part, Source source, ResultView? view, Matcher?[] matchers, long from, long to, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, Narrowing? plan)
+    private static void Scan(Part part, Source source, ResultView? view, Matcher?[] matchers, long from, long to, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, Narrowing? plan, byte[]? skips)
     {
+        long rangeStart = 0, rangeEnd = 0;
+        byte skipKind = 0;
         var columns = matchers.Length;
         var found = new List<int>(16);
         var scratch = new Scratch();
@@ -189,6 +197,18 @@ internal static class ResultSearcher
             }
             var row = view is null ? position : view.Order[position];
             if (row >= source.Rows) { part.Stopped = true; return; }
+            // A packed page whose filter rules the text out is passed over whole, never unpacked.
+            if (skips is not null)
+            {
+                if (row < rangeStart || row >= rangeEnd) skipKind = skips[source.Range(row, out rangeStart, out rangeEnd)];
+                if (skipKind != 0)
+                {
+                    work--;
+                    if (skipKind == Truncated) part.Approximate = part.Elsewhere = true;
+                    if (view is null) position = Math.Min(to, rangeEnd) - 1;
+                    continue;
+                }
+            }
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
@@ -237,7 +257,7 @@ internal static class ResultSearcher
     /// result's budget while it runs; TOO_LARGE without room). Each run keeps only the rows the outcome may take (the first
     /// from FromRow, or the last before it, in whole rows to MaxMatches, by view position), so the outcome is the one a pass
     /// in view order gives, with each packed page unpacked once a run instead of once a row.</summary>
-    private static SearchOutcome? ByPages(ResultSetBuffer set, StoredPage[] pages, ResultView view, Matcher?[] matchers, long baseRows, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, ViewSorter.WorkerGate.Lease threads, Narrowing? plan)
+    private static SearchOutcome? ByPages(ResultSetBuffer set, StoredPage[] pages, ResultView view, Matcher?[] matchers, long baseRows, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped, ViewSorter.WorkerGate.Lease threads, Narrowing? plan, byte[]? skips)
     {
         var order = view.Order;
         var bytes = 4L * baseRows;
@@ -261,7 +281,7 @@ internal static class ResultSearcher
             {
                 var part = parts[run] = new Kept(backward, maxMatches);
                 using var source = new Source(pages, matchers.Length, PackedSlots, rooms);
-                ScanPages(part, source, at, matchers, From(run), From(run + 1), textLength, fromRow, token, stopped, plan);
+                ScanPages(part, source, at, matchers, From(run), From(run + 1), textLength, fromRow, token, stopped, plan, skips);
             }
             threads.For(runs, Read);
             long total = 0, before = 0;
@@ -323,8 +343,10 @@ internal static class ResultSearcher
         }
     }
 
-    private static void ScanPages(Kept part, Source source, int[] at, Matcher?[] matchers, long from, long to, int textLength, long fromRow, CancellationToken token, Func<bool>? stopped, Narrowing? plan)
+    private static void ScanPages(Kept part, Source source, int[] at, Matcher?[] matchers, long from, long to, int textLength, long fromRow, CancellationToken token, Func<bool>? stopped, Narrowing? plan, byte[]? skips)
     {
+        long rangeStart = 0, rangeEnd = 0;
+        byte skipKind = 0;
         var columns = matchers.Length;
         var found = new List<int>(16);
         var scratch = new Scratch();
@@ -344,6 +366,17 @@ internal static class ResultSearcher
             // A row the last search ruled out is not read: a page holding none of the rest is never unpacked.
             if (position < 0) continue;
             if (plan is not null && plan.Skip(position) > 0) { part.Skipped++; continue; }
+            // A packed page whose filter rules the text out is passed over whole (never one holding a truncated cell here:
+            // the view may leave its row out).
+            if (skips is not null)
+            {
+                if (row < rangeStart || row >= rangeEnd) skipKind = skips[source.Range(row, out rangeStart, out rangeEnd)];
+                if (skipKind != 0)
+                {
+                    row = Math.Min(to, rangeEnd) - 1;
+                    continue;
+                }
+            }
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
@@ -387,6 +420,30 @@ internal static class ResultSearcher
 
     /// <summary>How a column compares, or null when no cell of it can contain the text (a binary column and text that is not
     /// hex).</summary>
+    private const byte Excluded = 1, Truncated = 2;
+
+    /// <summary>Which pages the search passes over by their filters (<see cref="PageFilter"/>): <see cref="Excluded"/>, or
+    /// <see cref="Truncated"/> when a searched column holds a truncated cell, which makes the answer approximate as reading
+    /// it would. Through a view (<paramref name="allRows"/> false) a page holding a truncated cell is read: the view may
+    /// leave its row out. Null when no page is passed over. A culture column ruled out by its filter was ruled out by its
+    /// fold, so a narrowed search after this one must meet the fold rule (<see cref="SearchNarrowing.Needs.Fold"/>).</summary>
+    private static byte[]? Skips(StoredPage[] pages, Matcher?[] matchers, string text, bool allRows)
+    {
+        LastFiltered = 0;
+        if (text.Length < PageFilter.MinText) return null;
+        PageFilter.Query? query = null;
+        byte[]? skips = null;
+        for (var p = 0; p < pages.Length; p++)
+        {
+            if (pages[p].Filter is not { } filter || !(query ??= new PageFilter.Query(matchers, text)).Excludes(filter, out var truncated)) continue;
+            if (truncated && !allRows) continue;
+            (skips ??= new byte[pages.Length])[p] = truncated ? Truncated : Excluded;
+            LastFiltered++;
+        }
+        if (skips is not null) foreach (var matcher in matchers) (matcher as CultureMatcher)?.RuledOutByFold();
+        return skips;
+    }
+
     internal static Matcher? MatcherFor(ResultColumn column, WireKind wire, string text)
     {
         if (wire == WireKind.Binary)
@@ -488,6 +545,15 @@ internal static class ResultSearcher
 
         /// <summary>The text's fold, when the pre-check runs.</summary>
         public string? Folded => folded;
+
+        /// <summary>The culture's fold table the pre-check uses (with <see cref="Folded"/>).</summary>
+        public SearchFold? Fold => fold;
+
+        /// <summary>Cells were ruled out by the fold outside this matcher (page filters built with it).</summary>
+        internal void RuledOutByFold()
+        {
+            if (!ruledByFold) Volatile.Write(ref ruledByFold, true);
+        }
 
         /// <summary>Pre-checks every cell, never stopping for the sampling: a narrowed search, whose rows mostly pass, needs
         /// the pre-check's answer to keep ruling rows out.</summary>
@@ -651,6 +717,16 @@ internal static class ResultSearcher
 
         /// <summary>The bytes of the layouts kept now.</summary>
         public long LayoutBytes => slotLayouts.Sum(layout => 4L * (layout?.Length ?? 0));
+
+        /// <summary>The index of the page holding <paramref name="row"/>, and its rows' range.</summary>
+        public int Range(long row, out long start, out long end)
+        {
+            var index = Array.BinarySearch(starts, row);
+            if (index < 0) index = ~index - 1;
+            start = starts[index];
+            end = start + pages[index].Rows;
+            return index;
+        }
 
         public PageView ViewOf(long row, out int local)
         {
