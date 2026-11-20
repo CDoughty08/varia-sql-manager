@@ -105,7 +105,7 @@ internal sealed class ScriptingService : IDisposable
         var watch = Stopwatch.StartNew();
         var (target, verb) = Validate(args);
         var profile = host.Profile(args.ConnectionId);
-        var database = ScriptPreflight.ServerScope(target.Kind) ? "master" : target.Database!;
+        var database = ScriptPreflight.Home(target.Kind, target.Database);
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         try
@@ -161,8 +161,9 @@ internal sealed class ScriptingService : IDisposable
         var subject = ScriptPreflight.Subject(catalog, target, verb, database);
         ScriptResult Result(string? text, IReadOnlyList<string> warnings, ScriptError? error = null) =>
             new(text, database, [.. warnings.Take(8).Select(warning => ScriptingErrors.Clip(warning, 512))], tracked.Commands, 0, error);
-        // Cloud databases are reached one per connection, and have no server-level objects to script.
-        if (served.Cloud && ScriptPreflight.ServerScope(target.Kind) && target.Kind != "database") return Result(null, [], ScriptingErrors.Create(catalog, "NOT_SUPPORTED", subject));
+        // Cloud databases are reached one per connection, and have no server-level objects (Agent's among them) to script.
+        if (served.Cloud && (ScriptPreflight.ServerScope(target.Kind) && target.Kind != "database" || ScriptPreflight.Agent(target.Kind)))
+            return Result(null, [], ScriptingErrors.Create(catalog, "NOT_SUPPORTED", subject));
         var perDatabase = served.Cloud && !ScriptPreflight.ServerScope(target.Kind);
         await using var connection = host.Connection(connectionId, perDatabase ? target.Database : null);
         string? home = null;

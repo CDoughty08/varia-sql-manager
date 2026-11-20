@@ -34,7 +34,7 @@ const cache = new PlanPreparationCache(), host = document.createElement('div'), 
 document.body.append(host)
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let generation: ((value: number) => void) | undefined
-const workbench = { planPreparation: cache, theme: { getSnapshot: () => theme, subscribe: () => () => {} },
+const workbench = { menuTargets: { register() {} }, planPreparation: cache, theme: { getSnapshot: () => theme, subscribe: () => () => {} },
   settings: { getSnapshot: () => settings, subscribe: (listener: () => void) => { settingsListeners.add(listener); return () => settingsListeners.delete(listener) },
     toggle: (key: BooleanSettingKey) => { settings = { values: { ...settings.values, [key]: !settings.values[key] } }; for (const listener of settingsListeners) listener() } },
   resultClient: { backendGeneration: 1, onGeneration: (listener: typeof generation) => { generation = listener; return { dispose() {} } } } } as unknown as Workbench

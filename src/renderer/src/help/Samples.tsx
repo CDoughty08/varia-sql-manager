@@ -31,7 +31,7 @@ export function ResultsSample() {
   const [filter, setFilter] = useState(false), [ascending, setAscending] = useState(false)
   const rows = [{ rank: 30, name: 'Orion', status: 'Open' }, { rank: 10, name: 'Atlas', status: 'Closed' }, { rank: 20, name: 'Lyra', status: 'Open' }]
   const visible = rows.filter(row => !filter || row.status === 'Open').sort((a, b) => ascending ? a.rank - b.rank : 0)
-  const headers = values['queryResults.grid.includeColumnHeaders']
+  const headers = values['queryResults.grid.copyColumnHeaders']
   return <figure className="help-sample"><figcaption>Sample · explore returned rows</figcaption>
     <div className="help-sample-controls"><button type="button" aria-pressed={filter} onClick={() => setFilter(!filter)}>Show Open rows only</button><button type="button" aria-pressed={ascending} onClick={() => setAscending(!ascending)}>Sort Rank ascending</button></div>
     <table aria-label="Fictional returned rows"><thead><tr><th>Rank</th><th>Name</th><th>Status</th></tr></thead><tbody>{visible.map(row => <tr key={row.name}><td>{row.rank}</td><td>{row.name}</td><td>{row.status}</td></tr>)}</tbody></table>

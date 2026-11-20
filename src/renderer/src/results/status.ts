@@ -80,14 +80,14 @@ export const endedStatus = (status: StatusKind, closedFrom?: Exclude<StatusKind,
  * how long it took (hh:mm:ss, ticking, while it runs) and when it ended. Results closed to free memory keep how the run
  * ended (`closedFrom`); a run the backend lost says only that, closed or not.
  */
-export function runSummary(o: { status: StatusKind; closedFrom?: Exclude<StatusKind, 'running' | 'closed'>; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number; completedAt?: string; bytesProcessed?: number }): RunSummary {
+export function runSummary(o: { status: StatusKind; closedFrom?: Exclude<StatusKind, 'running' | 'closed'>; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number; completedAt?: string; bytesProcessed?: number; prices?: boolean }): RunSummary {
   const status = endedStatus(o.status, o.closedFrom)
   const sentence = statusSentence({ status, elapsedMs: o.elapsedMs, rows: o.rows, completedBatches: o.completedBatches, totalBatches: o.totalBatches })
   if (status === 'lost') return { tone: 'error', icon: 'error', outcome: sentence, facts: [], sentence }
   const running = status === 'running', [tone, icon] = tones[status]
   const facts = [`${formatCount(o.rows)} ${plural(o.rows, 'row')}`, running ? formatElapsed(o.elapsedMs) : formatDuration(o.elapsedMs)]
   // A BigQuery job's bytes processed and their on-demand price, beside the row count (docs/bigquery.md, Cost).
-  if (o.bytesProcessed !== undefined) facts.splice(1, 0, processedFact(o.bytesProcessed))
+  if (o.bytesProcessed !== undefined) facts.splice(1, 0, processedFact(o.bytesProcessed, o.prices !== false))
   const time = running ? '' : timeOfDay(o.completedAt)
   if (time) facts.push(time)
   if (o.totalBatches > 1) facts.push(`${o.completedBatches}/${o.totalBatches} batches`)

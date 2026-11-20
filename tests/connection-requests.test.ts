@@ -231,6 +231,29 @@ describe('remembered password requests', () => {
     expect(await savedPasswords.reference(id, empty)).toEqual(credential)
     await expect(prepare('connections.connect', empty, context, deps)).rejects.toThrow('was rejected')
   })
+  it("saves the cost-prompt choice Advanced Properties named when Connect reuses a live BigQuery connection", async () => {
+    const setBigQueryCostPrompt = vi.fn(async () => true)
+    const principal = { provider: 'bigquery', project: 'varia-alpha', principal: 'bigquery:user:ada@example.com' } as const
+    const deps = {
+      connections: { setBigQueryCostPrompt },
+      authentication: { resolve: () => ({ expectedPrincipal: principal }), prepare: () => {} },
+      savedPasswords: {}
+    } as unknown as ConnectionRequestDeps
+    const bigQuery = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: true } as const
+    const prepared = (context: object, params: object = bigQuery) => ({ method: 'connections.connect', validated: params, params, context, injected: false })
+    const connected = { ...info(), targetId: randomUUID(), authentication: { principal } } as ConnectionInfo
+    expect(await settleReused(prepared({ mode: 'interactive' }), connected, deps)).toMatchObject({ ok: true })
+    expect(setBigQueryCostPrompt).toHaveBeenCalledWith(bigQuery, true)
+    // A background reconnect, or a dialog that named no choice, leaves the saved one alone.
+    setBigQueryCostPrompt.mockClear()
+    await settleReused(prepared({ mode: 'background' }), connected, deps)
+    const { costPrompt: _costPrompt, ...unnamed } = bigQuery
+    await settleReused(prepared({ mode: 'interactive' }, unnamed), connected, deps)
+    expect(setBigQueryCostPrompt).not.toHaveBeenCalled()
+    // A failed write still connects, with a warning.
+    setBigQueryCostPrompt.mockResolvedValueOnce(false)
+    expect(await settleReused(prepared({ mode: 'interactive' }), connected, deps)).toMatchObject({ ok: true, value: { historyWarning: expect.stringContaining('cost prompt') } })
+  })
   it('does not readmit a rejected revision from ordinary live-session equality without fresh password proof', async () => {
     const { remembered, deps, savedPasswords } = await setup()
     const id = await remembered(), credential = (await savedPasswords.reference(id, empty))!

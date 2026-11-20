@@ -1601,6 +1601,12 @@ async function bigQueryEmulator() {
     await expect(queryServer(page)).toContainText('varia-emulator')
     await expect(page.getByLabel('Query dataset', { exact: true })).toHaveValue('varia_fixture')
     await expect(queryStatus(page)).toContainText('varia-emulator')
+    // Typing dry-runs the text after a pause; the emulator cannot dry-run, so the chip beside Execute says so.
+    await editorTextbox(page).focus()
+    await page.keyboard.type('SELECT 1')
+    await expect(queryBar(page).getByRole('status', { name: 'Estimate: No estimate', exact: true })).toBeVisible({ timeout: 20000 })
+    // The query now has unsaved text: the quit below answers Don't Save.
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     // Next time, the dialog opens on the type used last, and history lists the project.
     const again = await open()
     await expect(again.getByLabel('Server type', { exact: true })).toHaveValue('bigquery')

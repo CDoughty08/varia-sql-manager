@@ -10,7 +10,9 @@ import type { ObjectRef } from '../src/shared/explorer/refs'
 import { newLoginDefinition } from '../src/renderer/src/dialogs/definitions'
 import { initialNewLoginDraft, mappable, mappingOf, newLoginRequest, renameLogin, setMapped, setMappingRole, setMappingSchema, setMappingUser, userMappings, type NewLoginDraft, type SecretState } from '../src/renderer/src/dialogs/new-login'
 import { ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
-import { mappingRange, unavailableChip, userMappingRowHeight } from '../src/renderer/src/dialogs/pages/UserMappingPage'
+import { mappingRange, unavailableChip, userMappingCopyRows, userMappingRowHeight } from '../src/renderer/src/dialogs/pages/UserMappingPage'
+import { securablesCopyRows } from '../src/renderer/src/dialogs/pages/SecurablesPage'
+import { securableKey } from '../src/shared/actions/securables'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
@@ -171,6 +173,19 @@ describe('User Mapping\'s grid helpers', () => {
     expect(mappingRange(0, 198, 4_096)).toEqual({ first: 0, last: 15 })
     expect(mappingRange(22 * 1_000, 198, 4_096)).toEqual({ first: 994, last: 1_015 })
     expect(mappingRange(0, 198, 3)).toEqual({ first: 0, last: 3 })
+  })
+  // Only the rows in view render, so Copy reads the selected row from the model: it copies even once that row scrolled away.
+  it('copies the selected database and securable from the model, a cell being edited with its text', () => {
+    const base = draft()
+    const mapped = { ...base, ...setMapped(base, 'Sales', true) }
+    const sales = model().databases.find(database => database.name === 'Sales')
+    expect(userMappingCopyRows(mapped, sales, () => false)).toEqual({ columns: ['Map', 'Database', 'User', 'Default Schema'], rows: [['Yes', 'Sales', 'app', '']] })
+    expect(userMappingCopyRows(mapped, sales, () => false, { database: 'Sales', column: 'user', text: 'reporting' })?.rows).toEqual([['Yes', 'Sales', 'reporting', '']])
+    expect(userMappingCopyRows(mapped, model().databases[0], () => false)?.rows).toEqual([['No', 'AppData', '', '']])
+    expect(userMappingCopyRows(mapped, undefined, () => false)).toBeUndefined()
+    const server = { type: 'server' as const }
+    expect(securablesCopyRows(model(), { ...base, securables: [server], securable: securableKey(server) })?.rows).toEqual([[model().securables.server, 'Server']])
+    expect(securablesCopyRows(model(), { ...base, securables: [server], securable: undefined })).toBeUndefined()
   })
 })
 

@@ -352,6 +352,20 @@ explorer.context, for a login
   ---
   Re&fresh  F5  -+++
 explorer.context, for a SQL Server Agent job
+  &Script Job as >
+    &CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    &DROP To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+    DROP A&nd CREATE To >
+      &New Query Editor Window  -++-
+      &File…  -++-
+      C&lipboard  -+++
+  ---
   Copy N&ame  -+++
   ---
   Re&fresh  F5  -+++
