@@ -128,12 +128,17 @@ internal sealed partial class SqlService
         var readChildren = new HashSet<string>(StringComparer.Ordinal);
         var succeededChildren = 0;
         long childRowsAffected = -1;
-        // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE.
-        using var stopJob = token.Register(() =>
+        // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE. Asked
+        // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
+        // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
+        var stopAsked = 0;
+        void StopJob()
         {
+            if (Interlocked.Exchange(ref stopAsked, 1) != 0) return;
             session.ActiveCancelled = true;
             if (sent && !complete) bigQuery.CancelJob(connection, project, jobId, location);
-        });
+        }
+        using var stopJob = token.Register(StopJob);
 
         // One finished child of a script: a SELECT's rows as the next result set, a DML's row count, a DDL's sentence.
         async Task ChildAsync(BigQueryChild child)
@@ -200,12 +205,20 @@ internal sealed partial class SqlService
                 // The session's last job (stopped, or cut off by the network) must reach DONE first; Stop cancels it.
                 messages.Add("Waiting for BigQuery job " + JobName(project, tail.Location, tail.JobId) + " to finish: this tab's BigQuery session runs one job at a time.");
                 // Every Stop asks again: an earlier jobs.cancel may have failed, or gone out before BigQuery created the job.
-                using var stopTail = token.Register(() =>
+                // Asked from the catch too, as StopJob is: the settle's own cancellation can unwind first.
+                var tailAsked = 0;
+                void StopTail()
                 {
+                    if (Interlocked.Exchange(ref tailAsked, 1) != 0) return;
                     tail.Cancelled = true;
                     bigQuery.CancelJob(connection, project, tail.JobId, tail.Location);
-                });
-                var settled = await bigQuery.SettleAsync(session, token);
+                }
+                BigQuerySettled settled;
+                using (token.Register(StopTail))
+                {
+                    try { settled = await bigQuery.SettleAsync(session, token); }
+                    catch (Exception) when (token.IsCancellationRequested) { StopTail(); throw; }
+                }
                 if (settled.Committed) messages.Add("The stopped job committed a transaction before it stopped; stopping does not undo work already committed.");
             }
             location = await TabLocationAsync(session, connection, dataset, token);
@@ -387,6 +400,7 @@ internal sealed partial class SqlService
             // Whatever a cancelled call threw, the run was stopped.
             if (token.IsCancellationRequested)
             {
+                StopJob();
                 status = running.UserCancelled ? "cancelled" : "timedOut";
                 var sentence = running.UserCancelled ? CancelledSentence : TimedOutSentence;
                 messages.Add(sentence, MessageKind.Error);

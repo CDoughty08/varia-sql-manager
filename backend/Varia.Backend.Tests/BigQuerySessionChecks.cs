@@ -1017,8 +1017,9 @@ internal static class BigQuerySessionChecks
         var polled = await Poll(() => harness.Fake.Seen.Count(request => request.Method == "GET" && request.Url.Contains("/jobs/" + stoppedId, StringComparison.Ordinal)) > gets, 120);
         check(polled, "the run after a Stop polls the stopped job before it starts");
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = waitingArgs["queryId"]!.GetValue<string>() });
-        await waiting.WaitAsync(TimeSpan.FromSeconds(30));
-        check(await Poll(() => bq.Cancels.Count(id => id == stoppedId) >= 2), $"a second Stop sends jobs.cancel again for the job the tab waits for: {bq.Cancels.Count(id => id == stoppedId)}");
+        var waitingRun = await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+        check(await Poll(() => bq.Cancels.Count(id => id == stoppedId) >= 2), $"a second Stop sends jobs.cancel again for the job the tab waits for: {bq.Cancels.Count(id => id == stoppedId)} "
+            + $"seen {harness.Fake.Seen.Count(request => request.Method == "POST" && request.Url.Contains(stoppedId + "/cancel", StringComparison.Ordinal))} {waitingRun.Code} {(waitingRun.Result as QueryResult)?.Status} {bq.Jobs[stoppedId].State} {Texts((waitingRun.Result as QueryResult)?.Messages ?? [])}");
         bq.Release(bq.Jobs[stoppedId]);
         var next = await harness.Execute(waitTab, "SELECT 1");
         check(next is { Code: "ok", Result.Status: "completed" } && Says(next.Result, "Waiting for BigQuery job") && Says(next.Result, "runs one job at a time"),
