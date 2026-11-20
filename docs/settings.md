@@ -333,6 +333,9 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 - Migration: when `settings.json` does not exist, a `scripting-options.json` from an earlier version is imported into
   the `objectExplorer.scripting.*` keys and left untouched; it is not read again once `settings.json` exists or was
   reset. When the import cannot be written, its values apply for the session and the next start imports again.
+- Renamed settings: a key an earlier version stored under its old name carries its value to each new key the file does
+  not set, and the next write drops the old name. A value the new key cannot hold is dropped without a warning.
+  `queryResults.grid.includeColumnHeaders` became `queryResults.grid.copyColumnHeaders` and `queryResults.grid.saveColumnHeaders`.
 - The color theme stays in `appearance.json` (View › Theme); connection profiles keep their own Advanced properties.
 
 ## Limits
