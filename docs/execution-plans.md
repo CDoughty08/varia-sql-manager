@@ -38,6 +38,10 @@ the plan document.
 - The outline's ranking selector ranks available CPU, elapsed time or row-estimate discrepancy, descending. Unreported
   values are excluded, measured zeros remain, and ties keep plan order. Search and warning filters work with rankings.
   Without a search or filter, rankings apply to the selected statement.
+- **Copy** (Ctrl+C in the outline, ⌘C on macOS, or the context menu of a row, which selects it) copies the selected
+  operator as one tab-separated line: Operator, Object, Estimated subtree cost and Rows, as the viewer shows them. A
+  header line comes first when **Include column headers when copying the results** is on. The text is formatted as a
+  results grid's copy is.
 - **Statement SQL** shows compiler-supplied text for exactly the current statement; **Back to graph** keeps selection and
   camera. It does not guess a location in an edited query, a repeated statement, a procedure or dynamic SQL.
 - **Go to XML** opens the source plan document at the operator, verified by NodeId and document revision; it is
@@ -52,6 +56,9 @@ the plan document.
 Select an operator in the canvas or outline. Hover shows a compact summary. The properties pane shows seek ranges and
 residual predicates, output columns, compiled/runtime parameters, memory grants, warning attributes, missing-index
 column usage, spill records, estimated execution mode, parallelism and per-thread runtime, when the plan supplies them.
+Its context menu (right-click, Shift+F10 or the context-menu key in the pane) has **Copy**, which copies facts as
+`Name<TAB>Value` lines, as Peek's Properties does, and **Copy Value**, which copies only their values. Both take the facts
+whose text is selected, else the one right-clicked, else every fact shown; a closed section's facts are left out.
 
 Counter scopes:
 

@@ -1,11 +1,16 @@
+import { useState } from 'react'
 import type { PlanNode } from '../../../shared/plans'
+import { useMenuTarget } from '../menus/useMenuTarget'
+import type { PlanPropertiesTarget } from '../menus/targets'
+import { factText, selectedFacts } from '../menus/selected-facts'
 import type { SourceStatement } from './sources'
 import { discrepancyLabel, estimatedTotalRows, formatPlanMetric as amount } from './diagnostics'
 import './diagnostics.css'
 
 type Property = { name: string; value: string }
 function Facts({ values }: { values: readonly (readonly [string, string])[] }) {
-  return <dl>{values.map(([name, value], index) => <div key={index}><dt>{name}</dt><dd>{value || 'Unavailable'}</dd></div>)}</dl>
+  const menu = useFactMenu()
+  return <dl>{values.map(([name, value], index) => <div key={index} ref={menu} className="plan-fact"><dt>{name}</dt><dd>{value || 'Unavailable'}</dd></div>)}</dl>
 }
 function Attributes({ properties }: { properties: readonly Property[] }) {
   return <Facts values={properties.map(property => [property.name, property.value])} />
@@ -13,6 +18,51 @@ function Attributes({ properties }: { properties: readonly Property[] }) {
 function Details({ title, items }: { title: string; items?: readonly { kind: string; properties: Property[] }[] }) {
   return <details><summary>{title} ({items?.length ?? 0})</summary>{items?.length ? items.map((item, index) => <div key={index} className="plan-diagnostic-detail"><strong>{item.kind || 'Unavailable'}</strong><Attributes properties={item.properties} /></div>)
     : <p>{items ? 'No details retained. Inspect the XML source for complete information.' : 'Detailed data unavailable in this view. Inspect the XML source for complete information.'}</p>}</details>
+}
+
+/**
+ * The Properties menu's target: the facts whose text is selected in the pane, else the one the menu was opened on (`fact`),
+ * else every fact shown (a closed section's facts are hidden). A right-click (or Ctrl+click) on macOS selects the word under
+ * it before the menu opens, so a menu opened while a press is down reads the selection as that press began (`press`), as
+ * Peek's Properties does; once the press ends (Windows opens the menu on release) it reads the selection as it is.
+ */
+export function planPropertiesMenu() {
+  let pressed: HTMLElement[] | undefined
+  return {
+    press(pane: HTMLElement) {
+      pressed = selectedFacts(pane, '.plan-fact')
+      const doc = pane.ownerDocument
+      const release = () => { pressed = undefined; doc.removeEventListener('pointerup', release, true); doc.removeEventListener('pointercancel', release, true) }
+      doc.addEventListener('pointerup', release, true)
+      doc.addEventListener('pointercancel', release, true)
+    },
+    target(pane: HTMLElement, fact?: Element): PlanPropertiesTarget | null {
+      const facts = [...pane.querySelectorAll<HTMLElement>('.plan-fact')].filter(item => !item.closest('details:not([open])'))
+      const selected = (pressed ?? selectedFacts(pane, '.plan-fact')).filter(item => facts.includes(item))
+      pressed = undefined
+      if (!facts.length) return null
+      const picked = selected.length ? selected : fact && facts.includes(fact as HTMLElement) ? [fact as HTMLElement] : facts
+      return { kind: 'planProperties', facts: picked.map(factText) }
+    }
+  }
+}
+type PropertiesMenu = ReturnType<typeof planPropertiesMenu>
+const paneSelector = '.plan-properties-pane'
+/** Each Properties pane's menu, for the facts inside it: a fact's own target names it, so a right-click copies that fact. */
+const paneMenus = new WeakMap<Element, PropertiesMenu>()
+function useFactMenu() {
+  return useMenuTarget<HTMLElement>(fact => {
+    const pane = fact.closest<HTMLElement>(paneSelector)
+    return pane ? paneMenus.get(pane)?.target(pane, fact) ?? null : null
+  }, fact => fact.closest<HTMLElement>(paneSelector) ?? undefined)
+}
+
+/** The Properties pane, focusable, with a menu whose Copy and Copy Value write its facts. */
+export function PlanPropertiesPane(props: { statement?: SourceStatement; node?: PlanNode; liveRunning?: boolean }) {
+  const [copy] = useState(planPropertiesMenu)
+  const menu = useMenuTarget<HTMLDivElement>(pane => copy.target(pane))
+  return <div ref={element => { if (element) { paneMenus.set(element, copy); menu(element) } }} className="plan-properties-pane" tabIndex={0} role="group" aria-label="Properties"
+    onPointerDownCapture={event => copy.press(event.currentTarget)}><PlanProperties {...props} /></div>
 }
 
 export function PlanProperties({ statement, node, liveRunning }: { statement?: SourceStatement; node?: PlanNode; liveRunning?: boolean }) {

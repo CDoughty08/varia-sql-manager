@@ -53,6 +53,7 @@ export const contextKeys = {
   messagesFocus: { type: 'boolean', scope: 'focus', description: "Focus is in a Messages view; activePanel is then 'output'." },
   resultsFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the Results pane (either layout) or its overflow picker; activePanel is then 'output', except in the picker." },
   searchHitsFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name." },
+  planOutlineFocus: { type: 'boolean', scope: 'focus', description: "Focus is in an execution plan's operator outline, whose Copy copies the selected operator." },
   explorerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'." },
   explorerTypeAhead: { type: 'boolean', scope: 'focus', description: "Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking." },
   optionsDialogFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the Options dialog.' },

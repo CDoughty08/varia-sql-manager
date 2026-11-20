@@ -250,7 +250,7 @@ describe('default keybindings', () => {
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...resultTabs]
     const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...macResultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
-    const search = ['search.copyName', 'search.copyQualifiedName']
+    const search = ['search.copyName', 'search.copyQualifiedName', 'plan.copyOperator']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
     const monitor = ['activity.refresh', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     for (const platform of ['win32', 'linux'] as const) {

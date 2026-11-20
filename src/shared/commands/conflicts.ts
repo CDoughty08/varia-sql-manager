@@ -33,6 +33,8 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'tableDesignerCell', keys: { activePanel: 'editor', designerFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'searchHitsTab', keys: { activePanel: 'editor', searchHitsFocus: true } },
   { name: 'searchHitsPane', keys: { activePanel: 'explorer', searchHitsFocus: true } },
+  { name: 'planOutline', keys: { activePanel: 'output', planOutlineFocus: true } },
+  { name: 'planDocumentOutline', keys: { activePanel: 'editor', planOutlineFocus: true } },
   { name: 'peekCard', keys: { peekFocus: true } },
   { name: 'peekCardGrid', keys: { peekFocus: true, outputGridFocus: true } },
   { name: 'peekTab', keys: { activePanel: 'editor', peekTabFocus: true } },

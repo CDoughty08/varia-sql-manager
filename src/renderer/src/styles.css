@@ -1454,6 +1454,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .plan-inspector dl { margin: 8px 0; }
 .plan-inspector dt { margin-top: 8px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .plan-inspector dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.plan-properties-pane { min-height: 100%; }
+.plan-properties-pane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .plan-statement-text { white-space: pre-wrap; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
 .plan-warning, .plan-notice { color: var(--varia-warningForeground); font-size: var(--varia-size-xs); }
 .plan-notice { flex: 0 0 auto; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); }
