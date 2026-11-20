@@ -51,7 +51,7 @@ internal sealed class SearchFold
     }
 
     /// <summary>The fold for a culture and options, waiting for its build, or null for a culture that is not verified (a
-    /// page's Find filter, built off the search, on the packer's thread).</summary>
+    /// page's Find filter, built off the search, on a packing thread).</summary>
     public static SearchFold? Awaited(int lcid, CompareOptions options)
     {
         if (Array.IndexOf(Verified, lcid) < 0) return null;

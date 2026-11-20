@@ -186,6 +186,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (packHidden)
         {
             if (this.store.Packing == PagePacking.Off) this.store.Packing = PagePacking.OnRequest;
+            this.store.PackAtSeal = true;
             packer = new ResultPacker(this.store, visibility);
             packer.Start();
         }
