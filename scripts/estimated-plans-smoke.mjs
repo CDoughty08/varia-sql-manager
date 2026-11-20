@@ -142,7 +142,9 @@ try {
     // Edit › Copy (Electron's copy role) with the outline focused copies the operator, not the facts still selected.
     await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
     await operatorTree.focus()
-    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.isFocused())?.webContents.copy())
+    // The page's own window, found by its title: a test window may not hold the system's focus.
+    const pageTitle = await page.title()
+    expect(await application.evaluate(({ BrowserWindow }, title) => { const window = BrowserWindow.getAllWindows().find(item => item.getTitle() === title); window?.webContents.copy(); return !!window }, pageTitle)).toBe(true)
     await expect.poll(clipboardText).toMatch(operatorRow)
     await page.evaluate(() => getSelection()?.removeAllRanges())
     console.log('Plan copy checks: the outline copies its operator with Ctrl+C and its menu, and Properties copies a value or a name and value.')
