@@ -73,7 +73,7 @@ export function fakeResultClient() {
           match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 1, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [3], units: 2
         })),
         // Seeking a change lands on stored row 1, the change; nothing is found from a result that is not a diff.
-        diffSeek: vi.fn<ResultHandle['diffSeek']>(async seek => 'partnerOf' in seek ? { none: true } : { row: 1, column: 0, index: 1, total: 2 }),
+        diffSeek: vi.fn<ResultHandle['diffSeek']>(async seek => 'partnerOf' in seek ? { none: true } : { row: 1, column: 0, index: 1, total: 2, rows: 3 }),
         // A pivot is result 800 + this one's id: its row columns and a Count of rows, two row groups of three rows.
         pivot: vi.fn<ResultHandle['pivot']>(async spec => ({
           descriptor: descriptor(800 + value.resultId, {

@@ -440,12 +440,12 @@ describe('ResultsJobHost over the fake backend', () => {
     ]
     for (const seek of seeks) expect(diffSeekResultSchema.safeParse(seek).error).toBeUndefined()
     // Forward from before the first row lands on the first added row; past the last it wraps round; a same row has no partner.
-    expect(seeks).toEqual([{ row: 10, column: 0, index: 1, total: 2 }, { row: 11, column: 0, index: 2, total: 2 }, { row: 11, column: 0, index: 2, total: 2 }, { none: true }])
+    expect(seeks).toEqual([{ row: 10, column: 0, index: 1, total: 2, rows: 12 }, { row: 11, column: 0, index: 2, total: 2, rows: 12 }, { row: 11, column: 0, index: 2, total: 2, rows: 12 }, { none: true }])
     const view = await supervisor.request('results.view', { resultId, sort: [], filters: [{ op: 'kind', kinds: ['added'] }] })
     expect(viewResultSchema.safeParse(view).error).toBeUndefined()
     expect([view.rows, view.filters]).toEqual([2, [{ op: 'kind', kinds: ['added'] }]])
     // Under the view, positions are the view's: its first row is the first added row, the first of the two units.
-    expect(await supervisor.request('results.diffSeek', { resultId, viewId: view.viewId, from: -1, direction: 'next' })).toEqual({ row: 0, column: 0, index: 1, total: 2 })
+    expect(await supervisor.request('results.diffSeek', { resultId, viewId: view.viewId, from: -1, direction: 'next' })).toEqual({ row: 0, column: 0, index: 1, total: 2, rows: 2 })
     // A kind filter or a seek on a result that is not a comparison is refused.
     expect(await failure(supervisor.request('results.diffSeek', { resultId: first.resultId, from: -1, direction: 'next' }))).toMatchObject({ code: 'INVALID_PARAMS' })
     expect(await failure(supervisor.request('results.view', { resultId: first.resultId, sort: [], filters: [{ op: 'kind', kinds: ['added'] }] }))).toMatchObject({ code: 'INVALID_PARAMS' })

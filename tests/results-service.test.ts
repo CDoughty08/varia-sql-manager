@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -2233,5 +2233,16 @@ describe('results service busy state', () => {
     // Closing the tab forgets what its operations said.
     service.release('t1')
     expect(ops()).toBeUndefined()
+  })
+})
+
+describe('comparison kind filters', () => {
+  it('names a kind filter by its kinds in a fixed order, whatever order it was asked in, and marks no header funnel', () => {
+    expect(kindLabel(['added', 'changed'])).toBe('Changed or added rows')
+    expect(kindLabel(['changed'])).toBe('Changed rows')
+    expect(kindLabel(['removed', 'same', 'added'])).toBe('Unchanged, added or removed rows')
+    expect(filterLabel({ op: 'kind', kinds: ['removed', 'changed'] }, [])).toBe('Changed or removed rows')
+    const sort = { filters: [{ filter: { op: 'kind', kinds: ['added'] }, label: 'Added rows', named: true }, { filter: { op: 'in', column: 1, rows: [0] }, label: 'x', named: false }] }
+    expect(filteredColumns(sort as never)).toEqual(new Set([1]))
   })
 })

@@ -741,7 +741,7 @@ export class ResultsPortHost {
   }
 
   /** A comparison's next or previous change unit, or a look-alike row's partner (results.diffSeek), copied member by member;
-   *  only a partner request may be answered `hidden`. */
+   *  only a partner request may be answered `hidden`, and a partner (an added or removed row) lands on the first column. */
   private diffSeek(request: Extract<PortRequest, { t: 'diffSeek' }>): void {
     const view = request.viewId === undefined ? {} : { viewId: request.viewId }
     const params: ResultsDiffSeekParams = request.partnerOf === undefined
@@ -749,7 +749,9 @@ export class ResultsPortHost {
       : { resultId: request.resultId, ...view, partnerOf: request.partnerOf }
     this.counted(request.rid, request.generation, request.resultId, () => this.backend.diffSeek(request.generation, params), result => {
       const parsed = diffSeekResultSchema.safeParse(result)
-      return parsed.success && !('hidden' in parsed.data && request.partnerOf === undefined) ? parsed.data : undefined
+      if (!parsed.success) return undefined
+      if ('hidden' in parsed.data) return request.partnerOf === undefined ? undefined : parsed.data
+      return 'row' in parsed.data && request.partnerOf !== undefined && parsed.data.column !== 0 ? undefined : parsed.data
     })
   }
 

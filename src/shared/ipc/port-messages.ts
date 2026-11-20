@@ -167,7 +167,8 @@ export const diffResultSchema = z.object({
 }).strict()
 /** A results.diffSeek answer as the backend sends it; main also checks that only a partner request is answered `hidden`. */
 export const diffSeekResultSchema = z.union([
-  z.object({ row: count, column: z.number().int().min(0).max(limits.page.maxColumns - 1), index: count.min(1), total: count.min(1) }).strict().refine(result => result.index <= result.total, 'The unit is one of the total.'),
+  z.object({ row: count, column: z.number().int().min(0).max(limits.page.maxColumns - 1), index: count.min(1), total: count.min(1), rows: count }).strict()
+    .refine(result => result.index <= result.total && result.row < result.rows, 'The unit is one of the total, at one of the rows shown.'),
   z.object({ none: z.literal(true) }).strict(),
   z.object({ hidden: z.literal(true) }).strict()
 ])

@@ -2023,7 +2023,7 @@ async function workbench(id, method, params, credit) {
         const partner = index[order[params.partnerOf]]?.partner ?? -1
         if (partner < 0) return respond(id, { none: true })
         const at = order.indexOf(partner)
-        return respond(id, at < 0 ? { hidden: true } : { row: at, column: 0, index: before(at) + 1, total })
+        return respond(id, at < 0 ? { hidden: true } : { row: at, column: 0, index: before(at) + 1, total, rows: order.length })
       }
       const forward = params.direction === 'next', from = Math.max(-1, Math.min(params.from, order.length))
       const candidates = forward
@@ -2032,7 +2032,7 @@ async function workbench(id, method, params, credit) {
       const found = candidates.find(position => unitsAt(position) > 0)
       if (found === undefined) return respond(id, { none: true })
       const cells = index[order[found]].cells
-      return respond(id, { row: found, column: cells.length ? (forward ? cells[0] : cells.at(-1)) : 0, index: before(found) + (forward ? 1 : unitsAt(found)), total })
+      return respond(id, { row: found, column: cells.length ? (forward ? cells[0] : cells.at(-1)) : 0, index: before(found) + (forward ? 1 : unitsAt(found)), total, rows: order.length })
     }
     case 'results.pivot': {
       const source = sourceOf(id, params.resultId, params.viewId)

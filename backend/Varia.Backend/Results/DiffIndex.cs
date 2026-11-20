@@ -30,8 +30,11 @@ internal sealed class DiffIndex
     public const byte ChangedBit = 1, AddedBit = 2, RemovedBit = 4;
     /// <summary>What the index holds besides its arrays: their headers and the overview.</summary>
     public const long Overhead = 1024;
-    /// <summary>Bytes a look-alike row costs: its stored row and partner kept (8), and its keys while the writer pairs them up (24).</summary>
-    public const long PossibleBytes = 32;
+    /// <summary>Bytes a look-alike row costs: its stored row and partner kept (8), and its keys, rows and their sorted copies
+    /// while the writer pairs them up (56).</summary>
+    public const long PossibleBytes = 64;
+    /// <summary>The most kinds a <c>kind</c> filter names (limits.diff.maxKinds).</summary>
+    public const int MaxKinds = 4;
 
     private readonly byte[] marks;
     private readonly ushort[] units;

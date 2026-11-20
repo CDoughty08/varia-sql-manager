@@ -30,7 +30,7 @@ export const limits = {
   /** results.diff: unchanged rows shown around a change (-1 for all), names listed of the columns only one result has, and
    *  the pairs a match by columns takes (SqlService.MaxDiffContext, MaxDiffColumnNames and ResultDiffer.MaxKeyColumns in C#);
    *  the answer's overview buckets, the rows one running total of the change index covers, and the kinds a `kind` filter
-   *  names (DiffIndex.OverviewBuckets and BlockRows in C#). */
+   *  names (DiffIndex.OverviewBuckets, BlockRows and MaxKinds in C#). */
   diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16, overviewBuckets: 512, indexBlockRows: 4096, maxKinds: 4 },
   /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
    *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */

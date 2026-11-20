@@ -11,6 +11,7 @@ import { ResultsService, setKey } from '../src/renderer/src/results/ResultsServi
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
 import { keyAt } from './fixtures/entries'
+import { limits } from '../src/shared/ipc/wire/protocol'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 
@@ -278,5 +279,13 @@ describe('result diffs', () => {
     expect(runs.get(5)).toBe(runs.get(4))
     expect(runs.get(9)).toBe(marks.get(6))
     expect(cellMarksOf('9-4 3-99999999 -2 ~')).toBeUndefined()
+  })
+})
+
+describe('change index limits', () => {
+  it('match their C# twins in DiffIndex', () => {
+    const source = readFileSync('backend/Varia.Backend/Results/DiffIndex.cs', 'utf8')
+    const constant = (name: string) => Number(new RegExp(`\\b${name} = (\\d+);`).exec(source)?.[1])
+    expect([constant('OverviewBuckets'), constant('BlockRows'), constant('MaxKinds')]).toEqual([limits.diff.overviewBuckets, limits.diff.indexBlockRows, limits.diff.maxKinds])
   })
 })

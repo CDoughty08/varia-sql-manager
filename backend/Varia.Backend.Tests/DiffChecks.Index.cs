@@ -124,6 +124,26 @@ internal static partial class DiffChecks
             "a kind filter is a comparison's only, with 1 to 4 distinct known kinds and nothing else; a seek names a comparison, and either a position and direction or a partner's position: " + string.Join(",", codes));
         check(SqlService.MethodNames.Contains("results.diffSeek") && service.LaneOf("results.diffSeek") == RequestLane.Results && Providers.Of("results.diffSeek").Count == 2,
             "results.diffSeek is a method of the results lane, for both engines");
+
+        // Under a sort (ItemId descending: the added row, then the change's halves) and before another filter (duplicate
+        // ItemIds: the change's two halves), a kind filter keeps its rows and a seek goes in the view's order.
+        var sortedChanges = Call<ResultsViewResult>("results.view", new { resultId = id, sort = new[] { new { column = 0, descending = true, mode = "value" } }, filters = new[] { new { op = "kind", kinds = new[] { "changed", "added" } } } });
+        var halves = Call<ResultsViewResult>("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "kind", kinds = new[] { "changed", "added" } }, new { op = "duplicates", columns = new[] { 0 } } } });
+        check(store.FindView(id, sortedChanges.ViewId)!.Order is [3, 1, 2] && Seek(new { resultId = id, viewId = sortedChanges.ViewId, from = 0, direction = "next" }) is { Row: 2, Column: 2, Index: 2, Total: 2, Rows: 3 }
+            && store.FindView(id, halves.ViewId)!.Order is [1, 2] && halves.Filters is [{ Op: "kind" }, { Op: "duplicates" }],
+            "a kind filter under a sort keeps its rows in the sort's order, and a later filter sees only its rows");
+
+        store.Release(id);
+        check(Code("results.diffSeek", new { resultId = id, from = -1, direction = "next" }) == "RESULT_RELEASED", "a seek on a released comparison answers RESULT_RELEASED");
+
+        // More stored rows than buckets: a change first, the added row last, each in its own end bucket of 512.
+        static string?[][] Rows(int count) => [.. Enumerable.Range(1, count).Select(i => new[] { i.ToString(CultureInfo.InvariantCulture), "n" + i.ToString(CultureInfo.InvariantCulture), "1" })];
+        var leftRows = Rows(1000);
+        string?[][] rightRows = [["1", "n1", "2"], .. leftRows.Skip(1), ["1001", "n1001", "1"]];
+        var (big, bigger) = Pair(store, leftRows, rightRows);
+        var wide = Call<ResultsDiffResult>("results.diff", new { left = big.ResultId, right = bigger.ResultId, context = -1 });
+        check(wide.Overview.Length == DiffIndex.OverviewBuckets && wide.Overview[0] == DiffIndex.ChangedBit && wide.Overview[^1] == DiffIndex.AddedBit && wide.Overview[1..^1].All(bits => bits == 0) && wide.Units == 2,
+            "past 512 stored rows the overview has 512 even buckets, each the kinds of its rows: " + string.Join(",", wide.Overview.Take(3)) + " … " + wide.Overview[^1]);
     }
 
     /// <summary>The index is charged to the query budget with its diff, exactly its bytes, a diff's views charge their running
@@ -189,14 +209,14 @@ internal static partial class DiffChecks
         var index = store.Find(id)!.DiffIndex!;
         ResultsDiffSeekResult Partner(long of, uint? view = null) => Call<ResultsDiffSeekResult>("results.diffSeek", view is null ? new { resultId = id, partnerOf = of } : (object)new { resultId = id, viewId = view, partnerOf = of });
         check(diff.Possible == 1 && index.PartnerOf(1) == 2 && index.PartnerOf(2) == 1 && index.PartnerOf(0) == -1
-            && Partner(1) is { Row: 2, Column: 0, Index: 2, Total: 2 } && Partner(2) is { Row: 1, Index: 1 } && Partner(0) is { None: true } && Partner(7) is { None: true },
+            && Partner(1) is { Row: 2, Column: 0, Index: 2, Total: 2, Rows: 3 } && Partner(2) is { Row: 1, Index: 1 } && Partner(0) is { None: true } && Partner(7) is { None: true },
             "a look-alike row's partner is its stored row in the diff, found without a search; a row without one, or past the rows, has none");
         // Sorted by ItemId descending: added (9) at 0, removed (2) at 1, same (1) at 2.
         var sorted = Call<ResultsViewResult>("results.view", new { resultId = id, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         check(Partner(1, sorted.ViewId) is { Row: 0, Index: 1, Total: 2 } && Partner(0, sorted.ViewId) is { Row: 1, Index: 2 },
             "under a sorted view a partner is found by view position, and its position is the view's");
         var removedOnly = Call<ResultsViewResult>("results.view", new { resultId = id, sort = Array.Empty<object>(), filters = new[] { new { op = "kind", kinds = new[] { "removed" } } } });
-        check(Partner(0, removedOnly.ViewId) is { Hidden: true }, "a partner the view's filter leaves out is hidden, not missing");
+        check(Partner(0, removedOnly.ViewId) is { Hidden: true } && Call<ResultsDiffSeekResult>("results.diffSeek", new { resultId = id, viewId = removedOnly.ViewId, from = -1, direction = "next" }) is { Row: 0, Rows: 1 }, "a partner the view's filter leaves out is hidden, not missing");
         // A diff freed while a view of it builds has no index at the kind step: the build is cancelled (UntilReleased answers
         // RESULT_RELEASED), not refused as if the result were not a comparison.
         var freed = store.Find(id)!;

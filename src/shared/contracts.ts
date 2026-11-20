@@ -437,7 +437,7 @@ export type ResultsDiffSeekParams =
 /** The position landed on, the pair index (data column) of its cell (0 for an added, removed or cut unit), the unit's number
  *  (`index`, 1 to `total`) and the change units in the view; or `none` (nothing found), or `hidden` (the partner exists but
  *  the view hides it; `partnerOf` only). */
-export type ResultsDiffSeekResult = { row: number; column: number; index: number; total: number } | { none: true } | { hidden: true }
+export type ResultsDiffSeekResult = { row: number; column: number; index: number; total: number; rows: number } | { none: true } | { hidden: true }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
  *  SUM, AVG, MIN or MAX. */
 export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'

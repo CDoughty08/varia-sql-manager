@@ -299,6 +299,16 @@ describe('ResultClient', () => {
     const finding = view.findRows([12])
     expect(await answer('findRows', { positions: [5], marks: [0], truncated: false, rows: 10 })).toMatchObject({ resultId: 3, ids: [12], viewId: 2 })
     expect((await finding).positions).toEqual([5])
+    // A comparison seek goes by the view's positions, in either form, and answers what main sent.
+    const seeking = view.diffSeek({ from: -1, direction: 'previous' })
+    expect(await answer('diffSeek', { row: 9, column: 1, index: 4, total: 4, rows: 10 })).toMatchObject({ t: 'diffSeek', resultId: 3, viewId: 2, from: -1, direction: 'previous' })
+    expect(await seeking).toEqual({ row: 9, column: 1, index: 4, total: 4, rows: 10 })
+    const partnering = handle.diffSeek({ partnerOf: 3 })
+    const partnerRequest = await answer('diffSeek', { hidden: true })
+    expect(partnerRequest).toMatchObject({ t: 'diffSeek', resultId: 3, partnerOf: 3 })
+    expect(partnerRequest).not.toHaveProperty('viewId')
+    expect(partnerRequest).not.toHaveProperty('from')
+    expect(await partnering).toEqual({ hidden: true })
     // A view identifies its result: identities belong to the result, whatever order shows it.
     const again = view.identify('row')
     const sent = await answer('identify', { column: -1, unique: true, approximate: false, rows: 10 })
@@ -311,6 +321,11 @@ describe('ResultClient', () => {
     await expect(handle.findRows([-1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.rowIds(-1, 1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(await handle.rowIds(0, 0)).toMatchObject({ ids: [] })
+    // A comparison seek: a position from -1 and a direction, or a partner's position; nothing else reaches the port.
+    await expect(handle.diffSeek({ from: -2, direction: 'next' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ from: 0.5, direction: 'next' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ from: 0, direction: 'up' as never })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ partnerOf: -1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(before)
     // A diff compares this result with another of the same generation, by result even through a view.
     const other = client.open(descriptor({ resultId: 4 }))
@@ -420,6 +435,9 @@ describe('ResultClient', () => {
     await expect(handle.sort([{ column: 1, descending: false, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([], { filters: [{ op: 'in', column: 1, rows: [0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([], { filters: [{ op: 'duplicates', columns: [0, 0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A kind filter: 1 to 4 distinct kinds, refused before the port otherwise.
+    await expect(handle.sort([], { filters: [{ op: 'kind', kinds: ['added', 'added'] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([], { filters: [{ op: 'kind', kinds: [] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     // A filtered view with no keys: the filters reach the worker, and the view holds them resolved.
     const filtering = handle.sort([], { filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
     await settle()

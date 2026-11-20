@@ -89,7 +89,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
-    diffSeek: vi.fn(async (_generation: number, params: ResultsDiffSeekParams): Promise<ResultsDiffSeekResult> => 'partnerOf' in params ? { hidden: true } : { row: 4, column: 2, index: 3, total: 7 }),
+    diffSeek: vi.fn(async (_generation: number, params: ResultsDiffSeekParams): Promise<ResultsDiffSeekResult> => 'partnerOf' in params ? { hidden: true } : { row: 4, column: 2, index: 3, total: 7, rows: 9 }),
     view: (generation, params, onProgress) => {
       let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
       const done = new Promise<ResultsViewResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
@@ -543,17 +543,27 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(vi.mocked(backend.diffSeek).mock.calls).toEqual([[1, { resultId: 7, viewId: 3, from: -1, direction: 'next' }], [1, { resultId: 7, partnerOf: 4 }]])
     expect(Object.fromEntries(codes(port()))).toEqual({ 1: 'ok', 2: 'ok', 3: 'INVALID_REQUEST', 4: 'INVALID_REQUEST', 5: 'INVALID_REQUEST', 6: 'INVALID_REQUEST', 7: 'RESULT_UNAVAILABLE' })
-    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { row: 4, column: 2, index: 3, total: 7 } })
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { row: 4, column: 2, index: 3, total: 7, rows: 9 } })
     expect(port().ends().find(end => end.rid === 2)).toEqual({ t: 'end', rid: 2, ok: true, result: { hidden: true } })
     // Hidden answers only a partner request; a unit past the total, or members it does not have, are the backend's mistakes.
     vi.mocked(backend.diffSeek)
       .mockResolvedValueOnce({ hidden: true })
-      .mockResolvedValueOnce({ row: 1, column: 0, index: 3, total: 2 })
+      .mockResolvedValueOnce({ row: 1, column: 0, index: 3, total: 2, rows: 5 })
       .mockResolvedValueOnce({ none: true, row: 1 } as never)
       .mockResolvedValueOnce({ none: true })
     for (const rid of [8, 9, 10, 11]) port().send({ t: 'diffSeek', rid, generation: 1, resultId: 7, from: 0, direction: 'previous' })
     await settle()
     expect(codes(port()).slice(-4)).toEqual([[8, 'BACKEND_ERROR'], [9, 'BACKEND_ERROR'], [10, 'BACKEND_ERROR'], [11, 'ok']])
+    // A row past the rows shown, or a partner landing anywhere but the first column, is the backend's mistake too.
+    vi.mocked(backend.diffSeek)
+      .mockResolvedValueOnce({ row: 5, column: 0, index: 1, total: 2, rows: 5 })
+      .mockResolvedValueOnce({ row: 1, column: 3, index: 1, total: 2, rows: 5 })
+      .mockResolvedValueOnce({ row: 1, column: 0, index: 1, total: 2, rows: 5 })
+    port().send({ t: 'diffSeek', rid: 12, generation: 1, resultId: 7, from: 0, direction: 'next' })
+    port().send({ t: 'diffSeek', rid: 13, generation: 1, resultId: 7, partnerOf: 2 })
+    port().send({ t: 'diffSeek', rid: 14, generation: 1, resultId: 7, partnerOf: 2 })
+    await settle()
+    expect(codes(port()).slice(-3)).toEqual([[12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR'], [14, 'ok']])
   })
   it('copies a kind filter member by member', async () => {
     const { host, port, views } = fixture()

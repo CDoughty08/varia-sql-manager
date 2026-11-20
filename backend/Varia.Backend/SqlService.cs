@@ -2020,7 +2020,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 // A comparison's rows of 1 to 4 kinds, read from its change index; no column, rows or cells.
                 if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null || filter.Columns is not null || filter.SnapshotId is not null
-                    || filter.Kinds is not { Length: >= 1 and <= 4 } kindNames || kindNames.Distinct(StringComparer.Ordinal).Count() != kindNames.Length)
+                    || filter.Kinds is not { Length: >= 1 and <= DiffIndex.MaxKinds } kindNames || kindNames.Distinct(StringComparer.Ordinal).Count() != kindNames.Length)
                     throw new RequestException("INVALID_PARAMS", "A kind filter names 1 to 4 different kinds: same, changed, added or removed.");
                 if (set.Kind != "diff" || set.DiffIndex is null) throw new RequestException("INVALID_PARAMS", "Only a comparison's rows can be filtered by kind.");
                 filters[i] = new ViewFilter(FilterOp.Kind, -1, null, false, null, [], Kinds: DiffIndex.KindsOf(kindNames));
@@ -2519,7 +2519,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 var at = view is null ? partner : Array.IndexOf(view.Order, partner);
                 if (at < 0) return new ResultsDiffSeekResult(Hidden: true);
                 // A partner is an added or removed row: one unit, its first column.
-                return new ResultsDiffSeekResult(at, 0, positions.Before(at) + 1, positions.Total);
+                return new ResultsDiffSeekResult(at, 0, positions.Before(at) + 1, positions.Total, Rows: positions.Count);
             }
             var forward = args.Direction == "next";
             var found = positions.Seek(args.From!.Value, forward);
@@ -2529,7 +2529,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var cut = index.IsCut(row);
             var tone = kind is DiffRowKind.Added or DiffRowKind.Removed ? null : DiffIndex.ToneOf(set, row);
             var before = positions.Before(found);
-            return new ResultsDiffSeekResult(found, DiffIndex.Column(kind, cut, tone, forward), forward ? before + 1 : before + positions.UnitsAt(found), positions.Total);
+            return new ResultsDiffSeekResult(found, DiffIndex.Column(kind, cut, tone, forward), forward ? before + 1 : before + positions.UnitsAt(found), positions.Total, Rows: positions.Count);
         }, token);
         if (set.IsReleased) throw Unavailable(args.ResultId);
         return answer;

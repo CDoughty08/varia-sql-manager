@@ -143,7 +143,7 @@ reservation is refused, the whole diff is refused (whole or refused, as the rows
   in both layouts except where a cut differs between them. Soft (collation-only) cells are not change units, matching
   the soft notice and `columnChanges.soft`.
 - When a view of a diff is built, a running total per 4,096 view positions is built with it from the view's `Order`
-  (O(view rows), 4 bytes a block, charged with the view), so view-order seek and counts need no scan.
+  (O(view rows), 8 bytes a block, charged with the view), so view-order seek and counts need no scan.
 - It serves the `kind` filter, seek, partner lookup and `overview` without reading tone text. Bounds in ipc.md § Limits and
   `limits.diff` (src/shared/ipc/wire/protocol.ts and C#).
 
