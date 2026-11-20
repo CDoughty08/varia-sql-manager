@@ -536,7 +536,7 @@ describe('ResultsPortHost', () => {
       resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
       rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
     })
-    const answer = (resultId: number) => ({ descriptor: diffDescriptor(resultId), key: 'Id', same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: ['Extra'] })
+    const answer = (resultId: number) => ({ descriptor: diffDescriptor(resultId), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: ['Extra'], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
     port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 9, exact: false, context: 1 })
     port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 7, exact: false, context: 1 })
@@ -566,7 +566,24 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(backend.close).toHaveBeenLastCalledWith(1, [22])
   })
-  it('accepts a whole-row diff, whose answer has no key member, and says which members a refused answer failed', async () => {
+  it('passes a diff\'s match member by member, and refuses a malformed one before the backend is asked', async () => {
+    const { host, port, diffs } = fixture()
+    host.own([descriptor(7), descriptor(8)])
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'columns', columns: [2, 0] } })
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'position' } })
+    port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'columns', columns: Array.from({ length: 17 }, (_, at) => at) } })
+    port().send({ t: 'diff', rid: 4, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'columns', columns: [1, 1] } })
+    port().send({ t: 'diff', rid: 5, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'columns', columns: [] } })
+    port().send({ t: 'diff', rid: 6, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'rows', columns: [0] } })
+    port().send({ t: 'diff', rid: 7, generation: 1, resultId: 7, right: 8, exact: false, context: -1, match: { mode: 'key' } })
+    await settle()
+    expect(diffs.map(item => item.params)).toEqual([
+      { left: 7, right: 8, exact: false, context: -1, match: { mode: 'columns', columns: [2, 0] } },
+      { left: 7, right: 8, exact: false, context: -1, match: { mode: 'position' } }
+    ])
+    expect(codes(port())).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST']])
+  })
+  it('accepts a whole-row diff, whose match names no column, and says which members a refused answer failed', async () => {
     const refusals: [string, readonly string[]][] = []
     const { host, port, diffs } = fixture({ onRefused: (method, issues) => refusals.push([method, issues]) })
     host.own([descriptor(7), descriptor(8)])
@@ -574,9 +591,8 @@ describe('ResultsPortHost', () => {
       resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
       rowsRead: 110, rowsStored: 110, rowsAvailable: 110, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
     })
-    // As the backend sends a diff of results with no unique column (repeated rows, NULLs): it leaves out the null key
-    // (Contracts.cs, WhenWritingNull). Before the fix, main refused this and the picker said "could not be compared".
-    const wholeRows = { descriptor: diffDescriptor(30), same: 45, changed: 0, added: 55, removed: 55, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
+    // As the backend sends a diff of results with no unique column (repeated rows, NULLs): matched by whole rows, no column named.
+    const wholeRows = { descriptor: diffDescriptor(30), match: { mode: 'rows', columns: [] }, same: 45, changed: 0, added: 55, removed: 55, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }
     port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
     diffs[0].resolve(wholeRows)
     await settle()
@@ -584,10 +600,10 @@ describe('ResultsPortHost', () => {
     expect(refusals).toEqual([])
     // A refused answer still reaches the worker as the generic sentence; the hook names the failing members, not values.
     port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
-    diffs[1].resolve({ ...wholeRows, descriptor: diffDescriptor(31), key: null })
+    diffs[1].resolve({ ...wholeRows, descriptor: diffDescriptor(31), match: null })
     await settle()
     expect(port().ends().find(end => end.rid === 2)).toMatchObject({ ok: false, code: 'BACKEND_ERROR', message: 'The results could not be compared.' })
-    expect(refusals).toEqual([['results.diff', ['key: invalid_type']]])
+    expect(refusals).toEqual([['results.diff', ['match: invalid_type']]])
   })
   it('pivots only owned results of the current generation within the schema bounds, owns the pivot it answers, and closes one refused or answered after its port went', async () => {
     const { host, backend, port, pivots } = fixture()

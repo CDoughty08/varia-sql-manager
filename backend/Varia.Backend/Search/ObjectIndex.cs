@@ -120,13 +120,27 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private Dictionary<string, DatabaseIndex> databases = new(StringComparer.Ordinal);
     private ResourceSet? resource;
     private DatabaseIndex? server;
+    private DatabaseIndex? agent;
     public bool Disposed { get; private set; }
 
     public IReadOnlyCollection<DatabaseIndex> Databases { get { lock (gate) return [.. databases.Values]; } }
     public ResourceSet? Resource { get { lock (gate) return resource; } }
     /// <summary>The server's own objects, whose refs name no database.</summary>
     public DatabaseIndex? Server { get { lock (gate) return server; } }
-    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Table.Count) + (resource?.Table.Count ?? 0) + (server?.Table.Count ?? 0); } }
+    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Table.Count) + (resource?.Table.Count ?? 0) + (server?.Table.Count ?? 0) + (agent?.Table.Count ?? 0); } }
+    /// <summary>SQL Server Agent's objects (jobs, alerts, operators), read apart from the server's, whose refs name no database.</summary>
+    public DatabaseIndex? Agent { get { lock (gate) return agent; } }
+
+    /// <summary>Holds Agent's objects in place of those held before, as <see cref="PutServer"/>.</summary>
+    public void PutAgent(DatabaseIndex value)
+    {
+        lock (gate)
+        {
+            if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
+            Settle(agent, value);
+            agent = value;
+        }
+    }
 
     /// <summary>Holds the server's objects in place of those held before, whose share goes back (or over to the new read).</summary>
     public void PutServer(DatabaseIndex value)
@@ -198,6 +212,8 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             databases = new(StringComparer.Ordinal);
             if (server is not null) Drop(server, server.Bytes);
             server = null;
+            if (agent is not null) Drop(agent, agent.Bytes);
+            agent = null;
             old = resource;
             resource = null;
         }
@@ -351,6 +367,7 @@ internal static class IndexSearch
         var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
         var sources = new List<(string? Database, ObjectTable Table)>();
         if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table));
+        if (query.Database is null && index.Agent is { } agent) sources.Add((null, agent.Table));
         sources.AddRange(databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
             .Select(value => ((string?)value.Database, value.Table)));
         if (index.Resource is { } resource)

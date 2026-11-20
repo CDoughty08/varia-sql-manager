@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -15,7 +15,7 @@ export type IdentityRequest =
   | { readonly method: 'rowIds'; readonly firstRow: number; readonly count: number }
   | { readonly method: 'findRows'; readonly ids: readonly number[] }
   /** results.diff: this result (the earlier) against `right` (the later), of the same generation. */
-  | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number }
+  | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number; readonly match?: DiffMatch }
   /** results.pivot: this result's rows (its view's, when the key names one) grouped and aggregated, stored as a new result. */
   | { readonly method: 'pivot'; readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
 

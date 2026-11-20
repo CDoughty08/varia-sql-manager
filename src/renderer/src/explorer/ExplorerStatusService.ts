@@ -4,7 +4,7 @@
 // turns them into chips (src/shared/explorer/status.ts) and publishes them for every connection the view serves. It never
 // reloads the tree, and never samples by itself: LiveService pauses the views while Object Explorer or the window is hidden.
 import { statusChipKinds } from '../../../shared/explorer/catalog'
-import { databaseChips, serverChips, type DatabaseStatusRow, type GroupRow, type ProgressRow, type StatusChip } from '../../../shared/explorer/status'
+import { agentChips, databaseChips, serverChips, type AgentServiceState, type DatabaseStatusRow, type GroupRow, type ProgressRow, type StatusChip } from '../../../shared/explorer/status'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -25,6 +25,8 @@ export interface RowStatus {
   /** A database's state as the row's status shows it (dimmed and badged when unavailable); undefined when it is usable
    *  and writable. */
   readonly state?: 'unavailable' | 'readOnly'
+  /** A sublabel the row shows after its name (SQL Server Agent's "Agent XPs disabled"); its words include it. */
+  readonly sublabel?: string
 }
 export interface ServerStatus {
   /** The server row's chips (running Agent jobs, availability group health); undefined while none are known. */
@@ -34,6 +36,10 @@ export interface ServerStatus {
   /** The database probe listed every database that is not plainly online, so one it does not list is online. False when
    *  its table was cut at its row cap: a database past the cut says nothing. */
   readonly complete: boolean
+  /** The SQL Server Agent node's chips and sublabel (behind the Agent release gate); undefined while none are known. */
+  readonly agent?: RowStatus
+  /** `explorer.agentService`'s last fresh sample: Agent XPs, the service's state and startup type. */
+  readonly agentService?: AgentServiceState
 }
 export interface ExplorerStatusSnapshot { readonly servers: ReadonlyMap<string, ServerStatus> }
 /** A database's runtime state as the database probe last sampled it: its row (none: plainly online, when `complete`), and
@@ -48,7 +54,9 @@ export interface StatusVisibility {
   popout?(): boolean
 }
 
-const probes = [...statusChipKinds.database, ...statusChipKinds.server] as LiveProbeId[]
+/** The probes a view samples: each once, though the server and Agent rows both show running jobs. The Agent node's own
+ *  probe only behind the Agent release gate, so a hidden node runs no SQL. */
+const probesFor = (agent: boolean) => [...new Set([...statusChipKinds.database, ...statusChipKinds.server, ...agent ? statusChipKinds.agent : []])] as LiveProbeId[]
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
 /** At most this many rows of a status table are read: the catalogue caps them at 1,000, a window at 4,096. */
 const maxRows = 1000
@@ -57,6 +65,10 @@ const noChips: readonly StatusChip[] = []
 export const onlineStatus: RowStatus = { chips: noChips, live: true, words: '' }
 const usable = new Set(['fresh', 'stale'])
 
+/** The Agent node's status: its chips and sublabel, and the words its accessible name says ("Stopped, Agent XPs disabled"). */
+const agentStatusOf = (chips: readonly StatusChip[], sublabel: string | undefined): RowStatus | undefined => chips.length || sublabel
+  ? { chips, live: true, words: [...chips.map(chip => chip.words), ...sublabel ? [sublabel] : []].join(', '), ...sublabel ? { sublabel } : {} }
+  : undefined
 const statusOf = (chips: readonly StatusChip[], state?: RowStatus['state']): RowStatus => chips.length ? { chips, live: true, words: chips.map(chip => chip.words).join(', '), ...state ? { state } : {} } : onlineStatus
 /** Usable as Object Explorer's listing says it: online or in emergency mode (sys.databases.state 0 or 5). */
 const stateOf = (row: DatabaseStatusRow): RowStatus['state'] => row.state !== 0 && row.state !== 5 ? 'unavailable' : row.readOnly || row.standby ? 'readOnly' : undefined
@@ -100,6 +112,7 @@ class ServerView {
   private progress: Map<string, ProgressRow> | undefined
   private groups: GroupRow[] | undefined
   private jobs: number | null | undefined
+  private agentService: AgentServiceState | undefined
   /** The newest read per probe: an older read that finishes later is dropped. */
   private readonly reads = new Map<LiveProbeId, number>()
   private readSeq = 0
@@ -108,12 +121,13 @@ class ServerView {
   /** What was published last, so unchanged rows keep their objects (rows are memoised on them). */
   private published: ServerStatus = { server: undefined, databases: undefined, complete: false }
 
-  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void) {
-    this.handle = live.open({ connectionId, source: 'explorer', probes: probes.map(probe => ({ probe })), background: true }, owner)
+  constructor(connectionId: string, live: LiveService, owner: LiveOwner, private readonly changed: () => void, private readonly agent = false) {
+    this.handle = live.open({ connectionId, source: 'explorer', probes: probesFor(agent).map(probe => ({ probe })), background: true }, owner)
     const disposeTick = this.handle.onTick(({ subscriptionId, tick }) => {
       this.follow(subscriptionId)
       for (const sample of tick.samples) {
         if (sample.probe === 'explorer.agent') { this.jobs = sample.metrics?.[0] ?? null; continue }
+        if (sample.probe === 'explorer.agentService') { this.agentService = agentServiceOf(sample.status); continue }
         const entry = sample.tables?.find(table => table.table === 0)
         if (!entry) continue
         const probe = sample.probe as TableProbe
@@ -154,6 +168,7 @@ class ServerView {
     this.subscriptionId = subscriptionId
     for (const probe of ['explorer.databases', 'explorer.progress', 'explorer.availability'] as const) this.forget(probe)
     this.jobs = undefined
+    this.agentService = undefined
     this.reads.clear()
   }
 
@@ -204,8 +219,12 @@ class ServerView {
     const complete = !!databases && this.complete
     const chips = serverChips(fresh('explorer.agent') ? this.jobs : undefined, fresh('explorer.availability') ? this.groups : undefined)
     const server = chips.length === 0 ? undefined : previous.server && sameChips(previous.server.chips, chips) ? previous.server : statusOf(chips)
-    if (server === previous.server && databases === previous.databases && complete === previous.complete) return
-    this.published = { server, databases, complete }
+    const agentService = this.agent && fresh('explorer.agentService') ? this.agentService : undefined
+    const agentNode = this.agent ? agentChips(agentService, fresh('explorer.agent') ? this.jobs : undefined) : undefined
+    const agent = !agentNode ? undefined : previous.agent && previous.agent.sublabel === agentNode.sublabel && sameChips(previous.agent.chips, agentNode.chips) ? previous.agent : agentStatusOf(agentNode.chips, agentNode.sublabel)
+    const sameService = agentService?.xps === previous.agentService?.xps && agentService?.state === previous.agentService?.state && agentService?.startup === previous.agentService?.startup
+    if (server === previous.server && databases === previous.databases && complete === previous.complete && agent === previous.agent && sameService) return
+    this.published = { server, databases, complete, ...agent ? { agent } : {}, ...agentService ? { agentService: sameService ? previous.agentService! : agentService } : {} }
     this.changed()
   }
 
@@ -235,8 +254,17 @@ class ServerView {
 export function rowStatus(server: ServerStatus | undefined, node: Pick<TreeNode, 'parent' | 'kind' | 'ref'>): RowStatus | undefined {
   if (!server) return undefined
   if (node.parent === 0) return server.server
+  if (node.kind === 'agent') return server.agent
   if (node.kind !== 'database' || node.ref.type !== 'object' || !server.databases) return undefined
   return server.databases.get(node.ref.object.name ?? '') ?? (server.complete ? onlineStatus : undefined)
+}
+
+/** `explorer.agentService`'s status values; one the login may not read is absent, so undefined. */
+function agentServiceOf(status: readonly { id: string; value: number | string }[] | undefined): AgentServiceState | undefined {
+  if (!status) return undefined
+  const value = (id: string) => { const entry = status.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
+  const xps = value('agentXps'), state = value('serviceState'), startup = value('startupType')
+  return { ...xps !== undefined ? { xps } : {}, ...state !== undefined ? { state } : {}, ...startup !== undefined ? { startup } : {} }
 }
 
 /** Samples count only while the view runs the subscription they came from. */
@@ -262,6 +290,8 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     visibility?: StatusVisibility
     /** Coalesces publications: an animation frame in the app. */
     schedule?: (callback: () => void) => void
+    /** The Agent release gate: the SQL Server Agent node's probe samples only while it is on. */
+    agent?: boolean
   }) {
     super({ servers: new Map() })
     this.visibility = o.visibility ?? { get: () => o.panes.getSnapshot().explorer, subscribe: listener => o.panes.subscribe(listener), popout: () => o.panes.location?.('explorer') === 'window' }
@@ -321,7 +351,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
       for (const key of keys) {
         if (this.views.has(key)) continue
         const first = this.members(key)[0]
-        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed()))
+        if (first !== undefined) this.views.set(key, new ServerView(first, this.o.live, this.owner(key, first), () => this.changed(), this.o.agent ?? false))
       }
     }
     this.changed()

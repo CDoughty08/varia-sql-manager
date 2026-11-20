@@ -29,14 +29,18 @@ export const svgIcons = {
   'plan-aggregate': { path: 'M12.5 2.5h-9l5 5.5-5 5.5h9M11.5 2.5v2M11.5 11.5v2', use: 'Execution plan aggregation.' },
   'plan-parallel': { path: 'M1.5 8.5h3v-5h6v10h-6v-5M7.5 8.5h6M10.5 3.5h3M10.5 13.5h3', use: 'Execution plan parallel exchanges.' },
   'plan-compute': { path: 'M3.5 2.5h9v11h-9ZM5.5 5.5h5M5.5 8.5h1M9.5 8.5h1M5.5 11.5h1M9.5 11.5h1', use: 'Execution plan scalar and constant computations.' },
-  'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent: Object Explorer\'s running-jobs chip, and jobs (planned).' },
+  'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent: jobs, and Object Explorer\'s running-jobs chip.' },
   'ssis-package': { path: 'M1.5 3.5h13v2h-13ZM2.5 5.5h11v8h-11ZM5.5 9.5h4.5M8.5 8l1.5 1.5-1.5 1.5', use: 'Integration Services packages (planned).' },
   drive: { path: 'M2.5 9.5 4 3.5h8l1.5 6M3.5 9.5h9a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1ZM10.5 11.5h1', use: 'Drives in the server file picker.' },
   'ssis-environment': { path: 'M2.5 3.5h11M2.5 7.5h11M2.5 11.5h7M13.5 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z', use: 'Integration Services environments (planned).' },
   transpose: { path: 'M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h4M6.5 2.5v4M9 5.5h1.5a1 1 0 0 1 1 1V9M10.5 8l1 1 1-1M5.5 9v1.5a1 1 0 0 0 1 1H9M8 10.5l1 1-1 1', use: 'Transpose: the results toolbar\'s Transpose button and the Transpose commands.' },
   pivot: { path: 'M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h11M6.5 2.5v11M8.5 10.5h3M10 9l1.5 1.5-1.5 1.5', use: 'Pivot: the results toolbar\'s Pivot toggle and the Pivot command.' },
   bigquery: { path: 'M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM10.2 10.2l3.3 3.3M5.5 8.5v-1M7.5 8.5v-3M9.5 8.5v-2', use: 'BigQuery connections: saved and recent connections in Connect, and BigQuery servers.' },
-  'fuzzy-match': { path: 'M2.5 6.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0M2.5 10.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0', use: 'The Fuzzy Match toggle in Search Objects (an approximately-equal sign).' }
+  'fuzzy-match': { path: 'M2.5 6.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0M2.5 10.5c1.75-1.5 3.5-1.5 5.5 0s3.75 1.5 5.5 0', use: 'The Fuzzy Match toggle in Search Objects (an approximately-equal sign).' },
+  agent: { path: 'M13.5 8A5.5 5.5 0 1 1 11.5 3.75M13.5 2.5v3h-3M7.5 4.5v4l2 1.5', use: 'SQL Server Agent: Object Explorer\'s Agent node (a clock that comes round again).' },
+  'agent-activity': { path: 'M2.5 2.5h11v8h-11ZM5.5 13.5h5M7.5 10.5v3M4.5 7.5h1.5l1-2 2 4 1-2h1.5', use: 'SQL Server Agent: Job Activity Monitor.' },
+  'agent-operator': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 9.5h5v4h-5ZM9.5 9.5l2.5 2 2.5-2', use: 'SQL Server Agent: operators (a person who is sent mail).' },
+  'agent-proxy': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 10.5h5M12.5 8.5l2 2-2 2', use: 'SQL Server Agent: proxies (an account a step runs as).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons
 /** The stroke width of Varia's icons, in px at the 16 px grid. */

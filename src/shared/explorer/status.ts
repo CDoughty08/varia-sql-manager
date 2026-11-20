@@ -123,11 +123,45 @@ export function serverChips(runningJobs: number | null | undefined, groups: read
   return chips
 }
 
+/**
+ * `explorer.agentService`'s sample: Agent XPs (`value_in_use`, 0 or 1), the service's state as sys.dm_server_services reports
+ * it (1 stopped, 2 start pending, 3 stop pending, 4 running, 5 continue pending, 6 pause pending, 7 paused) and its startup
+ * type (2 automatic, 3 manual, 4 disabled). A value the login may not read is undefined: unknown, never guessed.
+ */
+export interface AgentServiceState { readonly xps?: number; readonly state?: number; readonly startup?: number }
+/** The Agent service states with a chip of their own; Running (4) has none. */
+const agentStates: Readonly<Record<number, { label: string; words: string; tone: StatusTone; title: string }>> = {
+  1: { label: 'STOPPED', words: 'Stopped', tone: 'warning', title: 'SQL Server Agent is stopped: jobs, alerts and schedules do not run.' },
+  2: { label: 'STARTING', words: 'Starting', tone: 'running', title: 'SQL Server Agent is starting.' },
+  3: { label: 'STOPPING', words: 'Stopping', tone: 'running', title: 'SQL Server Agent is stopping.' },
+  5: { label: 'RESUMING', words: 'Resuming', tone: 'running', title: 'SQL Server Agent is resuming.' },
+  6: { label: 'PAUSING', words: 'Pausing', tone: 'running', title: 'SQL Server Agent is pausing.' },
+  7: { label: 'PAUSED', words: 'Paused', tone: 'warning', title: 'SQL Server Agent is paused.' }
+}
+/** The SQL Server Agent node's sublabel while Agent XPs is 0. */
+export const agentXpsSublabel = 'Agent XPs disabled'
+/**
+ * The SQL Server Agent node's chips and sublabel: its service state when it is not running (unknown shows none), the jobs
+ * running (as the server's chip counts them), and "Agent XPs disabled" while that option is 0.
+ */
+export function agentChips(service: AgentServiceState | undefined, runningJobs: number | null | undefined): { readonly chips: StatusChip[]; readonly sublabel?: string } {
+  const chips: StatusChip[] = []
+  const state = service?.state === undefined ? undefined : agentStates[service.state]
+  if (state) chips.push({ id: 'service', tone: state.tone, label: state.label, words: state.words, title: state.title })
+  if (runningJobs !== null && runningJobs !== undefined && runningJobs > 0) {
+    const count = Math.trunc(runningJobs), number = count.toLocaleString('en-US'), text = `${number} ${count === 1 ? 'job' : 'jobs'} running`
+    chips.push({ id: 'jobs', tone: 'running', label: text, value: number, words: text, title: `SQL Server Agent: ${text}.`, icon: 'agent-job' })
+  }
+  return service?.xps === 0 ? { chips, sublabel: agentXpsSublabel } : { chips }
+}
+
 /** Every chip a database or server can show, for docs/object-explorer.md. */
-export const statusChipDocs: readonly { readonly kind: 'server' | 'database'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
+export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | 'agent'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
   ...Object.entries(states).filter(([state]) => state !== '10').map(([state, value]) => ({ kind: 'database' as const, chip: value.label + (value.tone === 'running' && state !== '7' ? ' n %' : ''), tone: value.tone, when: `state ${state}${state === '6' ? ' or 10' : ''}: ${value.title}` })),
   { kind: 'database', chip: 'READ-ONLY / STANDBY', tone: 'warning', when: 'is_read_only, or is_in_standby (a log-shipping standby)' },
   { kind: 'database', chip: 'SINGLE USER / RESTRICTED USER', tone: 'warning', when: 'user_access 1 or 2' },
   { kind: 'server', chip: 'n Agent jobs running', tone: 'running', when: 'SQL Server Agent jobs of its current session that started and have not stopped (none while none runs)' },
-  { kind: 'server', chip: '<group> healthy / partially healthy / not healthy', tone: 'success, warning, critical', when: 'the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica\'s role' }
+  { kind: 'server', chip: '<group> healthy / partially healthy / not healthy', tone: 'success, warning, critical', when: 'the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica\'s role' },
+  ...Object.entries(agentStates).map(([state, value]) => ({ kind: 'agent' as const, chip: value.label, tone: value.tone, when: `the Agent service's state ${state}: ${value.title}` })),
+  { kind: 'agent', chip: 'n jobs running', tone: 'running', when: 'as the server\'s chip; the node\'s sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip' }
 ]

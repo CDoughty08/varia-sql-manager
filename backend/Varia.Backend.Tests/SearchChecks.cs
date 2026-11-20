@@ -31,6 +31,7 @@ internal static class SearchChecks
         Packing(check);
         SearchPackedChecks.Run(check);
         Reader(check).GetAwaiter().GetResult();
+        AgentRows(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
         SearchCostChecks.Run(check);
@@ -495,7 +496,8 @@ internal static class SearchChecks
         check(new[] { "CR", "CP", "AU", "SA", "BD", "LS" }.All(code => DatabaseReader.ServerNamed(code) is { } named && ObjectSearchService.Kinds.Contains(named.Kind) && ObjectSearchSql.Server(true, false).Contains("'" + code + "'", StringComparison.Ordinal)),
             "every named server object code the batch writes maps to a kind the index holds");
         var catalog = ExplorerCatalog.Current;
-        var served = catalog.Kinds.Where(kind => kind.Scope is not ("server" or "childUnnamed") && !kind.Scope.StartsWith("ssis", StringComparison.Ordinal)).Select(kind => kind.Kind).ToHashSet();
+        var served = catalog.Kinds.Where(kind => kind.Scope is not ("server" or "childUnnamed") && !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && !ObjectSearchService.Unindexed.Contains(kind.Kind))
+            .Select(kind => kind.Kind).ToHashSet();
         check(served.SetEquals(ObjectSearchService.Kinds), "the index holds every kind Object Explorer lists but the server, return values and the SSIS Catalog's: "
             + string.Join(", ", served.Except(ObjectSearchService.Kinds).Concat(ObjectSearchService.Kinds.Except(served))));
 
@@ -551,6 +553,40 @@ internal static class SearchChecks
             sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool))], parameters));
         }
         return new DataTableReader([.. sets]);
+    }
+
+    /// <summary>The Agent batch's rows by code: jobs with their modify date, alerts only where the platform serves the Alerts folder,
+    /// operators, and nothing for an unknown code; a login msdb lets read no jobs sends the alerts and operators as the only set.</summary>
+    private static async Task AgentRows(Action<bool, string> check)
+    {
+        var at = new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        DataTable Jobs() => Rows([("code", typeof(string)), ("name", typeof(string)), ("modified", typeof(DateTime))], ["AJ", "Nightly", at], ["AJ", "Undated", null]);
+        DataTable Named() => Rows([("code", typeof(string)), ("name", typeof(string))], ["AA", "Severity 17"], ["AO", "DBA team"], ["ZZ", "unknown"]);
+        async Task<List<IndexedObject>> Read(bool alerts, params DataTable[] sets) =>
+            [.. (await new DatabaseReader("msdb", new ObjectIndexLimits(), new StringPool(new IndexBudget(1 << 20))).ReadAgentAsync(new DataTableReader(sets), alerts, CancellationToken.None))!.Table.Rows()];
+        var windows = await Read(true, Jobs(), Named());
+        var linux = await Read(false, Jobs(), Named());
+        var noJobs = await Read(true, Named());
+        check(windows.Select(item => item.Kind + ":" + item.Name).Order(StringComparer.Ordinal).SequenceEqual(["agentAlert:Severity 17", "agentJob:Nightly", "agentJob:Undated", "agentOperator:DBA team"])
+            && windows.Single(item => item.Name == "Nightly") is { Folder: "agentJobs", Schema: null, Modified: var modified } && modified == at && windows.Single(item => item.Name == "Undated").Modified is null
+            && windows.Single(item => item.Name == "Severity 17").Folder == "agentAlerts" && windows.Single(item => item.Name == "DBA team").Folder == "agentOperators",
+            "the Agent read keeps jobs with their modify date, alerts and operators in their folders, and drops an unknown code");
+        check(linux.All(item => item.Kind != "agentAlert") && linux.Count == 3 && noJobs.Select(item => item.Kind).Order(StringComparer.Ordinal).SequenceEqual(["agentAlert", "agentOperator"]),
+            "where the platform has no Alerts folder the Agent read drops alerts, and a login with no jobs set still reads alerts and operators");
+        check(ObjectSearchSql.Agent.StartsWith("IF HAS_PERMS_BY_NAME(N'dbo.sysjobs_view', N'OBJECT', N'SELECT') = 1 SELECT 'AJ'", StringComparison.Ordinal),
+            "the Agent batch reads jobs only where msdb lets the login read sysjobs_view, so a login in no Agent role skips nothing");
+        using var sql = new SqlService();
+        check(sql.Search.AgentEnabled == Varia.Backend.Agent.AgentGate.Enabled, "Search Objects' Agent read follows the release gate by default");
+        // A failed Agent read is msdb's entry flagged as Agent's, listed before the server's and the databases'.
+        var skips = new SkipList(8);
+        skips.Add(0, new ObjectIndexSkip("Sales", "NO_DB_ACCESS", "m"));
+        skips.Add(SkipList.Server, new ObjectIndexSkip("", "CATALOG_ERROR", "m"));
+        skips.Add(SkipList.Agent, ObjectSearchService.AgentSkip("TIMEOUT", "m"));
+        var json = JsonSerializer.Serialize(ObjectSearchService.AgentSkip("TIMEOUT", "m"), new JsonSerializerOptions(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+        var plain = JsonSerializer.Serialize(new ObjectIndexSkip("Sales", "NO_DB_ACCESS", "m"), new JsonSerializerOptions(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+        check(skips.ToList() is [{ Database: "msdb", Agent: true }, { Database: "" }, { Database: "Sales", Agent: null }] && json.Contains("\"database\":\"msdb\"", StringComparison.Ordinal)
+            && json.Contains("\"agent\":true", StringComparison.Ordinal) && !plain.Contains("agent", StringComparison.Ordinal),
+            "a failed Agent read is reported as msdb with agent: true, first in the skip list, and a database's skip sends no agent flag: " + json + " " + plain);
     }
 
     private static async Task Reader(Action<bool, string> check)

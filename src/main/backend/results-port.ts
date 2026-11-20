@@ -745,7 +745,9 @@ export class ResultsPortHost {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (!this.current(generation, request.resultId) || !this.current(generation, request.right)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const port = this.port
-    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context }, this.relay(rid))
+    // Member by member: the match the port schema checked, never anything else the request carried.
+    const match = request.match === undefined ? undefined : request.match.mode === 'columns' ? { mode: 'columns' as const, columns: [...request.match.columns] } : { mode: request.match.mode }
+    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context, ...match ? { match } : {} }, this.relay(rid))
     this.sorting.set(rid, diff)
     diff.done.then(result => {
       const parsed = diffResultSchema.safeParse(result)

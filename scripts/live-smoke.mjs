@@ -169,7 +169,7 @@ try {
   await expect(statusChips(statusServer)).toHaveText(['2 Agent jobs running', 'AG1 healthy'])
   await expect(statusServer).toHaveAttribute('aria-label', /, SQL Server Agent: 2 jobs running, Availability groups: AG1 healthy, Production environment$/)
   const explorerSubscribe = (await liveCalls('live.subscribe')).filter(call => call.params.source === 'explorer').at(-1)
-  expect(explorerSubscribe.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'])
+  expect(explorerSubscribe.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'explorer.agentService'])
   await expandExplorerPath(page, 'status-server', 'Databases')
   const appData = await explorerRow(page, 'status-server', 'Databases', 'AppData')
   await expect(statusChips(appData)).toHaveText(['RESTORING 42 %', 'SINGLE USER'])

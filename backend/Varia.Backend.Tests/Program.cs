@@ -50,6 +50,12 @@ if (args is [PageCompressionBench.Argument, _, _, ..])
     PageCompressionBench.Run(args);
     return;
 }
+// The typed form over SQL Server's own catalog rows, run by hand against a server (read-only SELECTs): measures only.
+if (args is [TypedFormBench.Argument, var typedServer])
+{
+    TypedFormBench.Run(typedServer);
+    return;
+}
 
 // How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
 if (args is [FairnessBench.Argument, ..])
@@ -114,6 +120,12 @@ if (args is ["--sql-definition-checks"])
 {
     await SqlDefinitionChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " SQL definition checks.");
+    return;
+}
+if (args is ["--diff-checks"])
+{
+    DiffChecks.Run(Check);
+    Console.WriteLine("Passed " + passed + " diff checks.");
     return;
 }
 if (args is ["--result-name-checks"])
@@ -435,6 +447,7 @@ if (liveGroup is null)
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
         ("SearchNarrowing", Sync(() => SearchNarrowingChecks.Run(Check))),
+        ("PageFilter", Sync(() => PageFilterChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("SortKind", Sync(() => SortKindChecks.Run(Check))),
         ("Provider", () => ProviderChecks.RunAsync(Check)),
@@ -448,6 +461,7 @@ if (liveGroup is null)
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
+        ("TypedForm", Sync(() => TypedFormChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
@@ -504,13 +518,21 @@ if (liveGroup is null)
     }
     await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
     // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
-    // job meets packed pages through the accessor. Alone, after the first pass: the default is process-wide.
-    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "SearchNarrowing", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    // job meets packed pages through the accessor, and every packed page however small gets its n-gram filter, uncapped (PageFilter), so
+    // every search there passes over the pages it can. Alone, after the first pass: the defaults are process-wide.
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
+    Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = 0;
+    Varia.Backend.Results.ResultStore.DefaultFilterCapped = false;
     Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result");
     try { await OfflineSuites.RunAsync([.. offlineSuites.Where(suite => packedPass.Contains(suite.Name)).Select(suite => (OfflineSuites.PackedPrefix + suite.Name, suite.Run))], serial: slowMs > 0); }
-    finally { Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off; }
+    finally
+    {
+        Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off;
+        Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = Varia.Backend.Results.PageFilter.MinPageBytes;
+        Varia.Backend.Results.ResultStore.DefaultFilterCapped = true;
+    }
     using (var offline = new SqlService())
     {
         try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }

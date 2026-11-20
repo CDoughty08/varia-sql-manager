@@ -315,7 +315,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -362,7 +362,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: mainPage, schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
-  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
+  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) }, agent: api.agentPreview })
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
@@ -476,7 +476,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
-    api, documents, connections, settings, targetIdOf,
+    api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({

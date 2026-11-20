@@ -4,8 +4,10 @@ namespace Varia.Backend.Explorer;
 
 /// <summary>SchemaPlacement: where Group by Schema shows the folder (schema, database or both), for the folders below the
 /// roots that move below schema rows; null for every other.</summary>
+/// <summary>Platforms: the SQL Server Agent platforms the folder is served on (null: every server), combined with its parents'.
+/// AfterRows: a subfolder shown after its parent's rows rather than before them (Unassigned Proxies).</summary>
 internal sealed record CatalogFolder(string Id, string Label, string Owner, string? Parent, int Order, int? Since, IReadOnlyList<string> Engines, string? List,
-    IReadOnlyList<string> Rows, IReadOnlyList<string> Filter, string? SchemaPlacement = null)
+    IReadOnlyList<string> Rows, IReadOnlyList<string> Filter, string? SchemaPlacement = null, IReadOnlyList<string>? Platforms = null, bool AfterRows = false)
 {
     public bool BelowSchema => SchemaPlacement is "schema" or "both";
     /// <summary>Shown below a database while Group by Schema is on.</summary>
@@ -14,10 +16,21 @@ internal sealed record CatalogFolder(string Id, string Label, string Owner, stri
 /// <summary>Group by Schema's listing of a database's schemas.</summary>
 internal sealed record CatalogSchemaGroups(string List, IReadOnlyList<string> Rows);
 /// <summary>A node kind. List and Rows: the query whose rows follow the kind's static folders, and their kinds. MaxName: the
-/// longest name its refs may carry (128 unless the kind declares more, and then it owns no folders or rows).</summary>
+/// longest name its refs may carry (128 unless the kind declares more, and then it owns no folders or rows).
+/// <para>Singletons: kinds shown once below it, named by kind alone, sorted with its folders by order. Opens: the document a
+/// leaf opens. Platforms: the SQL Server Agent platforms the kind exists on (null: every server).</para></summary>
 internal sealed record CatalogKind(string Kind, string Title, string Scope, string Icon, IReadOnlyList<string> Subtypes, IReadOnlyDictionary<string, string> SubtypeIcons,
     IReadOnlyDictionary<string, string> VariantIcons, IReadOnlyList<string> Folders, IReadOnlyDictionary<string, IReadOnlyList<string>> SubtypeFolders,
-    IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName);
+    IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName, IReadOnlyList<CatalogSingleton>? Singletons = null,
+    string? Opens = null, IReadOnlyList<string>? Platforms = null)
+{
+    public IReadOnlyList<CatalogSingleton> SingletonList => Singletons ?? [];
+}
+/// <summary>A kind shown once below its owner, at its order among the owner's folders, on the platforms it lists (null: wherever
+/// its owner is).</summary>
+internal sealed record CatalogSingleton(string Kind, int Order, IReadOnlyList<string>? Platforms = null);
+/// <summary>One of a node's static children: a folder, or a singleton kind.</summary>
+internal readonly record struct CatalogChild(string? Folder, string? Singleton);
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 /// <summary>One of Peek's facts (src/shared/explorer/peek.ts): its id (the reply key and the batch's column alias), how its
 /// value travels (text, code, date, bool, count or kb), the first band whose catalog has it (null: every band), and whether it
@@ -45,8 +58,9 @@ internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kin
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
 /// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
-/// it is Azure SQL Managed Instance.</summary>
-internal readonly record struct ExplorerProfile(int Band, bool Cloud, bool Linux = false, bool ManagedInstance = false)
+/// it is Azure SQL Managed Instance. Agent: its SQL Server Agent platform (AgentCatalog.PlatformOf: windows, linux or
+/// managedInstance), null where Agent is not served.</summary>
+internal readonly record struct ExplorerProfile(int Band, bool Cloud, bool Linux = false, bool ManagedInstance = false, string? Agent = null)
 {
     /// <summary>The folders' engine: Managed Instance browses as a box server.</summary>
     public string Engine => Cloud ? "cloud" : "box";
@@ -67,10 +81,11 @@ internal sealed class ExplorerCatalog
     });
 
     private sealed record FolderJson(string Id, string Label, string Owner, string? Parent, int Order, int? Since, List<string> Engines, string? List, List<string>? Rows, List<string> Filter,
-        string? SchemaPlacement);
+        string? SchemaPlacement, List<string>? Platforms = null, bool AfterRows = false);
+    private sealed record SingletonJson(string Kind, int Order, List<string>? Platforms = null);
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
-        string? List, List<string> Rows, int MaxName);
+        string? List, List<string> Rows, int MaxName, List<SingletonJson>? Singletons = null, string? Opens = null, List<string>? Platforms = null);
     private sealed record PeekFactJson(string Id, string Format, int? Since, bool Optional = false);
     private sealed record PeekListJson(string Id, List<PeekFactJson> Columns);
     private sealed record PeekKindJson(string Kind, string Definition, bool Dependencies, string? OptionalGroup, List<PeekFactJson> Facts, List<PeekListJson> Lists);
@@ -93,11 +108,17 @@ internal sealed class ExplorerCatalog
         CloudEditions = json.CloudEngineEditions.ToHashSet();
         ManagedInstanceEditions = json.ManagedInstanceEngineEditions.ToHashSet();
         folders = json.Folders.ToDictionary(folder => folder.Id, folder => new CatalogFolder(folder.Id, folder.Label, folder.Owner, folder.Parent, folder.Order, folder.Since,
-            folder.Engines, folder.List, folder.Rows ?? [], folder.Filter, folder.SchemaPlacement), StringComparer.Ordinal);
+            folder.Engines, folder.List, folder.Rows ?? [], folder.Filter, folder.SchemaPlacement, folder.Platforms, folder.AfterRows), StringComparer.Ordinal);
         kinds = json.Kinds.ToDictionary(kind => kind.Kind, kind => new CatalogKind(kind.Kind, kind.Title, kind.Scope, kind.Icon, kind.Subtypes, kind.SubtypeIcons, kind.VariantIcons,
             kind.Folders, kind.SubtypeFolders.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value), kind.HistoryLookup, kind.Parents, kind.List, kind.Rows,
-            kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range.")),
+            kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range."),
+            kind.Singletons is { Count: > 0 } singletons ? [.. singletons.Select(item => new CatalogSingleton(item.Kind, item.Order, item.Platforms))] : null, kind.Opens, kind.Platforms),
             StringComparer.Ordinal);
+        // A singleton is named by its kind alone, so it is an unnamed server-scope kind with one owner.
+        foreach (var owner in kinds.Values)
+            foreach (var item in owner.SingletonList)
+                if (!kinds.TryGetValue(item.Kind, out var single) || single.Scope != "server" || kinds.Values.Count(other => other.SingletonList.Any(entry => entry.Kind == item.Kind)) != 1)
+                    throw new InvalidOperationException("A singleton must be a server-scope kind with one owner: " + item.Kind + ".");
         // Folders, history rows and listings name their owner through @object_name, a sysname: a longer owner name would
         // reach them cut to 128 code units, and resolve another object.
         if (kinds.Values.FirstOrDefault(kind => kind.MaxName > ExplorerRefs.MaxIdentifier && OwnsChildren(kind)) is { } longNamed)
@@ -166,7 +187,7 @@ internal sealed class ExplorerCatalog
         return items;
     }
 
-    private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null;
+    private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null || kind.SingletonList.Count > 0;
 
     public static ExplorerCatalog Current => Embedded.Value;
 
@@ -194,6 +215,18 @@ internal sealed class ExplorerCatalog
     public ExplorerProfile Profile(int major, int edition, int catalogBand = MinBand) =>
         new(Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)), CloudEditions.Contains(edition), ManagedInstance: ManagedInstanceEditions.Contains(edition));
 
+    /// <summary>A platforms gate (null: every server) admits this server's Agent platform.</summary>
+    public static bool PlatformServed(IReadOnlyList<string>? platforms, ExplorerProfile profile) => platforms is null || profile.Agent is { } platform && platforms.Contains(platform);
+
+    /// <summary>The kind exists on this server: Agent kinds only where Agent runs (CheckServed refuses their refs elsewhere).</summary>
+    public bool KindServed(string kind, ExplorerProfile profile) => PlatformServed(kinds[kind].Platforms, profile);
+
+    /// <summary>A kind's served static children in SSMS order: its folders (or its subtype's) and its singletons, merged by order.</summary>
+    public IReadOnlyList<CatalogChild> Children(string kind, string? subtype, ExplorerProfile profile) =>
+        [.. StaticFolders(kind, subtype, profile).Select(id => (Order: folders[id].Order, Child: new CatalogChild(id, null)))
+            .Concat(kinds[kind].SingletonList.Where(item => PlatformServed(item.Platforms, profile) && KindServed(item.Kind, profile)).Select(item => (item.Order, Child: new CatalogChild(null, item.Kind))))
+            .OrderBy(item => item.Order).Select(item => item.Child)];
+
     public string RootFolder(string id)
     {
         var folder = folders[id];
@@ -207,7 +240,7 @@ internal sealed class ExplorerCatalog
     public bool Served(string folder, ExplorerProfile profile)
     {
         var spec = folders[folder];
-        return (spec.Since ?? MinBand) <= profile.Band && spec.Engines.Contains(profile.Engine);
+        return (spec.Since ?? MinBand) <= profile.Band && spec.Engines.Contains(profile.Engine) && PlatformServed(spec.Platforms, profile);
     }
 
     public IReadOnlyList<string> FoldersFor(string kind, string? subtype)
@@ -239,7 +272,7 @@ internal sealed class ExplorerCatalog
     /// <summary>Whether an object node can expand: it has served static folders, a history row (temporal and ledger tables), or
     /// rows of its own (<see cref="CatalogKind.List"/>).</summary>
     public bool HasChildren(string kind, string? subtype, ExplorerProfile profile) =>
-        StaticFolders(kind, subtype, profile).Count > 0 || subtype is not null && kinds[kind].HistoryLookup.Contains(subtype) || kinds[kind].List is not null;
+        Children(kind, subtype, profile).Count > 0 || subtype is not null && kinds[kind].HistoryLookup.Contains(subtype) || kinds[kind].List is not null;
 
     public string IconFor(string kind, string? subtype) => subtype is not null && kinds[kind].SubtypeIcons.TryGetValue(subtype, out var icon) ? icon : kinds[kind].Icon;
 }
