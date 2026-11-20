@@ -170,6 +170,56 @@ describe('Connection library and history across both engines', () => {
     expect(sql.remove).not.toHaveBeenCalled()
   })
 
+  it("keeps Don't ask again on the entry: a connect that does not name it keeps it, and Advanced Properties clears it", async () => {
+    const directory = await folder(), bigQuery = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles()), sql = sqlStore()
+    const library = connectionLibrary({ connections: sql as never, savedPasswords: passwords as never, bigQuery })
+    await bigQuery.rememberEntry(gcloud())
+    expect(await library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false })).toBe(true)
+    const entry = async () => (await bigQuery.load()).library.profiles.find(profile => profile.options.project === 'varia-alpha')!
+    expect((await entry()).options.costPrompt).toBe(false)
+    // The same connection typed again (no choice named) is the same entry, and keeps the choice.
+    await bigQuery.rememberEntry(gcloud())
+    expect((await entry()).options.costPrompt).toBe(false)
+    expect((await bigQuery.load()).library.profiles).toHaveLength(1)
+    // Turned back on in Advanced Properties (true): the default is not stored.
+    await bigQuery.rememberEntry({ ...gcloud(), costPrompt: true })
+    expect((await entry()).options).not.toHaveProperty('costPrompt')
+    // A live connection with no saved entry gets one; anything else in the input is refused.
+    expect(await library.setBigQueryCostPrompt({ options: gcloud('varia-beta'), costPrompt: false })).toBe(true)
+    await expect(library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false, environment: 'Production' })).rejects.toThrow()
+  })
+
+  it('keeps the cost-prompt choice with the settings when Save edits an entry to new ones', async () => {
+    const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
+    const alpha = await store.upsert({ options: { ...gcloud(), displayName: 'A' }, saved: true })
+    await store.upsert({ options: { ...gcloud('varia-beta'), displayName: 'B' }, saved: true })
+    await store.setCostPrompt({ options: gcloud(), costPrompt: false })
+    const choice = async (id: string) => (await store.load()).library.profiles.find(profile => profile.id === id)?.options.costPrompt
+    // Edited to varia-beta's settings, the entry takes varia-beta's choice (asks), not varia-alpha's.
+    await store.upsert({ id: alpha.id, options: { ...gcloud('varia-beta'), displayName: 'A' }, saved: true })
+    expect(await choice(alpha.id)).toBeUndefined()
+    // Edited back, it takes the choice entries with those settings share.
+    await store.setCostPrompt({ options: gcloud('varia-beta'), costPrompt: false })
+    const gamma = await store.upsert({ options: { ...gcloud('varia-gamma'), displayName: 'C' }, saved: true })
+    await store.upsert({ id: gamma.id, options: { ...gcloud('varia-beta'), displayName: 'C' }, saved: true })
+    expect(await choice(gamma.id)).toBe(false)
+  })
+
+  it('keeps one cost-prompt choice for entries with the same settings', async () => {
+    const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
+    // Save with an id can edit an entry until its settings equal another's: two entries, one connection.
+    const first = await store.upsert({ options: { ...gcloud(), displayName: 'A' }, saved: true })
+    const second = await store.upsert({ options: { ...gcloud('varia-beta'), displayName: 'B' }, saved: true })
+    await store.upsert({ id: second.id, options: { ...gcloud(), displayName: 'B' }, saved: true })
+    const choices = async () => (await store.load()).library.profiles.map(profile => profile.options.costPrompt)
+    await store.setCostPrompt({ options: gcloud(), costPrompt: false })
+    expect(await choices()).toEqual([false, false])
+    // Turned back on through either entry, both ask again.
+    await store.upsert({ options: { ...gcloud(), displayName: 'B', costPrompt: true } }, true, false, second.id)
+    expect(await choices()).toEqual([undefined, undefined])
+    expect(first.id).not.toBe(second.id)
+  })
+
   it('keeps SQL Server\'s library working when BigQuery\'s file cannot be read', async () => {
     const sql = sqlStore(), bigQuery = { load: vi.fn(async () => { throw new Error('EBUSY') }), remove: vi.fn(async () => { throw new Error('EBUSY') }) }
     const sqlId = '00000000-0000-4000-8000-000000000009'

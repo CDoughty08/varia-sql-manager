@@ -1,5 +1,5 @@
-import type { ConnectionLibrary, ConnectionProfile } from '../shared/connections'
-import type { ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
+import { connectionKey, type ConnectionLibrary, type ConnectionProfile } from '../shared/connections'
+import type { BigQueryConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
 import type { BigQueryConnectionStore } from './bigquery-connection-store'
 import type { ConnectionStore } from './connection-store'
 
@@ -13,6 +13,8 @@ export interface ConnectionHistory {
   rememberEntry(options: ProviderConnectionOptions, keepEnvironment?: boolean, autoReconnect?: ConnectionProfile['autoReconnect'], selectedProfileId?: string): Promise<{ id: string; environment?: string }>
   setAutoReconnect(options: ProviderConnectionOptions, value: NonNullable<ConnectionProfile['autoReconnect']>, selectedProfileId?: string): Promise<boolean>
   load(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }>
+  /** Saves a BigQuery connection's cost-prompt choice (docs/bigquery.md, Cost); resolves whether it holds. */
+  setBigQueryCostPrompt?(options: BigQueryConnectionOptions, costPrompt: boolean): Promise<boolean>
 }
 
 export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQueryConnectionStore): ConnectionHistory {
@@ -23,6 +25,11 @@ export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQuery
     setAutoReconnect: (options, value, selectedProfileId) => options.provider === 'bigquery'
       ? bigQuery.setAutoReconnect(options, value, selectedProfileId)
       : sqlServer.setAutoReconnect(options as ConnectionOptions, value, selectedProfileId),
-    load: () => sqlServer.load()
+    load: () => sqlServer.load(),
+    async setBigQueryCostPrompt(options, costPrompt) {
+      const { costPrompt: _costPrompt, ...rest } = options, key = connectionKey(rest)
+      const library = await bigQuery.setCostPrompt({ options: rest, costPrompt })
+      return library.profiles.some(profile => connectionKey(profile.options) === key && (profile.options.costPrompt !== false) === costPrompt)
+    }
   }
 }

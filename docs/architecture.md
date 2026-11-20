@@ -642,6 +642,11 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
 - **BigQuery** (`BigQueryService`, docs/bigquery.md) runs GoogleSQL through its REST client, never legacy SQL
   (`useLegacySql` false; `#legacySQL` is refused before a job exists). The connect probe dry-runs the constant
   `BigQueryService.ProbeSql`; every job carries `BigQueryService.Labels`.
+- **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
+  the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
+  beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes
+  (never by itself after a restore or a provider switch), and Text Editor › GoogleSQL turns the automatic one off; Execute
+  still dry-runs what it is about to send.
 
 ## UI structure
 

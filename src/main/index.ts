@@ -988,6 +988,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-save', value => library.save(value))
   handle('varia:connections-remove', value => library.remove(value))
   handle('varia:connections-environment', value => library.setEnvironment(value))
+  handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
   // name, never its path, and for a federation configuration the token file it reads (decision 49).
   handle('varia:connections-pick-key-file', async value => {

@@ -61,6 +61,9 @@ export const stateBudgetMs = 5_000
 const nothingOpen: TransactionState = { transactions: 0 }
 const mayBeOpen: TransactionState = { transactions: 0, unchecked: true }
 
+/** BigQuery's estimate and prompts before a run: the text, where it starts in the document (a selection's line and
+ *  column, for dry-run markers), and a signal Cancel aborts. Resolves whether to run. */
+export type CostGate = (tabId: string, sql: string, origin: { readonly line: number; readonly column: number }, signal: AbortSignal) => Promise<boolean>
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
   readonly statistics = new ClientStatisticsService()
   private disposed = false
@@ -70,6 +73,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
+  /** BigQuery's estimate and cost prompts before a run (BigQueryCostService.beforeExecute); resolves whether to run. */
+  private costGate?: CostGate
+  /** Runs waiting on the cost gate, which Cancel stops before anything is sent: the tab goes back as it was at once. */
+  private readonly gated = new Map<string, { readonly queryId: string; readonly stop: AbortController; readonly before: QueryState | undefined }>()
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
     private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
@@ -83,6 +90,24 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           this.update(event.tabId, { ...state, estimated: { ...state.estimated, view: event.view } })
       }
     })
+  }
+  setCostGate(gate: CostGate): void { this.costGate = gate }
+  /** Stops a run still waiting on its estimate or cost prompt (nothing was sent): the tab is as it was. */
+  private stopGated(tabId: string, queryId: string): boolean {
+    const gated = this.gated.get(tabId)
+    if (gated?.queryId !== queryId) return false
+    this.gated.delete(tabId)
+    gated.stop.abort()
+    const current = this.getSnapshot()[tabId]
+    if (current?.running?.queryId === queryId) {
+      // As it was, but with the session as it is now: one that ended while the run waited stays ended.
+      const restored = gated.before ? { ...gated.before, session: current.session } : current.session ? { session: current.session } : undefined
+      const next = { ...this.getSnapshot() }
+      if (restored) next[tabId] = restored
+      else delete next[tabId]
+      this.publish(next)
+    }
+    return true
   }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
@@ -178,14 +203,18 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       timeoutSeconds: connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout'],
       // Stop on error is SQL Server's (GO batches); a BigQuery query is one job, and main refuses the option for it.
       ...settings['queryExecution.stopOnError'] && connection.providerId !== 'bigquery' ? { stopOnError: true } : {},
-      ...settings['queryResults.grid.discardResults'] ? { discardResults: true } : {}
+      ...settings['queryResults.grid.discardResults'] ? { discardResults: true } : {},
+      // BigQuery: Options' cap goes with every job when the connection sets none (the backend prefers the connection's),
+      // and Bytes only leaves the dollars out of Messages.
+      ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.maximumBytesBilled'] > 0 ? { maximumBytesBilled: settings['queryExecution.bigQuery.maximumBytesBilled'] * 2 ** 30 } : {},
+      ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.showCost'] === 'bytes' ? { prices: false } : {}
     }
   }
-  private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode): PlanExecutionContext {
+  private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode, sqlScope?: 'document' | 'selection'): PlanExecutionContext {
     const document = this.documents.get(tabId)!, connection = this.getConnection(document.connectionId!)
     return Object.freeze({ executionId, tabId, name: document.name, file: document.file?.path,
       connectionId: document.connectionId!, server: connection?.server, database: document.database,
-      sql, startLine, sqlScope: sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection', startedAt,
+      sql, startLine, sqlScope: sqlScope ?? (sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection'), startedAt,
       includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
       ...estimateMode ? { estimateMode } : {} })
   }
@@ -250,18 +279,35 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private async run(tabId: string): Promise<void> {
     const document = this.documents.get(tabId)!
     const connection = this.getConnection(document.connectionId!)!
-    const { sql, startLine } = this.documents.getExecuteText(tabId)
+    const { sql, startLine, startColumn } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
-    const queryId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]?.session
+    const queryId = crypto.randomUUID(), before = this.getSnapshot()[tabId], previous = before?.session
     const provenance: QueryProvenance = Object.freeze({ queryId, connectionId: connection.id, generation: connection.generation, database: document.database, ...connection.targetId ? { targetId: connection.targetId } : {} })
-    this.sources.set(tabId, { queryId, revision: this.documents.revision(tabId) })
-    const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
     // A BigQuery query has no SQL Server options (plans, client statistics) and takes the tab's dataset, not a database.
     const bigQuery = connection.providerId === 'bigquery'
     const sqlServerOnly: { includeActualPlan?: boolean; includeLivePlan?: boolean; includeClientStatistics?: boolean } = bigQuery ? {} : document
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = sqlServerOnly.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
     this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, provenance, ...livePlan ? { livePlan } : {} })
+    // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
+    // locations point into the edited text.
+    const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
+    // BigQuery dry-runs first (free) and may ask (docs/bigquery.md, Cost). Declined or cancelled, the tab is as it was.
+    if (bigQuery && this.costGate) {
+      const stop = new AbortController()
+      this.gated.set(tabId, { queryId, stop, before })
+      const stopped = new Promise<false>(resolve => { stop.signal.addEventListener('abort', () => resolve(false), { once: true }) })
+      let run = false
+      try { run = await Promise.race([this.costGate(tabId, sql, { line: startLine, column: startColumn }, stop.signal), stopped]) } catch { run = true }
+      if (stop.signal.aborted || this.disposed || this.getSnapshot()[tabId]?.running?.queryId !== queryId) {
+        if (this.gated.get(tabId)?.queryId === queryId) this.gated.delete(tabId)
+        return
+      }
+      if (!run) { this.stopGated(tabId, queryId); return }
+      this.gated.delete(tabId)
+    }
+    this.sources.set(tabId, { queryId, revision })
+    const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now(), undefined, sqlScope) : undefined
     if (sqlServerOnly.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
@@ -311,6 +357,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   async cancel(tabId = this.documents.getSnapshot().activeId): Promise<void> {
     const running = this.getSnapshot()[tabId]?.running
     if (!running || this.disposed) return
+    // Still waiting on its estimate or cost prompt: nothing was sent, so stopping it is local.
+    if (this.stopGated(tabId, running.queryId)) return
     try {
       const response = await this.api.cancel(running.queryId)
       if (!response.ok) throw new Error(response.error)
@@ -390,6 +438,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       await Promise.all(prepared.stopping.slice(next, next + sessionRequests).map(async tab => {
         if (this.getSnapshot()[tab.id]?.running?.queryId !== tab.queryId) return
         if (!strict) { await this.cancel(tab.id); return }
+        if (this.stopGated(tab.id, tab.queryId)) return
         try {
           const response = await this.api.cancel(tab.queryId)
           if (!response.ok) throw new Error(response.error)
@@ -401,5 +450,5 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (strict && prepared.stopping.some(tab => this.getSnapshot()[tab.id]?.running?.queryId === tab.queryId))
       throw new Error('A cancelled query has not reported completion. Its outcome may be unknown; no tabs were closed. Review its state before trying again.')
   }
-  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.executionVersions.clear(); this.clearListeners(); this.publish({}) }
+  dispose(): void { this.disposed = true; for (const gated of this.gated.values()) gated.stop.abort(); this.gated.clear(); this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.executionVersions.clear(); this.clearListeners(); this.publish({}) }
 }

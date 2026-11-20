@@ -4,6 +4,7 @@ import type { CommandArgs, CommandId } from './core/types'
 import type { IconId } from '../../shared/icons'
 import Icon from './Icon'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
+import BigQueryCostChip from './BigQueryCostChip'
 import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useExecutionScope, useQueryContext } from './QueryBar'
 import { lostHint, withKey } from './query-context'
 
@@ -62,6 +63,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
         <Icon name="play" />{scope.title}{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <span className="query-scope">{scope.detail}</span>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
+      <BigQueryCostChip tabId={tab?.id} />
       <ActualPlanToggle classic />
       <ActualPlanToggle classic live />
       <EstimatedPlanButton classic />

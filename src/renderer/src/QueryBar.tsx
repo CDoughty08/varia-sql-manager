@@ -6,6 +6,7 @@ import { environmentTag } from '../../shared/environments'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
+import BigQueryCostChip from './BigQueryCostChip'
 import { lostHint, queryContextModel, toolbarMove, toolbarReturn, toolbarStop, withKey, type QueryContextModel } from './query-context'
 import { documentUri } from './services/documents'
 
@@ -97,7 +98,7 @@ export function EstimatedPlanButton({ classic = false }: { classic?: boolean }) 
  */
 export default function QueryBar() {
   const { commands } = useWorkbench()
-  const { model } = useQueryContext()
+  const { tab, model } = useQueryContext()
   const scope = useExecutionScope()
   const canExecute = useCommandEnabled('query.execute'), canCancel = useCommandEnabled('query.cancel')
   const keys = { execute: useKeybindingLabel('query.execute'), cancel: useKeybindingLabel('query.cancel') }
@@ -150,6 +151,7 @@ export default function QueryBar() {
         onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
         <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
       </button>
+      <BigQueryCostChip tabId={tab?.id} />
       <ActualPlanToggle />
       <ActualPlanToggle live />
       <EstimatedPlanButton />

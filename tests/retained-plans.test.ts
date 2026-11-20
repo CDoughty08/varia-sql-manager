@@ -180,7 +180,7 @@ describe('normal execution retention lifecycle', () => {
   it('holds Execute and result release until copying settles; pins outlive re-execute, Close Results and Close Tab', async () => {
     const f = executionFixture(), waiting = deferred<CellValue>()
     f.client.handle(42)!.getCell.mockReturnValueOnce(waiting.promise)
-    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT chosen;', startLine: 2 })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT chosen;', startLine: 2, startColumn: 1 })
     const run = f.queries.execute()
     await vi.waitFor(() => expect(f.client.handle(42)!.getCell).toHaveBeenCalled())
     expect(f.queries.canExecute()).toBe(false)
@@ -230,7 +230,7 @@ describe('normal execution retention lifecycle', () => {
     const f = executionFixture(), waiting = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
     f.documents.update(f.tab.id, { includeLivePlan: true })
     f.api.estimatePlan.mockReturnValueOnce(waiting.promise)
-    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT chosen;', startLine: 2 })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT chosen;', startLine: 2, startColumn: 1 })
     const run = f.queries.estimate()
     f.model(f.tab.id).edit('SELECT edited;')
     waiting.resolve({ ok: true, value: { plans: [{ xml: '<original-estimate/>', batchNumber: 1, iteration: 2 }], database: 'tempdb' } }); await run
