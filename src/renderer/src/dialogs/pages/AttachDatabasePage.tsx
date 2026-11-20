@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { useDomRowCopy } from '../../grid/row-copy'
 import type { AttachServerFacts } from '../../../../shared/actions/schema.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import type { IconId } from '../../../../shared/icons.ts'
@@ -33,6 +34,7 @@ const showEnd = (input: HTMLInputElement | null) => { if (input && input.ownerDo
  * removed one's place, so focus never leaves the dialog.
  */
 export default function AttachDatabasePage({ open, editable }: PageProps) {
+  const copyRow = useDomRowCopy()
   const { dialogs } = useWorkbench()
   const id = useId()
   const root = useRef<HTMLDivElement>(null)
@@ -63,7 +65,7 @@ export default function AttachDatabasePage({ open, editable }: PageProps) {
   return <div className="attach-database" ref={root}>
     <div className="object-dialog-caption" id={`${id}-databases`}>Databases to attach:</div>
     <div className="attach-database-table">
-      <table className="object-dialog-grid attach-database-grid" aria-labelledby={`${id}-databases`}>
+      <table onCopy={copyRow} className="object-dialog-grid attach-database-grid" aria-labelledby={`${id}-databases`}>
         <colgroup><col className="attach-col-path" /><col /><col /><col /><col className="attach-col-status" /><col /></colgroup>
         <thead><tr><th scope="col">MDF File Location</th><th scope="col">Database Name</th><th scope="col">Attach As</th><th scope="col">Owner</th><th scope="col">Status</th><th scope="col">Message</th></tr></thead>
         <tbody>
@@ -99,7 +101,7 @@ export default function AttachDatabasePage({ open, editable }: PageProps) {
     {selected && <>
       <div className="object-dialog-caption" id={`${id}-files`}>"<bdi>{displayText(selected.name || selected.databaseName)}</bdi>" database details:</div>
       <div className="attach-database-table">
-        <table className="object-dialog-grid attach-database-grid" aria-labelledby={`${id}-files`}>
+        <table onCopy={copyRow} className="object-dialog-grid attach-database-grid" aria-labelledby={`${id}-files`}>
           <colgroup><col /><col className="attach-col-type" /><col className="attach-col-path" /><col className="attach-col-status" /></colgroup>
           <thead><tr><th scope="col">Original File Name</th><th scope="col">File Type</th><th scope="col">Current File Path</th><th scope="col">Message</th></tr></thead>
           <tbody>{selected.files.map((item, index) => <tr key={`${selected.key}-${index}`} data-selected={index === draft.selectedFile || undefined} onFocusCapture={() => selectAttachFile(host, index)} onMouseDown={() => selectAttachFile(host, index)}>

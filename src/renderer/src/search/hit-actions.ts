@@ -37,8 +37,10 @@ export function revealHit({ commands, objectSearch, explorer }: Pick<Workbench, 
   void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
 }
 
-/** The clipboard's Copy key on `platform`: ⌘C on macOS, where Ctrl+C is not Copy, and Ctrl+C elsewhere. */
-export function isCopyKey(event: { readonly key: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean }, platform: Platform): boolean {
+/** The clipboard's Copy key on `platform`: ⌘C on macOS, where Ctrl+C is not Copy, and Ctrl+C elsewhere. A layout without
+ * Latin letters (Cyrillic, Greek) names the key by its position, as KeybindingService reads a chord. */
+export function isCopyKey(event: { readonly key: string; readonly code?: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean }, platform: Platform): boolean {
   const mac = platform === 'darwin'
-  return event.key.toLowerCase() === 'c' && !event.altKey && !event.shiftKey && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+  const c = /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() === 'c' : event.code === 'KeyC'
+  return c && !event.altKey && !event.shiftKey && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
 }

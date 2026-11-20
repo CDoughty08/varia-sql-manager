@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (355)
+## Commands (358)
 
 ### File
 
@@ -224,6 +224,9 @@ keys it uses are listed below.
 | Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size; Results toolbar › More results tools › Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
+| Copy Operator (not in the palette) | `plan.copyOperator` | Ctrl+C * (`planOutlineFocus`) | Ctrl+C * (`planOutlineFocus`) | ⌘C * (`planOutlineFocus`) | Always | Execution plan outline context menu › Copy |
+| Copy Plan Properties (not in the palette) | `plan.copyProperties` | — | — | — | Always | Execution plan Properties context menu › Copy |
+| Copy Plan Property Values (not in the palette) | `plan.copyPropertyValues` | — | — | — | Always | Execution plan Properties context menu › Copy Value |
 
 ### Connection
 
@@ -1063,7 +1066,24 @@ Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `peek.copyProperties` | Always |
 
-## Context keys (173)
+#### Execution plan outline context menu (`plan.outline.context`)
+
+Right-click an operator in the execution plan's outline, which selects it, or press Shift+F10 or the context-menu key in the outline. Copy puts the selected operator on the clipboard as one tab-separated line: its operator, object, estimated subtree cost and rows, after a header line when Include column headers when copying the results is on.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `plan.copyOperator` | Always |
+
+#### Execution plan Properties context menu (`plan.properties.context`)
+
+Right-click the execution plan's Properties pane, or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, else the one right-clicked, else all of them, on the clipboard as Name and Value lines separated by a tab; Copy Value puts only their values, one a line.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `plan.copyProperties` | Always |
+| `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
+
+## Context keys (174)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1085,6 +1105,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `resultsFocus` | boolean | focus | Focus is in the Results pane (either layout) or its overflow picker; activePanel is then 'output', except in the picker. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
+| `planOutlineFocus` | boolean | focus | Focus is in an execution plan's operator outline, whose Copy copies the selected operator. |
 | `explorerFocus` | boolean | focus | Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
 | `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
 | `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |

@@ -143,6 +143,12 @@ the Servers column above says which, and on another server the menu hides the it
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
 
+The editable grids of these pages (New Database's files and filegroups, Restore's backup sets and files, Attach's
+databases and files, User Mapping, Securables, Explicit permissions, Mapped Credentials and Table Properties' Extended
+properties) copy their selected row with Ctrl+C (⌘C on macOS) or Edit › Copy, as a results grid copies it: tab-separated
+values as shown (a checkbox as Yes or No, a field's default name where it shows one), after a header line when Include
+column headers when copying the results is on. With text selected in a field, Ctrl+C copies that text instead.
+
 A modal dialog with more than one page lists them beside the page (SSMS's "Select a page"); where the dialog is narrower
 than 720 px (a viewport under 768 CSS px, as when zoomed in: the window is at least 1024 px wide) the list becomes a row of tabs above the page (a `tablist` named "Select a page", arrow keys, Home and End). A
 page marked kept mounted stays in the page once visited, hidden while another shows, so what it holds (a running list,

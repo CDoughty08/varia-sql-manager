@@ -12,8 +12,8 @@ export const applicationMenus = [
   { id: 'help', label: 'Help', mnemonic: 'h' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
-/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a Search Objects hit, the results toolbar's ⋯, Peek's Properties. */
-export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'search.hit.context', 'output.tools', 'peek.properties.context'] as const
+/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a Search Objects hit, the results toolbar's ⋯, Peek's Properties, the execution plan's outline and Properties. */
+export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'search.hit.context', 'output.tools', 'peek.properties.context', 'plan.outline.context', 'plan.properties.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
@@ -75,7 +75,9 @@ export const menuIds: readonly MenuId[] = [
   'search.hit.context',
   'search.copy',
   'output.tools',
-  'peek.properties.context'
+  'peek.properties.context',
+  'plan.outline.context',
+  'plan.properties.context'
 ]
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
