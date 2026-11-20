@@ -41,7 +41,8 @@ packed) and catalog columns read sixteen times 52 % (58 MiB raw, 2.7 MiB packed)
   pages stay raw and readable). Live tables are never packed, and derived sets are left to the policy.
 - **A refused row waits for it.** While the query's own pages are queued (`QueryBudget.SealCanPack`), a row the budget
   refuses waits for their saving as it waits for packing for room ([Room for a query](#room-for-a-query)), through a
-  read's brief pin too, whose end restarts the worker. While a lease holds them (a Copy or Save of a result still
+  pin too (a read's is brief; Find's or a profile's lasts the operation), whose end restarts the worker, within the
+  wait's bounds. While a lease holds them (a Copy or Save of a result still
   loading), it is refused at once.
 - **Reads of a fresh result read packed pages** from its first seconds rather than after the policy's 5 or 30 s. They
   cost what the [measurements](#measurements) show: below a frame for scrolling and random jumps, a sorted grid's slowest

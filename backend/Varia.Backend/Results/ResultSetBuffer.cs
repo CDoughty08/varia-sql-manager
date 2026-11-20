@@ -802,7 +802,8 @@ internal sealed class ResultSetBuffer
     }
 
     /// <summary>Whether pages are queued for packing at seal that will pack without a lease ending first: a pin (a read)
-    /// is brief and its end restarts the worker, so a refused row waits through it; a lease (a Copy or Save) may hold the
+    /// ends with its read, Find or profile and its end restarts the worker, so a refused row waits through it (within the
+    /// wait's bounds); a lease (a Copy or Save) may hold the
     /// set for as long as its job runs, so a row is refused at once rather than waiting on it.</summary>
     internal bool SealPackable
     {

@@ -49,7 +49,7 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
 
     /// <summary>Whether a page this query queued for packing at seal will pack without waiting on a lease
     /// (<see cref="ResultSetBuffer.SealPackable"/>). Asked outside every set's lock (ResultStore.WaitForRoomAsync), so a row is
-    /// refused at once while a Copy or Save holds every set with pages queued, and waits through a read's brief pin.</summary>
+    /// refused at once while a Copy or Save holds every set with pages queued, and waits through a pin, which ends with its read, Find or profile.</summary>
     internal bool SealCanPack()
     {
         if (SealPending == 0) return false;

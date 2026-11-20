@@ -130,7 +130,7 @@ internal static class SealPackingChecks
         copied.ReleaseLease();
         check(Settled(copied) && AllPacked(copied), "and the lease's end packs what was stored");
 
-        // A read's pin at the refusal is brief: the row waits through it, and the query stores every row once it ends.
+        // A read's pin at the refusal ends with the read: the row waits through it, and the query stores every row.
         var read = Store(64L << 20, 12L << 20);
         var scrolled = Open(read, "scrolled");
         var held = scrolled.Pin();
