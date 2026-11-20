@@ -235,7 +235,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); }, null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); this.store.Rooms.Trim(Environment.TickCount64); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
