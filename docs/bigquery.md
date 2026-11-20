@@ -206,8 +206,10 @@ Messages).
   status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Executing a selection marks its error where the
   selection puts it in the document. Nothing dry-runs after a restore, a provider switch, a connection or dataset change,
   or once the setting is off, until the user edits or executes (decision 44): an edit's dry run queued behind one in
-  flight is dropped too. A NOT_FOUND table or dataset is the query's error (`SQL_ERROR` with Google's text), and a
-  refused table keeps Google's text, since connecting already proved the account can create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
+  flight is dropped too, as is one Execute makes redundant. A table or dataset that does not exist is the query's
+  error (`SQL_ERROR` with Google's text), a dataset in another location is `LOCATION_MISMATCH` as Execute says, a missing
+  project stays `NOT_FOUND`, and a refused table keeps Google's text, since connecting already proved the account can
+  create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
   while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
 - **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
   first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
@@ -216,7 +218,9 @@ Messages).
     10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
     kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
     and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
-    threshold** turns it back on. It is a preference, not part of which entry the connection is or of its target.
+    threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
+    changed, so a remembered connection never undoes a later Don't ask again, and entries with the same settings share
+    one choice. It is a preference, not part of which entry the connection is or of its target.
   - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
     external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
     `UNKNOWN`. **Don't warn me about incomplete estimates again** clears

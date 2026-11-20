@@ -15,6 +15,16 @@ const empty = (): BigQueryLibraryFile => ({ version: 1, profiles: [] })
 const stored = (options: BigQueryConnectionOptions): BigQueryConnectionOptions => bigQueryProfileInputSchema.shape.options.parse(options)
 const keyOf = (options: BigQueryConnectionOptions) => connectionKey(options)
 
+/** The cost-prompt choice of every entry with these settings (one connection, however many entries name it); true, the
+ *  default, is not stored. */
+function setChoice(library: BigQueryLibraryFile, key: string, costPrompt: boolean) {
+  for (const item of library.profiles) {
+    if (keyOf(item.options) !== key) continue
+    const { costPrompt: _costPrompt, ...next } = item.options
+    item.options = costPrompt ? next : { ...next, costPrompt: false }
+  }
+}
+
 /** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. */
 function prune(library: BigQueryLibraryFile) {
   const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
@@ -99,6 +109,8 @@ export class BigQueryConnectionStore {
       const costPrompt = options.costPrompt ?? profile.options.costPrompt
       const { costPrompt: _costPrompt, ...rest } = kept ? { ...options, environment: kept } : options
       profile.options = costPrompt === false ? { ...rest, costPrompt: false } : rest
+      // A choice the options name is the connection's: entries with the same settings take it too.
+      if (options.costPrompt !== undefined) setChoice(library, key, options.costPrompt)
       if (keyPath) profile.keyPath = keyPath
       else delete profile.keyPath
       if (input.favorite !== undefined) profile.favorite = input.favorite
@@ -148,8 +160,7 @@ export class BigQueryConnectionStore {
     return (await this.change(library => {
       let profile = library.profiles.find(item => keyOf(item.options) === key)
       if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }; library.profiles.push(profile) }
-      const { costPrompt: _costPrompt, ...next } = profile.options
-      profile.options = input.costPrompt ? next : { ...next, costPrompt: false }
+      setChoice(library, key, input.costPrompt)
       prune(library)
       if (!library.profiles.includes(profile)) throw new Error('The connection could not be kept in the saved connections.')
     })).library

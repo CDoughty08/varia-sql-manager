@@ -22,6 +22,29 @@ internal static partial class BigQueryErrors
     public const string LegacySql = "Varia runs GoogleSQL only. Remove #legacySQL and write the query in GoogleSQL.";
 
     // Google access and refresh tokens ("ya29.", "1//"), beside the JSON Web Tokens EntraFailures.Sanitize removes.
+    [GeneratedRegex(@"Dataset (?<project>[^\s:]+):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
+    private static partial Regex DatasetLocationMessage();
+
+    /// <summary>A NOT_FOUND naming a dataset "not found in location X": a dataset in another location (LOCATION_MISMATCH, found
+    /// by asking where it is with datasets.get, free) told apart from one that does not exist (the error as it was).</summary>
+    public static async Task<RequestException> LocationAsync(RequestException mapped, Google.Cloud.BigQuery.V2.BigQueryClient client)
+    {
+        if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
+        string? actual;
+        try
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var found = await client.Service.Datasets.Get(match.Groups["project"].Value, match.Groups["dataset"].Value).ExecuteAsync(limit.Token);
+            actual = found.Location;
+        }
+        // Any failure here (a refused token, a disposed client) leaves the query's own error as it was.
+        catch (Exception) { return mapped; }
+        var ran = match.Groups["location"].Value;
+        if (actual is not { Length: > 0 and <= BigQueryLimits.Location } || !BigQueryLimits.LocationId().IsMatch(actual) || string.Equals(actual, ran, StringComparison.OrdinalIgnoreCase)) return mapped;
+        return new RequestException("LOCATION_MISMATCH", "Dataset " + match.Groups["dataset"].Value + " is in location " + actual + ", but the query ran in " + ran
+            + ". A query runs in one location: query datasets in " + ran + ", or connect with the location set to " + actual + ".");
+    }
+
     [GeneratedRegex(@"\b(?:ya29\.|1//)[\w.-]+")]
     private static partial Regex GoogleToken();
 

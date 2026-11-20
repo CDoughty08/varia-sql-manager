@@ -298,12 +298,16 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
     {
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+        Exception failure;
+        // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
         try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, dataset, token)); }
-        // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: keep Google's text. A
-        // missing table or dataset is the query's mistake too, not the project's.
-        catch (Google.GoogleApiException error) when (!token.IsCancellationRequested && (error.HttpStatusCode == System.Net.HttpStatusCode.NotFound || error.Error?.Errors?.Any(item => item.Reason == "notFound") == true))
-        { throw new RequestException("SQL_ERROR", BigQueryErrors.Sanitize(error.Error?.Message) is { Length: > 0 } text ? text : "BigQuery could not find a table or dataset the query names."); }
-        catch (Exception error) { throw BigQueryErrors.Map(error, connection.Options.Project, token: token); }
+        catch (Exception error) { failure = BigQueryErrors.Map(error, connection.Options.Project, token: token); }
+        if (failure is not RequestException { Code: "NOT_FOUND" } missing) throw failure;
+        // A dataset in another location is told apart as Execute tells it; a table or dataset that does not exist is the
+        // query's mistake (marked in the editor), while a missing project stays NOT_FOUND.
+        var mapped = await BigQueryErrors.LocationAsync(missing, connection.Client);
+        if (mapped.Code == "NOT_FOUND" && NamedObject().Match(mapped.Message) is { Success: true } named) throw new RequestException("SQL_ERROR", named.Value);
+        throw mapped;
     }
 
     /// <summary>bigquery.dryRun (docs/bigquery.md, Cost): the free estimate before Execute and the editor's diagnostics. It
@@ -317,6 +321,11 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         var estimate = await EstimateAsync(connection, args.Sql, token, args.Dataset ?? connection.Options.Dataset);
         return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked);
     }
+
+    /// <summary>Google's text for a table, view, routine, model or dataset the query names that does not exist (without the
+    /// project hint NOT_FOUND adds).</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Not found: (?:Table|View|Routine|Model|Dataset) [^\s]{1,1100}(?: was not found in location [A-Za-z\d-]{1,64})?")]
+    private static partial System.Text.RegularExpressions.Regex NamedObject();
 
     /// <summary>The most text a dry run takes, as query.execute does (dryRunLimits in src/shared/bigquery/dry-run.ts).</summary>
     public const int MaxDryRunCharacters = 1_000_000;

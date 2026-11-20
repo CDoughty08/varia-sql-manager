@@ -771,6 +771,32 @@ describe('BigQuery cost gate', () => {
     await f.queries.execute(f.tab.id)
     expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ maximumBytesBilled: 5 * 2 ** 30, prices: false })
   })
+  it("records the text's version before the gate, and Cancel keeps a session that ended while it waited", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const versions: number[] = []
+    const revision = vi.spyOn(f.documents, 'revision').mockImplementation(() => { versions.push(versions.length + 1); return versions.length })
+    const pending = deferred<boolean>()
+    let readBeforeGate = -1
+    f.queries.setCostGate(async () => { readBeforeGate = versions.length; await pending.promise; return true })
+    const run = f.queries.execute(f.tab.id)
+    pending.resolve(true)
+    await run
+    expect(readBeforeGate).toBeGreaterThan(0)
+    revision.mockRestore()
+    // A session the tab had ends while the next run waits on its estimate: Cancel does not bring it back.
+    const live = { connectionId: f.connection.id, spid: 51, login: 'reader' }
+    f.queries['update'](f.tab.id, { ...f.queries.getSnapshot()[f.tab.id], session: live })
+    const waiting = deferred<boolean>()
+    f.queries.setCostGate(() => waiting.promise)
+    const next = f.queries.execute(f.tab.id)
+    expect(f.queries.getSnapshot()[f.tab.id]?.session).toEqual(live)
+    f.bus.emit({ type: 'session.ended', tabId: f.tab.id } as never)
+    await f.queries.cancel(f.tab.id)
+    await next
+    expect(f.queries.getSnapshot()[f.tab.id]?.session).toBeUndefined()
+    waiting.resolve(true)
+  })
   it("hands the gate a selection's start, so dry-run markers land in the document", async () => {
     const f = fixture()
     Object.assign(f.connection, { providerId: 'bigquery' })

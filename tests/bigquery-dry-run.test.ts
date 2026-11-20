@@ -284,6 +284,31 @@ describe('the estimate before Execute', () => {
     expect(f.service.getSnapshot().get(f.tab.id)).toMatchObject({ phase: 'refused' })
     expect(f.service.status(f.tab.id)?.label).toBe('BigQuery: 1 error')
   })
+  it("keeps the newer estimate when the text is edited while Execute's own dry run is out", async () => {
+    const f = fixture()
+    const run = f.service.beforeExecute(f.tab.id, 'SELECT 1')
+    f.model.edit('SELECT 2')
+    f.pending.shift()!.resolve(estimate(GiB))
+    expect(await run).toBe(true)
+    f.replies.push(estimate(3 * GiB))
+    f.tick()
+    await f.settle()
+    f.docs.events.emit({ type: 'query.finished', tabId: f.tab.id, queryId: 'q', summary: { job: { project: 'p', jobId: 'j', bytesProcessed: 42 } } as never })
+    expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'estimate', bytes: 3 * GiB })
+  })
+  it('drops a diagnostics run queued behind one in flight when Execute dry-runs the text itself', async () => {
+    const f = fixture()
+    f.model.edit('SELECT 1')
+    f.tick()
+    f.model.edit('SELECT 2')
+    f.tick()
+    f.replies.push(estimate(GiB))
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 2')).toBe(true)
+    f.pending.shift()!.resolve(estimate(GiB))
+    await f.settle()
+    await f.settle()
+    expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(2)
+  })
   it("marks an executed selection's error in the document, from the selection's start", async () => {
     const f = fixture()
     f.model.edit('-- daily\n-- totals\nSELECT 1; SELECT x\nFROM orders')
@@ -347,6 +372,16 @@ describe('the saved prompt choice', () => {
     saved = undefined
     await fresh.refresh(connection)
     expect(fresh.asks(connection)).toBe(true)
+  })
+  it("holds Don't ask again for the session when it could not be saved", async () => {
+    const api = {
+      loadConnectionLibrary: vi.fn(async () => ({ ok: true, value: { bigQuery: { profiles: [] } } }) as never),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: false as const, error: 'The connection could not be kept in the saved connections.', code: 'INTERNAL' as never }))
+    }
+    const optOut = costOptOut(api)
+    await optOut.dontAsk(connection)
+    await optOut.refresh(connection)
+    expect(optOut.asks(connection)).toBe(false)
   })
 })
 

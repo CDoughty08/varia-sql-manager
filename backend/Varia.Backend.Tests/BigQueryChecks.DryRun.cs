@@ -95,6 +95,15 @@ internal static partial class BigQueryChecks
         var missing = await harness.Call("bigquery.dryRun", Args("SELECT * FROM ordrs", "sales"));
         check(missing.Code == "SQL_ERROR" && missing.Message == "Not found: Table varia-alpha:sales.ordrs was not found in location US",
             $"a dry run naming a missing table is the query's error, with Google's text and no project hint: {missing.Code} {missing.Message}");
+        // A dataset in another location is told apart as Execute tells it, and a missing project stays NOT_FOUND.
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Dataset varia-alpha:sales_eu was not found in location US")));
+        harness.Fake.On("GET", BigQueryFake.Datasets, new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#dataset\",\"datasetReference\":{\"projectId\":\"varia-alpha\",\"datasetId\":\"sales_eu\"},\"location\":\"EU\"}"));
+        var elsewhere = await harness.Call("bigquery.dryRun", Args("SELECT * FROM sales_eu.orders"));
+        check(elsewhere.Code == "LOCATION_MISMATCH" && elsewhere.Message.Contains("is in location EU, but the query ran in US", StringComparison.Ordinal),
+            $"a dry run against a dataset in another location is LOCATION_MISMATCH, as Execute says: {elsewhere.Code} {elsewhere.Message}");
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Project varia-alpha")));
+        var gone = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
+        check(gone.Code == "NOT_FOUND", $"a dry run in a project that no longer exists is NOT_FOUND, not a query error: {gone.Code} {gone.Message}");
 
         var jobs = harness.Fake.To(BigQueryFake.Jobs).Count();
         var legacy = await harness.Call("bigquery.dryRun", Args("#legacySQL\nSELECT 1"));

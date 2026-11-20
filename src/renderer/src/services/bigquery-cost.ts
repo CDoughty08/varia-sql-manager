@@ -55,6 +55,8 @@ export interface CostOptOut {
  */
 export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBigQueryCostPrompt'>, changed: () => void = () => {}): CostOptOut {
   const declined = new Map<string, boolean>()
+  // Choices made here whose write has not landed, or failed: a read of the saved entries does not undo them this session.
+  const local = new Set<string>()
   const key = (connection: LiveConnection) => {
     try { return connection.options.provider === 'bigquery' ? connectionKey(connection.options) : undefined } catch { return undefined }
   }
@@ -67,17 +69,21 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
       try {
         const loaded = await api.loadConnectionLibrary()
         if (!loaded.ok) return
-        const profile = loaded.value.bigQuery.profiles.find(item => { try { return connectionKey(item.options) === entry } catch { return false } })
-        set(entry, profile?.options.costPrompt === false)
+        // Entries with the same settings are one connection: the choice applies to them all (the store writes them alike).
+        const profiles = loaded.value.bigQuery.profiles.filter(item => { try { return connectionKey(item.options) === entry } catch { return false } })
+        if (!local.has(entry)) set(entry, profiles.some(item => item.options.costPrompt === false))
       } catch { /* The last choice read stands. */ }
     },
     async dontAsk(connection) {
       const entry = key(connection)
       if (entry === undefined || connection.options.provider !== 'bigquery') return
       set(entry, true)
+      local.add(entry)
       const options: BigQueryConnectionOptions = connection.options
       // Saved where a reconnect finds it; if the write fails, the choice still holds until the app closes.
-      try { await api.setBigQueryCostPrompt({ options, costPrompt: false }) } catch { /* As above. */ }
+      let saved = false
+      try { const result = await api.setBigQueryCostPrompt({ options, costPrompt: false }); saved = result.ok && result.value } catch { /* As above. */ }
+      if (saved) local.delete(entry)
     }
   }
 }
@@ -280,14 +286,16 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (!connection || !entry) return true
     clearTimeout(entry.timer)
     entry.timer = undefined
+    entry.again = false
     const dataset = this.dataset(tabId)
     let estimate = entry.estimated && entry.estimated.sql === sql && entry.estimated.dataset === dataset ? entry.estimated.result : undefined
     if (!estimate) {
       if (sql.length > dryRunLimits.characters) return true
       entry.revision++
-      estimate = await this.dryRun(entry, sql, origin)
     }
+    // The revision of the text Execute runs, read before any await: an edit while the dry run is out is newer.
     entry.executed = entry.revision
+    if (!estimate) estimate = await this.dryRun(entry, sql, origin)
     if (signal?.aborted) return false
     if (!estimate) return true
     await this.deps.optOut.refresh(connection)

@@ -12,7 +12,7 @@ import type { BigQueryConnectionProfile, BigQueryLibraryView, PickedKeyFile } fr
 import type { ProviderId } from '../../shared/providers'
 import type { BigQueryAuthenticationMode } from '../../shared/auth'
 import { BigQueryAdvanced, BigQueryConnectFields, accountText, useBigQueryLists } from './BigQueryConnectFields'
-import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, serverTypeLabels, switchServerType, undoServerType, withAuthentication, type ServerTypeState } from './bigquery-connect-form'
+import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
@@ -146,7 +146,9 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const [options, setOptions] = useState<ConnectionOptions>({ ...sqlInitial, password: '' })
   const [serverType, setServerType] = useState<ServerTypeState>({ type: initial.provider === 'bigquery' ? 'bigquery' : 'sqlserver' })
   const isBigQuery = serverType.type === 'bigquery'
-  const [bigQuery, setBigQuery] = useState<BigQueryConnectionOptions>(() => initial.provider === 'bigquery' ? { ...initial } : bigQueryDefaults())
+  // The cost-prompt choice is the saved entry's (savedCostPrompt below): the form names one only once Advanced Properties
+  // changes it, so a remembered or stale value never overwrites "Don't ask again".
+  const [bigQuery, setBigQuery] = useState<BigQueryConnectionOptions>(() => initial.provider === 'bigquery' ? withoutCostPrompt(initial) : bigQueryDefaults())
   const currentBigQuery = useRef(bigQuery)
   currentBigQuery.current = bigQuery
   const [bigQueryLibrary, setBigQueryLibrary] = useState<BigQueryLibraryView>({ profiles: [] })
@@ -260,6 +262,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   const storageNote = canRememberPassword(options.authentication) && storage && !storage.available ? storageNotes[storage.reason ?? 'unavailable'] : ''
   function showLibrary(view: ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }) { setLibrary(view.library); setSavedIds(new Set(view.savedPasswords)); if (view.bigQuery) setBigQueryLibrary(view.bigQuery) }
   const bigQuerySelected = bigQueryLibrary.profiles.find(profile => profile.id === bigQuerySelectedId)
+  const bigQuerySavedCostPrompt = savedCostPrompt(bigQueryLibrary.profiles, bigQuery)
   const bigQueryKeyName = bigQuery.keyFile ? pickedKeyName?.keyFile === bigQuery.keyFile ? pickedKeyName.name : bigQueryLibrary.profiles.find(profile => profile.options.keyFile === bigQuery.keyFile)?.keyFileName : undefined
   const bigQueryLists = useBigQueryLists(bigQuery, alive, isBigQuery)
   const ready = isBigQuery ? bigQueryReady(bigQuery) : authReady
@@ -665,7 +668,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
   function chooseBigQuery(profile: BigQueryConnectionProfile) {
     setServerType(current => switchServerType(current, 'bigquery'))
     if (properties === 'string') setProperties('properties')
-    setBigQuery({ ...profile.options }); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
+    setBigQuery(withoutCostPrompt(profile.options)); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
     setBigQueryReconnect(profile.autoReconnect ?? 'inherit'); bigQuerySettled()
     setError(''); setNotice(''); setTested(undefined); setFailure(undefined)
   }
@@ -1024,7 +1027,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
               <div className="property-grid" hidden={properties !== 'properties'}>
                 <div className="property-row"><label htmlFor="connect-server-type">Server type</label><select id="connect-server-type" value={serverType.type} disabled={locked} onChange={event => changeServerType(event.target.value as ProviderId)}>{(['sqlserver', 'bigquery'] as const).map(type => <option key={type} value={type}>{serverTypeLabels[type]}</option>)}</select></div>
                 {serverType.previous && <div className="property-row"><span /><p className="field-note" role="status">Server type changed to {serverTypeLabels[serverType.type]}; the {serverTypeLabels[serverType.previous]} fields are kept. <button type="button" className="connect-inline-action" disabled={locked} onClick={undoServerTypeChange}>Undo</button></p></div>}
-                {isBigQuery ? <BigQueryConnectFields options={bigQuery} keyFileName={bigQueryKeyName} locked={locked} lists={bigQueryLists} onChange={bigQueryUpdate} onAuthentication={bigQueryAuthentication} onBrowseKeyFile={() => void pickKeyFile()} onAdvanced={() => setBigQueryAdvanced(true)} /> : <>
+                {isBigQuery ? <BigQueryConnectFields options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} keyFileName={bigQueryKeyName} locked={locked} lists={bigQueryLists} onChange={bigQueryUpdate} onAuthentication={bigQueryAuthentication} onBrowseKeyFile={() => void pickKeyFile()} onAdvanced={() => setBigQueryAdvanced(true)} /> : <>
                 <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
                 <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
                 <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
@@ -1089,7 +1092,7 @@ export default function ConnectDialog({ initial, initialTargetId, reviewOpen, in
       onOk={() => { const type = confirmClose.type; setConfirmClose(undefined); void save().then(saved => { if (saved === 'saved') closeRest(type) }) }} onCancel={() => setConfirmClose(undefined)}>
       <p>{confirmClose.target || confirmClose.bigQueryTarget ? 'You changed this saved connection. Save the changes to History and its Object Explorer connections before closing?' : 'This connection is not saved. Save it to History before closing?'}</p>
     </SubDialog>}
-    {bigQueryAdvanced && <BigQueryAdvanced options={bigQuery} projects={bigQueryLists.projects} onSave={patch => { bigQueryUpdate(patch); setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
+    {bigQueryAdvanced && <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} projects={bigQueryLists.projects} onSave={patch => { bigQueryUpdate(patch); setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setBigQueryAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
     {sourcePrompt && <SubDialog title="Use this token file?" okLabel="Use It" onOk={() => void confirmSource(sourcePrompt)} onCancel={() => setSourcePrompt(undefined)}>
       <p>{sourcePrompt.name} signs in with a token that Varia reads from this file each time it connects:</p>
       <p className="bq-source-path">{sourcePrompt.source}</p>

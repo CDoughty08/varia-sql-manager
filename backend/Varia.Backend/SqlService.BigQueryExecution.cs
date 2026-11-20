@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Google;
 using Google.Apis.Bigquery.v2.Data;
 using Varia.Backend.BigQuery;
@@ -29,9 +28,6 @@ internal sealed partial class SqlService
     internal const int BigQueryPageCells = 250_000;
 
     internal int BigQueryPageRows(int columns) => Math.Clamp(BigQueryPageCells / Math.Max(1, columns), BigQueryFirstPageRows, bigQuery.PageRows);
-
-    [GeneratedRegex(@"Dataset (?<project>[^\s:]+):(?<dataset>[A-Za-z\d_]{1,1024}) was not found in location (?<location>[A-Za-z\d-]{1,64})")]
-    private static partial Regex DatasetLocationMessage();
 
     private async Task<QueryResult> ExecuteBigQueryAsync(QueryArgs args, BigQueryConnection connection, RequestContext? context)
     {
@@ -321,19 +317,6 @@ internal sealed partial class SqlService
         var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap, prices)
             : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: cap, token: token, prices: prices) as RequestException
             ?? new RequestException("BACKEND_ERROR", "Execution stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
-        if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
-        string? actual;
-        try
-        {
-            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var found = await connection.Client.Service.Datasets.Get(match.Groups["project"].Value, match.Groups["dataset"].Value).ExecuteAsync(limit.Token);
-            actual = found.Location;
-        }
-        // Any failure here (a refused token, a disposed client) leaves the query's own error as it was.
-        catch (Exception) { return mapped; }
-        var ran = match.Groups["location"].Value;
-        if (actual is not { Length: > 0 and <= BigQueryLimits.Location } || !BigQueryLimits.LocationId().IsMatch(actual) || string.Equals(actual, ran, StringComparison.OrdinalIgnoreCase)) return mapped;
-        return new RequestException("LOCATION_MISMATCH", "Dataset " + match.Groups["dataset"].Value + " is in location " + actual + ", but the query ran in " + ran
-            + ". A query runs in one location: query datasets in " + ran + ", or connect with the location set to " + actual + ".");
+        return await BigQueryErrors.LocationAsync(mapped, connection.Client);
     }
 }

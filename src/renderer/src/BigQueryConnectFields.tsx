@@ -6,7 +6,7 @@ import { bigQueryLimits } from '../../shared/connections'
 import { z } from 'zod'
 import Icon from './Icon'
 import { trapFocus } from './trap-focus'
-import { bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, parseExtraProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
+import { advancedCostPrompt, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, parseExtraProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
 
 /** Location's choices: Automatic (the dataset's), the multi-regions, then common regions. Any other a profile names is
  *  listed as well. */
@@ -142,6 +142,8 @@ export function bigQueryAdvancedSummary(options: BigQueryConnectionOptions): str
 
 interface FieldsProps {
   options: BigQueryConnectionOptions
+  /** The saved entry's cost-prompt choice, shown while the form names none. */
+  savedCostPrompt?: false
   keyFileName?: string
   locked: boolean
   lists: BigQueryLists
@@ -152,11 +154,11 @@ interface FieldsProps {
 }
 
 /** BigQuery's block of the Connect dialog's Connection Properties (docs/bigquery.md, Connect dialog). */
-export function BigQueryConnectFields({ options, keyFileName, locked, lists, onChange, onAuthentication, onBrowseKeyFile, onAdvanced }: FieldsProps) {
+export function BigQueryConnectFields({ options, savedCostPrompt, keyFileName, locked, lists, onChange, onAuthentication, onBrowseKeyFile, onAdvanced }: FieldsProps) {
   const keyMode = usesKeyFile(options.authentication) ? options.authentication as Exclude<BigQueryAuthenticationMode, 'gcloud'> : undefined
   const ready = bigQueryCredentialReady(options)
   const projectProblem = options.project.trim() ? projectError(options.project) : undefined
-  const advancedNote = bigQueryAdvancedSummary(options)
+  const advancedNote = bigQueryAdvancedSummary({ ...options, costPrompt: options.costPrompt ?? savedCostPrompt })
   const dataset = options.dataset?.trim() ? lists.datasets.find(value => value.name === options.dataset?.trim()) : undefined
   const locations = options.location && !(bigQueryLocations as readonly string[]).includes(options.location) ? [...bigQueryLocations, options.location] : bigQueryLocations
   const { account } = lists
@@ -181,9 +183,10 @@ export function BigQueryConnectFields({ options, keyFileName, locked, lists, onC
 
 const serviceAccountSchema = z.email().max(bigQueryLimits.serviceAccount)
 /** BigQuery's Advanced Properties: the cost cap and prompt, impersonation and extra read-only projects (a second project picker). */
-export function BigQueryAdvanced({ options, projects, onSave, onClose }: { options: BigQueryConnectionOptions; projects: readonly BigQueryProject[]; onSave(patch: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>): void; onClose(): void }) {
+export function BigQueryAdvanced({ options, savedCostPrompt, projects, onSave, onClose }: { options: BigQueryConnectionOptions; savedCostPrompt?: false; projects: readonly BigQueryProject[]; onSave(patch: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>): void; onClose(): void }) {
   const initialBytes = splitBytes(options.maximumBytesBilled)
-  const [costPrompt, setCostPrompt] = useState(options.costPrompt !== false)
+  const asking = (options.costPrompt ?? savedCostPrompt) !== false
+  const [costPrompt, setCostPrompt] = useState(asking)
   const [amount, setAmount] = useState(initialBytes.amount)
   const [unit, setUnit] = useState<ByteUnit>(initialBytes.unit)
   const [impersonate, setImpersonate] = useState(options.impersonateServiceAccount ?? '')
@@ -205,8 +208,7 @@ export function BigQueryAdvanced({ options, projects, onSave, onClose }: { optio
     const pending = adding.trim() ? [...extra, adding] : extra
     const parsed = parseExtraProjects(pending.join(' '), options.project)
     if (!parsed.ok) { setError(parsed.error); return }
-    // Turning the prompt back on names it (true), so the saved entry's "Don't ask again" is cleared rather than kept.
-    const prompt = costPrompt ? options.costPrompt === false ? true : options.costPrompt : false
+    const prompt = advancedCostPrompt(options, savedCostPrompt, costPrompt)
     onSave({ maximumBytesBilled: bytes.bytes, costPrompt: prompt, impersonateServiceAccount: account || undefined, extraProjects: parsed.projects.length ? parsed.projects : undefined })
   }
   return <div className="modal-backdrop advanced-backdrop"><form ref={form} className="connection-modal advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="bq-advanced-title" onSubmit={event => { event.preventDefault(); save() }} onKeyDown={event => { trapFocus(event); if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>

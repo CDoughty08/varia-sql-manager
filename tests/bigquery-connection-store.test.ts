@@ -189,6 +189,21 @@ describe('Connection library and history across both engines', () => {
     await expect(library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false, environment: 'Production' })).rejects.toThrow()
   })
 
+  it('keeps one cost-prompt choice for entries with the same settings', async () => {
+    const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
+    // Save with an id can edit an entry until its settings equal another's: two entries, one connection.
+    const first = await store.upsert({ options: { ...gcloud(), displayName: 'A' }, saved: true })
+    const second = await store.upsert({ options: { ...gcloud('varia-beta'), displayName: 'B' }, saved: true })
+    await store.upsert({ id: second.id, options: { ...gcloud(), displayName: 'B' }, saved: true })
+    const choices = async () => (await store.load()).library.profiles.map(profile => profile.options.costPrompt)
+    await store.setCostPrompt({ options: gcloud(), costPrompt: false })
+    expect(await choices()).toEqual([false, false])
+    // Turned back on through either entry, both ask again.
+    await store.upsert({ options: { ...gcloud(), displayName: 'B', costPrompt: true } }, true, false, second.id)
+    expect(await choices()).toEqual([undefined, undefined])
+    expect(first.id).not.toBe(second.id)
+  })
+
   it('keeps SQL Server\'s library working when BigQuery\'s file cannot be read', async () => {
     const sql = sqlStore(), bigQuery = { load: vi.fn(async () => { throw new Error('EBUSY') }), remove: vi.fn(async () => { throw new Error('EBUSY') }) }
     const sqlId = '00000000-0000-4000-8000-000000000009'

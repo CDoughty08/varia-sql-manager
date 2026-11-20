@@ -1,5 +1,5 @@
 import type { BigQueryConnectionOptions, BigQueryProject, ProviderConnectionOptions } from '../../shared/contracts'
-import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema } from '../../shared/connections'
+import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema, connectionKey } from '../../shared/connections'
 import { usesKeyFile, type BigQueryAuthenticationMode } from '../../shared/auth'
 import type { ProviderId } from '../../shared/providers'
 import { bigQueryAuthenticationLabels, type BigQueryConnectionProfile } from '../../shared/bigquery-connections'
@@ -67,6 +67,27 @@ export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryCo
   const parsed = bigQueryConnectionOptionsSchema.safeParse(value)
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Check the connection settings.')
   return value
+}
+
+/**
+ * The cost-prompt choice (docs/bigquery.md, Cost) belongs to the saved entry: the form starts without one, shows the saved
+ * entry's, and names one only when Advanced Properties changes it, so a remembered or stale value never overwrites
+ * "Don't ask again" made since.
+ */
+export function withoutCostPrompt(options: BigQueryConnectionOptions): BigQueryConnectionOptions {
+  const { costPrompt: _costPrompt, ...rest } = options
+  return { ...rest }
+}
+/** The saved choice for these settings: false when an entry with them chose "Don't ask again". */
+export function savedCostPrompt(profiles: readonly { readonly options: BigQueryConnectionOptions }[], options: BigQueryConnectionOptions): false | undefined {
+  let key: string
+  try { key = connectionKey(options) } catch { return undefined }
+  return profiles.some(profile => { try { return profile.options.costPrompt === false && connectionKey(profile.options) === key } catch { return false } }) ? false : undefined
+}
+/** What Advanced Properties' OK names: the form's choice when the box is as it was, else the box (true clears a saved
+ *  "Don't ask again", false sets it). */
+export function advancedCostPrompt(options: BigQueryConnectionOptions, saved: false | undefined, checked: boolean): boolean | undefined {
+  return checked === ((options.costPrompt ?? saved) !== false) ? options.costPrompt : checked
 }
 
 /** How many projects Load projects keeps across its pages. */

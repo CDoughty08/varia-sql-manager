@@ -98,9 +98,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (gated?.queryId !== queryId) return false
     this.gated.delete(tabId)
     gated.stop.abort()
-    if (this.getSnapshot()[tabId]?.running?.queryId === queryId) {
+    const current = this.getSnapshot()[tabId]
+    if (current?.running?.queryId === queryId) {
+      // As it was, but with the session as it is now: one that ended while the run waited stays ended.
+      const restored = gated.before ? { ...gated.before, session: current.session } : current.session ? { session: current.session } : undefined
       const next = { ...this.getSnapshot() }
-      if (gated.before) next[tabId] = gated.before
+      if (restored) next[tabId] = restored
       else delete next[tabId]
       this.publish(next)
     }
@@ -207,11 +210,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       ...connection.providerId === 'bigquery' && settings['queryExecution.bigQuery.showCost'] === 'bytes' ? { prices: false } : {}
     }
   }
-  private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode): PlanExecutionContext {
+  private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode, sqlScope?: 'document' | 'selection'): PlanExecutionContext {
     const document = this.documents.get(tabId)!, connection = this.getConnection(document.connectionId!)
     return Object.freeze({ executionId, tabId, name: document.name, file: document.file?.path,
       connectionId: document.connectionId!, server: connection?.server, database: document.database,
-      sql, startLine, sqlScope: sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection', startedAt,
+      sql, startLine, sqlScope: sqlScope ?? (sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection'), startedAt,
       includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
       ...estimateMode ? { estimateMode } : {} })
   }
@@ -286,6 +289,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = sqlServerOnly.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
     this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, provenance, ...livePlan ? { livePlan } : {} })
+    // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
+    // locations point into the edited text.
+    const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
     // BigQuery dry-runs first (free) and may ask (docs/bigquery.md, Cost). Declined or cancelled, the tab is as it was.
     if (bigQuery && this.costGate) {
       const stop = new AbortController()
@@ -293,12 +299,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const stopped = new Promise<false>(resolve => { stop.signal.addEventListener('abort', () => resolve(false), { once: true }) })
       let run = false
       try { run = await Promise.race([this.costGate(tabId, sql, { line: startLine, column: startColumn }, stop.signal), stopped]) } catch { run = true }
-      if (stop.signal.aborted || this.disposed || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
+      if (stop.signal.aborted || this.disposed || this.getSnapshot()[tabId]?.running?.queryId !== queryId) {
+        if (this.gated.get(tabId)?.queryId === queryId) this.gated.delete(tabId)
+        return
+      }
       if (!run) { this.stopGated(tabId, queryId); return }
       this.gated.delete(tabId)
     }
-    this.sources.set(tabId, { queryId, revision: this.documents.revision(tabId) })
-    const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
+    this.sources.set(tabId, { queryId, revision })
+    const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now(), undefined, sqlScope) : undefined
     if (sqlServerOnly.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
@@ -441,5 +450,5 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (strict && prepared.stopping.some(tab => this.getSnapshot()[tab.id]?.running?.queryId === tab.queryId))
       throw new Error('A cancelled query has not reported completion. Its outcome may be unknown; no tabs were closed. Review its state before trying again.')
   }
-  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.executionVersions.clear(); this.clearListeners(); this.publish({}) }
+  dispose(): void { this.disposed = true; for (const gated of this.gated.values()) gated.stop.abort(); this.gated.clear(); this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.executionVersions.clear(); this.clearListeners(); this.publish({}) }
 }

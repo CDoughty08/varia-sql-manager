@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects, parseExtraProjects,
-  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication
-} from '../src/renderer/src/bigquery-connect-form'
+  projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, savedCostPrompt, withoutCostPrompt } from '../src/renderer/src/bigquery-connect-form'
 import { bigQueryAdvancedSummary, accountText } from '../src/renderer/src/BigQueryConnectFields'
 
 const keyFile = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
@@ -94,6 +93,22 @@ describe('Connect dialog: BigQuery fields', () => {
     // The form sends the choice when it names one, so Connect keeps or clears the saved entry's.
     expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false })).toMatchObject({ costPrompt: false })
     expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' })).not.toHaveProperty('costPrompt')
+  })
+  it("shows the saved entry's cost-prompt choice and names one only when Advanced Properties changes it", () => {
+    const form = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
+    // The dialog's form never starts with a choice: a remembered true from an earlier connect cannot undo a later opt-out.
+    expect(withoutCostPrompt({ ...form, costPrompt: true })).toEqual(form)
+    const entries = [{ options: { ...form, dataset: 'other' } }, { options: { ...form, costPrompt: false as const } }]
+    expect(savedCostPrompt(entries, form)).toBe(false)
+    expect(savedCostPrompt(entries, { ...form, project: 'varia-beta' })).toBeUndefined()
+    // Saved off, the box shows off: ticking it names true (turns the prompt back on); OK unchanged names nothing.
+    expect(advancedCostPrompt(form, false, true)).toBe(true)
+    expect(advancedCostPrompt(form, false, false)).toBeUndefined()
+    // Saved on: unticking names false; left ticked names nothing, so the saved entry's choice stands.
+    expect(advancedCostPrompt(form, undefined, false)).toBe(false)
+    expect(advancedCostPrompt(form, undefined, true)).toBeUndefined()
+    // A change made earlier in this dialog stays when OK leaves the box as it shows.
+    expect(advancedCostPrompt({ ...form, costPrompt: true }, false, true)).toBe(true)
     expect(accountText({ kind: 'user', account: 'ada@example.com' })).toBe('Signed in to gcloud as ada@example.com')
     expect(accountText({ kind: 'serviceAccount', account: 'reader@varia-alpha.iam.gserviceaccount.com', impersonated: 'etl@varia-alpha.iam.gserviceaccount.com' }))
       .toBe('Service account reader@varia-alpha.iam.gserviceaccount.com, acting as etl@varia-alpha.iam.gserviceaccount.com')
