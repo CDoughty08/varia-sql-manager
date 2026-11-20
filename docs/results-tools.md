@@ -236,7 +236,7 @@ writes `Change`, `Old row` and `New row` before them. An added or removed row ha
 and new rows only the changed values are coloured, struck through on the old row and bold on the new, and unchanged rows
 are not coloured. Highlights, search matches and the selection are drawn over these colours as translucent layers rather
 than replacing them, so a changed value stays visible when it is highlighted, matched or selected; in Windows high
-contrast, changed values are outlined and keep their strikethrough or bold. A comparison is never transposed. Rows match by a key column unique in both, else by whole rows. **Compare with Previous
+contrast, changed values are outlined and keep their strikethrough or bold. A comparison is never transposed. Rows match by a key column unique in both, else by whole rows, and the strip says which ("rows matched by Id", "whole rows matched"). A key or row that repeats pairs its copies in order; when that happens a row's gutter shows ≈ ("repeated key"). A removed and an added row that look alike (most of their other values equal) are a possible match: the gutter shows ? and names the other row, without changing the counts or colours. A row with more changed values than its gutter can list names "More changes in this row are not listed". **Compare with Previous
 Result (Exact Text)** in the palette compares every character. Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
 A run keeps at most 1,000 results, comparisons and Pivots (including those building); past that it is refused.
 

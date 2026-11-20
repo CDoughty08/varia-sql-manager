@@ -122,7 +122,7 @@ describe('the Compare popover', () => {
     // Moving the focus out of the popover closes it (as the popover does on a press or key elsewhere).
     results.focusEntry('t1', keys[2])
     compare.close('t1')
-    answer.resolve({ descriptor: descriptor(990, { index: 3, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(990, { index: 3, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await expect(comparing).resolves.toBeUndefined()
     expect(tab().comparisons).toHaveLength(1)
     expect(tab().focused).toBe(keys[2])
@@ -182,12 +182,12 @@ describe('the Compare popover', () => {
     expect(answers).toHaveLength(4)
     expect(jobs.load).toEqual({ running: 4, waiting: 1 })
     expect(compare.getSnapshot().running.t1).toHaveLength(5)
-    answers[0].resolve({ descriptor: descriptor(950, { index: 6, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answers[0].resolve({ descriptor: descriptor(950, { index: 6, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await first
     await settle()
     expect(answers).toHaveLength(5)
     expect(tab().comparisons.map(slot => slot.entry.label)).toEqual(['Differences: Result 1 → Result 2'])
-    for (const [at, answer] of answers.slice(1).entries()) answer.resolve({ descriptor: descriptor(951 + at, { index: 7 + at, kind: 'diff' }), same: 0, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    for (const [at, answer] of answers.slice(1).entries()) answer.resolve({ descriptor: descriptor(951 + at, { index: 7 + at, kind: 'diff' }), match: { mode: 'rows', columns: [] }, same: 0, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await Promise.all(others)
     await settle()
     expect(tab().comparisons).toHaveLength(5)
@@ -207,7 +207,7 @@ describe('the Compare popover', () => {
     expect(notify).toHaveBeenCalledWith('t1', compareFullText)
     // From the picker the sentence is the picker's.
     await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toEqual({ error: compareFullText })
-    answer.resolve({ descriptor: descriptor(5000, { index: 999, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(5000, { index: 999, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await first
     expect(tab().sets).toHaveLength(resultLimits.sets)
   })
@@ -223,7 +223,7 @@ describe('the Compare popover', () => {
     expect(results.operations.getSnapshot().t1?.items).toMatchObject([{ kind: 'compare', shown: true }])
     // The run holding both sets went full before the answer came: the diff is released, and the strip does not read done.
     const add = vi.spyOn(results, 'addSet').mockReturnValueOnce(undefined)
-    answer.resolve({ descriptor: descriptor(5000, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(5000, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await first
     expect(add).toHaveBeenCalled()
     expect(results.operations.getSnapshot().t1?.items ?? []).toEqual([])
@@ -256,7 +256,7 @@ describe('the Compare popover', () => {
     expect(handle(keys[1]).pivot).not.toHaveBeenCalled()
     expect(pivot.getSnapshot().tabs.t1.error).toMatch(/already show 1,000 sets/)
     building.reject(new DOMException('Given up.', 'AbortError'))
-    answers[0].resolve({ descriptor: descriptor(7000, { index: 998, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answers[0].resolve({ descriptor: descriptor(7000, { index: 998, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await Promise.allSettled([built, first])
     expect(results.getSnapshot().t1.comparisons).toHaveLength(1)
     expect(jobs.load).toEqual({ running: 0, waiting: 0 })
@@ -270,7 +270,7 @@ describe('the Compare popover', () => {
     const earlier = compare.comparePair('t1', keys[0], keys[1], { exact: false })
     // The re-run gives it up; before it settles, the new run has room for exactly one more.
     keys = run(resultLimits.sets - 1, { queryId: 'q2' })
-    vi.mocked(handle(keys[0]).diff).mockResolvedValueOnce({ descriptor: descriptor(6000, { index: 999, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    vi.mocked(handle(keys[0]).diff).mockResolvedValueOnce({ descriptor: descriptor(6000, { index: 999, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     const next = compare.comparePair('t1', keys[0], keys[1], { exact: false, quiet: true })
     expect(handle(keys[0]).diff).toHaveBeenCalledTimes(1)
     await expect(earlier).resolves.toBeUndefined()
@@ -318,7 +318,7 @@ describe('the Compare popover', () => {
     const comparing = compare.run('t1')
     results.removeEntry('t1', keys[0])
     expect(signal?.aborted).toBe(true)
-    answer.resolve({ descriptor: descriptor(970, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(970, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await comparing
     expect(client.released()).toContain(970)
     // It goes with the results themselves: Close Results, or a run that leaves none.
@@ -415,7 +415,7 @@ describe('the Compare popover', () => {
     const comparing = compare.run('t1')
     compare.close('t1')
     compare.open('t1', keys[1])
-    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await comparing
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
   })
@@ -457,7 +457,7 @@ describe('the Compare popover', () => {
     compare.close('t1')
     results.focusEntry('t1', keys[1])
     compare.open('t1', keys[1])
-    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     const made = await comparing
     expect(made).toBeDefined()
     expect(tab().focused).toBe(made)
@@ -473,7 +473,7 @@ describe('the Compare popover', () => {
     const comparing = compare.run('t1')
     const before = tab().focused
     compare.close('t1')
-    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     expect(await comparing).toBeUndefined()
     expect(tab().focused).toBe(before)
     expect(tab().comparisons).toHaveLength(1)
@@ -488,7 +488,7 @@ describe('the Compare popover', () => {
     vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
     const comparing = compare.run('t1')
     compare.swap('t1')
-    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     expect(await comparing).toBeUndefined()
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ swapped: true })
     expect(focusEntry).not.toHaveBeenCalled()
@@ -528,7 +528,7 @@ describe('a comparison\'s names', () => {
     await settle()
     // Result 3 is not an input: closing it does not give the comparison up, but leaves Result 1 the only "Totals".
     results.removeEntry('t1', keys[2])
-    answer.resolve({ descriptor: descriptor(5000, { index: 0, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(5000, { index: 0, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await made
     const slot = tab().comparisons[0]
     expect(slot.entry.label).toBe('Differences: Totals (Result 1) → Result 2')
@@ -548,7 +548,7 @@ describe('a comparison given up or gone', () => {
     const comparing = compare.comparePair('t1', keys[0], keys[1], { exact: false })
     await settle()
     compare.cancel('t1', keys[0], keys[1], false)
-    answer.resolve({ descriptor: descriptor(991, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    answer.resolve({ descriptor: descriptor(991, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
     await expect(comparing).resolves.toBeUndefined()
     expect(tab().comparisons).toHaveLength(0)
     expect(compare.getSnapshot().info.size).toBe(0)

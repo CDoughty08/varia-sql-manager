@@ -1,8 +1,9 @@
 # SQL Server Agent
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Nothing of it is visible yet: the foundations below are in the code, and
-the Agent node, Job Activity Monitor and the job documents arrive in later lanes, behind the release gate until 0.11.0.
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node and Search Objects
+finds jobs, alerts and operators; Job Activity Monitor and the job documents arrive in later lanes, behind the same gate until
+0.11.0.
 
 ## How it works
 
@@ -19,7 +20,7 @@ the Agent node, Job Activity Monitor and the job documents arrive in later lanes
 - **Times** are the server's local time, as msdb stores them; nothing converts them to this computer's time zone.
 - **Release gate.** Agent's surfaces show only when Varia was started with `VARIA_AGENT_PREVIEW=1`: main reads the
   variable once and passes the window an argument, which becomes the static context key `agentEnabled`. Without it Object
-  Explorer keeps its planned SQL Server Agent folder and no Agent command, menu item or document is offered.
+  Explorer shows no SQL Server Agent node and no Agent command, menu item or document is offered.
 - **What the login may do** (`agent.profile`). One constant batch in msdb, on the Object Explorer pool on its own slot per connection,
   reads the login's sysadmin membership and Agent roles (`IS_ROLEMEMBER`, so nested membership counts), EXECUTE on
   `sp_purge_jobhistory` and `sysmail_help_profile_sp`, the server-state permissions `sys.dm_server_services` and Agent's
@@ -79,9 +80,18 @@ checks impersonated a scratch SQL login (`EXECUTE AS LOGIN`) that was a member o
   and the reader reports `NOT_SUPPORTED`; `xp_readerrorlog 0, 2, …` still reads the current Agent log, and
   `xp_servicecontrol N'QueryState'` answers "Running.".
 
-Not checked yet: the Linux container's `sys.dm_server_services` and subsystems (AG-1, against CI's container), Managed
-Instance's `sp_readmierrorlog` and archives (no instance; AG-1 from Microsoft's documentation), service control on a
-named instance or under a domain account (AG-2's Windows workflow), and how history records a reordered step (AG-6b).
+- **Agent's state (Object Explorer's `explorer.agentService`).** On Windows `sys.dm_server_services` lists `SQL Server Agent
+  (<instance>)` with its status and startup type. Where it lists no Agent row, the probe falls back to whether an
+  `SQLAgent - …` session is connected (running or stopped, no startup type), only for a login that sees other sessions
+  (VIEW SERVER PERFORMANCE STATE from SQL Server 2022; without it the state is unknown, as 0 sessions would read as
+  stopped). The DMV itself answers VIEW SERVER SECURITY or PERFORMANCE STATE from 2022, VIEW SERVER STATE before. The Agent live suite's check says which
+  answered, so CI's Linux container log records the Linux answer. Managed Instance's Agent always runs and cannot be
+  stopped (Microsoft's T-SQL differences page), so the probe reads running there without the DMV.
+- **Subsystems.** `msdb.dbo.syssubsystems` lists TSQL as `subsystem_id` 1. Object Explorer's Proxies folder lists every
+  other subsystem with its proxies, labelled as SSMS labels them, so Linux shows the ones its container reports.
+
+Not checked yet: Managed Instance's `sp_readmierrorlog` and archives (no instance to test), service control on a named
+instance or under a domain account (AG-2's Windows workflow), and how history records a reordered step (AG-6b).
 
 ## Testing
 

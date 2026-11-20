@@ -269,6 +269,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
   to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
   pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
+  Rows match by `results.diff`'s `match` (`ResultDiffer.Compare`: auto, position, whole rows, or a composite key over
+  chosen pairs hashed with `CellHasher`, which reads `sortKind`, never type names); repeated keys and look-alikes are
+  marks, never kinds: the tone is `<kind> [flag…] [cell…]` (kinds `same`, `changed`, `added`, `removed`, `changedOld`,
+  `changedNew`; flags `dup`, `poss=<row>`, `gap=<n>`), kept within 500 characters, and readers ignore unknown flags.
+  The look-alike search is bounded (1,000 rows a side, 4,000,000 comparisons) and skipped, not slowed, past its bounds.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
@@ -352,6 +357,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
+  - Find filters: packing a page of 32 KiB or more also builds its n-gram filter (`PageFilter`), which lets Find pass the
+    page over unread; it is charged with the packed page (at most an eighth of it, and the page with it still saves a
+    tenth), dropped on unpack and never stored apart from it (docs/ipc.md's "Search in results").
   - When: stage 1 packs a complete result of 1 MiB or more hidden in every window for 5 s (`ResultVisibility`); stage 2
     a shown one idle for 30 s (no pin or lease begun or ended, not completed or shown again; `ResultSetBuffer.Activity`
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An

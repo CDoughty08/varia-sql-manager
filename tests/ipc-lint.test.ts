@@ -60,8 +60,8 @@ await import(${JSON.stringify(core)})`
     expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
   })
   it('reads a backend answer\'s null member as absent: the backend leaves nulls out (Contracts.cs, WhenWritingNull)', () => {
-    // A bare .nullable() member is required, so an answer that leaves it out is refused: a whole-row results.diff once
-    // failed as "The results could not be compared." because its schema required a null key the backend never sends.
+    // A bare .nullable() member is required, so an answer that leaves it out is refused, and the feature reads it as a
+    // failure ("The results could not be compared."): the backend never sends a null member, it leaves it out.
     // Every shared and main schema is scanned, as a backend answer's schema may live in any of them (validation.ts,
     // supervisor.ts, connection.ts); a null that is not a member the backend could leave out is listed with why. A line
     // an allowance names may hold only the one null it excuses; a pattern matches a whole line too generic to quote.

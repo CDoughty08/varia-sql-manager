@@ -1,7 +1,7 @@
 // Renders docs/object-explorer.md from the catalogue; tests/explorer-catalog.test.ts keeps the file in sync.
 import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, schemaGroupList,
-  schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
+  schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, folderGates, singletonOwners, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
 import { loginChipDocs, statusChipDocs } from './status.ts'
 import { peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle } from './peek.ts'
@@ -49,12 +49,13 @@ const lists = (id: FolderId) => {
   const { list, rows = [] } = folderSpecs[id]
   return list ? `${rows.map(kind => kindSpecs[kind].title).join(', ')} (${code(list)})` : '—'
 }
-type Entry = { readonly label: string; readonly order: number; readonly id?: FolderId; readonly later?: LaterFolder }
+type Entry = { readonly label: string; readonly order: number; readonly id?: FolderId; readonly later?: LaterFolder; readonly singleton?: NodeKind }
 /** A folder's (or an owner's top-level) served and planned subfolders, in SSMS order. */
 function entries(owner: 'server' | 'database', parent?: FolderId): Entry[] {
   const served = (parent ? subfolders(parent) : folderIds.filter(id => !folderSpecs[id].parent && folderSpecs[id].owner === owner)).map(id => ({ label: folderSpecs[id].label, order: folderSpecs[id].order, id }))
   const later = laterFolders.filter(folder => folder.owner === owner && folder.parent === parent).map(folder => ({ label: folder.label, order: folder.order, later: folder }))
-  return [...served, ...later].sort((a, b) => a.order - b.order)
+  const singletons = parent ? [] : (kindSpecs[owner].singletons ?? []).map(item => ({ label: kindSpecs[item.kind].title, order: item.order, singleton: item.kind }))
+  return [...served, ...later, ...singletons].sort((a, b) => a.order - b.order)
 }
 function folderRows(owner: 'server' | 'database', parent?: FolderId, path = ''): string[][] {
   return entries(owner, parent).flatMap(entry => {
@@ -63,21 +64,31 @@ function folderRows(owner: 'server' | 'database', parent?: FolderId, path = ''):
       const contents = entry.later.contents ? `Planned: ${entry.later.contents.join(', ')}` : 'Planned'
       return [[name, '—', since(entry.later.since), '—', contents, '—']]
     }
+    if (entry.singleton) {
+      const spec = kindSpecs[entry.singleton]
+      return [[name, `${code(spec.kind)} node`, '—', 'No', `Its own node; ${platforms(spec.platforms)}`, '—']]
+    }
     const spec = folderSpecs[entry.id!]
     const filters = spec.filter?.map(property => filterPropertyLabels[property]).join(', ') || '—'
-    return [[name, code(spec.id), since(spec.since), folderServed(spec.id, { band: maxBand, engine: 'cloud' }) ? 'Yes' : 'No', lists(spec.id), filters], ...folderRows(owner, spec.id, name + ' › ')]
+    return [[name, code(spec.id), since(spec.since), folderServed(spec.id, { band: maxBand, engine: 'cloud', edition: 5, linux: false }) ? 'Yes' : 'No', lists(spec.id), filters], ...folderRows(owner, spec.id, name + ' › ')]
   })
 }
+/** A folder below a gated node is served only where both its own gate and its owner's are (Jobs has none of its own). */
+const served = (gate: readonly string[] | undefined, owner: readonly string[] | undefined) =>
+  gate && owner ? gate.filter(platform => owner.includes(platform)) : gate ?? owner
+/** Where a `platforms` gate serves: every server, or the SQL Server Agent platforms it lists. */
+const platforms = (gate: readonly string[] | undefined) => gate ? `SQL Server Agent platforms ${codes(gate)}` : 'every server'
 const folderTable = (owner: 'server' | 'database') => table(['Folder', 'Id', 'Since', 'Cloud editions', 'Lists (query)', 'Filters'], folderRows(owner))
 
-const folderLabels = (ids: readonly FolderId[]) => ids.map(id => folderSpecs[id].label).join(', ')
-/** A kind's static folders, then the rows it lists itself (`KindSpec.list`). */
+/** A kind's static folders and singletons in SSMS order, then the rows it lists itself (`KindSpec.list`). */
 const childLabels = (spec: KindSpec, folders: readonly FolderId[]) => {
+  const statics = [...folders.map(id => ({ label: folderSpecs[id].label, order: folderSpecs[id].order })), ...(spec.singletons ?? []).map(item => ({ label: kindSpecs[item.kind].title + ' (its own node)', order: item.order }))]
+    .sort((a, b) => a.order - b.order).map(item => item.label).join(', ')
   const rows = spec.list ? `${(spec.rows ?? []).map(kind => kindSpecs[kind].title).join(', ')} rows (${code(spec.list)})` : undefined
-  return [folderLabels(folders), rows].filter(Boolean).join(', then ')
+  return [statics, rows].filter(Boolean).join(', then ')
 }
 function childRows(spec: KindSpec): string[][] {
-  if (!spec.folders.length && !spec.subtypeFolders && !spec.list) return []
+  if (!spec.folders.length && !spec.subtypeFolders && !spec.list && !spec.singletons) return []
   const special = Object.keys(spec.subtypeFolders ?? {}) as NodeSubtype[]
   const history = spec.historyLookup ?? []
   const others = (spec.subtypes ?? []).filter(subtype => !special.includes(subtype) && !history.includes(subtype))
@@ -153,6 +164,27 @@ export function renderExplorerDocs(): string {
     table(['Kind', 'Subtypes', 'Children'], nodeKinds.filter(kind => kind !== 'server' && kind !== 'database').flatMap(kind => childRows(kindSpecs[kind]))),
     '',
     table(['Folder', 'Id', 'Below', 'Lists (query)'], folderIds.filter(id => folderSpecs[id].owner === 'object').map(id => [folderSpecs[id].label, code(id), codes(folderOwnerKinds(id)), lists(id)])),
+    '',
+    '## SQL Server Agent',
+    '',
+    'The server\'s SQL Server Agent node is its own node (a singleton: its ref names only its kind), after the server\'s folders, on the',
+    'servers Agent runs on (docs/sql-server-agent.md). It shows only while the Agent release gate is on (`VARIA_AGENT_PREVIEW=1`). Its',
+    'children follow SSMS: Jobs, Job Activity Monitor (a leaf; double-clicking it opens nothing yet), Alerts, Operators, Proxies (a row per',
+    'subsystem, then Unassigned Proxies) and Error Logs. Which of them a login sees depends on its Agent role, read when the node',
+    'expands: sysadmin sees all; SQLAgentOperatorRole Jobs, Job Activity Monitor, Alerts and Operators; SQLAgentReaderRole and',
+    'SQLAgentUserRole Jobs and Job Activity Monitor (a User sees only its own jobs, as msdb' + "'" + 's sysjobs_view filters them). Proxies and Error',
+    'Logs are sysadmin' + "'" + 's alone: msdb lets no Agent role read the proxy tables, and the error logs come from xp_enumerrorlogs. A',
+    'login in none of the roles gets PERMISSION_DENIED naming them; with Agent stopped or Agent XPs off the node lists nothing and',
+    'says why (AGENT_DISABLED). The node' + "'" + 's chips say the Agent service' + "'" + 's state when it is not running and the jobs running, and its',
+    'sublabel says Agent XPs disabled while that option is 0 (Live status). Where xp_enumerrorlogs returns no list (SQL Server on',
+    'Linux), Error Logs lists Current alone. Search Objects finds the jobs the login may read, operators and, where the Alerts folder',
+    'is served, alerts; Ctrl+Q reveals them below the node, and with the gate off the index reads no Agent objects. Copy Name copies',
+    'a job, alert, operator or proxy name unquoted, as the msdb procedures take it. The platform gates come from the Agent catalogue:',
+    '',
+    table(['Node', 'Id', 'Served on'], [
+      ...nodeKinds.filter(kind => singletonOwners(kind).length).map(kind => [kindSpecs[kind].title, `${code(kind)} node`, platforms(kindSpecs[kind].platforms)]),
+      ...folderIds.filter(id => folderOwnerKinds(id).includes('agent')).map(id => [folderSpecs[id].label, code(id), platforms(served(folderGates(id).platforms, kindSpecs.agent.platforms))])
+    ]),
     '',
     `## Node kinds (${nodeKinds.length})`,
     '',

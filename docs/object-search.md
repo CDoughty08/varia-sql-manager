@@ -59,8 +59,9 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 
 ### Objects indexed
 
-Every kind Object Explorer lists except the server node, return values and the SSIS Catalog's folders, projects,
-packages and environments. Each hit carries Object Explorer's ref and folder, so it can be revealed and scripted.
+Every kind Object Explorer lists except the server node, return values, the SSIS Catalog's folders, projects,
+packages and environments, and SQL Server Agent's node, Job Activity Monitor, proxies, proxy subsystems and error logs.
+Each hit carries Object Explorer's ref and folder, so it can be revealed and scripted.
 
 | Level | Kinds |
 | --- | --- |
@@ -68,6 +69,7 @@ packages and environments. Each hit carries Object Explorer's ref and folder, so
 | Database | Users, database and application roles, schemas, assemblies, asymmetric and symmetric keys, certificates, column master and encryption keys, database audit specifications, database triggers, external data sources and file formats, full-text catalogs and stoplists, partition schemes and functions, search property lists, plan guides. |
 | Schema | Tables (in Tables, FileTables, External Tables, Graph Tables or Dropped Ledger Tables), views, synonyms, procedures (T-SQL, CLR, extended, replication-filter), scalar, table-valued and aggregate functions, sequences, user-defined data and CLR types, table types, XML schema collections, rules, defaults, security policies. |
 | Children | Columns, keys, constraints, DML triggers, indexes, statistics and parameters under their table, view, table type, procedure or function, only where Object Explorer lists such a folder. Label `schema.parent.name`; the hit names the parent's folder. Columns are those the Columns folder shows (no graph hidden or dropped ledger columns), and system functions' columns and parameters are left out. |
+| SQL Server Agent | Only behind the Agent release gate (`VARIA_AGENT_PREVIEW=1`; with it off the build reads no Agent objects): the jobs the login may read in `msdb.dbo.sysjobs_view` (none, and no error, for a login in no Agent role), and where msdb lets it read them (SQLAgentOperatorRole or sysadmin) operators and, where the Alerts folder is served (Windows), alerts. They name no database and reveal below the server's SQL Server Agent node. |
 | History tables | A temporal or ledger history table and its columns, indexes and statistics name the table whose history row shows it, and Reveal walks there. A dropped ledger table's history is left out. |
 
 Microsoft-shipped objects are indexed as Object Explorer lists them (master's `spt_` tables and msdb's procedures under
@@ -86,7 +88,9 @@ skipped as `mssqlsystemresource`.
 - A failing statement (a catalog view the login may not read, or an edition lacks) lists the server or database as
   skipped. A first build keeps what was read before the failure; a rebuild keeps the earlier build's objects whole.
 - Skip reasons (the build carries on): `TIMEOUT`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `CATALOG_ERROR`, `TOO_LARGE`.
-  The status lists the server and system objects first, then databases in listing order, up to 256.
+  The status lists the server and system objects first, then databases in listing order, up to 256. A failed SQL Server
+  Agent read is listed first, as msdb flagged `agent: true`: msdb itself may still be indexed, so it is not counted as a
+  skipped database.
 
 ### Memory
 
@@ -254,7 +258,7 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   details act on its own server.
 - **Summary.** Servers, total results, slowest server's time, and servers still searching or indexing, unsearchable or
   disconnected. The index line counts every server's index and names each that leaves objects out (skipped databases,
-  names only, no index, a failed build).
+  server objects or SQL Server Agent objects skipped, names only, no index, a failed build).
 
 ## Protocol
 

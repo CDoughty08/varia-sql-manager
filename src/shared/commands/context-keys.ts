@@ -43,7 +43,7 @@ export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
   isWindows: { type: 'boolean', scope: 'static', description: 'The app runs on Windows.' },
   isLinux: { type: 'boolean', scope: 'static', description: 'The app runs on Linux or another platform treated like it.' },
-  agentEnabled: { type: 'boolean', scope: 'static', description: "SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out." },
+  agentEnabled: { type: 'boolean', scope: 'static', description: "SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer shows no SQL Server Agent node and every Agent command, menu item and document is left out." },
   editorFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the query editor, including its find widget.' },
   editorTextFocus: { type: 'boolean', scope: 'focus', description: "The query editor's text has focus." },
   inputFocus: { type: 'boolean', scope: 'focus', description: 'Focus is on an input, text area, select, or editable element other than the editor text. The find widget\'s inputs count.' },
@@ -197,6 +197,7 @@ export const contextKeys = {
   explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
   explorerNodeDependencies: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
+  explorerNodeNameless: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node other than a server or folder whose kind has no name to copy (its `insert` style is `none`, such as an Agent error log), so Copy Name is hidden.' },
   explorerNodeStatus: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...nodeStatuses],
     description: "The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none."

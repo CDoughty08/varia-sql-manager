@@ -10,8 +10,8 @@ export const gridLimits = {
   /** Two paddings and the 1 px gridline: what a column needs beyond its text. */
   cellChrome: 13,
   rowHeaderMinWidth: 40, rowHeaderMinRows: 9999,
-  /** A comparison's gutter beyond its number and one mark character: the 3 px kind bar and the gap after the mark. */
-  diffGutterChrome: 9,
+  /** A comparison's gutter beyond its number and two characters (its mark and its flag): the 3 px kind bar and the gaps after the mark and before the flag. */
+  diffGutterChrome: 15,
   columnMinWidth: 32, columnMaxWidth: 3000, initialMinWidth: 40, initialMaxWidth: 400,
   /** A transposed grid: the most its drawn columns share before the user sizes one (a drawn column holds a value of every
    *  column, and the widest would size them all), and its frozen name column, which fits its names within these until dragged. */

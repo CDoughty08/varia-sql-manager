@@ -38,6 +38,8 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
 
     /// <summary>Runs a statement in place of the server, with its parameter values and its row cap (offline checks only).</summary>
     internal Func<AgentStatement, IReadOnlyDictionary<string, object?>, int, Task<AgentResult>>? TestRun { get; init; }
+    /// <summary>As <see cref="TestRun"/>, with the read's token (offline checks of which token a read runs on).</summary>
+    internal Func<AgentStatement, CancellationToken, Task<AgentResult>>? TestRunUntil { get; init; }
 
     /// <summary>Runs the statements in order, each after <paramref name="prologue"/> (null for a describe, whose prologue ran as
     /// its own command), and returns what each read or why it failed.</summary>
@@ -58,6 +60,7 @@ internal sealed class AgentReader(AgentCatalog? catalog = null)
             try
             {
                 results[statement.Id] = TestRun is { } run ? await run(statement, arguments, cap).ConfigureAwait(false)
+                    : TestRunUntil is { } until ? await until(statement, token).ConfigureAwait(false)
                     : await RunAsync(connection ?? throw new InvalidOperationException("An Agent read needs a connection."), prologue, statement, arguments, cap, token).ConfigureAwait(false);
             }
             catch (AgentShapeException error)
