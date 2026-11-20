@@ -462,6 +462,8 @@ internal static partial class PageCodec
 
     private static int WriteMoment(Span<byte> to, long value, bool hasTime, int digits, bool hasOffset, long minutes)
     {
+        // A moment before 0001-01-01 (only damaged bytes give one) would divide to day 0 and a negative time.
+        if (value < 0) throw Unreadable();
         var day = value;
         long clock = 0;
         if (hasTime)

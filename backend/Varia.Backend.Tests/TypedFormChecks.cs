@@ -18,6 +18,7 @@ internal static class TypedFormChecks
         NearMisses(check);
         Layouts(check);
         Damaged(check);
+        BeforeDayOne(check);
         Stored(check);
     }
 
@@ -285,6 +286,44 @@ internal static class TypedFormChecks
         check(unreadable - beforeFrames == 9, $"a cut, longer or misdeclared values frame is unreadable ({unreadable - beforeFrames} of 9)");
         check(saneWorks && unexpected.Count == 0 && unreadable > 300,
             $"a changed typed page unpacks or fails as unreadable ({unreadable} unreadable; other outcomes: {string.Join(", ", unexpected.Distinct().Take(4))})");
+    }
+
+    /// <summary>A date and time column whose first value is changed to a moment just before 0001-01-01 (day 0 with a
+    /// negative time once divided) is unreadable, whatever its fraction digits.</summary>
+    private static void BeforeDayOne(Action<bool, string> check)
+    {
+        var start = new DateTime(2024, 1, 1);
+        var outcomes = new List<string>();
+        foreach (var (format, step, first) in new[] { ("yyyy-MM-dd HH:mm:ss", 1.0, new byte[] { 0x01 }), ("yyyy-MM-dd HH:mm:ss.fff", 1.001, [0xCF, 0x0F]) })
+        {
+            var page = Page(200, [Text(row => start.AddSeconds(row * step).ToString(format, Invariant))], holes: false);
+            var packed = PageCodec.Pack(page)!;
+            if (packed[0] != 2) { outcomes.Add(format + ": not packed typed"); continue; }
+            var at = 1;
+            uint Leb() { uint value = 0; for (var shift = 0; ; shift += 7) { var b = packed[at++]; value |= (uint)(b & 0x7F) << shift; if (b < 0x80) return value; } }
+            var (formLength, valuesLength, valuesFrame) = (Leb(), Leb(), Leb());
+            var values = new byte[valuesLength];
+            var form = new byte[formLength];
+            ZstandardDecoder.TryDecompress(packed.AsSpan(at, (int)valuesFrame), values, out _);
+            ZstandardDecoder.TryDecompress(packed.AsSpan(at + (int)valuesFrame), form, out _);
+            // Delta-coded from 0: the first value's bytes become the zigzag of a small negative moment.
+            first.CopyTo(values, 0);
+            var head = new List<byte> { 2 };
+            byte[] Frame(byte[] source)
+            {
+                var frame = new byte[ZstandardEncoder.GetMaxCompressedLength(Math.Max(1, source.Length))];
+                ZstandardEncoder.TryCompress(source, frame, out var length, PageCodec.Quality, PageCodec.Window);
+                return frame[..length];
+            }
+            var valuesBytes = Frame(values);
+            foreach (var value in new[] { formLength, valuesLength, (uint)valuesBytes.Length })
+                for (var v = value; ; v >>= 7) { if (v < 0x80) { head.Add((byte)v); break; } head.Add((byte)(v | 0x80)); }
+            try { PageCodec.Unpack([.. head, .. valuesBytes, .. Frame(form)], page.Length); outcomes.Add(format + ": read"); }
+            catch (InvalidDataException) { }
+            catch (Exception error) { outcomes.Add(format + ": " + error.GetType().Name); }
+            if (PageCodec.TypedKinds(page) is not [PageCodec.Kind.Moment]) outcomes.Add(format + ": not typed");
+        }
+        check(outcomes.Count == 0, "a moment before 0001-01-01 in a typed column is unreadable (" + string.Join(", ", outcomes) + ")");
     }
 
     /// <summary>A store packs a result's pages typed: they read back as sealed, charge their packed length, and pack smaller
