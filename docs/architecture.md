@@ -383,9 +383,10 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     (`TryReserveSpare`), else for that read alone. A view read unpacks its base pages 64 at a time on the workers
     (`BodiesTogether`, reserved working memory, one at a time when refused) into rooms rented from the store's pool.
   - Room pool (`RoomPool`, `ResultStore.Rooms`): view reads and `PageRooms` rent their rooms from it and give them back
-    once nothing reads them (a view read before it hands over a page; `PageRooms` at its end, only rooms their readers
-    gave back), so reading again allocates no large arrays. A rented room is at least the page's length (read its first
-    `StoredPage.Length` bytes) and is charged by its reader. Idle rooms are uncharged, capped at `RoomPool.IdleBytes`
+    once nothing reads them (a grid's view read before it hands over a page, Copy and Save through a view when they drop
+    the group; `PageRooms` at its end, only rooms their readers gave back), so reading again allocates no large arrays. A
+    rented room is at least the page's length (read its first `StoredPage.Length` bytes; the shortest idle room that fits,
+    so it may be longer) and its reader is charged the page's length. Idle rooms are uncharged, capped at `RoomPool.IdleBytes`
     (a tile's 64 rooms and one a worker), never kept twice or past `LargestRoom`, and let go after `IdleMs` without a
     rental (the memory timer's `Trim`).
   - Fused reads leave the result packed. Sort, filter, profile and pivot use `ViewSorter.PageSource` and `PageRooms`;
