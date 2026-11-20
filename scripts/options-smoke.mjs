@@ -136,6 +136,14 @@ try {
   await node('Shortcuts').click()
   await expect(dialog().getByRole('heading', { name: 'Keyboard and mouse shortcuts', exact: true })).toBeVisible()
   await expect(shortcutsTable(dialog())).toBeVisible()
+  // Ctrl+C on a row copies it as shown, its command by title: Command, Shortcut, Scope and Source, tab-separated.
+  const firstCommand = shortcutsTable(dialog()).getByRole('row').filter({ has: options.getByRole('gridcell') }).first()
+  await firstCommand.click()
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await options.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
+  await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^[^\t\r\n]+\t[^\t\r\n]*\t[^\t\r\n]*\t[^\t\r\n]+$/)
+  const copiedCommand = (await application.evaluate(({ clipboard }) => clipboard.readText())).split('\t')[0]
+  expect((await firstCommand.getByRole('gridcell').first().innerText()).startsWith(copiedCommand)).toBe(true)
   await expect(optionsDescription(dialog())).toHaveCount(0)
   // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
   await node('Fonts and Colors').click()
