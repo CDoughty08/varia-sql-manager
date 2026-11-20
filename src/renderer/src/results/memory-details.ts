@@ -166,7 +166,7 @@ export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
     { label: 'Pooled texts', value: formatCount(texts) },
     { label: 'Refs per text', value: texts > 0 ? (references / texts).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : dash },
     { label: 'Defined objects', value: formatCount(detail.definitions) },
-    { label: 'Left out', value: formatCount(detail.cut) },
+    { label: 'Cut or left out', value: formatCount(detail.cut) },
     { label: 'Without children', value: plural(detail.childrenLeftOut, 'database', 'databases') },
     { label: 'Being read', value: detail.readingBytes > 0 ? bytes(detail.readingBytes) : dash },
     { label: 'Last build', value: ms(detail.lastBuildMs) },
