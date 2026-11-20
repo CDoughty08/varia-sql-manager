@@ -322,8 +322,10 @@ internal static partial class PageCompressionBench
         ZstdCodec(-5, 18), ZstdCodec(-1, 18), ZstdCodec(1, 18), ZstdCodec(2, 18), ZstdCodec(3, 18), ZstdCodec(6, 18), ZstdCodec(1, 22),
         ZstdReusedCodec(-1), ZstdReusedCodec(1), ZstdReusedCodec(3),
         Lz4Codec(K4os.Compression.LZ4.LZ4Level.L00_FAST, "lz4"), Lz4Codec(K4os.Compression.LZ4.LZ4Level.L03_HC, "lz4hc3"),
-        // The store's own codec: zstd 2 over the page's lengths form (PageCodec.Lengths.cs).
+        // The store's own codec: zstd 2 over the page's lengths form (PageCodec.Lengths.cs) with typed columns
+        // (PageCodec.Typed.cs), and without them (`lengths`).
         new("page", (source, _) => PageCodec.Pack(source) ?? throw new InvalidOperationException("PageCodec failed."), (packed, destination) => PageCodec.UnpackInto(packed, destination)),
+        new("lengths", (source, _) => PageCodec.Pack(source, typed: false) ?? throw new InvalidOperationException("PageCodec failed."), (packed, destination) => PageCodec.UnpackInto(packed, destination)),
     ];
 
     /// <summary>A Save's output: counts the bytes and drops them, so only formatting and page reads are timed.</summary>
@@ -338,8 +340,12 @@ internal static partial class PageCompressionBench
 
     private static string label = "";
 
+    /// <summary>`--untyped`: the store packs without typed columns, to compare with the product's typed packing.</summary>
+    internal static bool untyped;
+
     public static void Run(string[] args)
     {
+        untyped = args.Contains("--untyped");
         var gib = double.Parse(args[1], CultureInfo.InvariantCulture);
         var shapeName = args[2];
         string? Option(string name) => Array.IndexOf(args, name) is var at and >= 0 && at + 1 < args.Length ? args[at + 1] : null;
@@ -373,7 +379,7 @@ internal static partial class PageCompressionBench
         // The policy run leaves its query room to unpack the result again (a result that fills its query's half cannot be
         // sorted raw either), so it fills to the size and stops there.
         var policy = args.Contains("--policy");
-        var store = new ResultStore(4 * budget, policy ? 2 * budget : budget);
+        var store = new ResultStore(4 * budget, policy ? 2 * budget : budget) { TypedPacking = !untyped };
         var query = store.BeginQuery("compression");
         var set = store.Open(query, 0, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The result set was not kept.");
         var watch = Stopwatch.StartNew();
@@ -397,6 +403,18 @@ internal static partial class PageCompressionBench
         StoredPage[]? pages = set.SealedSnapshot();
         // Its pages are read through their set's accessor while it is pinned, until the raw pages are dropped below.
         var pin = set.Pin();
+        if (args.Contains("--columns"))
+        {
+            TypedFormBench.ColumnSizes(pages, columns);
+            return;
+        }
+        if (args.Contains("--typed"))
+        {
+            Console.WriteLine(shapeName + ": " + TypedFormBench.Compare([.. pages.Select(page => page.Body())]));
+            pin.Dispose();
+            Console.WriteLine("  Find over every page, packed: " + TypedFormBench.FindTimes(set));
+            return;
+        }
         long bodyBytes = 0, lengthBytes = 0;
         foreach (var page in pages) { bodyBytes += page.Body().Length; lengthBytes += page.Lengths.MemoryBytes; }
         var detail = rows.ToString("N0", CultureInfo.InvariantCulture) + " rows, " + pages.Length.ToString("N0", CultureInfo.InvariantCulture) + " pages, " + columns.Length + " columns";

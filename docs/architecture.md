@@ -364,7 +364,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   (`tests/result-page-access.test.ts`), and the .NET checks refuse reads of an unpinned, unleased set
   (`ResultSetBuffer.RequirePins`).
 - **Page packing.** The store may keep a page packed (`PackedPage`: Zstandard level 2, one-page window, `PageCodec`),
-  over the page's lengths form (each column's offsets as cell lengths); unpacking always returns the page as sealed.
+  over the page's lengths form (each column's offsets as cell lengths) with typed columns (a column whose every cell is
+  the exact text of one number, date, time or GUID shape kept as values in a frame of their own, `PageCodec.Typed.cs`);
+  unpacking always returns the page as sealed, byte for byte.
   Packing is an internal switch (`ResultStore.Packing`), not a setting; the policy is `ResultPacker` (docs/ipc.md's
   "Result store and memory budget", measurements in docs/page-compression-findings.md).
   - Find filters: packing a page of 32 KiB or more also builds its n-gram filter (`PageFilter`), which lets Find pass the

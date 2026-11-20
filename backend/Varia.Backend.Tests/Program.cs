@@ -50,6 +50,12 @@ if (args is [PageCompressionBench.Argument, _, _, ..])
     PageCompressionBench.Run(args);
     return;
 }
+// The typed form over SQL Server's own catalog rows, run by hand against a server (read-only SELECTs): measures only.
+if (args is [TypedFormBench.Argument, var typedServer])
+{
+    TypedFormBench.Run(typedServer);
+    return;
+}
 
 // How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
 if (args is [FairnessBench.Argument, ..])
@@ -455,6 +461,7 @@ if (liveGroup is null)
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
+        ("TypedForm", Sync(() => TypedFormChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
