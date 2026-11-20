@@ -674,7 +674,7 @@ internal static class StoreChecks
             check(reports.Count == 5 && reports[^1] == (0L, limit, 4L) && details.Count == 5 && sent[^1] is { LastSearchMs: 7, LastBuildMs: null },
                 "a finished search sends an index report with its time though the budget is unchanged");
         // While one report is walking (here, inside its publish), the timer's check skips its tick instead of queueing behind it.
-        service.Search.Finish(build: true, 30);
+        // The hook is set before the build finishes, so whichever thread sends the report (this one or the timer's) runs it.
         var skipped = false;
         during = () =>
         {
@@ -682,6 +682,7 @@ internal static class StoreChecks
             skipped = tick.Wait(TimeSpan.FromSeconds(30));
             return true;
         };
+        service.Search.Finish(build: true, 30);
         service.ReportIndexMemory();
         lock (reports)
             check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 },

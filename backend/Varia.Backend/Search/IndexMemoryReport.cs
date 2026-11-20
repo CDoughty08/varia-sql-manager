@@ -3,11 +3,11 @@ namespace Varia.Backend.Search;
 /// <summary>
 /// What every connection's index holds, for the Memory panel's Nerd metrics (<see cref="IndexMemoryDetail"/>). It is read only
 /// when an explorer.index.memory event goes out, never by a search or a build. Each held table is walked once (a shared resource
-/// set once, however many connections show it); the pool's figures are its own counters. A table's definitions are its texts no
-/// entry names as a name or schema, so a definition a read pooled for a row it then left out (a child whose parent the login
-/// cannot see) still counts as a definition, as the pool charges it. Names are the pool's charges less those definitions, so
-/// texts a running read holds count as names and its records as reading; with no read running, records, names and definitions
-/// add up to the budget's use.
+/// set once, however many connections show it); the pool's figures are its own counters. A table's definitions are the texts its
+/// entries name as definitions and its packed texts (<see cref="ObjectTable.DefinitionTexts"/>), so a long definition a read pooled
+/// for a row it then left out (a child whose parent the login cannot see) still counts as one, and that row's name stays a name.
+/// Names are the pool's charges less those definitions, so texts a running read holds count as names and its records as reading;
+/// with no read running, records, names and definitions add up to the budget's use.
 /// </summary>
 internal static class IndexMemoryReport
 {
@@ -45,10 +45,10 @@ internal static class IndexMemoryReport
                 definitions++;
                 if (stored is PackedText) packedDefinitions++;
             }
-            var names = table.NameTexts();
-            for (var id = 0; id < names.Length; id++)
+            var defined = table.DefinitionTexts();
+            for (var id = 0; id < defined.Length; id++)
             {
-                if (names[id] || table.Texts[id] is not { } text || !seen.Add(text)) continue;
+                if (!defined[id] || table.Texts[id] is not { } text || !seen.Add(text)) continue;
                 definitionTexts++;
                 definitionBytes += StringPool.Cost(text);
                 if (text is not PackedText packed) continue;

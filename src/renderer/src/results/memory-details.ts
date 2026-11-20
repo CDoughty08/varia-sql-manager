@@ -160,7 +160,8 @@ export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
   const scale = Math.max(total, 1)
   // Reads still running show only while there are some; the three parts that hold the index always do.
   const segments = parts.filter(([part, value]) => value > 0 || part !== 'reading').map(([part, value]): Segment => ({ part, label: partLabels[part], bytes: value, share: value / scale }))
-  const ms = (value: number | undefined) => value === undefined ? dash : duration(value * 1000)
+  // Times come in whole milliseconds: 0 is a search under one, not one that never ran.
+  const ms = (value: number | undefined) => value === undefined ? dash : value < 1 ? '<1 ms' : duration(value * 1000)
   const counters: Counter[] = [
     { label: 'Pooled texts', value: formatCount(texts) },
     { label: 'Refs per text', value: texts > 0 ? (references / texts).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : dash },

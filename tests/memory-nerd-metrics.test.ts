@@ -164,6 +164,8 @@ describe('Memory panel Nerd metrics', () => {
     ])
     expect(model.bar.segments.map(part => [part.part, part.share])).toEqual([['records', 0], ['names', 0], ['definitions', 0]])
     expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toMatchObject({ 'Refs per text': '—', 'Last build': '—', 'Last search': '—', 'Without children': '0 databases' })
+    // A search under a millisecond reports 0: it ran, unlike one that never did.
+    expect(indexNerdMetrics({ ...noIndex, lastSearchMs: 0 }).counters.find(counter => counter.label === 'Last search')?.value).toBe('<1 ms')
   })
 
   it('accepts the index event with its detail, bounds it, and forwards the detail as the index report', () => {

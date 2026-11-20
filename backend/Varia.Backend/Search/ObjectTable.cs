@@ -161,6 +161,18 @@ internal sealed class ObjectTable
         return names;
     }
 
+    /// <summary>For each text, whether it is a definition: one an entry names as its definition, or a packed one (only definitions
+    /// are packed), which a read may have pooled for a row it then left out.</summary>
+    public bool[] DefinitionTexts()
+    {
+        var definitions = new bool[texts.Length];
+        foreach (var entry in entries)
+            if (entry.Definition >= 0) definitions[entry.Definition] = true;
+        for (var id = 0; id < texts.Length; id++)
+            if (texts[id] is PackedText) definitions[id] = true;
+        return definitions;
+    }
+
     private static uint Encode(DateTime? value)
     {
         if (value is not { } date) return 0;

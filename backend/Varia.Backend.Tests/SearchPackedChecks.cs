@@ -382,18 +382,21 @@ internal static class SearchPackedChecks
         var orphan = Module("usp_Orphan");
         var orphanText = pool.TryAcquire(PackedText.TryPack(orphan)!)!;
         var orphanName = pool.TryAcquire("usp_Kept")!;
+        // The name of a row a read left out (a history table whose table the login cannot see) stays a name.
+        var goneName = pool.TryAcquire("Orders_History")!;
         var builder = new ObjectTable.Builder();
         builder.Text(orphanName);
+        builder.Text(goneName);
         builder.Text(orphanText);
         builder.Add("procedure", "storedProcedures", null, null, orphanName, null, false);
-        var kept = new DatabaseIndex("Orphans", builder.Build(), IndexMemory.RecordBytes + 2 * IndexMemory.SlotBytes, 0, 0, pooled: true);
+        var kept = new DatabaseIndex("Orphans", builder.Build(), IndexMemory.RecordBytes + 3 * IndexMemory.SlotBytes, 0, 0, pooled: true);
         budget.Force(kept.Bytes);
         second.Put(kept);
         var orphaned = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held);
         check(orphaned.DefinitionTexts == reading.DefinitionTexts + 2 && orphaned.PackedTexts == reading.PackedTexts + 2 && orphaned.Definitions == reading.Definitions + 2
             && orphaned.DefinitionBytes - reading.DefinitionBytes == StringPool.Cost(orphanText) + StringPool.Cost(late.Table.StoredDefinition(0)!)
             && orphaned.RecordBytes + orphaned.NameBytes + orphaned.DefinitionBytes == budget.Used,
-            "a definition no row names is still counted as a definition, as the pool charges it");
+            "a packed definition no row names is still counted as a definition, as the pool charges it, and a left-out row's name as a name");
         first.Dispose();
         second.Dispose();
         var empty = IndexMemoryReport.Detail(budget, pool, [], catalog.Held);
