@@ -202,10 +202,8 @@ internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, DiffMatchR
 /// (a look-alike row's position); positions are a view's with ViewId, else stored rows of the comparison.</summary>
 internal sealed record ResultsDiffSeekArgs(uint ResultId, uint? ViewId = null, long? From = null, string? Direction = null, long? PartnerOf = null);
 /// <summary>The position landed on (Row), the pair index of its cell (Column: an added, removed or cut unit's is 0), the
-/// unit's number (Index, 1 to Total) and the change units in the view (Total); or None (nothing found), or Hidden (the
-/// partner exists but the view hides it).</summary>
-/// <summary>A found row: its position, the column to land on, its 1-based unit of the total, and the rows shown (the set's
-/// or the view's), which main checks the position against.</summary>
+/// unit's number (Index, 1 to Total), the change units in the view (Total) and the rows shown (Rows: the set's or the
+/// view's, which main checks Row against); or None (nothing found), or Hidden (the partner exists but the view hides it).</summary>
 internal sealed record ResultsDiffSeekResult(long? Row = null, int? Column = null, long? Index = null, long? Total = null, bool? None = null, bool? Hidden = null, long? Rows = null);
 /// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
 /// without a column counts rows.</summary>

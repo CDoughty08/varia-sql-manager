@@ -165,7 +165,8 @@ export const diffResultSchema = z.object({
   columnChanges: z.array(z.object({ changed: count, soft: count }).strict()).max(limits.page.maxColumns), trailingHidden: count,
   overview: z.array(z.number().int().min(0).max(7)).max(limits.diff.overviewBuckets), units: count
 }).strict()
-/** A results.diffSeek answer as the backend sends it; main also checks that only a partner request is answered `hidden`. */
+/** A results.diffSeek answer as the backend sends it (its unit within the total, its row below the rows shown); main also
+ *  checks that only a partner request is answered `hidden`, and that a partner lands on the first column. */
 export const diffSeekResultSchema = z.union([
   z.object({ row: count, column: z.number().int().min(0).max(limits.page.maxColumns - 1), index: count.min(1), total: count.min(1), rows: count }).strict()
     .refine(result => result.index <= result.total && result.row < result.rows, 'The unit is one of the total, at one of the rows shown.'),
