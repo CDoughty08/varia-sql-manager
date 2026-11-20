@@ -309,6 +309,7 @@ internal sealed partial class ActionService
             catch (ServiceControlException failure) { throw new StepRefusedException(ServiceError(failure, facts)); }
             catch (ServiceTimeoutException failure) { throw new StepRefusedException(Error("TIMEOUT", failure.Message)); }
             catch (ServiceStoppedException failure) { throw new StepRefusedException(Error("SQL_ERROR", failure.Message)); }
+            catch (ServiceStillStoppingException failure) { throw new StepRefusedException(Error("BLOCKED", failure.Message)); }
         };
         RunStep Stop() => new(StopServiceStep, Guard(t => control.StopAsync(facts.Machine, facts.Service, t)), Detail: facts.Service);
         RunStep Stopped() => new(StoppedServiceStep, Guard(t => control.WaitAsync(facts.Machine, facts.Service, AgentServiceStatus.Stopped, t)), Detail: facts.Service);

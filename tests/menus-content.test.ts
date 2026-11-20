@@ -28,7 +28,7 @@ const states = ['disconnected', 'connected', 'running', 'busy'] as const
 
 /** Every title-bar menu, resolved as the custom menus show it, in each workbench state: one snapshot per state. */
 async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuItem[])[][]> {
-  const fixture = workbenchFixture({ platform })
+  const fixture = workbenchFixture({ platform, agentPreview: true })
   cleanups.push(fixture.dispose)
   const theme = fixture.theme as { state: ThemeState }
   theme.state = { ...theme.state, themes }
@@ -59,7 +59,7 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
  * with and without selected cells, and Messages with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
-  const fixture = workbenchFixture({ platform })
+  const fixture = workbenchFixture({ platform, agentPreview: true })
   cleanups.push(fixture.dispose)
   fixture.api.push(readyBackend())
   const ran = fixture.documents.create('ran.sql', 'SELECT 3', 'master', 'server-r')

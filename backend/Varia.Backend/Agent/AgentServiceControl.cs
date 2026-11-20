@@ -153,6 +153,8 @@ internal sealed partial class AgentServiceControl(IServiceControl control, Agent
         {
             var state = await QueryAsync(machine, service, token).ConfigureAwait(false);
             if (state == wanted) return;
+            // The SCM refuses a Start while the service is still stopping (1056, read as already running), so nothing was started.
+            if (wanted == AgentServiceStatus.Running && started && state == AgentServiceStatus.StopPending) throw new ServiceStillStoppingException();
             if (wanted == AgentServiceStatus.Running && state == AgentServiceStatus.Stopped && pending) throw new ServiceStoppedException();
             pending |= state == AgentServiceStatus.StartPending;
             if (DateTime.UtcNow >= deadline)
@@ -165,6 +167,9 @@ internal sealed partial class AgentServiceControl(IServiceControl control, Agent
 
 /// <summary>An SCM call or a wait past its bound.</summary>
 internal sealed class ServiceTimeoutException(string message) : Exception(message);
+
+/// <summary>A Start sent while the service was still stopping, which the SCM does not take.</summary>
+internal sealed class ServiceStillStoppingException() : Exception("SQL Server Agent is still stopping, so it was not started. Start it again once it has stopped.");
 
 /// <summary>The service stopped again while it was starting.</summary>
 internal sealed class ServiceStoppedException() : Exception("SQL Server Agent stopped again while it was starting. Its error log (SQLAGENT.OUT) says why.");

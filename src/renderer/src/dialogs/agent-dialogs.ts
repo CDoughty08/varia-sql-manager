@@ -5,8 +5,9 @@ import type { AgentJobFacts, AgentServiceFacts, AgentServiceStateName } from '..
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { BuiltRequest, ObjectDialogDefinition } from './definitions'
 
-/** Start Job at Step's choice: the step it starts at, by id (the first step unless chosen). */
-export interface StartJobDraft { readonly step: number }
+/** Start Job at Step's choice: the step it starts at, by id (the first step unless chosen), and the job's creation time as the tree listed
+ *  it, when it did. */
+export interface StartJobDraft { readonly step: number; readonly listed?: string }
 /** The service dialogs have nothing to choose. */
 export type AgentServiceDraft = Readonly<Record<never, never>>
 
@@ -16,6 +17,7 @@ export const agentDialogText = {
   noSteps: 'This job has no steps, so SQL Server Agent cannot start it.',
   disabled: 'The job is disabled. SQL Server Agent starts it all the same when asked.',
   running: 'The job is already running.',
+  replaced: 'This job was deleted and created again since Object Explorer listed it. Refresh Object Explorer.',
   started: (label: string) => `Started the job ${label}.`,
   stopped: (label: string) => `Asked SQL Server Agent to stop the job ${label}.`,
   enabled: (label: string) => `Enabled the job ${label}.`,
@@ -30,8 +32,10 @@ export const agentDialogText = {
   })[state]
 } as const
 
-/** Why Start Job at Step cannot run: a job with no steps, or one already running. */
-export function startJobBlocked(model: AgentJobFacts): string | undefined {
+/** Why Start Job at Step cannot run: a job created since the tree listed the row (so not the one chosen), one with no steps, or one
+ *  already running. */
+export function startJobBlocked(model: AgentJobFacts, draft?: StartJobDraft): string | undefined {
+  if (draft?.listed && draft.listed !== model.agentIdentity.created) return agentDialogText.replaced
   if (!model.steps.length) return agentDialogText.noSteps
   if (model.running) return agentDialogText.running
   return undefined
@@ -66,8 +70,8 @@ const serviceDefinition = (dialog: AgentServiceAction, label: string): ObjectDia
   noScript: true,
   keepOpen: true,
   longRun: dialog,
-  // The Agent node's chip and the server's follow the next status sample, so nothing reloads.
-  afterSuccess: () => undefined
+  // The Agent node's state (which greys its verbs) is sampled again at once rather than at the next interval; nothing reloads.
+  afterSuccess: effects => effects.refreshStatus?.()
 })
 export const startAgentDefinition = serviceDefinition('startAgent', 'Start')
 export const stopAgentDefinition = serviceDefinition('stopAgent', 'Stop')

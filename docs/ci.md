@@ -39,7 +39,7 @@ the Measurements below with the new baseline.
 - `agent-service.yml` (held by `tests/agent-service-workflow.test.ts`) installs SQL Server 2022 Developer as the named
   instance `VARIA` on a Windows runner and runs the `Agent` and `AgentService` live suites, which stop, start and restart
   its real SQL Server Agent through the Service Control Manager (docs/sql-server-agent.md). It runs on pull requests that
-  change its `paths` (the Agent backend, the job verbs, its live checks, the workflow), daily on main, and by hand, kept
+  change its `paths` (the Agent backend, the job verbs, the actions dispatch, the backend's packages, its live checks and their grouping, the workflow), daily on main, and by hand, kept
   out of `ci.yml` so every other pull request's validation is unchanged. It is not a required check: a pull request on
   which it ran merges only when it is green. Measured time: about 230 s wall (SQL Server install 158 s, the two live
   suites 37 s, setup 30 s).

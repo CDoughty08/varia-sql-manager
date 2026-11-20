@@ -11,7 +11,9 @@ describe('the Agent service workflow', () => {
     expect(on).toMatch(/\n {2}pull_request:\n {4}paths:\n/)
     expect([...on.matchAll(/^ {6}- (\S+)$/gm)].map(match => match[1])).toEqual([
       '.github/workflows/agent-service.yml', 'backend/Varia.Backend/Agent/**', 'backend/Varia.Backend/Actions/AgentJobs.cs',
-      'backend/Varia.Backend.Tests/AgentActionLiveChecks.cs', 'backend/Varia.Backend.Tests/AgentLiveChecks.cs'
+      // The service verbs' dispatch and preflight, and the ServiceController package they call.
+      'backend/Varia.Backend/Actions/ActionService.cs', 'backend/Varia.Backend/Varia.Backend.csproj', 'backend/Varia.Backend/packages.lock.json',
+      'backend/Varia.Backend.Tests/AgentActionLiveChecks.cs', 'backend/Varia.Backend.Tests/AgentLiveChecks.cs', 'backend/Varia.Backend.Tests/LiveGroups.cs'
     ])
     expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:\n/)
     expect(on).not.toContain('push:')

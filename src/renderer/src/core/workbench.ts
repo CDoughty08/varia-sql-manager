@@ -435,7 +435,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids),
-    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
+    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }),
+    refreshStatus: connectionId => explorerStatus.refresh(connectionId)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -796,7 +797,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),

@@ -41,9 +41,12 @@ internal static class AgentActionChecks
         public AgentServiceStatus Last { get; set; } = AgentServiceStatus.Running;
         public ServiceControlException? OnStart, OnStop, OnQuery;
         public List<string> Calls { get; } = [];
+        /// <summary>Set by the first Query, so a check can act while a wait polls, without a fixed sleep.</summary>
+        public TaskCompletionSource Queried { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public AgentServiceStatus Query(string machine, string service)
         {
             Calls.Add("query " + machine + " " + service);
+            Queried.TrySetResult();
             if (OnQuery is not null) throw OnQuery;
             if (States.TryDequeue(out var state)) Last = state;
             return Last;
@@ -216,6 +219,9 @@ internal static class AgentActionChecks
         check(quick.Result.Error?.Code == "SQL_ERROR" && Statuses(quick.Result) == "done failed" && quick.Result.Error.Message.Contains("stopped again while it was starting", StringComparison.Ordinal)
             && quick.Control.Calls.Count(call => call.StartsWith("query", StringComparison.Ordinal)) <= 2,
             "a service already stopped again at the first read after Start fails at once, not after serviceWaitMs: " + string.Join(",", quick.Control.Calls));
+        var stopping = await Run("startAgent", control => { control.States.Enqueue(AgentServiceStatus.StopPending); });
+        check(stopping.Result.Error?.Code == "BLOCKED" && Statuses(stopping.Result) == "done failed" && stopping.Result.Error.Message.Contains("still stopping", StringComparison.Ordinal),
+            "a Start sent while the service is still stopping says so (BLOCKED), not that it stopped again while starting: " + Statuses(stopping.Result));
         var unreadable = await Run("startAgent", control => control.OnQuery = new ServiceControlException(ServiceFailure.Denied, 5));
         check(unreadable.Result.Error?.Code == "PERMISSION_DENIED" && Statuses(unreadable.Result) == "done failed" && unreadable.Result.AgentService == "unreadable",
             "a state the login may not read fails the wait as denied, and the reply's state is unreadable");
@@ -224,7 +230,7 @@ internal static class AgentActionChecks
         for (var i = 0; i < 1_000; i++) control.States.Enqueue(AgentServiceStatus.StartPending);
         await using var connection = new SqlConnection();
         var pending = service.RunAgentServiceAsync(connection, "startAgent", facts, control, stop.Token);
-        await Task.Delay(50);
+        await control.Queried.Task.WaitAsync(TimeSpan.FromSeconds(30));
         await stop.CancelAsync();
         var stopped = await pending;
         check(stopped.Error?.Code == "CANCELLED" && Statuses(stopped) == "done cancelled", "Stop during the wait ends it; the Start that was sent stays done");

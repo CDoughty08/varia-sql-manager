@@ -51,10 +51,10 @@ in later lanes, behind the same gate until 0.11.0.
   `SQLAgent$<instance>`, both read from the server and checked against strict patterns; nothing typed names a machine.
   Each call is bounded (`serviceStatementMs`, `serviceReadMs`) and a wait polls every `servicePollMs` up to
   `serviceWaitMs`. Access denied is `PERMISSION_DENIED` ("Starting and stopping SQL Server Agent needs Windows
-  administrator rights on <machine>"), an unreachable machine or Service Control Manager `SERVICE_UNREACHABLE`, and no
-  such service `NOT_FOUND`. The verbs are offered with Varia on Windows for a Windows server that is not Managed Instance
+  administrator rights on <machine>"), an unreachable machine or Service Control Manager `SERVICE_UNREACHABLE`, no
+  such service `NOT_FOUND`, and a Start while the service is still stopping `BLOCKED`. The verbs are offered with Varia on Windows for a Windows server that is not Managed Instance
   and not a failover cluster instance; elsewhere they stay in the menu, greyed with the reason (Varia not on Windows, a
-  Linux server, Managed Instance, a clustered instance, the service changing state), and the backend refuses them
+  Linux server, Managed Instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and

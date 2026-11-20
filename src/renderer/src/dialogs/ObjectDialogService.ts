@@ -106,6 +106,8 @@ export interface ObjectDialogServiceOptions {
   readonly newId?: () => string
   /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
   readonly notify?: (message: string) => void
+  /** Object Explorer's status samples the connection at once (ExplorerStatusService.refresh). */
+  readonly refreshStatus?: (connectionId: string) => void
   /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
   readonly databaseGone?: (gone: DatabaseGone) => void
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
@@ -671,7 +673,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       reveal: (folder, object) => this.reveal(open, folder, object),
       reload: (owner, folder) => this.reloadFolder(open, owner, folder),
       databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) },
-      notify: message => this.options.notify?.(message)
+      notify: message => this.options.notify?.(message),
+      refreshStatus: () => this.options.refreshStatus?.(open.connectionId)
     }
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */

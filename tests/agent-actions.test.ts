@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionMenuReasons, actionMenuState, agentServiceRules, type ActionTarget } from '../src/shared/actions/catalog'
 import { actionExecuteRequestSchema, type AgentJobFacts } from '../src/shared/actions/schema'
 import type { ApiResult } from '../src/shared/contracts'
@@ -7,12 +7,29 @@ import { jobActionMessages } from '../src/renderer/src/actions/ObjectActionServi
 import { agentDialogText, restartAgentDefinition, startJobAtStepDefinition, startJobBlocked, stopAgentDefinition } from '../src/renderer/src/dialogs/agent-dialogs'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { actionsContribution } from '../src/renderer/src/contributions/actions'
+import { CommandService } from '../src/renderer/src/core/commands'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
 const agent = (facts: Partial<NonNullable<ActionTarget['agent']>> = {}, target: Partial<ActionTarget> = {}): ActionTarget => ({ kind: 'agent', engine: 'box', agent: { windowsClient: true, ...facts }, ...target })
 const service = (target: ActionTarget) => { const state = actionMenuState(target); return [state.startAgent, state.stopAgent, state.restartAgent] }
+
+describe('the release gate', () => {
+  it('registers no Agent command without VARIA_AGENT_PREVIEW=1, so the palette offers none', () => {
+    const ids = ['explorer.startJob', 'explorer.stopJob', 'explorer.startAgent', 'explorer.stopAgent', 'explorer.restartAgent'] as const
+    const registered = (agentEnabled: boolean) => {
+      const commands = new CommandService()
+      const contribution = actionsContribution({ commands } as never, { agentEnabled })
+      const has = ids.map(id => commands.has(id))
+      contribution.dispose()
+      return has
+    }
+    expect(registered(false)).toEqual(ids.map(() => false))
+    expect(registered(true)).toEqual(ids.map(() => true))
+  })
+})
 
 describe('SQL Server Agent service verbs (AG-2)', () => {
   it('offers Start when stopped and Stop and Restart when running', () => {
@@ -72,6 +89,16 @@ describe('Start Job at Step and the service dialogs', () => {
     expect(startJobAtStepDefinition.request(target, facts(3), { step: 1 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 1' })
     expect(startJobAtStepDefinition.request(target, facts(3), { step: 2 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 2' })
     expect([startJobBlocked(facts(0)), startJobBlocked(facts(2, { running: true })), startJobBlocked(facts(2))]).toEqual([agentDialogText.noSteps, agentDialogText.running, undefined])
+  })
+  it('refuses a job created since the tree listed the row, even one that would start as it opens', () => {
+    expect(startJobBlocked(facts(1), { step: 1, listed: '2025-12-31T23:59:59' })).toBe(agentDialogText.replaced)
+    expect(startJobBlocked(facts(1), { step: 1, listed: '2026-01-01T00:00:00' })).toBeUndefined()
+    expect(startJobBlocked(facts(1), { step: 1 })).toBeUndefined()
+  })
+  it("samples the server's status again once a start, stop or restart ran, so the verbs do not wait for the next interval", () => {
+    const effects = { refreshStatus: vi.fn() }
+    stopAgentDefinition.afterSuccess(effects as never, undefined as never, undefined as never, undefined as never, {})
+    expect(effects.refreshStatus).toHaveBeenCalledTimes(1)
   })
   it('keeps the service dialogs open on their steps, with no Script button, and asks as SSMS does', () => {
     expect([stopAgentDefinition.noScript, stopAgentDefinition.keepOpen, stopAgentDefinition.longRun]).toEqual([true, true, 'stopAgent'])

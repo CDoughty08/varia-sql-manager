@@ -43,6 +43,8 @@ export interface DialogEffects {
   reload(owner: ObjectRef, folder: FolderId): void
   /** The dialog's database went offline or came online: its Database Properties documents follow. */
   databaseState(offline: boolean): void
+  /** Samples the dialog's server's status at once (the Agent node's state after Varia started, stopped or restarted it). */
+  refreshStatus?(): void
   /** A toast with the object actions' notice key, which the next one replaces (Unlock Login's success). */
   notify(message: string): void
 }
