@@ -29,6 +29,7 @@ internal static class SearchChecks
         SystemObjects(check);
         Kinds(check);
         Packing(check);
+        SearchPackedChecks.Run(check);
         Reader(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
@@ -575,7 +576,7 @@ internal static class SearchChecks
         object?[][] parameters = [[17, "@top", false]];
         var budget = new IndexBudget(1 << 20);
         var pool = new StringPool(budget);
-        static long Costs(IEnumerable<string> values) => values.Sum(StringPool.Cost);
+        static long Costs(IEnumerable<object> values) => values.Sum(value => StringPool.Cost(value));
         var index = await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
         IndexedObject? Find(string name) => index?.Table.Rows().SingleOrDefault(item => item.Name == name);
         check(Find("trg_orders") is { Kind: "trigger", ParentName: "Orders", ParentFolder: "tables", Schema: null }, "a child that comes before its parent in id order is placed under it");

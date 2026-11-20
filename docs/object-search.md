@@ -93,6 +93,11 @@ skipped as `mssqlsystemresource`.
 - All connections share one budget. Each object is a packed 24-byte entry in its database's `ObjectTable`; names and
   definitions live in one reference-counted pool shared by every connection, so each distinct text (msdb's procedures,
   master's `spt_` objects, common column names) is held and charged once.
+- A definition of 512 characters or more is held compressed (`PackedText`: one zstd frame of its UTF-8 text, level 3),
+  about a seventh of the string on real module definitions, and charged at its compressed size. The same text always
+  compresses to the same frame, so the pool still holds a definition shared by several databases or servers once. A
+  search unpacks each definition into its own reusable buffer as it reads it; shorter definitions (defaults, most
+  computed columns) stay strings.
 - Once less than 128 MiB is free, definitions stop being kept: a build reads at most each one's first 256 characters,
   only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
   predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.

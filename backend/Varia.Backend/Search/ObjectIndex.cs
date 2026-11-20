@@ -33,7 +33,7 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// replaced or dropped. Its names and definitions are the pool's (<see cref="Pooled"/>).</summary>
     public long Bytes { get; } = bytes;
     /// <summary>The distinct texts it holds a <see cref="StringPool"/> reference to, given back with it: a read's table's texts.</summary>
-    public string[] Pooled { get; } = pooled ? [.. table.Texts.OfType<string>()] : [];
+    public object[] Pooled { get; } = pooled ? [.. table.Texts.OfType<object>()] : [];
     /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
     /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
     public long Credited { get; } = credited;
@@ -288,21 +288,22 @@ internal sealed class SearchMatcher
     private bool Has(string? value) => value is not null && value.Contains(hint, comparison);
 
     /// <summary>The first match at or after <paramref name="start"/>.</summary>
-    public bool Find(string value, int start, out int index, out int length)
+    public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length)
     {
         while (start <= value.Length)
         {
             if (regex is not null)
             {
-                var match = regex.Match(value, start);
-                if (!match.Success) break;
-                (index, length) = (match.Index, match.Length);
+                // The first match at or after start, as Match(string, start) finds it (anchors and boundaries see the whole text).
+                var matches = regex.EnumerateMatches(value, start);
+                if (!matches.MoveNext()) break;
+                (index, length) = (matches.Current.Index, matches.Current.Length);
             }
             else
             {
-                var at = text.Length == 0 ? -1 : value.IndexOf(text, start, comparison);
+                var at = text.Length == 0 ? -1 : value[start..].IndexOf(text, comparison);
                 if (at < 0) break;
-                (index, length) = (at, text.Length);
+                (index, length) = (start + at, text.Length);
             }
             if (!wholeWord || Bounded(value, index, length)) return true;
             start = index + Math.Max(1, length);
@@ -311,7 +312,7 @@ internal sealed class SearchMatcher
         return false;
     }
 
-    private static bool Bounded(string value, int index, int length) =>
+    private static bool Bounded(ReadOnlySpan<char> value, int index, int length) =>
         length > 0 && (index == 0 || !Word(value[index - 1])) && (index + length >= value.Length || !Word(value[index + length]));
 
     internal static bool Word(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
@@ -345,6 +346,8 @@ internal static class IndexSearch
         var scanned = 0;
         var partial = false;
         var dotted = query.Text.Contains('.');
+        // Long definitions are packed: each is unpacked into this search's own buffers as it is read.
+        var scratch = new PackedText.Scratch();
         var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
         var sources = new List<(string? Database, ObjectTable Table)>();
         if (query.Database is null && index.Server is { } server) sources.Add((null, server.Table));
@@ -366,7 +369,7 @@ internal static class IndexSearch
                     if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 }
                 if (kept is not null && !kept[table.ShapeOf(at)]) continue;
-                if (!Match(name, table, at, query, matcher, fuzzy, dotted, out var candidate)) continue;
+                if (!Match(name, table, at, query, matcher, fuzzy, dotted, scratch, out var candidate)) continue;
                 total++;
                 var key = (candidate.Rank, candidate.Score, table.System(at));
                 if (found.Count < limits.Candidates) found.Enqueue(candidate, key);
@@ -393,7 +396,7 @@ internal static class IndexSearch
         {
             token.ThrowIfCancellationRequested();
             late = late || watch.Elapsed > limits.SearchBudget;
-            hits.Add(Build(candidate, label, query, matcher, limits, watch, token, ref late, ref stopped));
+            hits.Add(Build(candidate, label, query, matcher, limits, watch, token, scratch, ref late, ref stopped));
         }
         return new(hits, total, partial || stopped, watch.ElapsedMilliseconds, status);
     }
@@ -404,7 +407,8 @@ internal static class IndexSearch
     /// <summary>Whether <paramref name="item"/> is a hit, with its rank and name range. Builds nothing for a name that matches
     /// without a dot; a definition is searched here only when the name did not match (the rank needs it), and a name hit's
     /// definition match waits for <see cref="Build"/>.</summary>
-    private static bool Match(string? database, ObjectTable table, int at, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, bool dotted, out Candidate candidate)
+    private static bool Match(string? database, ObjectTable table, int at, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, bool dotted, PackedText.Scratch scratch,
+        out Candidate candidate)
     {
         var rank = DefinitionRank;
         var score = 0;
@@ -447,7 +451,7 @@ internal static class IndexSearch
         }
         var definitionAt = -1;
         var definitionLength = 0;
-        if (from < 0 && !(query.Definitions && table.Definition(at) is { } text && matcher.Find(text, 0, out definitionAt, out definitionLength)))
+        if (from < 0 && !(query.Definitions && table.StoredDefinition(at) is { } stored && matcher.Find(DefinitionText.Read(stored, scratch), 0, out definitionAt, out definitionLength)))
         {
             candidate = default;
             return false;
@@ -461,14 +465,15 @@ internal static class IndexSearch
     /// definition hit shows the match the scan found, its count only what was counted (marked Uncounted), and a name hit shows no
     /// definition match. <paramref name="stopped"/> is set only when lateness left out a search that would otherwise have run.</summary>
     private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, Stopwatch watch, CancellationToken token,
-        ref bool late, ref bool stopped)
+        PackedText.Scratch scratch, ref bool late, ref bool stopped)
     {
         var (table, at) = (hit.Table, hit.At);
         DefinitionMatch? definition = null;
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
-        var stored = table.Definition(at);
+        var stored = table.StoredDefinition(at);
+        var text = query.Definitions && stored is not null && !(first < 0 && late) ? DefinitionText.Read(stored, scratch) : default;
         if (query.Definitions && stored is not null && first < 0 && late) stopped = true;
-        else if (query.Definitions && stored is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        else if (query.Definitions && stored is not null && (first >= 0 || matcher.Find(text, 0, out first, out size)))
         {
             var count = 1;
             var next = first + Math.Max(1, size);
@@ -492,13 +497,13 @@ internal static class IndexSearch
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>
-    internal static DefinitionMatch Preview(string text, int index, int length, int count, int chars, bool cut)
+    internal static DefinitionMatch Preview(ReadOnlySpan<char> text, int index, int length, int count, int chars, bool cut)
     {
         var line = 1;
-        for (var at = text.IndexOf('\n'); at >= 0 && at < index; at = text.IndexOf('\n', at + 1)) line++;
-        var start = index == 0 ? 0 : text.LastIndexOf('\n', index - 1) + 1;
-        var end = text.IndexOf('\n', index);
-        if (end < 0) end = text.Length;
+        line += text[..index].Count('\n');
+        var start = index == 0 ? 0 : text[..index].LastIndexOf('\n') + 1;
+        var end = text[index..].IndexOf('\n');
+        end = end < 0 ? text.Length : index + end;
         if (end > start && text[end - 1] == '\r') end--;
         // A match that spans lines shows up to its own line's end.
         var shown = Math.Min(length, Math.Max(0, end - index));
@@ -506,7 +511,7 @@ internal static class IndexSearch
         var to = Math.Min(end, Math.Max(from + chars, index + shown));
         if (to - from > chars) to = from + chars;
         from = Math.Max(start, from);
-        var preview = text[from..to].Replace('\t', ' ');
+        var preview = new string(text[from..to]).Replace('\t', ' ');
         return new(line, index - start + 1, preview, [index - from, Math.Min(shown, to - index)], from > start, to < end, count, cut);
     }
 }
