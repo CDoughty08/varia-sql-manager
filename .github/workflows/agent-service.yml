@@ -35,7 +35,9 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 45
     env:
-      # Windows authentication as the runner's account, which setup makes sysadmin; shared memory needs no SQL Browser.
+      # Windows authentication as the runner's account, which setup makes sysadmin by name (not through BUILTIN\Administrators), so
+      # the jobs it creates have an owner that is a server principal, as Object Explorer's Jobs folder names it; shared memory needs
+      # no SQL Browser.
       VARIA_TEST_SQL_SERVER: lpc:.\VARIA
       VARIA_TEST_SQL_SCRATCH: '1'
       VARIA_TEST_SQL_AGENT: '1'
@@ -53,7 +55,7 @@ jobs:
         timeout-minutes: 25
         shell: pwsh
         run: |
-          choco install sql-server-2022 -y --no-progress --params "'/IgnorePendingReboot /INSTANCENAME:VARIA /FEATURES:SQLENGINE /SQLSYSADMINACCOUNTS:BUILTIN\Administrators /AGTSVCSTARTUPTYPE:Manual'"
+          choco install sql-server-2022 -y --no-progress --params "'/IgnorePendingReboot /INSTANCENAME:VARIA /FEATURES:SQLENGINE /SQLSYSADMINACCOUNTS:$env:COMPUTERNAME\$env:USERNAME /AGTSVCSTARTUPTYPE:Manual'"
           Start-Service 'SQLAgent$VARIA'
           Get-Service 'MSSQL$VARIA', 'SQLAgent$VARIA' | Format-Table -AutoSize Name, Status, StartType
       - name: Agent live suites with service control
