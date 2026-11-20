@@ -51,6 +51,13 @@ export interface InputTarget {
  * pane or else every shown fact, read then so Copy writes what the menu was opened on.
  */
 export interface PeekPropertiesTarget { readonly kind: 'peekProperties'; readonly text: string }
+/** An execution plan's operator outline when its menu opened: the operator a Copy writes (`copy`, none when none is selected). */
+export interface PlanOutlineTarget { readonly kind: 'planOutline'; readonly copy?: (headers: boolean) => Promise<string> }
+/**
+ * An execution plan's Properties pane when its menu opened: the facts to copy, read then (those whose text was selected, else
+ * the one right-clicked, else every fact shown), so Copy and Copy Value write what the menu was opened on.
+ */
+export interface PlanPropertiesTarget { readonly kind: 'planProperties'; readonly facts: readonly (readonly [name: string, value: string])[] }
 export type OutputView = 'grid' | 'messages' | 'live'
 /**
  * A Query Output view: the query's results grid for one result set (its cell selection lives in the grid's view state,
@@ -149,16 +156,20 @@ export type MenuTarget =
   | { readonly kind: 'resultsTools'; readonly tabId: string }
   /** Peek's Properties pane: Copy writes `text`, the facts read when the menu opened (`PeekPropertiesTarget`). */
   | PeekPropertiesTarget
+  | PlanOutlineTarget
+  | PlanPropertiesTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context'
+  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context',
+  planOutline: 'plan.outline.context', planProperties: 'plan.properties.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
-  'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties'
+  'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties',
+  'plan.outline.context': 'Plan outline', 'plan.properties.context': 'Plan properties'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -208,6 +219,8 @@ export function argsFor(target: MenuTarget): CommandArgs {
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
+export const planOutlineOf = (args: CommandArgs | undefined): PlanOutlineTarget | undefined => args?.target?.kind === 'planOutline' ? args.target : undefined
+export const planPropertiesOf = (args: CommandArgs | undefined): PlanPropertiesTarget | undefined => args?.target?.kind === 'planProperties' ? args.target : undefined
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined

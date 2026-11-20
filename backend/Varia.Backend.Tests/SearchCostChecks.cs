@@ -60,7 +60,7 @@ internal static class SearchCostChecks
 
     /// <summary>A batch's rows as SqlClient serves them: closing the reader short of its end reads every row left (counted as
     /// drained), unless the batch was cancelled first; definition reads are counted.</summary>
-    private sealed class Batch(DataTable[] tables) : System.Data.Common.DbDataReader
+    internal sealed class Batch(DataTable[] tables) : System.Data.Common.DbDataReader
     {
         private readonly DataTableReader inner = new(tables);
         public bool Cancelled;

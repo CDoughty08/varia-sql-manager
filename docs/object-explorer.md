@@ -285,11 +285,11 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
 | `agent` | SQL Server Agent | `server` | `agent` | — | No | — |
 | `agentJobActivity` | Job Activity Monitor | `server` | `agent-activity` | — | No | — |
-| `agentJob` | Job | `serverObject` | `agent-job` | — | No | the name as is (`@name`) |
-| `agentAlert` | Alert | `serverObject` | `bell` | — | No | the name as is (`@name`) |
-| `agentOperator` | Operator | `serverObject` | `agent-operator` | — | No | the name as is (`@name`) |
+| `agentJob` | Job | `serverObject` | `agent-job` | Job | Yes | the name as is (`@name`) |
+| `agentAlert` | Alert | `serverObject` | `bell` | Alert | Yes | the name as is (`@name`) |
+| `agentOperator` | Operator | `serverObject` | `agent-operator` | Operator | Yes | the name as is (`@name`) |
 | `agentProxySubsystem` | Proxy Subsystem | `serverObject` | `folder` | — | No | — |
-| `agentProxy` | Proxy | `serverObject` | `agent-proxy` | — | No | the name as is (`@name`) |
+| `agentProxy` | Proxy | `serverObject` | `agent-proxy` | ProxyAccount | Yes | the name as is (`@name`) |
 | `agentErrorLog` | Error Log | `serverObject` | `output` | — | No | — |
 
 ## Node identity

@@ -21,7 +21,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, and Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project). |
+| Advanced… | A sub-dialog: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -36,8 +36,8 @@ token path asks again.
 ## Saved connections
 
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
-most recent connects, each keyed by its settings, with environment labels per entry, written atomically and
-quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
+most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
+[Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
 target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
@@ -229,6 +229,52 @@ type.
 Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
 beside them, "< $0.01" below a cent. The price is an estimate: projects with capacity reservations do not pay per byte.
 `BigQueryCost` (C#) and `src/shared/bigquery/cost.ts` write the same text, pinned by `tests/fixtures/bigquery/cost.json`.
+Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`prices: false` for
+Messages).
+
+- **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A query tab shows it in a chip
+  beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (its tooltip says whether
+  Execute asks on this connection), and after a run what the job processed and cost, unless the text changed while it
+  ran. Its tooltip says the estimate is free and on demand, and why it may be low.
+- **Diagnostics.** After a 1 s pause in editing, a dry run (one in flight per tab; the latest text wins) marks the error
+  BigQuery reports at its `[line:column]` (owner `varia.googlesql.dryRun`, so Alt+F8 reaches it) and updates the chip; the
+  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Executing a selection marks its error where the
+  selection puts it in the document. Nothing dry-runs after a restore, a provider switch, a connection or dataset change,
+  or once the setting is off, until the user edits or executes (decision 44): an edit's dry run queued behind one in
+  flight is dropped too, as is one Execute makes redundant. A table or dataset that does not exist is the query's
+  error (`SQL_ERROR` with Google's text), a dataset in another location is `LOCATION_MISMATCH` as Execute says, a missing
+  project stays `NOT_FOUND`, and a refused table keeps Google's text, since connecting already proved the account can
+  create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
+  while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
+- **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
+  first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
+  Cancel as an alert dialog with a **Cost settings…** link:
+  - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
+    kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
+    and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
+    threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
+    changed, so a remembered connection never undoes a later Don't ask again, and entries with the same settings share
+    one choice (a connect that names one takes effect at once). If the choice cannot be saved, it holds for the session.
+    It is a preference, not part of which entry the connection is or of its target.
+  - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
+    a 0-byte estimate for a query that reads tables (right for an empty table or skipped partitions, but external and
+    row-level-security tables also report 0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
+    `UNKNOWN` (DDL that reads no table, such as DROP or TRUNCATE, never counts as 0-byte; DML and CREATE TABLE AS SELECT
+    do). **Don't warn me about incomplete estimates
+    again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
+  one that the answer before it made moot (Don't ask again) is not shown; the incomplete-estimate warning it was
+  hiding still asks.
+
+  A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel,
+  closing the tab or disconnecting while the estimate is worked out or a prompt is open or waiting stops the run at once,
+  closes the prompt and sends nothing; its Don't ask again is not kept. An edit with the diagnostics setting off clears
+  the chip and the marker for the old text. Emulator mode's faked estimates never ask.
+- **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
+  `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
+  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
 
 ## Errors
 
@@ -249,7 +295,7 @@ beside them, "< $0.01" below a cent. The price is an estimate: projects with cap
 | `SQL_ERROR` | `invalidQuery`, or a job error with no other row | BigQuery's text, with its line and column |
 | `LOCATION_MISMATCH` | A query's dataset is in another location (`notFound`, then `datasets.get` says where) | Names both locations |
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
-| `COST_CAP` | `bytesBilledLimitExceeded` | Names the connection's maximum bytes billed and Google's figure; raise the cap or read less |
+| `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
 
 ## Emulator mode
@@ -286,7 +332,10 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
-  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text.
+  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text. The dry-run
+  checks in `BigQueryChecks` cover `bigquery.dryRun` (the body, each incomplete reason, a refused query's `[line:column]`,
+  the limits); `tests/bigquery-dry-run.test.ts` the cost rules, the prompts, the chip and the diagnostics loop, and
+  `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
   `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).

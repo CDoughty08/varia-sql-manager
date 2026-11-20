@@ -1,6 +1,7 @@
 // Restore Files and Filegroups' two sections (D1g), SSMS's General and Options pages (spec D1 §8, labels recalled): the
 // document frame, the Run panel and the Script drawer are Restore Database's (RestoreDatabase.tsx, mode 'files').
 import { isRestoreSystemDatabase, restoreDevicePickerTitles, restoreFilesRecoveryLabels, restoreLimits, restoreMessages, restoreRecoveryStates, type RestoreRecovery } from '../../../shared/actions/restore.ts'
+import { useDomRowCopy } from '../grid/row-copy'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import PropertyField, { fieldAria } from '../kit/PropertyField'
 import Segmented from '../kit/Segmented'
@@ -13,6 +14,7 @@ const fileTypeLabel = (type: string) => type === 'log' ? 'Log' : type === 'data'
 
 /** General: Destination (To database), Source (From database or From device), and Select the backup sets to restore. */
 export function FilesGeneralSection({ state, draft, facts, service, problems }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const update = (patch: Partial<RestoreDraft>) => service.updateDraft(state.id, patch)
   const destinations = facts.server?.destinations.filter(item => !isRestoreSystemDatabase(item.name)) ?? []
   const toDatabase = destinations.some(item => item.name === draft.destination) || !draft.destination ? destinations.map(item => item.name) : [draft.destination, ...destinations.map(item => item.name)]
@@ -57,7 +59,7 @@ export function FilesGeneralSection({ state, draft, facts, service, problems }: 
     {state.sets === 'loading' || (state.files === 'loading' && rows.length === 0) ? <Skeleton rows={3} label="Reading the backup sets" />
       // The grid is wider than the column: its scroller is a tab stop, so the keyboard reaches the columns past the edge.
       : <div className="properties-table restore-sets" role="region" aria-labelledby={gridId} tabIndex={0}>
-        <table className="object-dialog-grid" aria-labelledby={gridId}>
+        <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={gridId}>
           <thead><tr>{columns.map(column => <th key={column} scope="col" data-wrap="never">{column}</th>)}</tr></thead>
           <tbody>{rows.map(row => {
             const cells = filesSetCells(row, asFilegroup), reasonId = `${gridId}-${row.key.replace(/\W/g, '_')}-reason`
@@ -80,6 +82,7 @@ export function FilesGeneralSection({ state, draft, facts, service, problems }: 
 
 /** Options: Restore options, Restore the database files as, Recovery state and Rollback undo file, and Varia's log backup. */
 export function FilesOptionsSection({ state, draft, facts, service, problems, browse }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const update = (patch: Partial<RestoreDraft>) => service.updateDraft(state.id, patch)
   const files = draft.files!
   const rows = filesMoveRows(draft, facts), gridId = fieldId(state.id, 'files'), recoveryId = fieldId(state.id, 'recovery')
@@ -102,7 +105,7 @@ export function FilesOptionsSection({ state, draft, facts, service, problems, br
     {simple && <p className="field-note">{restoreMessages.simpleReadOnly}</p>}
     <h3 className="properties-group-title" id={gridId}>Restore the database files as</h3>
     {state.files === 'loading' && rows.length === 0 ? <Skeleton rows={2} label="Reading the backup's files" /> : <div className="properties-table restore-files-table">
-      <table className="object-dialog-grid" aria-labelledby={gridId}>
+      <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={gridId}>
         <thead><tr><th scope="col">Original File Name</th><th scope="col" data-wrap="never">File Type</th><th scope="col">Restore As</th></tr></thead>
         <tbody>{rows.map(row => <tr key={row.file.logical} data-problem={row.problem ? true : undefined}>
           <td data-wrap="anywhere"><bdi>{displayText(row.file.physical)}</bdi></td><td data-wrap="never">{fileTypeLabel(row.file.type)}</td>

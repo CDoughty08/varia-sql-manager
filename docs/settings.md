@@ -27,10 +27,15 @@ from Microsoft's documentation, so Varia keeps its own.
     - General (`textEditor.transactSql.general`)
     - IntelliSense (`textEditor.transactSql.intelliSense`)
     - Tabs (`textEditor.transactSql.tabs`)
+  - GoogleSQL
+    - General (`textEditor.googleSql.general`)
 - Query Execution
   - SQL Server
     - General (`queryExecution.sqlServer.general`)
     - Advanced (`queryExecution.sqlServer.advanced`)
+  - BigQuery
+    - Cost (`queryExecution.bigQuery.cost`)
+    - Sessions (`queryExecution.bigQuery.sessions`)
 - Query Results
   - SQL Server
     - Results to Grid (`queryResults.sqlServer.grid`)
@@ -91,7 +96,7 @@ Sections: **Text Editor**.
 
 ### Environment › Shortcuts
 
-Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
+Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Copy on a row copies its columns as shown. Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
 
 _No settings yet._
 
@@ -188,6 +193,14 @@ Sections: **Tab**.
 | Tab | `textEditor.sql.indentSize` | Indent size | Integer 1–60 | 4 |  | All | At once | The number of columns Tab and automatic indentation indent by. |
 | Tab | `textEditor.sql.tabs` | Tab characters | One of `spaces` (Insert spaces), `tabs` (Keep tabs) | Keep tabs |  | All | At once | Whether Tab and indentation insert spaces or tab characters, as SSMS's Insert spaces and Keep tabs. The indentation already in a query is not detected. |
 
+### Text Editor › GoogleSQL › General
+
+BigQuery query tabs. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `textEditor.googleSql.dryRunDiagnostics` | Check queries with a dry run while editing | Boolean | True |  | All | At once | After a pause in typing, a free BigQuery dry run marks the query's error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate. Not in SSMS. |
+
 ### Query Execution › SQL Server › General
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
@@ -199,6 +212,26 @@ Sections: **Tab**.
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `queryExecution.stopOnError` | Stop the script at the first batch that raises an error | Boolean | False |  | All | Next execution | Skips the remaining batches of a script after a batch fails. Otherwise every batch runs, as in SSMS. Not in SSMS. |
+
+### Query Execution › BigQuery › Cost
+
+Estimates come from a free dry run before Execute. Prices are on-demand estimates: projects that use reserved capacity are not billed per byte. Not in SSMS.
+
+Sections: **Prompt** (Execute asks before running only in these cases), **Limit** (The hard guard: BigQuery fails a job past it, at no charge), **Estimates**.
+
+| Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Prompt | `queryExecution.bigQuery.costPrompt` | Ask before running a query that processes more than the threshold | Boolean | True |  | All | Next execution | Execute dry-runs a BigQuery query first (free) and asks before running one estimated to process more than the threshold. A connection where you chose "Don't ask again" in the prompt never asks; its Advanced Properties turn the prompt back on. Not in SSMS. |
+| Prompt | `queryExecution.bigQuery.costThreshold` | Threshold | Integer 1–1,048,576 GiB | 10 GiB |  | All | Next execution | Queries estimated to process more than this ask before running. The estimate beside Execute turns amber above it. Not in SSMS. Greyed while `queryExecution.bigQuery.costPrompt` is False. |
+| Prompt | `queryExecution.bigQuery.incompleteEstimateWarning` | Warn when an estimate may be low | Boolean | True |  | All | Next execution | Asks once per query tab before running a query whose estimate may be low: a script (estimated only up to its first DDL or control statement), external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks as a lower bound or could not make accurate. Not in SSMS. |
+| Limit | `queryExecution.bigQuery.maximumBytesBilled` | Maximum bytes billed per query | Integer 0–1,048,576 GiB | 0 GiB |  | All | Next execution | Every BigQuery job carries this limit, so BigQuery fails a query that would bill more, at no charge. A connection's own limit (Advanced Properties) wins over this one. Shown after the field: 0 = no limit. Not in SSMS. |
+| Estimates | `queryExecution.bigQuery.showCost` | Show cost as | One of `onDemand` (On-demand US rate ($6.25 per TiB)), `bytes` (Bytes only) | On-demand US rate ($6.25 per TiB) |  | All | At once | Dollars beside every byte figure (the estimate, the Results status, Messages and the prompts), at the US on-demand rate. Projects that use reserved capacity are not billed per byte; Bytes only leaves the dollars out. Not in SSMS. |
+
+### Query Execution › BigQuery › Sessions
+
+Each BigQuery query tab runs in its own BigQuery session, created by its first execution at no charge, so temporary tables, variables and transactions carry across executions. Temporary tables are billed as storage until the session ends: when the tab closes or disconnects, or after 24 hours idle (7 days at most). Not in SSMS.
+
+_No settings yet._
 
 ### Query Results › SQL Server › Results to Grid
 
@@ -215,7 +248,8 @@ Sections: **Grid display** (How results look in the grid), **Copy and save**, **
 | Grid display | `queryResults.grid.columnProfileSelectedOnly` | Show only the selected columns in the column profile | Boolean | False |  | All | At once | The column profile panel lists only the columns the grid's selection covers, following it as it changes, instead of every column. Either way the cards of the selected columns are highlighted, and holding Ctrl (⌘ on macOS) with the pointer over the panel shows the other list for as long as it is held. The panel's Selected Columns Only button changes this too. Not in SSMS. |
 | Grid display | `queryResults.grid.filterPopupWidth` | Column filter width | Integer 340–900 px | 440 px |  | All | At once | The width of the column filter that a header's funnel or Filter Column Values opens. Dragging the filter's corner grip sets it. The filter shrinks to fit a small window. Named "Column filter popup width" outside its section. Not in SSMS. |
 | Grid display | `queryResults.grid.filterPopupHeight` | Column filter height | Integer 0–1,200 px | 0 px |  | All | At once | The height of the column filter that a header's funnel or Filter Column Values opens; a taller filter shows more values. 0 fits it to its contents. Dragging the filter's corner grip sets it, at least 240 px. The filter shrinks to fit a small window. Shown after the field: 0 = fit to contents. Named "Column filter popup height" outside its section. Not in SSMS. |
-| Copy and save | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
+| Copy and save | `queryResults.grid.copyColumnHeaders` | Include column headers when copying the results | Boolean | False |  | All | At once | Copy starts with a row of column names, in the results grid and in every other grid that copies its rows. Copy with Headers always includes them. |
+| Copy and save | `queryResults.grid.saveColumnHeaders` | Include column headers when saving the results | Boolean | True |  | All | At once | Save Results As (CSV and tab-delimited text) starts with a row of column names, from the results grid and from every other grid that saves its rows. JSON always names its keys. |
 | Limits and memory | `queryResults.grid.discardResults` | Discard results after execution | Boolean | False |  | All | Next execution | Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results. |
 | Limits and memory | `queryResults.grid.maxResultSets` | Result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Named "Maximum result sets kept per execution" outside its section. Not in SSMS. |
 | Limits and memory | `queryResults.grid.maxRows` | Rows kept per execution | Integer 0–2,147,483,647 | 0 |  | All | Next execution | Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row. Shown after the field: 0 = no limit. Named "Maximum rows kept per execution" outside its section. Not in SSMS. |
@@ -332,6 +366,9 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 - Migration: when `settings.json` does not exist, a `scripting-options.json` from an earlier version is imported into
   the `objectExplorer.scripting.*` keys and left untouched; it is not read again once `settings.json` exists or was
   reset. When the import cannot be written, its values apply for the session and the next start imports again.
+- Renamed settings: a key an earlier version stored under its old name carries its value to each new key the file does
+  not set, and the next write drops the old name. A value the new key cannot hold is dropped without a warning.
+  `queryResults.grid.includeColumnHeaders` became `queryResults.grid.copyColumnHeaders` and `queryResults.grid.saveColumnHeaders`.
 - The color theme stays in `appearance.json` (View › Theme); connection profiles keep their own Advanced properties.
 
 ## Limits
@@ -345,4 +382,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (122 today).
+A patch holds at most one entry per setting (129 today).

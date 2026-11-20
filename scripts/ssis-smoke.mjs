@@ -182,7 +182,8 @@ try {
   expect(await application.evaluate(() => globalThis.variaSave.dialogs.at(-1))).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Loads-Parameters\.csv$/) })
   const saved = await readFile(join(saveDir, 'parameters.csv'), 'utf8')
   // An empty value is an empty string (""), as a result's is; an empty field would be NULL.
-  expect(saved).toBe('﻿' + ['Server,String,sql01,Literal,Yes,No,""', 'Password,String,********,Literal,No,Yes,""', 'Port,Int32,Port,Environment variable,No,No,""'].map(line => line + '\r\n').join(''))
+  // Saves have column headers by default (Include column headers when saving the results).
+  expect(saved).toBe('﻿' + ['Name,Data type,Value,Source,Required,Sensitive,Description', 'Server,String,sql01,Literal,Yes,No,""', 'Password,String,********,Literal,No,Yes,""', 'Port,Int32,Port,Environment variable,No,No,""'].map(line => line + '\r\n').join(''))
   // A header sorts the list, as in a results grid.
   await listMenu(parameters, 'Sort Descending')
   await expect(gridCell(parameters, 0, 0)).toHaveText('Server')

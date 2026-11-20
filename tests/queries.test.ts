@@ -220,7 +220,7 @@ describe('query orchestration', () => {
     f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 47, login: 'reader' }) })
     await f.queries.execute()
     const statistics = f.queries.statistics.getSnapshot()
-    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT selected', startLine: 9 })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT selected', startLine: 9, startColumn: 1 })
     f.results.begin.mockClear(); f.results.finish.mockClear(); f.queryApi.execute.mockClear()
     const previous = f.queries.getSnapshot()[f.tab.id]
     const deferredPlan = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
@@ -250,7 +250,7 @@ describe('query orchestration', () => {
     await f.queries.estimate()
     expect(f.queries.getSnapshot()[f.tab.id].estimated?.error).toBe('SHOWPLAN permission denied')
     expect(f.queries.isRunning(f.tab.id)).toBe(false)
-    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: '  ', startLine: 1 })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: '  ', startLine: 1, startColumn: 1 })
     await f.queries.estimate()
     expect(f.queryApi.estimatePlan).toHaveBeenCalledTimes(1)
     f.queries.dispose()
@@ -734,5 +734,88 @@ describe('BigQuery execution', () => {
     await f.queries.execute(f.tab.id)
     expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('dataset')
     expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('database')
+  })
+})
+
+describe('BigQuery cost gate', () => {
+  it('sends nothing when the cost prompt is declined, and leaves the tab as it was', async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const gate = vi.fn(async () => false)
+    f.queries.setCostGate(gate)
+    await f.queries.execute(f.tab.id)
+    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT 1', { line: 1, column: 1 }, expect.any(AbortSignal))
+    expect(f.queryApi.execute).not.toHaveBeenCalled()
+    expect(f.results.begin).not.toHaveBeenCalled()
+    expect(f.queries.getSnapshot()[f.tab.id]).toBeUndefined()
+  })
+  it('Cancel while the estimate runs stops locally; an accepted gate runs with Options\' cap and Bytes only', async () => {
+    const f = fixture(undefined, undefined, { 'queryExecution.bigQuery.maximumBytesBilled': 5, 'queryExecution.bigQuery.showCost': 'bytes' })
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const pending = deferred<boolean>()
+    let signal: AbortSignal | undefined
+    f.queries.setCostGate((_tab, _sql, _origin, stop) => { signal = stop; return pending.promise })
+    const run = f.queries.execute(f.tab.id)
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    await f.queries.cancel(f.tab.id)
+    // Cancel is immediate: the tab is as it was and the gate (its dry run, its prompt) is told to stop, before it settles.
+    expect(f.queries.isRunning(f.tab.id)).toBe(false)
+    expect(signal?.aborted).toBe(true)
+    await run
+    pending.resolve(true)
+    await Promise.resolve()
+    expect(f.queryApi.cancel).not.toHaveBeenCalled()
+    expect(f.queryApi.execute).not.toHaveBeenCalled()
+    expect(f.queries.isRunning(f.tab.id)).toBe(false)
+    f.queries.setCostGate(async () => true)
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ maximumBytesBilled: 5 * 2 ** 30, prices: false })
+  })
+  it("records the text's version before the gate, and Cancel keeps a session that ended while it waited", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const versions: number[] = []
+    const revision = vi.spyOn(f.documents, 'revision').mockImplementation(() => { versions.push(versions.length + 1); return versions.length })
+    const pending = deferred<boolean>()
+    let readBeforeGate = -1
+    f.queries.setCostGate(async () => { readBeforeGate = versions.length; await pending.promise; return true })
+    const run = f.queries.execute(f.tab.id)
+    pending.resolve(true)
+    await run
+    expect(readBeforeGate).toBeGreaterThan(0)
+    // The run's error locations are tied to the version read before the gate, not one read after it (an edit while the
+    // prompt was open would make them point into the edited text).
+    expect((f.queries as unknown as { sources: Map<string, { revision: number }> }).sources.get(f.tab.id)?.revision).toBe(readBeforeGate)
+    revision.mockRestore()
+    // A session the tab had ends while the next run waits on its estimate: Cancel does not bring it back.
+    const live = { connectionId: f.connection.id, spid: 51, login: 'reader' }
+    f.queries['update'](f.tab.id, { ...f.queries.getSnapshot()[f.tab.id], session: live })
+    const waiting = deferred<boolean>()
+    f.queries.setCostGate(() => waiting.promise)
+    const next = f.queries.execute(f.tab.id)
+    expect(f.queries.getSnapshot()[f.tab.id]?.session).toEqual(live)
+    f.bus.emit({ type: 'session.ended', tabId: f.tab.id } as never)
+    await f.queries.cancel(f.tab.id)
+    await next
+    expect(f.queries.getSnapshot()[f.tab.id]?.session).toBeUndefined()
+    waiting.resolve(true)
+  })
+  it("hands the gate a selection's start, so dry-run markers land in the document", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT x', startLine: 12, startColumn: 5 })
+    const gate = vi.fn(async () => false)
+    f.queries.setCostGate(gate)
+    await f.queries.execute(f.tab.id)
+    expect(gate).toHaveBeenCalledWith(f.tab.id, 'SELECT x', { line: 12, column: 5 }, expect.any(AbortSignal))
+  })
+  it('never gates or sends BigQuery options for SQL Server', async () => {
+    const f = fixture(undefined, undefined, { 'queryExecution.bigQuery.maximumBytesBilled': 5, 'queryExecution.bigQuery.showCost': 'bytes' })
+    const gate = vi.fn(async () => false)
+    f.queries.setCostGate(gate)
+    await f.queries.execute(f.tab.id)
+    expect(gate).not.toHaveBeenCalled()
+    expect(f.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('maximumBytesBilled')
+    expect(f.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('prices')
   })
 })

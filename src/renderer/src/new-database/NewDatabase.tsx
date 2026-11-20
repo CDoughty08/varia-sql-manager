@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useDomRowCopy } from '../grid/row-copy'
 import { actionLimits, dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
 import { autogrowthText, fileTypeLabel, notApplicable, optionDef, type Growth } from '../../../shared/actions/database.ts'
 import { newDatabaseBaseline, newDatabaseOptionKeys, newDatabaseScopedKeys, primaryFilegroup, type NewDatabaseProblem, type NewFilegroupType, type NewFileType } from '../../../shared/actions/new-database.ts'
@@ -97,6 +98,7 @@ const numberOf = (text: string): number | undefined => text.trim() === '' ? unde
 
 /** General: the database's name and owner, and its files (SSMS's grid, editable in place). */
 function GeneralSection({ state, editable, problems, service }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const model = state.model!
   const [choosing, setChoosing] = useState(false)
   const [autogrowth, setAutogrowth] = useState<number>()
@@ -138,7 +140,7 @@ function GeneralSection({ state, editable, problems, service }: SectionProps) {
     <FactList facts={[{ label: 'Use full-text indexing', value: 'Always on (since SQL Server 2008)' }]} />
     <h3 className="properties-group-title" id={`${state.id}-new-files`}>Database files</h3>
     <div className="properties-table new-database-files">
-      <table className="object-dialog-grid" aria-labelledby={`${state.id}-new-files`}>
+      <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={`${state.id}-new-files`}>
         <thead><tr>
           <th scope="col">Logical Name</th><th scope="col" data-wrap="never">File Type</th><th scope="col">Filegroup</th><th scope="col" data-wrap="never">Initial Size (MB)</th>
           <th scope="col">Autogrowth / Maxsize</th><th scope="col">Path</th><th scope="col">File Name</th>
@@ -247,6 +249,7 @@ function OptionsSection({ state, editable, problems, service, baseline }: Sectio
 
 /** Filegroups: SSMS's Rows, FILESTREAM and Memory Optimized Data lists, each with Add Filegroup and Remove. */
 function FilegroupsSection({ state, editable, problems, service }: SectionProps) {
+  const copyRow = useDomRowCopy()
   const server = state.model!
   const [selected, setSelected] = useState<number>()
   const level = server.model.server.level
@@ -277,7 +280,7 @@ function FilegroupsSection({ state, editable, problems, service }: SectionProps)
       <h3 className="properties-group-title" id={id}>{title}</h3>
       {unavailable && <p className="field-note">{unavailable}</p>}
       {rows.length > 0 && <div className="properties-table">
-        <table className="object-dialog-grid" aria-labelledby={id}>
+        <table onCopy={copyRow} className="object-dialog-grid" aria-labelledby={id}>
           <thead><tr>
             <th scope="col">Name</th><th scope="col" data-wrap="never">{type === 'rows' ? 'Files' : 'FILESTREAM Files'}</th>
             {type !== 'memoryOptimized' && <>{type === 'rows' && <th scope="col">Read-Only</th>}<th scope="col">Default</th></>}

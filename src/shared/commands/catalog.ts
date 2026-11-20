@@ -830,11 +830,11 @@ export const commandCatalog = {
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {
-    title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     keybindings: [{ key: 'alt+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 1, mnemonic: 'n' }]
   },
   'edit.previousSqlIssue': {
-    title: 'Previous SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    title: 'Previous SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
     keybindings: [{ key: 'alt+shift+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 2, mnemonic: 'p' }]
   },
   // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the
@@ -1379,6 +1379,24 @@ export const commandCatalog = {
   'peek.copyProperties': {
     title: 'Copy Properties', category: 'Object Explorer', icon: 'copy', palette: false,
     menus: [{ menu: 'peek.properties.context', group: '1_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
+  },
+  // The execution plan's operator outline (plan.outline.context): the selected operator as one tab-separated line.
+  'plan.copyOperator': {
+    providerContext: 'own',
+    title: 'Copy Operator', category: 'Query', icon: 'copy', palette: false,
+    keybindings: [{ key: 'mod+c', when: 'planOutlineFocus', native: true }], menus: [{ menu: 'plan.outline.context', group: '1_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
+  },
+  // The execution plan's Properties pane (plan.properties.context): the facts whose text is selected, else the one
+  // right-clicked, else all of them, as Name<TAB>Value lines (Copy) or their values alone (Copy Value).
+  'plan.copyProperties': {
+    providerContext: 'own',
+    title: 'Copy Plan Properties', category: 'Query', icon: 'copy', palette: false,
+    menus: [{ menu: 'plan.properties.context', group: '1_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
+  },
+  'plan.copyPropertyValues': {
+    providerContext: 'own',
+    title: 'Copy Plan Property Values', category: 'Query', palette: false,
+    menus: [{ menu: 'plan.properties.context', group: '1_copy', order: 2, title: 'Copy Value', mnemonic: 'v' }]
   }
 } as const satisfies Record<string, CommandDescriptor>
 

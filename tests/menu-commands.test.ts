@@ -701,10 +701,16 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.sortAscending', { target: { ...on(1).target!, live: { ...live, sortable: false } } as CommandArgs['target'] })).toBe(false)
   })
   it('copy with headers when Tools › Options › Results to Grid says so', async () => {
-    const { commands, api, resultSelection, tab, on, block } = await ran('win32', results, { 'queryResults.grid.includeColumnHeaders': true })
+    const { commands, api, resultSelection, tab, on, block } = await ran('win32', results, { 'queryResults.grid.copyColumnHeaders': true })
     resultSelection.set(tab.id, block())
     expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
     expect(api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true })
+  })
+  it('copy without headers when only saving includes them: copy and save have their own settings', async () => {
+    const { commands, api, resultSelection, tab, on, block } = await ran('win32', results, { 'queryResults.grid.copyColumnHeaders': false, 'queryResults.grid.saveColumnHeaders': true })
+    resultSelection.set(tab.id, block())
+    expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
+    expect(api.copyResults.mock.calls[0][0]).toMatchObject({ headers: false })
   })
   it('copy nothing from results the backend lost, and report a copy the backend refused in the banner', async () => {
     const { commands, api, resultSelection, resultClient, tab, on, block } = await ran()

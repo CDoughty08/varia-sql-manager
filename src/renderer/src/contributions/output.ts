@@ -234,9 +234,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const target = targetOf(args), cells = selected(target), live = liveOf(args)
         // Any copy supersedes a local grid's still formatting (copy-generation.ts); a local grid begins its own after this.
         beginCopy()
-        if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
+        if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.copyColumnHeaders')); return }
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
-        if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
+        if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.copyColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
       }
     }),
