@@ -299,7 +299,11 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         if (environment.Emulator) return new(0, Faked: true);
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, dataset, token)); }
-        catch (Exception error) { throw BigQueryErrors.Map(error, connection.Options.Project, ProbePermission, token: token); }
+        // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: keep Google's text. A
+        // missing table or dataset is the query's mistake too, not the project's.
+        catch (Google.GoogleApiException error) when (!token.IsCancellationRequested && (error.HttpStatusCode == System.Net.HttpStatusCode.NotFound || error.Error?.Errors?.Any(item => item.Reason == "notFound") == true))
+        { throw new RequestException("SQL_ERROR", BigQueryErrors.Sanitize(error.Error?.Message) is { Length: > 0 } text ? text : "BigQuery could not find a table or dataset the query names."); }
+        catch (Exception error) { throw BigQueryErrors.Map(error, connection.Options.Project, token: token); }
     }
 
     /// <summary>bigquery.dryRun (docs/bigquery.md, Cost): the free estimate before Execute and the editor's diagnostics. It

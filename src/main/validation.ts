@@ -53,7 +53,7 @@ export const requestSchemas = {
     startLine: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
-    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), hidePrices: z.boolean().optional()
+    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),

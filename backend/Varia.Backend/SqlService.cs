@@ -406,7 +406,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.dryRun" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -1179,7 +1179,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
-        if (args.MaximumBytesBilled is not null || args.HidePrices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
+        if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);

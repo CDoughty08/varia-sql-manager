@@ -6,7 +6,7 @@ import StatusPill from './kit/StatusPill'
 import type { EstimateState } from './services/bigquery-cost'
 
 /** The chip's tone, words and tooltip for a tab's estimate (docs/bigquery.md, Cost). */
-export function costChip(state: EstimateState, settings: Pick<SettingsValues, 'queryExecution.bigQuery.costPrompt' | 'queryExecution.bigQuery.costThreshold' | 'queryExecution.bigQuery.showCost'>): { tone: StatusTone; label: string; title: string } {
+export function costChip(state: EstimateState, settings: Pick<SettingsValues, 'queryExecution.bigQuery.costPrompt' | 'queryExecution.bigQuery.costThreshold' | 'queryExecution.bigQuery.showCost'>, asks = settings['queryExecution.bigQuery.costPrompt']): { tone: StatusTone; label: string; title: string } {
   const prices = settings['queryExecution.bigQuery.showCost'] !== 'bytes'
   const rate = prices ? ' Prices are on-demand estimates; projects that use reserved capacity are not billed per byte.' : ''
   switch (state.phase) {
@@ -20,7 +20,7 @@ export function costChip(state: EstimateState, settings: Pick<SettingsValues, 'q
       const over = settings['queryExecution.bigQuery.costPrompt'] && state.bytes > threshold
       const note = state.incomplete ? ` ${incompleteText[state.incomplete]}` : ''
       return { tone: over ? 'warning' : 'neutral', label: `≈ ${pricedBytes(state.bytes, prices)}`,
-        title: `Free dry-run estimate: this query will process about ${pricedBytes(state.bytes, prices)}.${over ? ' Over the threshold: Execute asks first.' : ''}${note}${rate}` }
+        title: `Free dry-run estimate: this query will process about ${pricedBytes(state.bytes, prices)}.${over ? asks ? ' Over the threshold: Execute asks first.' : ' Over the threshold; Execute does not ask on this connection.' : ''}${note}${rate}` }
     }
   }
 }
@@ -32,7 +32,7 @@ export default function BigQueryCostChip({ tabId }: { tabId: string | undefined 
   const estimates = useServiceSnapshot(bigQueryCost), values = useServiceSnapshot(settings).values
   const state = tabId ? estimates.get(tabId) : undefined
   if (!state) return null
-  const chip = costChip(state, values)
+  const chip = costChip(state, values, bigQueryCost.asksAboveThreshold(tabId!))
   return <span className="bigquery-cost-chip" role="status" aria-label={`Estimate: ${chip.label}`} title={chip.title}>
     <StatusPill tone={chip.tone} label={chip.label} size="small" title={chip.title} />
   </span>

@@ -9,7 +9,7 @@ namespace Varia.Backend.BigQuery;
 /// </summary>
 internal sealed record BigQueryConnectOptions(string Provider, string Project, string Authentication,
     string? Location = null, string? Dataset = null, IReadOnlyList<string>? ExtraProjects = null, string? KeyFile = null,
-    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, string? DisplayName = null, string? Color = null,
+    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, bool? CostPrompt = null, string? DisplayName = null, string? Color = null,
     string? Environment = null, bool NonInteractive = false, BigQueryCredentialMaterial? Credential = null);
 
 /// <summary>

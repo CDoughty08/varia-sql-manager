@@ -8,10 +8,16 @@ interface Pending { readonly request: CostPromptRequest; readonly resolve: (answ
 /** The cost prompt waiting for an answer (one at a time: it is modal), which BigQueryCostPrompt shows. */
 export class CostPromptService extends SnapshotStore<{ readonly pending?: Pending }> {
   constructor() { super({}) }
-  ask(request: CostPromptRequest): Promise<CostPromptAnswer> {
+  /** Shows the prompt; `signal` (Cancel, or the tab closing) closes it as Cancel would. */
+  ask(request: CostPromptRequest, signal?: AbortSignal): Promise<CostPromptAnswer> {
     // A prompt still open (another tab's Execute) is answered Cancel first, so no run waits forever.
     this.getSnapshot().pending?.resolve({ run: false })
-    return new Promise(resolve => { this.publish({ pending: { request, resolve } }) })
+    if (signal?.aborted) { this.publish({}); return Promise.resolve({ run: false }) }
+    return new Promise(resolve => {
+      const pending: Pending = { request, resolve }
+      signal?.addEventListener('abort', () => { if (this.getSnapshot().pending === pending) this.publish({}); resolve({ run: false }) }, { once: true })
+      this.publish({ pending })
+    })
   }
   answer(answer: CostPromptAnswer): void {
     const pending = this.getSnapshot().pending

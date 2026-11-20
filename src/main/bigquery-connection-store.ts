@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { connectionAutoReconnectSchema, connectionKey } from '../shared/connections'
 import {
-  bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
+  bigQueryCostPromptInputSchema, bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
   type BigQueryConnectionProfile, type BigQueryLibraryFile, type BigQueryLibraryView, type BigQueryProfileInput, type BigQueryStoredProfile
 } from '../shared/bigquery-connections'
 import type { BigQueryConnectionOptions } from '../shared/contracts'
@@ -95,7 +95,10 @@ export class BigQueryConnectionStore {
       if (input.id && !profile) throw new Error('This saved connection no longer exists.')
       if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit' }; library.profiles.push(profile) }
       const kept = keepEnvironment && options.environment === undefined ? profile.options.environment : undefined
-      profile.options = kept ? { ...options, environment: kept } : options
+      // Options that do not name the cost-prompt choice (a connection typed again) keep the entry's; true is the default.
+      const costPrompt = options.costPrompt ?? profile.options.costPrompt
+      const { costPrompt: _costPrompt, ...rest } = kept ? { ...options, environment: kept } : options
+      profile.options = costPrompt === false ? { ...rest, costPrompt: false } : rest
       if (keyPath) profile.keyPath = keyPath
       else delete profile.keyPath
       if (input.favorite !== undefined) profile.favorite = input.favorite
@@ -133,6 +136,20 @@ export class BigQueryConnectionStore {
       if (input.environment) next.environment = input.environment
       else delete next.environment
       profile.options = next
+      prune(library)
+      if (!library.profiles.includes(profile)) throw new Error('The connection could not be kept in the saved connections.')
+    })).library
+  }
+
+  /** "Don't ask again for this connection" for a live BigQuery connection: only its entry's cost-prompt choice changes. */
+  async setCostPrompt(value: unknown): Promise<BigQueryLibraryFile> {
+    const input = bigQueryCostPromptInputSchema.parse(value)
+    const options = stored(input.options), key = keyOf(options), keyPath = this.keyPath(options)
+    return (await this.change(library => {
+      let profile = library.profiles.find(item => keyOf(item.options) === key)
+      if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }; library.profiles.push(profile) }
+      const { costPrompt: _costPrompt, ...next } = profile.options
+      profile.options = input.costPrompt ? next : { ...next, costPrompt: false }
       prune(library)
       if (!library.profiles.includes(profile)) throw new Error('The connection could not be kept in the saved connections.')
     })).library

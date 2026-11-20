@@ -4,7 +4,7 @@ import { costPrompt, errorPosition, gibibytes, pricedBytes, type BigQueryDryRunR
 import { methodAllows, optionsAllow } from '../src/shared/ipc/methods'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { defaultSettings, type SettingKey, type SettingsValues } from '../src/shared/settings/catalog'
-import { BigQueryCostService, dryRunDebounceMs, dryRunMarkerOwner, type CostPromptAnswer, type CostPromptRequest } from '../src/renderer/src/services/bigquery-cost'
+import { BigQueryCostService, costOptOut, dryRunDebounceMs, dryRunMarkerOwner, type CostPromptAnswer, type CostPromptRequest } from '../src/renderer/src/services/bigquery-cost'
 import { CostPromptService, costPromptText } from '../src/renderer/src/services/bigquery-cost-prompt'
 import { costChip } from '../src/renderer/src/BigQueryCostChip'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
@@ -28,11 +28,11 @@ describe('bigquery.dryRun contract', () => {
   })
   it("takes Options' cap and Bytes only for BigQuery runs only", () => {
     const base = { connectionId, sessionId: connectionId, sql: 'SELECT 1', queryId: connectionId, maxRows: 0, timeoutSeconds: 0 }
-    expect(() => validateRequest('query.execute', { ...base, maximumBytesBilled: 10 * GiB, hidePrices: true })).not.toThrow()
+    expect(() => validateRequest('query.execute', { ...base, maximumBytesBilled: 10 * GiB, prices: false })).not.toThrow()
     expect(() => validateRequest('query.execute', { ...base, maximumBytesBilled: 0 })).toThrow()
-    expect(optionsAllow('query.execute', 'bigquery', { ...base, maximumBytesBilled: GiB, hidePrices: true })).toBe(true)
+    expect(optionsAllow('query.execute', 'bigquery', { ...base, maximumBytesBilled: GiB, prices: false })).toBe(true)
     expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', maximumBytesBilled: GiB })).toBe(false)
-    expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', hidePrices: true })).toBe(false)
+    expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', prices: false })).toBe(false)
   })
 })
 
@@ -95,20 +95,21 @@ function fixture(settings: Partial<SettingsValues> = {}) {
   const timers: (() => void)[] = []
   let timerIds = 0
   const asked: CostPromptRequest[] = []
-  let answer: CostPromptAnswer = { run: true }
+  let answer: CostPromptAnswer | Promise<CostPromptAnswer> = { run: true }
+  const signals: (AbortSignal | undefined)[] = []
   const declined = new Set<string>()
   const service = new BigQueryCostService({
     api, documents: docs.documents, connections, events: docs.events, monaco: { MarkerSeverity: { Error: 8 } as never, editor: { setModelMarkers: markers } },
     settings: { get: key => values[key] as never, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) }, choose: async (key: SettingKey, value: unknown) => { values[key] = value; listeners.forEach(listener => listener()) } },
-    ask: async request => { asked.push(request); return answer },
-    optOut: { asks: c => !declined.has(c.id), dontAsk: c => { declined.add(c.id) } },
+    ask: async (request, signal) => { asked.push(request); signals.push(signal); return answer },
+    optOut: { asks: c => !declined.has(c.id), refresh: async () => {}, dontAsk: async c => { declined.add(c.id) } },
     schedule: (callback, ms) => { expect(ms).toBe(dryRunDebounceMs); timers.push(callback); return ++timerIds as unknown as ReturnType<typeof setTimeout> }
   })
   const tab = docs.documents.create('daily.sql', 'SELECT 1', 'sales', connectionId)
   const model = docs.model(tab.id)
   const tick = () => { for (const timer of timers.splice(0)) timer() }
   const settle = () => new Promise(resolve => { setTimeout(resolve, 0) })
-  return { docs, service, api, markers, timers, tick, settle, tab, model, replies, pending, asked, values, declined, setAnswer: (value: CostPromptAnswer) => { answer = value }, setLive: (value: boolean) => { live = value } }
+  return { docs, service, api, markers, timers, tick, settle, tab, model, replies, pending, asked, signals, values, declined, setAnswer: (value: CostPromptAnswer | Promise<CostPromptAnswer>) => { answer = value }, setLive: (value: boolean) => { live = value } }
 }
 const estimate = (bytesProcessed: number, extra: Partial<BigQueryDryRunResult> = {}): ApiResult<BigQueryDryRunResult> => ({ ok: true, value: { bytesProcessed, ...extra } })
 
@@ -182,6 +183,31 @@ describe('dry-run diagnostics', () => {
     expect(f.service.getSnapshot().get(f.tab.id)).toBeUndefined()
     expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(1)
   })
+  it('drops the dry run an edit queued behind one in flight when the dataset changes or the setting goes off', async () => {
+    for (const change of ['dataset', 'setting'] as const) {
+      const f = fixture()
+      f.model.edit('SELECT 1')
+      f.tick()
+      f.model.edit('SELECT 2')
+      f.tick()
+      if (change === 'dataset') f.docs.documents.update(f.tab.id, { database: 'archive' })
+      else await f.service['deps'].settings.choose('textEditor.googleSql.dryRunDiagnostics', false)
+      f.pending.shift()!.resolve(estimate(GiB))
+      await f.settle()
+      await f.settle()
+      expect(f.api.bigQueryDryRun, change).toHaveBeenCalledTimes(1)
+    }
+  })
+  it('does not stay on "checking" when an edit drops the answer and no dry run follows', async () => {
+    const f = fixture({ 'textEditor.googleSql.dryRunDiagnostics': false })
+    const run = f.service.beforeExecute(f.tab.id, 'SELECT 1')
+    expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'checking' })
+    f.model.edit('SELECT 2')
+    f.pending.shift()!.resolve(estimate(GiB))
+    await run
+    expect(f.service.getSnapshot().get(f.tab.id)).toBeUndefined()
+    expect(f.service.status(f.tab.id)).toBeUndefined()
+  })
 })
 
 describe('the estimate before Execute', () => {
@@ -240,10 +266,87 @@ describe('the estimate before Execute', () => {
     expect(f.service.cap(connection)).toBe(50 * GiB)
     expect(f.service.cap({ options: { provider: 'bigquery', maximumBytesBilled: 1000 } } as unknown as LiveConnection)).toBe(1000)
   })
-  it('shows what a finished run processed', async () => {
+  it('shows what a finished run processed, unless the text changed while it ran', async () => {
     const f = fixture()
-    f.docs.events.emit({ type: 'query.finished', tabId: f.tab.id, queryId: 'q', summary: { job: { project: 'p', jobId: 'j', bytesProcessed: 42 } } as never })
+    const finished = () => f.docs.events.emit({ type: 'query.finished', tabId: f.tab.id, queryId: 'q', summary: { job: { project: 'p', jobId: 'j', bytesProcessed: 42 } } as never })
+    f.replies.push(estimate(GiB))
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(true)
+    finished()
     expect(f.service.getSnapshot().get(f.tab.id)).toEqual({ phase: 'ran', bytes: 42 })
+    // Edited while the next run ran (the same text: its estimate is reused), and the edit's dry run found an error: the
+    // run's figure does not hide it.
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT 1')).toBe(true)
+    f.model.edit('SELECT nope')
+    f.replies.push({ ok: false, code: 'SQL_ERROR', error: 'Unrecognized name: nope at [1:8]' } as ApiResult<BigQueryDryRunResult>)
+    f.tick()
+    await f.settle()
+    finished()
+    expect(f.service.getSnapshot().get(f.tab.id)).toMatchObject({ phase: 'refused' })
+    expect(f.service.status(f.tab.id)?.label).toBe('BigQuery: 1 error')
+  })
+  it("marks an executed selection's error in the document, from the selection's start", async () => {
+    const f = fixture()
+    f.model.edit('-- daily\n-- totals\nSELECT 1; SELECT x\nFROM orders')
+    // The selection starts at line 3, column 11 ("SELECT x\nFROM orders"): BigQuery's [1:8] is line 3, column 18.
+    f.replies.push({ ok: false, code: 'SQL_ERROR', error: 'Unrecognized name: x at [1:8]' } as ApiResult<BigQueryDryRunResult>)
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT x\nFROM orders', { line: 3, column: 11 })).toBe(true)
+    expect(f.markers.mock.calls.at(-1)![2]).toEqual([expect.objectContaining({ startLineNumber: 3, startColumn: 18 })])
+    f.replies.push({ ok: false, code: 'SQL_ERROR', error: 'Not found: Table orders at [2:6]' } as ApiResult<BigQueryDryRunResult>)
+    expect(await f.service.beforeExecute(f.tab.id, 'SELECT x\nFROM orders ', { line: 3, column: 11 })).toBe(true)
+    expect(f.markers.mock.calls.at(-1)![2]).toEqual([expect.objectContaining({ startLineNumber: 4, startColumn: 6 })])
+  })
+  it('stops at once when Execute is cancelled: during the dry run nothing asks, and an open prompt closes', async () => {
+    const f = fixture()
+    const stop = new AbortController()
+    const run = f.service.beforeExecute(f.tab.id, 'SELECT * FROM big', undefined, stop.signal)
+    stop.abort()
+    f.pending.shift()!.resolve(estimate(11 * GiB))
+    expect(await run).toBe(false)
+    expect(f.asked).toHaveLength(0)
+    // Cancelled while the prompt is open: the prompt gets the signal, and Don't ask again is not kept.
+    const open = new AbortController(), reply = deferred<CostPromptAnswer>()
+    f.setAnswer(reply.promise)
+    const asking = f.service.beforeExecute(f.tab.id, 'SELECT * FROM big', undefined, open.signal)
+    await f.settle()
+    expect(f.signals.at(-1)).toBe(open.signal)
+    open.abort()
+    reply.resolve({ run: true, dontAskAgain: true })
+    expect(await asking).toBe(false)
+    expect(f.declined.size).toBe(0)
+  })
+  it("says on the chip when the connection's prompt is off", () => {
+    const over = costChip({ phase: 'estimate', bytes: 11 * GiB }, defaultSettings, false)
+    expect(over.tone).toBe('warning')
+    expect(over.title).toContain('Execute does not ask on this connection')
+    expect(over.title).not.toContain('Execute asks first')
+  })
+})
+
+describe('the saved prompt choice', () => {
+  const options = { provider: 'bigquery', project: 'acme-analytics', authentication: 'gcloud' } as const
+  const connection = { id: connectionId, generation: 1, server: 'acme-analytics', providerId: 'bigquery', options } as unknown as LiveConnection
+  it("reads the saved entry's choice, and Don't ask again writes it there", async () => {
+    let saved: unknown = undefined
+    const library = (costPrompt?: false) => ({ ok: true, value: { bigQuery: { profiles: [{ id: 'p', options: { ...options, ...costPrompt === false ? { costPrompt } : {} }, favorite: false }] } } })
+    const api = {
+      loadConnectionLibrary: vi.fn(async () => library(saved === false ? false : undefined) as never),
+      setBigQueryCostPrompt: vi.fn(async (input: { costPrompt: boolean }) => { saved = input.costPrompt; return { ok: true as const, value: true } })
+    }
+    const changed = vi.fn()
+    const optOut = costOptOut(api, changed)
+    await optOut.refresh(connection)
+    expect(optOut.asks(connection)).toBe(true)
+    await optOut.dontAsk(connection)
+    expect(api.setBigQueryCostPrompt).toHaveBeenCalledWith({ options, costPrompt: false })
+    expect(optOut.asks(connection)).toBe(false)
+    expect(changed).toHaveBeenCalled()
+    // Another window or session reads it from the saved entry; turned back on there (Advanced Properties), it asks again.
+    const fresh = costOptOut(api)
+    await fresh.refresh(connection)
+    expect(fresh.asks(connection)).toBe(false)
+    saved = undefined
+    await fresh.refresh(connection)
+    expect(fresh.asks(connection)).toBe(true)
   })
 })
 

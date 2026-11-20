@@ -498,7 +498,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
   // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).
-  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
+  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true }
   const workbench = {
     sqlLanguage,
     sqlDiagnostics,

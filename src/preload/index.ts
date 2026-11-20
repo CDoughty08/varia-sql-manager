@@ -71,6 +71,7 @@ const api: VariaApi = {
   saveConnectionProfile: profile => ipcRenderer.invoke('varia:connections-save', profile),
   removeConnectionProfile: id => ipcRenderer.invoke('varia:connections-remove', id),
   setConnectionEnvironment: input => ipcRenderer.invoke('varia:connections-environment', input),
+  setBigQueryCostPrompt: input => ipcRenderer.invoke('varia:bigquery-cost-prompt', input),
   pickKeyFile: authentication => ipcRenderer.invoke('varia:connections-pick-key-file', { authentication }),
   confirmFederationSource: (keyFile, source) => ipcRenderer.invoke('varia:connections-confirm-source', { keyFile, source }),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),

@@ -401,12 +401,12 @@ describe('query documents', () => {
     documents.create('query.sql', '-- heading\nSELECT 1;\nSELECT 2;', 'master')
     const instance = new TestEditor(); documents.bindEditor(instance.asEditor())
     instance.selection = { startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 10, selectionStartLineNumber: 3, selectionStartColumn: 1, positionLineNumber: 3, positionColumn: 10 }
-    expect(documents.getExecuteText()).toEqual({ sql: 'SELECT 2;', startLine: 3 })
+    expect(documents.getExecuteText()).toEqual({ sql: 'SELECT 2;', startLine: 3, startColumn: 1 })
     // A whitespace-only selection executes nothing rather than the whole document.
     instance.selection = { startLineNumber: 2, startColumn: 7, endLineNumber: 2, endColumn: 8, selectionStartLineNumber: 2, selectionStartColumn: 7, positionLineNumber: 2, positionColumn: 8 }
-    expect(documents.getExecuteText()).toEqual({ sql: ' ', startLine: 2 })
+    expect(documents.getExecuteText()).toEqual({ sql: ' ', startLine: 2, startColumn: 7 })
     instance.selection = { startLineNumber: 2, startColumn: 7, endLineNumber: 2, endColumn: 7, selectionStartLineNumber: 2, selectionStartColumn: 7, positionLineNumber: 2, positionColumn: 7 }
-    expect(documents.getExecuteText()).toEqual({ sql: '-- heading\nSELECT 1;\nSELECT 2;', startLine: 1 })
+    expect(documents.getExecuteText()).toEqual({ sql: '-- heading\nSELECT 1;\nSELECT 2;', startLine: 1, startColumn: 1 })
   })
   it('opens a value as a text document in its language, with no connection or session, saved with its kind', async () => {
     const { documents, api, model } = documentFixture()

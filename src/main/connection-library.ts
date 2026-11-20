@@ -1,16 +1,16 @@
 import { z } from 'zod'
-import { connectionEnvironmentInputSchema, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionSaveView, type SecretStorageState } from '../shared/connections'
+import { connectionEnvironmentInputSchema, connectionKey, connectionProfileInputSchema, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionSaveView, type SecretStorageState } from '../shared/connections'
 import { forgetSavedPassword, rememberCheckedPassword, takeVerifiedPassword } from './connection-requests'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 import { BigQueryConnectionStore } from './bigquery-connection-store'
-import { bigQueryProfileInputSchema, type BigQueryLibraryView } from '../shared/bigquery-connections'
+import { bigQueryCostPromptInputSchema, bigQueryProfileInputSchema, type BigQueryLibraryView } from '../shared/bigquery-connections'
 
 export interface ConnectionLibraryDeps {
   connections: Pick<ConnectionStore, 'load' | 'save' | 'saveEntry' | 'remove' | 'setEnvironment'>
   savedPasswords: Pick<SavedPasswordStore, 'reconcile' | 'forget' | 'forgetCredentials' | 'state' | 'set' | 'storageAvailable'>
   /** BigQuery's saved connections (`bigquery-connections.json`); absent in checks that cover SQL Server's alone. */
-  bigQuery?: Pick<BigQueryConnectionStore, 'load' | 'upsert' | 'remove' | 'setEnvironment'>
+  bigQuery?: Pick<BigQueryConnectionStore, 'load' | 'upsert' | 'remove' | 'setEnvironment' | 'setCostPrompt'>
 }
 const isBigQueryInput = (value: unknown) => !!value && typeof value === 'object' && (value as { options?: { provider?: unknown } }).options?.provider === 'bigquery'
 
@@ -88,6 +88,13 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
       }
       const { library, savedPasswords } = await view(await deps.connections.setEnvironment(connectionEnvironmentInputSchema.parse(value)))
       return { library, savedPasswords }
+    },
+    /** "Don't ask again for this connection": resolves whether the entry now holds the choice. */
+    async setBigQueryCostPrompt(value: unknown): Promise<boolean> {
+      if (!deps.bigQuery) throw new Error('BigQuery connections cannot be saved here.')
+      const input = bigQueryCostPromptInputSchema.parse(value), key = connectionKey(input.options)
+      const library = await deps.bigQuery.setCostPrompt(input)
+      return library.profiles.some(profile => connectionKey(profile.options) === key && (profile.options.costPrompt !== false) === input.costPrompt)
     },
     // The password goes first, so a failure leaves the entry listed with it rather than an orphaned password.
     async remove(value: unknown): Promise<ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }> {

@@ -374,8 +374,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   const costPrompts = new CostPromptService()
-  const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: request => costPrompts.ask(request), optOut: costOptOut() })
-  queries.setCostGate((tabId, sql) => bigQueryCost.beforeExecute(tabId, sql))
+  // The saved choice is read after the service exists, so it re-renders the chips once a choice is known.
+  let costChoiceChanged = () => {}
+  const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal) => costPrompts.ask(request, signal), optOut: costOptOut(api, () => costChoiceChanged()) })
+  costChoiceChanged = () => bigQueryCost.optOutChanged()
+  queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))

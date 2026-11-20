@@ -82,6 +82,19 @@ internal static partial class BigQueryChecks
         harness.Fake.On("POST", BigQueryFake.Jobs, BigQueryFake.Fixture("error-access-denied", 403));
         var denied = await harness.Call("bigquery.dryRun", Args("SELECT 1"));
         check(denied.Code == "PERMISSION_DENIED", $"a refused dry run maps as other BigQuery errors do: {denied.Code} {denied.Message}");
+        // Connecting proved bigquery.jobs.create: a 403 on a dry run is about a table the query reads, so Google's text stays.
+        string Refusal(int code, string status, string reason, string message) => new JsonObject
+        {
+            ["error"] = new JsonObject { ["code"] = code, ["message"] = message, ["status"] = status, ["errors"] = new JsonArray(new JsonObject { ["message"] = message, ["domain"] = "global", ["reason"] = reason }) }
+        }.ToJsonString();
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(403, Refusal(403, "PERMISSION_DENIED", "accessDenied", "Access Denied: Table other-proj:ds.t: User does not have permission to query table other-proj:ds.t.")));
+        var table = await harness.Call("bigquery.dryRun", Args("SELECT * FROM `other-proj.ds.t`"));
+        check(table.Code == "PERMISSION_DENIED" && table.Message.Contains("permission to query table other-proj:ds.t", StringComparison.Ordinal) && !table.Message.Contains("Job User", StringComparison.Ordinal),
+            $"a dry run refused for a table keeps Google's text and does not blame bigquery.jobs.create: {table.Code} {table.Message}");
+        harness.Fake.On("POST", BigQueryFake.Jobs, _ => new BigQueryFake.Reply(404, Refusal(404, "NOT_FOUND", "notFound", "Not found: Table varia-alpha:sales.ordrs was not found in location US")));
+        var missing = await harness.Call("bigquery.dryRun", Args("SELECT * FROM ordrs", "sales"));
+        check(missing.Code == "SQL_ERROR" && missing.Message == "Not found: Table varia-alpha:sales.ordrs was not found in location US",
+            $"a dry run naming a missing table is the query's error, with Google's text and no project hint: {missing.Code} {missing.Message}");
 
         var jobs = harness.Fake.To(BigQueryFake.Jobs).Count();
         var legacy = await harness.Call("bigquery.dryRun", Args("#legacySQL\nSELECT 1"));

@@ -181,7 +181,7 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = await BigQueryFailureAsync(error, connection, created, cap, CancellationToken.None);
+                var mapped = await BigQueryFailureAsync(error, connection, created, cap, args.Prices != false, CancellationToken.None);
                 // A job BigQuery stopped (its timeout, or a cancel from elsewhere) ended as one Varia stopped would.
                 status = error is BigQueryJobException && mapped.Code is "TIMEOUT" or "CANCELLED" ? (mapped.Code == "TIMEOUT" ? "timedOut" : "cancelled") : "failed";
                 messages.Add(mapped.Message, MessageKind.Error);
@@ -201,7 +201,7 @@ internal sealed partial class SqlService
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
         }
-        if (summary is not null && BigQueryCost.Summary(summary, args.HidePrices != true) is { } cost) messages.Add(cost);
+        if (summary is not null && BigQueryCost.Summary(summary, args.Prices != false) is { } cost) messages.Add(cost);
         var output = messages.Snapshot();
         void Note(string text) => output.Add(new(text, QueryMessages.Info));
         var descriptors = sets.Select(set => set.Describe()).ToList();
@@ -315,11 +315,11 @@ internal sealed partial class SqlService
 
     /// <summary>The error value for a failed execution: the job's own error, or the failed call's, with a location mismatch
     /// told apart from a missing dataset by asking where the dataset is (datasets.get, free).</summary>
-    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, CancellationToken token)
+    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, bool prices, CancellationToken token)
     {
         var project = connection.Options.Project;
-        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap)
-            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: cap, token: token) as RequestException
+        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap, prices)
+            : BigQueryErrors.Map(error, project, created ? null : BigQueryService.ProbePermission, cap: cap, token: token, prices: prices) as RequestException
             ?? new RequestException("BACKEND_ERROR", "Execution stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
         if (mapped.Code != "NOT_FOUND" || DatasetLocationMessage().Match(mapped.Message) is not { Success: true } match) return mapped;
         string? actual;

@@ -13,7 +13,7 @@ export const bigQuerySettings = [
   {
     key: 'queryExecution.bigQuery.costPrompt', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Ask before running a query that processes more than the threshold', type: 'boolean', default: true, varia: true,
     applies: 'nextExecution', keywords: ['bigquery', 'cost', 'bytes', 'estimate', 'confirm'],
-    description: 'Execute dry-runs a BigQuery query first (free) and asks before running one estimated to process more than the threshold. A connection where you chose "Don\'t ask again for this connection" never asks.'
+    description: 'Execute dry-runs a BigQuery query first (free) and asks before running one estimated to process more than the threshold. A connection where you chose "Don\'t ask again" in the prompt never asks; its Advanced Properties turn the prompt back on.'
   },
   {
     key: 'queryExecution.bigQuery.costThreshold', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Threshold', type: 'integer', min: 1, max: 1_048_576, default: 10, unit: 'GiB', varia: true,
@@ -23,7 +23,7 @@ export const bigQuerySettings = [
   {
     key: 'queryExecution.bigQuery.incompleteEstimateWarning', page: 'queryExecution.bigQuery.cost', group: 'Prompt', label: 'Warn when an estimate may be low', type: 'boolean', default: true, varia: true,
     applies: 'nextExecution', keywords: ['bigquery', 'cost', 'script', 'external table'],
-    description: 'Asks once per query tab before running a query whose estimate may be low: a script (estimated only up to its first DDL or control statement), external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks as a lower bound.'
+    description: 'Asks once per query tab before running a query whose estimate may be low: a script (estimated only up to its first DDL or control statement), external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks as a lower bound or could not make accurate.'
   },
   {
     key: 'queryExecution.bigQuery.maximumBytesBilled', page: 'queryExecution.bigQuery.cost', group: 'Limit', label: 'Maximum bytes billed per query', type: 'integer', min: 0, max: 1_048_576, default: 0, unit: 'GiB', hint: '0 = no limit', varia: true,

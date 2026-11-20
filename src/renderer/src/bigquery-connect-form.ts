@@ -61,6 +61,7 @@ export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryCo
     ...location ? { location } : {}, ...dataset ? { dataset } : {}, ...extraProjects?.length ? { extraProjects } : {},
     ...usesKeyFile(form.authentication) && form.keyFile ? { keyFile: form.keyFile } : {},
     ...impersonate ? { impersonateServiceAccount: impersonate } : {}, ...form.maximumBytesBilled ? { maximumBytesBilled: form.maximumBytesBilled } : {},
+    ...form.costPrompt !== undefined ? { costPrompt: form.costPrompt } : {},
     ...form.displayName?.trim() ? { displayName: form.displayName } : {}, ...form.color ? { color: form.color } : {}, ...form.environment ? { environment: form.environment } : {}
   }
   const parsed = bigQueryConnectionOptionsSchema.safeParse(value)

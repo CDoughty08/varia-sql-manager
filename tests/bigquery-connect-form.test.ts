@@ -88,6 +88,12 @@ describe('Connect dialog: BigQuery fields', () => {
   it('summarises Advanced and the account line', () => {
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha' })).toBe('')
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', maximumBytesBilled: 1, extraProjects: ['varia-beta'] })).toBe('2 properties set')
+    // Don't ask again counts as a property set; the prompt left on (or turned back on) does not.
+    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: false })).toBe('1 property set')
+    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: true })).toBe('')
+    // The form sends the choice when it names one, so Connect keeps or clears the saved entry's.
+    expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costPrompt: false })).toMatchObject({ costPrompt: false })
+    expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' })).not.toHaveProperty('costPrompt')
     expect(accountText({ kind: 'user', account: 'ada@example.com' })).toBe('Signed in to gcloud as ada@example.com')
     expect(accountText({ kind: 'serviceAccount', account: 'reader@varia-alpha.iam.gserviceaccount.com', impersonated: 'etl@varia-alpha.iam.gserviceaccount.com' }))
       .toBe('Service account reader@varia-alpha.iam.gserviceaccount.com, acting as etl@varia-alpha.iam.gserviceaccount.com')

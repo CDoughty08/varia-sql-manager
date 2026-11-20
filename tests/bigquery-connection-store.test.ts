@@ -170,6 +170,25 @@ describe('Connection library and history across both engines', () => {
     expect(sql.remove).not.toHaveBeenCalled()
   })
 
+  it("keeps Don't ask again on the entry: a connect that does not name it keeps it, and Advanced Properties clears it", async () => {
+    const directory = await folder(), bigQuery = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles()), sql = sqlStore()
+    const library = connectionLibrary({ connections: sql as never, savedPasswords: passwords as never, bigQuery })
+    await bigQuery.rememberEntry(gcloud())
+    expect(await library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false })).toBe(true)
+    const entry = async () => (await bigQuery.load()).library.profiles.find(profile => profile.options.project === 'varia-alpha')!
+    expect((await entry()).options.costPrompt).toBe(false)
+    // The same connection typed again (no choice named) is the same entry, and keeps the choice.
+    await bigQuery.rememberEntry(gcloud())
+    expect((await entry()).options.costPrompt).toBe(false)
+    expect((await bigQuery.load()).library.profiles).toHaveLength(1)
+    // Turned back on in Advanced Properties (true): the default is not stored.
+    await bigQuery.rememberEntry({ ...gcloud(), costPrompt: true })
+    expect((await entry()).options).not.toHaveProperty('costPrompt')
+    // A live connection with no saved entry gets one; anything else in the input is refused.
+    expect(await library.setBigQueryCostPrompt({ options: gcloud('varia-beta'), costPrompt: false })).toBe(true)
+    await expect(library.setBigQueryCostPrompt({ options: gcloud(), costPrompt: false, environment: 'Production' })).rejects.toThrow()
+  })
+
   it('keeps SQL Server\'s library working when BigQuery\'s file cannot be read', async () => {
     const sql = sqlStore(), bigQuery = { load: vi.fn(async () => { throw new Error('EBUSY') }), remove: vi.fn(async () => { throw new Error('EBUSY') }) }
     const sqlId = '00000000-0000-4000-8000-000000000009'

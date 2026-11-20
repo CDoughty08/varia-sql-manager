@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor'
-import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, BigQueryConnectionOptions, VariaApi } from '../../../shared/contracts'
+import { connectionKey } from '../../../shared/connections'
 import { costPrompt, dryRunLimits, errorPosition, gibibytes, type BigQueryDryRunResult, type CostPrompt, type IncompleteReason } from '../../../shared/bigquery/dry-run'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
@@ -40,18 +41,45 @@ export interface CostPromptAnswer { readonly run: boolean; readonly dontAskAgain
 
 /** Where "Don't ask again for this connection" is kept. */
 export interface CostOptOut {
+  /** Whether the threshold prompt asks on this connection, as last read. */
   asks(connection: LiveConnection): boolean
-  dontAsk(connection: LiveConnection): Promise<void> | void
+  /** Reads the connection's saved choice again. */
+  refresh(connection: LiveConnection): Promise<void>
+  dontAsk(connection: LiveConnection): Promise<void>
 }
 
 /**
- * "Don't ask again for this connection", kept for this window's session by the connection's target (the remembered
- * connection a reconnect keeps). Pending the owner's choice of where it persists (BQ-7 PR).
+ * "Don't ask again for this connection" as `costPrompt: false` on the saved BigQuery connection (bigquery-connections.json),
+ * found by its entry key, so a reconnect or restart keeps it; the connection's Advanced Properties turn the prompt back on.
+ * `changed` runs when a choice is read or made, so the chip can follow it.
  */
-export function costOptOut(): CostOptOut {
-  const declined = new Set<string>()
-  const key = (connection: LiveConnection) => connection.targetId ?? connection.id
-  return { asks: connection => !declined.has(key(connection)), dontAsk: connection => { declined.add(key(connection)) } }
+export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBigQueryCostPrompt'>, changed: () => void = () => {}): CostOptOut {
+  const declined = new Map<string, boolean>()
+  const key = (connection: LiveConnection) => {
+    try { return connection.options.provider === 'bigquery' ? connectionKey(connection.options) : undefined } catch { return undefined }
+  }
+  const set = (entry: string, value: boolean) => { if (declined.get(entry) !== value) { declined.set(entry, value); changed() } }
+  return {
+    asks: connection => { const entry = key(connection); return entry === undefined || !declined.get(entry) },
+    async refresh(connection) {
+      const entry = key(connection)
+      if (entry === undefined) return
+      try {
+        const loaded = await api.loadConnectionLibrary()
+        if (!loaded.ok) return
+        const profile = loaded.value.bigQuery.profiles.find(item => { try { return connectionKey(item.options) === entry } catch { return false } })
+        set(entry, profile?.options.costPrompt === false)
+      } catch { /* The last choice read stands. */ }
+    },
+    async dontAsk(connection) {
+      const entry = key(connection)
+      if (entry === undefined || connection.options.provider !== 'bigquery') return
+      set(entry, true)
+      const options: BigQueryConnectionOptions = connection.options
+      // Saved where a reconnect finds it; if the write fails, the choice still holds until the app closes.
+      try { await api.setBigQueryCostPrompt({ options, costPrompt: false }) } catch { /* As above. */ }
+    }
+  }
 }
 
 type Settings = { get<K extends SettingKey>(key: K): SettingValue<K>; subscribe(listener: () => void): () => void; choose<K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void> }
@@ -72,6 +100,10 @@ interface Entry {
   estimated?: { readonly sql: string; readonly dataset?: string; readonly result: BigQueryDryRunResult }
   /** The incomplete-estimate prompt asks once per tab (decision 22). */
   warnedIncomplete?: boolean
+  /** The revision Execute last ran: a run that finishes after an edit leaves the newer state alone. */
+  executed?: number
+  /** The connection (id and generation) whose saved prompt choice was read. */
+  read?: string
 }
 
 export interface BigQueryCostDeps {
@@ -82,7 +114,7 @@ export interface BigQueryCostDeps {
   readonly events: Pick<EventBus, 'subscribe'>
   readonly monaco: MarkerMonaco
   /** Shows a cost prompt (BigQueryCostPrompt) and resolves with the answer. */
-  readonly ask: (request: CostPromptRequest) => Promise<CostPromptAnswer>
+  readonly ask: (request: CostPromptRequest, signal?: AbortSignal) => Promise<CostPromptAnswer>
   readonly optOut: CostOptOut
   readonly schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
 }
@@ -145,7 +177,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
         entry.key = key
         if (!first) this.reset(entry)
       }
-      if (!this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) { clearTimeout(entry.timer); entry.timer = undefined }
+      if (entry.read !== `${connection.id}:${connection.generation}`) { entry.read = `${connection.id}:${connection.generation}`; void this.deps.optOut.refresh(connection) }
+      if (!this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) { clearTimeout(entry.timer); entry.timer = undefined; entry.again = false }
     }
     for (const entry of [...this.entries.values()]) if (!open.has(entry.id)) this.remove(entry)
   }
@@ -154,6 +187,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     entry.revision++
     clearTimeout(entry.timer)
     entry.timer = undefined
+    entry.again = false
     entry.estimated = undefined
     this.clearMarkers(entry)
     this.put(entry.id, undefined)
@@ -178,24 +212,32 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const sql = entry.model.getValue()
     if (!sql.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
     if (sql.length > dryRunLimits.characters) { this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
-    entry.running = this.dryRun(entry, sql).then(() => undefined).finally(() => {
+    entry.running = this.dryRun(entry, sql, { line: 1, column: 1 }).then(() => undefined).finally(() => {
       entry.running = undefined
-      if (entry.again && !this.disposed && this.entries.get(entry.id) === entry) { entry.again = false; this.diagnose(entry) }
+      if (!entry.again || this.disposed || this.entries.get(entry.id) !== entry) return
+      entry.again = false
+      if (this.deps.settings.get('textEditor.googleSql.dryRunDiagnostics')) this.diagnose(entry)
     })
   }
 
   /** Dry-runs `sql` for the tab and records the outcome when it is still current: the estimate, or BigQuery's error marked
-   *  at its position. Resolves with the estimate, or undefined when there is none. */
-  private async dryRun(entry: Entry, sql: string): Promise<BigQueryDryRunResult | undefined> {
+   *  at its position (`origin` is where `sql` starts in the document: a selection's start). Resolves with the estimate,
+   *  or undefined when there is none. */
+  private async dryRun(entry: Entry, sql: string, origin: { readonly line: number; readonly column: number }): Promise<BigQueryDryRunResult | undefined> {
     const connection = this.connection(entry.id)
     if (!connection) return undefined
     const revision = entry.revision, version = entry.model.getVersionId(), dataset = this.dataset(entry.id)
-    this.put(entry.id, { phase: 'checking' })
+    const checking: EstimateState = { phase: 'checking' }
+    this.put(entry.id, checking)
     let response: ApiResult<BigQueryDryRunResult>
     try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {} }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
-    if (!current) return response.ok ? response.value : undefined
+    if (!current) {
+      // Nothing newer replaced "checking" (an edit with diagnostics off schedules no dry run): no estimate stands.
+      if (!this.disposed && this.getSnapshot().get(entry.id) === checking) this.put(entry.id, undefined)
+      return response.ok ? response.value : undefined
+    }
     if (response.ok) {
       entry.estimated = { sql, dataset, result: response.value }
       this.clearMarkers(entry)
@@ -203,7 +245,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       return response.value
     }
     if (response.code === 'SQL_ERROR') {
-      this.mark(entry, response.error, version)
+      this.mark(entry, response.error, version, origin)
       this.put(entry.id, { phase: 'refused', message: response.error })
     } else {
       this.clearMarkers(entry)
@@ -212,9 +254,11 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return undefined
   }
 
-  private mark(entry: Entry, message: string, version: number): void {
-    const model = entry.model, position = errorPosition(message)
-    const line = position && position.line <= model.getLineCount() ? position.line : 1
+  private mark(entry: Entry, message: string, version: number, origin: { readonly line: number; readonly column: number }): void {
+    const model = entry.model, found = errorPosition(message)
+    // BigQuery counts from the start of the text it was sent: a selection's first line starts at its column.
+    const position = found && { line: origin.line + found.line - 1, column: found.line === 1 ? origin.column + found.column - 1 : found.column }
+    const line = position && position.line <= model.getLineCount() ? position.line : origin.line <= model.getLineCount() ? origin.line : 1
     const max = model.getLineMaxColumn(line), column = position && position.line === line ? Math.min(position.column, max) : 1
     // The word at the position, or one character, so the marker shows even where BigQuery points past a token.
     const word = model.getWordAtPosition?.({ lineNumber: line, column })
@@ -231,7 +275,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
    * dataset, else a new dry run, which goes first: a pending diagnostics run is dropped), then the prompts. Resolves
    * whether to run.
    */
-  async beforeExecute(tabId: string, sql: string): Promise<boolean> {
+  async beforeExecute(tabId: string, sql: string, origin: { readonly line: number; readonly column: number } = { line: 1, column: 1 }, signal?: AbortSignal): Promise<boolean> {
     const connection = this.connection(tabId), entry = this.entries.get(tabId)
     if (!connection || !entry) return true
     clearTimeout(entry.timer)
@@ -241,9 +285,13 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (!estimate) {
       if (sql.length > dryRunLimits.characters) return true
       entry.revision++
-      estimate = await this.dryRun(entry, sql)
+      estimate = await this.dryRun(entry, sql, origin)
     }
+    entry.executed = entry.revision
+    if (signal?.aborted) return false
     if (!estimate) return true
+    await this.deps.optOut.refresh(connection)
+    if (signal?.aborted || this.disposed) return false
     const settings = this.deps.settings, thresholdBytes = gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
     const prompt = costPrompt(estimate, {
       askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes,
@@ -253,7 +301,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const answer = await this.deps.ask({
       prompt, connection: connection.displayName ?? connection.server, thresholdBytes, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
       ...this.cap(connection) ? { cap: this.cap(connection) } : {}
-    })
+    }, signal)
+    if (signal?.aborted) return false
     if (prompt.kind === 'incomplete' && answer.run) entry.warnedIncomplete = true
     if (answer.dontAskAgain) {
       if (prompt.kind === 'threshold') await this.deps.optOut.dontAsk(connection)
@@ -268,10 +317,20 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return own ?? gibibytes(this.deps.settings.get('queryExecution.bigQuery.maximumBytesBilled'))
   }
 
-  /** A run finished: the chip shows what it processed (or keeps the estimate when BigQuery reported no bytes). */
+  /** Whether Execute asks above the threshold on this tab: the setting, and not turned off for its connection. */
+  asksAboveThreshold(tabId: string): boolean {
+    const connection = this.connection(tabId)
+    return this.deps.settings.get('queryExecution.bigQuery.costPrompt') && (!connection || this.deps.optOut.asks(connection))
+  }
+
+  /** The prompt choice for a connection changed: the chips re-render. */
+  optOutChanged(): void { if (!this.disposed) this.publish(new Map(this.getSnapshot())) }
+
+  /** A run finished: the chip shows what it processed (or keeps the estimate when BigQuery reported no bytes), unless the
+   *  text changed while it ran, when the newer estimate or error stands. */
   private finished(tabId: string, bytes: number | undefined): void {
     const entry = this.entries.get(tabId)
-    if (!entry || bytes === undefined) return
+    if (!entry || bytes === undefined || entry.executed !== entry.revision) return
     this.put(tabId, { phase: 'ran', bytes })
   }
 

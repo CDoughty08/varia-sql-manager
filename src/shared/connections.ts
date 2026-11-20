@@ -72,6 +72,9 @@ export const bigQueryConnectionOptionsSchema = z.object({
   keyFile: z.uuid().optional(),
   impersonateServiceAccount: z.email().max(bigQueryLimits.serviceAccount).optional(),
   maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  // false: Execute does not ask above the cost threshold on this connection ("Don't ask again"); a preference, not part of
+  // which entry the connection is (connectionKey) or of its target.
+  costPrompt: z.boolean().optional(),
   displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional()
 }).strict().refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), { error: issue => usesKeyFile((issue.input as BigQueryConnectionOptions).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' })
 const keyFileRule = { error: (issue: { input: unknown }) => usesKeyFile((issue.input as { authentication: BigQueryAuthenticationMode }).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' }

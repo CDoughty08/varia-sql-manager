@@ -104,6 +104,8 @@ export interface BigQueryConnectionOptions {
   keyFile?: string
   impersonateServiceAccount?: string
   maximumBytesBilled?: number
+  /** false: Execute does not ask above the cost threshold on this connection (Don't ask again). Not part of its identity. */
+  costPrompt?: boolean
   displayName?: string
   color?: string
   environment?: string
@@ -191,8 +193,8 @@ export interface QueryOptions {
   /** BigQuery: Tools › Options' maximum bytes billed (Query Execution › BigQuery › Cost), sent as the job's
    *  `maximumBytesBilled` when the connection sets none of its own. SQL Server refuses it. */
   maximumBytesBilled?: number
-  /** BigQuery: Show cost as Bytes only, so the job's Messages line leaves out the dollars. SQL Server refuses it. */
-  hidePrices?: boolean
+  /** BigQuery: false for Show cost as Bytes only, so the job's Messages line leaves out the dollars (default true). SQL Server refuses it. */
+  prices?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -858,6 +860,9 @@ export interface VariaApi {
   /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
+  /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
+   *  resolves whether the entry holds it. */
+  setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */

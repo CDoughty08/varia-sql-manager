@@ -36,8 +36,8 @@ token path asks again.
 ## Saved connections
 
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
-most recent connects, each keyed by its settings, with environment labels per entry, written atomically and
-quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
+most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
+[Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
 target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
@@ -194,32 +194,40 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
 Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
 beside them, "< $0.01" below a cent. The price is an estimate: projects with capacity reservations do not pay per byte.
 `BigQueryCost` (C#) and `src/shared/bigquery/cost.ts` write the same text, pinned by `tests/fixtures/bigquery/cost.json`.
-Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`hidePrices` for
+Query Execution › BigQuery › Cost's **Show cost as: Bytes only** leaves the dollars out everywhere (`prices: false` for
 Messages).
 
 - **The estimate.** `bigquery.dryRun` (free) answers the bytes a query would process. A query tab shows it in a chip
-  beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (Execute will ask), and after a
-  run what the job processed and cost. Its tooltip says the estimate is free and on demand, and why it may be low.
+  beside Execute ("≈ 1.24 GiB · < $0.01"): neutral, amber above the cost-prompt threshold (its tooltip says whether
+  Execute asks on this connection), and after a run what the job processed and cost, unless the text changed while it
+  ran. Its tooltip says the estimate is free and on demand, and why it may be low.
 - **Diagnostics.** After a 1 s pause in editing, a dry run (one in flight per tab; the latest text wins) marks the error
   BigQuery reports at its `[line:column]` (owner `varia.googlesql.dryRun`, so Alt+F8 reaches it) and updates the chip; the
-  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Nothing dry-runs after a restore, a provider switch or a
-  dataset change until the user edits or executes (decision 44). Text Editor › GoogleSQL › **Check queries with a dry run
+  status bar reads "BigQuery: 1 error" or "BigQuery: no issues". Executing a selection marks its error where the
+  selection puts it in the document. Nothing dry-runs after a restore, a provider switch, a connection or dataset change,
+  or once the setting is off, until the user edits or executes (decision 44): an edit's dry run queued behind one in
+  flight is dropped too. A NOT_FOUND table or dataset is the query's error (`SQL_ERROR` with Google's text), and a
+  refused table keeps Google's text, since connecting already proved the account can create jobs. Text Editor › GoogleSQL › **Check queries with a dry run
   while editing** turns it off. A dry run sends the text to Google (docs/architecture.md).
 - **Before Execute** the diagnostics estimate is reused when it is for the same text and dataset; otherwise Execute dry-runs
   first, and a pending diagnostics run is dropped. Varia asks in only two cases (decision 22), each opening with focus on
   Cancel as an alert dialog with a **Cost settings…** link:
   - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
-    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection.
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
+    kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
+    and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
+    threshold** turns it back on. It is a preference, not part of which entry the connection is or of its target.
   - **An incomplete estimate**, once per tab: a script (estimated only up to its first DDL or control statement),
     external or row-level-security tables (0 bytes before they run), or an estimate BigQuery marks `LOWER_BOUND` or
     `UNKNOWN`. **Don't warn me about incomplete estimates again** clears
     `queryExecution.bigQuery.incompleteEstimateWarning`.
 
-  A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel while
-  the estimate is worked out stops the run before anything is sent. Emulator mode's faked estimates never ask.
+  A dry run that fails (the network, a permission) does not block: the query runs and reports its own error. Cancel,
+  closing the tab or disconnecting while the estimate is worked out or a prompt is open stops the run at once, closes
+  the prompt and sends nothing; its Don't ask again is not kept. Emulator mode's faked estimates never ask.
 - **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
-  job past it at no charge (`COST_CAP`, which names the cap).
+  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
 
 ## Errors
 

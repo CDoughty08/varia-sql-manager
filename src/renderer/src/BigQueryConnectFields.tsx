@@ -136,7 +136,7 @@ export type BigQueryLists = ReturnType<typeof useBigQueryLists>
 
 /** The Advanced button's summary: how many of BigQuery's advanced settings are set. */
 export function bigQueryAdvancedSummary(options: BigQueryConnectionOptions): string {
-  const count = [options.maximumBytesBilled, options.impersonateServiceAccount, options.extraProjects?.length].filter(Boolean).length
+  const count = [options.maximumBytesBilled, options.costPrompt === false, options.impersonateServiceAccount, options.extraProjects?.length].filter(Boolean).length
   return count === 0 ? '' : count === 1 ? '1 property set' : `${count} properties set`
 }
 
@@ -180,9 +180,10 @@ export function BigQueryConnectFields({ options, keyFileName, locked, lists, onC
 }
 
 const serviceAccountSchema = z.email().max(bigQueryLimits.serviceAccount)
-/** BigQuery's Advanced Properties: the cost cap, impersonation and extra read-only projects (a second project picker). */
-export function BigQueryAdvanced({ options, projects, onSave, onClose }: { options: BigQueryConnectionOptions; projects: readonly BigQueryProject[]; onSave(patch: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'impersonateServiceAccount' | 'extraProjects'>): void; onClose(): void }) {
+/** BigQuery's Advanced Properties: the cost cap and prompt, impersonation and extra read-only projects (a second project picker). */
+export function BigQueryAdvanced({ options, projects, onSave, onClose }: { options: BigQueryConnectionOptions; projects: readonly BigQueryProject[]; onSave(patch: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount' | 'extraProjects'>): void; onClose(): void }) {
   const initialBytes = splitBytes(options.maximumBytesBilled)
+  const [costPrompt, setCostPrompt] = useState(options.costPrompt !== false)
   const [amount, setAmount] = useState(initialBytes.amount)
   const [unit, setUnit] = useState<ByteUnit>(initialBytes.unit)
   const [impersonate, setImpersonate] = useState(options.impersonateServiceAccount ?? '')
@@ -204,7 +205,9 @@ export function BigQueryAdvanced({ options, projects, onSave, onClose }: { optio
     const pending = adding.trim() ? [...extra, adding] : extra
     const parsed = parseExtraProjects(pending.join(' '), options.project)
     if (!parsed.ok) { setError(parsed.error); return }
-    onSave({ maximumBytesBilled: bytes.bytes, impersonateServiceAccount: account || undefined, extraProjects: parsed.projects.length ? parsed.projects : undefined })
+    // Turning the prompt back on names it (true), so the saved entry's "Don't ask again" is cleared rather than kept.
+    const prompt = costPrompt ? options.costPrompt === false ? true : options.costPrompt : false
+    onSave({ maximumBytesBilled: bytes.bytes, costPrompt: prompt, impersonateServiceAccount: account || undefined, extraProjects: parsed.projects.length ? parsed.projects : undefined })
   }
   return <div className="modal-backdrop advanced-backdrop"><form ref={form} className="connection-modal advanced-dialog" role="dialog" aria-modal="true" aria-labelledby="bq-advanced-title" onSubmit={event => { event.preventDefault(); save() }} onKeyDown={event => { trapFocus(event); if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>
     <div className="connection-heading"><h2 id="bq-advanced-title">Advanced Properties</h2><button type="button" className="icon-button" aria-label="Close advanced properties" onClick={onClose}><Icon name="close" /></button></div>
@@ -212,6 +215,8 @@ export function BigQueryAdvanced({ options, projects, onSave, onClose }: { optio
       <fieldset className="property-section"><legend>Cost</legend><div className="property-grid">
         <div className="property-row"><label htmlFor="bq-max-bytes">Maximum bytes billed</label><div className="property-input-action"><input id="bq-max-bytes" inputMode="decimal" maxLength={24} placeholder="No limit" value={amount} aria-describedby="bq-max-bytes-note" onChange={event => setAmount(event.target.value)} /><select aria-label="Maximum bytes billed unit" className="bq-unit" value={unit} onChange={event => setUnit(event.target.value as ByteUnit)}>{byteUnits.map(([name]) => <option key={name} value={name}>{name}</option>)}</select></div></div>
         <p className="field-note" id="bq-max-bytes-note">Every query on this connection is sent with this cap, and BigQuery fails a query that would bill more, at no charge. Empty means no limit.</p>
+        <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={costPrompt} aria-describedby="bq-cost-prompt-note" onChange={event => setCostPrompt(event.target.checked)} />Ask before running a query over the cost threshold</label></div>
+        <p className="field-note" id="bq-cost-prompt-note">Tools › Options › Query Execution › BigQuery › Cost sets the threshold. Choosing "Don't ask again" in the prompt clears this.</p>
       </div></fieldset>
       <fieldset className="property-section"><legend>Identity</legend><div className="property-grid">
         <div className="property-row"><label htmlFor="bq-impersonate">Impersonate service account</label><input id="bq-impersonate" type="email" maxLength={bigQueryLimits.serviceAccount} spellCheck={false} placeholder="name@project.iam.gserviceaccount.com" value={impersonate} aria-describedby="bq-impersonate-note" onChange={event => setImpersonate(event.target.value)} /></div>
@@ -224,6 +229,6 @@ export function BigQueryAdvanced({ options, projects, onSave, onClose }: { optio
       </div></fieldset>
       {error && <p className="field-note" role="alert" data-tone="warning">{error}</p>}
     </div>
-    <div className="connection-footer"><button type="button" onClick={() => { setAmount(''); setUnit('GiB'); setImpersonate(''); setExtra([]); setAdding(''); setError('') }}>Reset</button><span /><button className="primary" type="submit">OK</button><button type="button" onClick={onClose}>Cancel</button></div>
+    <div className="connection-footer"><button type="button" onClick={() => { setAmount(''); setUnit('GiB'); setCostPrompt(true); setImpersonate(''); setExtra([]); setAdding(''); setError('') }}>Reset</button><span /><button className="primary" type="submit">OK</button><button type="button" onClick={onClose}>Cancel</button></div>
   </form></div>
 }
