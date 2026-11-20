@@ -38,8 +38,12 @@ export function planPropertiesMenu() {
     },
     target(pane: HTMLElement, fact?: Element): PlanPropertiesTarget | null {
       const facts = [...pane.querySelectorAll<HTMLElement>('.plan-fact')].filter(item => !item.closest('details:not([open])'))
-      const selected = (pressed ?? selectedFacts(pane, '.plan-fact')).filter(item => facts.includes(item))
+      const press = pressed
       pressed = undefined
+      const selected = (press ?? selectedFacts(pane, '.plan-fact')).filter(item => facts.includes(item))
+      // The press saw no selection, so any selection now is the word macOS selects under a right-click: drop it, or the
+      // next right-click's press would take it for the user's selection and copy this fact again.
+      if (press && !press.length) pane.ownerDocument.getSelection()?.removeAllRanges()
       if (!facts.length) return null
       const picked = selected.length ? selected : fact && facts.includes(fact as HTMLElement) ? [fact as HTMLElement] : facts
       return { kind: 'planProperties', facts: picked.map(groupedFactText) }

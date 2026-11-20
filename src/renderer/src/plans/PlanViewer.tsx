@@ -432,7 +432,9 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           </select></div>
         <div className="plan-operator-tree" ref={element => { tree.current = element; if (element) outlineMenu(element) }} data-plan-outline="" role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate}
           // Edit › Copy (Electron's copy role) reaches the focused outline as a copy event; Ctrl+C is handled as a key above.
-          onCopy={event => { event.preventDefault(); void commands.execute('plan.copyOperator', undefined, 'keybinding') }} onScroll={event => {
+          onCopy={event => { event.preventDefault(); void commands.execute('plan.copyOperator', undefined, 'keybinding') }}
+          // Edit › Copy goes to where a text selection starts, so a selection left in Properties would take the outline's copy.
+          onFocus={event => { const selection = event.currentTarget.ownerDocument.getSelection(); if (selection && !selection.isCollapsed && !event.currentTarget.contains(selection.anchorNode)) selection.removeAllRanges() }} onScroll={event => {
           // Scrolling a visible outline by hand replaces any reveal still waiting for its row.
           if (event.currentTarget.clientHeight) { reveal.current = undefined; outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
         }}

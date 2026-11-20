@@ -139,6 +139,11 @@ try {
     await rowsFact.click({ button: 'right' })
     await page.getByRole('menu', { name: 'Plan properties', exact: true }).getByRole('menuitem', { name: 'Copy', exact: true }).click()
     await expect.poll(async () => (await clipboardText()).split(/\r?\n/)).toEqual([`Estimated rows per execution\t${rowsValue}`, expect.stringMatching(/^Estimated executions\t[^\t]+$/)])
+    // Edit › Copy (Electron's copy role) with the outline focused copies the operator, not the facts still selected.
+    await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+    await operatorTree.focus()
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.isFocused())?.webContents.copy())
+    await expect.poll(clipboardText).toMatch(operatorRow)
     await page.evaluate(() => getSelection()?.removeAllRanges())
     console.log('Plan copy checks: the outline copies its operator with Ctrl+C and its menu, and Properties copies a value or a name and value.')
     await planViewer(page).getByRole('button', { name: 'Fit batch', exact: true }).click()
