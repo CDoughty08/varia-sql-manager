@@ -27,6 +27,11 @@ if (args is [SearchBench.Argument])
     return;
 }
 // tests/bench/search.bench.ts: measures only, no checks.
+if (args is [FindBench.MessagesArgument, var messagesServer, ..])
+{
+    FindBench.RunMessages(messagesServer, args.Length > 2 ? args[2] : null);
+    return;
+}
 if (args is [FindBench.Argument])
 {
     FindBench.Run();
@@ -80,6 +85,19 @@ void Check(bool condition, string name)
     Interlocked.Increment(ref passed);
 }
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
+// The BigQuery engine against the offline fake, reporting every failing check rather than the first (docs/bigquery.md).
+if (args is ["--bigquery-checks"])
+{
+    var failed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    void Collect(bool condition, string name) { if (condition) Interlocked.Increment(ref passed); else failed.Enqueue(name); }
+    BigQueryCredentialChecks.Run(Collect);
+    await BigQueryChecks.RunAsync(Collect);
+    await BigQueryExecutionChecks.RunAsync(Collect);
+    foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
+    Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
+    Environment.ExitCode = failed.IsEmpty ? 0 : 1;
+    return;
+}
 if (args is ["--lsp-transport-checks"])
 {
     await LspTransportChecks.RunAsync(Check);
@@ -102,6 +120,13 @@ if (args is ["--result-name-checks"])
 {
     await ResultNameChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " result name checks.");
+    return;
+}
+// BigQuery against the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (CI: live group 1, docs/ci.md); never a real project.
+if (args is ["--bigquery-emulator-live"])
+{
+    await BigQueryEmulatorLiveChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery emulator checks.");
     return;
 }
 if (args is ["--sql-language-live"])
@@ -409,7 +434,13 @@ if (liveGroup is null)
         ("Diff", Sync(() => DiffChecks.Run(Check))),
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("SearchFold", Sync(() => SearchFoldChecks.Run(Check))),
+        ("SearchNarrowing", Sync(() => SearchNarrowingChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
+        ("SortKind", Sync(() => SortKindChecks.Run(Check))),
+        ("Provider", () => ProviderChecks.RunAsync(Check)),
+        ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
+        ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
+        ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
@@ -452,6 +483,7 @@ if (liveGroup is null)
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
+        ("Agent", () => AgentChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
@@ -473,7 +505,7 @@ if (liveGroup is null)
     await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
     // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
     // job meets packed pages through the accessor. Alone, after the first pass: the default is process-wide.
-    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "SearchNarrowing", "ParallelResult", "CellLength", "Text", "TransposedText"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
     Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result");
@@ -981,6 +1013,7 @@ try
     await Suite("ActivityAction", () => ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
+    await Suite("Agent", () => AgentLiveChecks.RunAsync(Check, service, info, json));
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."

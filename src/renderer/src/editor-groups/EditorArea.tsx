@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import ServerDropLayer, { bindServerDrop } from './ServerDropLayer'
 import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
 import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout, type EditorTabRows } from '../../../shared/editor-groups'
 import { environmentTag } from '../../../shared/environments'
@@ -10,7 +11,7 @@ import type { Workbench } from '../core/workbench'
 import { focusWhenDrawn } from '../core/modal'
 import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
-import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
+import { documentInfo, documentKind, isCustomKind, isQueryDocument, isTextDocument, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
 import TabShelves from './TabShelves'
@@ -122,7 +123,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
   // A text document keeps its (empty) slot while hidden, so the editor can move in the moment its tab is chosen.
   if (!custom) {
     const plan = kind === 'sqlplan'
-    const editor = <div className="editor-container" ref={slot} hidden={plan && !planSource} />
+    const editor = <div className="editor-container" ref={slot} hidden={plan && !planSource} data-document-id={api.id} />
     return plan ? <div className="document-view">
       {visible && <PlanDocument documentId={api.id} source={planSource} onSource={setPlanSource} />}
       {editor}
@@ -220,11 +221,11 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     return () => node.removeEventListener('pointerdown', own)
   }, [])
   if (!tab) return null
-  const kind = kindInfo[documentKind(tab)], pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
+  const kind = documentInfo(tab), pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
   const rememberedServer = isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
   const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : spid === undefined ? '—' : `SID ${spid}`}</span>
   const metadata = sid || environmentTag(environment)
-  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} style={{ borderTopColor: workbench.theme.accent(presentation.color) }}
+  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} data-query={isQueryDocument(tab) || undefined} style={{ borderTopColor: workbench.theme.accent(presentation.color), ...accentVariable(workbench.theme.accent(presentation.color)) }}
     onDoubleClick={event => { if (workbench.gestures.matches('documentTabs.rename', event) && !(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
     <div className={renaming ? 'tab-select tab-renaming' : 'tab-select'}>
       <Icon name={kind.icon} className="tab-icon" label={kind.label} />
@@ -245,6 +246,9 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
       onClick={() => void workbench.commands.execute('file.close', { tabId: id }, 'toolbar')}><Icon name="close" /></button>
   </div>
 }
+
+/** The tab's connection color, for the server drop's swap (styles.css). */
+const accentVariable = (accent: string | undefined): Record<string, string> => accent ? { '--tab-accent': accent } : {}
 
 /** The editor panel's ⋯ menu, in the group whose header is at the editor area's top right. */
 function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
@@ -291,9 +295,10 @@ export default function EditorArea() {
   const themeType = useServiceSnapshot(workbench.theme).active.type
   const root = useRef<HTMLDivElement>(null)
   const [restored, setRestored] = useState(false)
+  const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null)
   const [area] = useState(() => new EditorAreaController(workbench))
   useEffect(() => () => area.dispose(), [area])
-  const onReady = useCallback((event: DockviewReadyEvent) => { area.ready(event.api, root.current!); setRestored(true) }, [area])
+  const onReady = useCallback((event: DockviewReadyEvent) => { area.ready(event.api, root.current!); setRestored(true); setRootElement(root.current) }, [area])
   return <div className="editor-groups-root" ref={root}>
     <AreaContext.Provider value={area}><RestoredContext.Provider value={restored}>
       <DockviewReact className="editor-groups-dock" theme={areaThemes[themeType]} components={components} tabComponents={tabComponents} defaultTabComponent={DocumentTab}
@@ -301,6 +306,7 @@ export default function EditorArea() {
         rightHeaderActionsComponent={GroupActions} watermarkComponent={EmptyEditor} defaultRenderer="onlyWhenVisible" floatingGroupBounds={floatingBounds}
         transformFloatingGroupDrag={keepTitlebar} floatingGroupDragHandle="titlebar" dndStrategy="pointer" onReady={onReady} />
     </RestoredContext.Provider></AreaContext.Provider>
+    <ServerDropLayer root={rootElement} />
   </div>
 }
 
@@ -416,7 +422,12 @@ class EditorAreaController implements Area, EditorGroupHost {
       this.regions = nameGroupRegions(root),
       this.pointer = afterPointer(),
       followFocus(root, inside => { this.focusInArea = inside; if (!inside) documents.dropPendingFocus() }),
-      chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }))
+      chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }),
+      bindServerDrop(root, this.workbench.serverDrop, {
+        insertHeld: event => this.workbench.gestures.matches('explorer.dropServerName', event),
+        activateGroupOf: element => api.groups.find(group => group.element.contains(element))?.api.setActive(),
+        reportError: error => this.workbench.commands.reportError(error instanceof Error ? error.message : 'The query could not move to that server.')
+      }))
     this.reconcile()
     this.publish()
   }

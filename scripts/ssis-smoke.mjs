@@ -3,19 +3,22 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
-import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, gridCell, gridPart, localGrid, localGridFrame, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
 // which each tab keeps across switches, list and content; Refresh with F5; Close cancelling a read in flight; a failed read
-// and Retry from the keyboard, with focus kept in the document and the header the same height in every state; lists at
-// the 2,048-row cap drawn only near the view; an object deleted elsewhere.
+// and Retry from the keyboard, with focus kept in the document and the header the same height in every state; the lists
+// as page grids (LocalGrid) whose Copy and Save write a sensitive value masked; lists at the 2,048-row cap; an object
+// deleted elsewhere.
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'ssis-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'ssis-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'ssis'))
+const saveDir = await mkdtemp(resolve('artifacts', 'ssis-save-'))
+const eol = process.platform === 'win32' ? '\r\n' : '\n'
 const lines = async name => parseCalls(await readFile(join(control, name), 'utf8').catch(() => ''))
 const describes = async () => (await lines('calls.jsonl')).filter(call => call.method === 'ssis.describe').map(call => call.params)
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
@@ -63,8 +66,24 @@ async function menuOn(path, item) {
 }
 /** Whether focus is inside the document's frame. */
 const focusIn = title => frame(title).evaluate(element => element.contains(document.activeElement))
-/** Rows a document draws (its lists draw only those near the view), and every element in it. */
-const drawn = title => frame(title).evaluate(element => ({ rows: element.querySelectorAll('tbody tr[aria-rowindex]').length, nodes: element.querySelectorAll('*').length }))
+/** Rows a document draws (its grids draw only those near the view), and every element in it. */
+const drawn = title => frame(title).evaluate(element => ({ rows: element.querySelectorAll('[role="rowgroup"] > [role="row"]').length, nodes: element.querySelectorAll('*').length }))
+/** A list's row as its cells show it. */
+const rowText = async (grid, row, columns) => { const cells = []; for (let column = 0; column < columns; column++) cells.push(await gridCell(grid, row, column).textContent()); return cells }
+const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
+/** A list's grid frame (its strip, its box): one list of the name is open where this is used. */
+const listFrame = name => localGridFrame(page, name)
+/** Whether a list's row is wholly inside the part of its scroller that shows, above any scroll bar or strip. */
+const rowShown = async (grid, name, row) => {
+  const box = await gridCell(grid, row, 0).boundingBox()
+  const view = await listFrame(name).locator(gridPart.scroller).evaluate(element => ({ top: element.getBoundingClientRect().top, height: element.clientHeight }))
+  return !!box && box.y >= view.top - 0.5 && box.y + box.height <= view.top + view.height + 0.5
+}
+/** Runs a Query output menu item on a list's cell. */
+const listMenu = async (grid, item) => {
+  await gridCell(grid, 0, 0).click({ button: 'right' })
+  await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: item, exact: true }).click()
+}
 /** A General fact by its label. */
 const fact = (title, label) => frameSection(frame(title), 'General').locator('dl > div').filter({ has: page.locator('dt', { hasText: new RegExp(`^${label}$`) }) }).locator('dd')
 
@@ -74,6 +93,14 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toHaveText('Ready', { timeout: 30000 })
+  await application.evaluate(({ dialog }) => {
+    globalThis.variaSave = { paths: [], dialogs: [] }
+    dialog.showSaveDialog = async (_window, options) => {
+      globalThis.variaSave.dialogs.push(options)
+      const filePath = globalThis.variaSave.paths.shift()
+      return filePath ? { canceled: false, filePath } : { canceled: true }
+    }
+  })
   // A short window, as properties documents take the whole document area: Project Properties' sections then overflow
   // their column, so choosing one scrolls to it.
   await resizeContent(application, page, 1440, 700)
@@ -122,14 +149,45 @@ try {
   await expect(sections('Loads').getByRole('button')).toHaveText(['General', 'Packages', 'Parameters', 'References'])
   await expect(sections('Loads').getByRole('button', { name: 'General', exact: true })).toBeFocused()
   await expect(documentFactValues(loads)).toHaveText(['Finance', '2026-10-21 14:05:06 +02:00', 'Not validated'])
-  const parameters = loads.getByRole('table', { name: 'Parameters', exact: true })
-  await expect(parameters.locator('tbody tr')).toHaveCount(3)
-  // An empty value is a dash read as None; a sensitive one is stars read as hidden.
-  await expect(parameters.locator('tbody tr').nth(0).locator('td')).toHaveText(['Server', 'String', 'sql01', 'Literal', 'Yes', 'No', '—None'])
-  await expect(parameters.locator('tbody tr').nth(1).locator('td').nth(2)).toHaveText('********Sensitive value, not shown')
-  await expect(parameters.locator('tbody tr').nth(1).locator('td').nth(2).locator('[aria-hidden="true"]')).toHaveText('********')
-  await expect(parameters.locator('tbody tr').nth(2).locator('td').nth(3)).toHaveText('Environment variable')
-  await expect(loads.getByRole('table', { name: 'References', exact: true }).locator('tbody td')).toHaveText(['Test', '.', 'Relative', 'Not validated'])
+  // Each list is a results grid (LocalGrid), named with its counts as a result's grid is.
+  const parameters = localGrid(loads, 'Parameters')
+  await expect(parameters).toHaveAttribute('aria-label', 'Parameters, 3 rows, 7 columns')
+  await expect(parameters.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Data type', 'Value', 'Source', 'Required', 'Sensitive', 'Description'])
+  // An empty value is an empty cell; a sensitive one is stars.
+  expect(await rowText(parameters, 0, 7)).toEqual(['Server', 'String', 'sql01', 'Literal', 'Yes', 'No', ''])
+  expect(await rowText(parameters, 1, 7)).toEqual(['Password', 'String', '********', 'Literal', 'No', 'Yes', ''])
+  await expect(gridCell(parameters, 2, 3)).toHaveText('Environment variable')
+  expect(await rowText(localGrid(loads, 'References'), 0, 4)).toEqual(['Test', '.', 'Relative', 'Not validated'])
+  // A short list is as tall as its rows: its last row is inside its frame, with no band of empty rows under it.
+  await expect.poll(() => rowShown(parameters, 'Parameters', 2)).toBe(true)
+  expect(await listFrame('Parameters').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(160)
+  // A list narrower than its section has no room kept for a horizontal scroll bar: its header, two rows and its border.
+  // Polled until two reads agree: the grid says whether it is wide on its first frame.
+  const packagesHeight = () => listFrame('Packages').evaluate(element => element.getBoundingClientRect().height)
+  await expect.poll(async () => { const height = await packagesHeight(); await page.evaluate(() => new Promise(requestAnimationFrame)); return height === await packagesHeight() && height }).toBeLessThanOrEqual(22 + 2 * 20 + 4)
+  // Copy writes what the cell shows: the stars, never a value. Copy with Headers of every row does too.
+  await gridCell(parameters, 1, 2).click()
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('********')
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe([['Name', 'Data type', 'Value', 'Source', 'Required', 'Sensitive', 'Description'], ['Server', 'String', 'sql01', 'Literal', 'Yes', 'No', ''],
+    ['Password', 'String', '********', 'Literal', 'No', 'Yes', ''], ['Port', 'Int32', 'Port', 'Environment variable', 'No', 'No', '']].map(row => row.join('\t')).join(eol))
+  // Save Results As (Ctrl+S) writes the same text through main's dialog, named for the project and the list.
+  await application.evaluate((_, value) => { globalThis.variaSave.paths.push(value) }, join(saveDir, 'parameters.csv'))
+  await page.keyboard.press('Control+S')
+  await expect(listFrame('Parameters').locator(gridPart.strip)).toHaveText('Saved 3 rows to parameters.csv.')
+  // The list grows to make room for its strip: every row still shows.
+  await expect.poll(() => rowShown(parameters, 'Parameters', 2)).toBe(true)
+  expect(await application.evaluate(() => globalThis.variaSave.dialogs.at(-1))).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Loads-Parameters\.csv$/) })
+  const saved = await readFile(join(saveDir, 'parameters.csv'), 'utf8')
+  // An empty value is an empty string (""), as a result's is; an empty field would be NULL.
+  expect(saved).toBe('﻿' + ['Server,String,sql01,Literal,Yes,No,""', 'Password,String,********,Literal,No,Yes,""', 'Port,Int32,Port,Environment variable,No,No,""'].map(line => line + '\r\n').join(''))
+  // A header sorts the list, as in a results grid.
+  await listMenu(parameters, 'Sort Descending')
+  await expect(gridCell(parameters, 0, 0)).toHaveText('Server')
+  await expect(gridCell(parameters, 2, 0)).toHaveText('Password')
+  await sections('Loads').getByRole('button', { name: 'General', exact: true }).focus()
   // The count follows the title inside the heading, and says what it counts: the section is "Packages (2 packages)".
   await expect(frameSection(loads, 'Packages (2 packages)').getByRole('heading', { level: 2 })).toHaveText('Packages2 (2 packages)')
   // Down in the list moves to the next section; References from the list stays current.
@@ -150,12 +208,19 @@ try {
   await expect(documentCrumbs(frame('Daily.dtsx'))).toHaveText(['server-a', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Loads'])
   await (await explorerRow(page, ...finance, 'Environments', 'Test')).dblclick()
   await expect(tab('Environment Properties - Test')).toHaveAttribute('aria-selected', 'true')
-  const variables = frame('Test').getByRole('table', { name: 'Variables', exact: true })
-  await expect(variables.locator('tbody tr').nth(1).locator('td')).toHaveText(['Secret', 'String', '********Sensitive value, not shown', 'Yes', 'Never read'])
+  const variables = localGrid(frame('Test'), 'Variables')
+  expect(await rowText(variables, 1, 5)).toEqual(['Secret', 'String', '********', 'Yes', 'Never read'])
+  await gridCell(variables, 1, 0).click()
+  await gridCell(variables, 1, 4).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['Secret', 'String', '********', 'Yes', 'Never read'].join('\t'))
   console.log('SSIS checks: Enter on a package and a double-click on an environment open their Properties.')
 
-  // 4. Each tab keeps its section across switches; opening the folder again shows its tab and reads it again.
+  // 4. Each tab keeps its section across switches, and its lists their sort; opening the folder again shows its tab and
+  // reads it again.
   await selectOpenDocument(page, 'Project Properties - Loads')
+  await expect(gridCell(parameters, 0, 0)).toHaveText('Server')
+  await expect(parameters.getByRole('columnheader', { name: 'Name', exact: true })).toHaveAttribute('aria-sort', 'descending')
   await expect(sections('Loads').getByRole('button', { name: 'References', exact: true })).toHaveAttribute('aria-current', 'location')
   // The content comes back on that section too, not on General from the top.
   await expect.poll(() => headingShown('Loads', 'references')).toEqual({ shown: true, scrolled: true })
@@ -235,11 +300,11 @@ try {
   await writeFile(join(control, 'ssis', 'many'), '')
   await selectOpenDocument(page, 'Project Properties - Loads')
   await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
-  const references = frame('Loads').getByRole('table', { name: 'References', exact: true })
-  await expect(references).toHaveAttribute('aria-rowcount', '2049')
-  await expect(frame('Loads').getByRole('table', { name: 'Parameters', exact: true })).toHaveAttribute('aria-rowcount', '2049')
+  const references = localGrid(frame('Loads'), 'References')
+  await expect(references).toHaveAttribute('aria-label', 'References, 2,048 rows, 4 columns')
+  await expect(parameters).toHaveAttribute('aria-label', 'Parameters, 2,048 rows, 7 columns')
   await expect(documentBanner(frame('Loads'))).toContainText('each list shows its first 2,048')
-  // 6,144 rows of 4 to 7 cells each were 67,701 elements; a screen of rows is a few hundred.
+  // 6,144 rows of 4 to 7 cells each were 67,701 elements; each grid draws a screen of rows.
   const bounded = async () => {
     const { rows, nodes } = await drawn('Loads')
     expect(rows).toBeGreaterThan(0)
@@ -247,23 +312,39 @@ try {
     expect(nodes).toBeLessThanOrEqual(6000)
   }
   await bounded()
+  // The sensitive rows of a long list copy masked too: every fifth parameter, in the catalog's order once the sort clears.
+  await listMenu(parameters, 'Clear Sort')
+  await expect(gridCell(parameters, 0, 0)).toHaveText('Parameter 1')
+  await gridCell(parameters, 0, 2).click()
+  await gridCell(parameters, 5, 2).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+C')
+  await expect.poll(async () => (await clipboard()).split(eol)[0]).toBe('********')
+  expect((await clipboard()).split(eol).filter(value => value === '********')).toHaveLength(2)
   await sections('Loads').getByRole('button', { name: 'References', exact: true }).click()
   await expect.poll(() => headingShown('Loads', 'references')).toEqual({ shown: true, scrolled: true })
-  await expect(references.locator('tbody tr[aria-rowindex="2"] td').first()).toHaveText('Environment 1')
+  await expect(gridCell(references, 0, 0)).toHaveText('Environment 1')
   await bounded()
+  // Ctrl+End in the grid goes to its last row, in view: a list at the cap scrolls inside its section.
+  await gridCell(references, 0, 0).click()
+  await page.keyboard.press('Control+End')
+  const last = gridCell(references, 2047, 0)
+  await expect(last).toHaveText('Environment 2048')
+  await expect.poll(() => rowShown(references, 'References', 2047)).toBe(true)
   await sectionColumn(frame('Loads'), 'Loads').evaluate(column => { column.scrollTop = column.scrollHeight })
-  const last = references.locator('tbody tr[aria-rowindex="2049"]')
-  await expect(last.locator('td').first()).toHaveText('Environment 2048')
   await expect(last).toBeInViewport()
   await bounded()
   await selectOpenDocument(page, 'Environment Properties - Test')
   await selectOpenDocument(page, 'Project Properties - Loads')
-  await expect(references).toHaveAttribute('aria-rowcount', '2049')
+  await expect(references).toHaveAttribute('aria-label', 'References, 2,048 rows, 4 columns')
   await expect(sections('Loads').getByRole('button', { name: 'References', exact: true })).toHaveAttribute('aria-current', 'location')
   await bounded()
   await rm(join(control, 'ssis', 'many'))
   await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
-  await expect(references).toHaveAttribute('aria-rowcount', '2')
+  await expect(references).toHaveAttribute('aria-label', 'References, 1 row, 4 columns')
+  // The selection Ctrl+End left on row 2,048 is held to the one row left: Copy copies it, not rows that are gone.
+  await references.focus()
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('Not validated')
   console.log('SSIS checks: lists at the 2,048-row cap draw only the rows near the view, after a tab switch too, and reach their last row.')
 
   // 9. Light theme, and still no page-wide horizontal scroll.
@@ -275,7 +356,7 @@ try {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 
   expect(failures).toEqual([])
-  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a failed read and Retry from the keyboard; lists at the cap; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
+  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a failed read and Retry from the keyboard; lists as grids copying and saving sensitive values masked; lists at the cap; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'ssis-failure.png') }).catch(() => {})
   throw error
@@ -285,4 +366,5 @@ try {
   await application?.close().catch(() => application?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
   await rm(control, { recursive: true, force: true })
+  await rm(saveDir, { recursive: true, force: true })
 }

@@ -123,7 +123,7 @@ jobs:
         group: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 40
+    timeout-minutes: 45
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -131,6 +131,8 @@ jobs:
           ACCEPT_EULA: 'Y'
           # A fixed development password is fine here: the container is created for this job, holds no data, and is discarded with the runner.
           MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
+          MSSQL_AGENT_ENABLED: 'true'
         ports:
           - 1433:1433
         options: >-
@@ -148,6 +150,8 @@ jobs:
       # Only this disposable container records New Login's and Create Catalog's batches in an Extended Events session, to prove
       # neither password reaches any recorded field (wave 5 decision 14); a developer's server runs it only when its owner asks.
       VARIA_TEST_SQL_XE: '1'
+      # The Agent live suites require SQL Server Agent and fail if it never comes up.
+      VARIA_TEST_SQL_AGENT: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -183,6 +187,17 @@ jobs:
         run: |
           node scripts/prepare-sqltools-service.mjs --rid linux-x64
           dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live
+      - name: BigQuery against its emulator
+        # BigQuery in emulator mode against goccy/bigquery-emulator 0.8.1, pinned by digest (docs/bigquery.md, Testing):
+        # anonymous credentials, so no Google project or credential is ever involved. The checks wait for it to answer.
+        # Runs after other checks fail too, provided their Release build exists.
+        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
+        timeout-minutes: 5
+        env:
+          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050
+        run: |
+          docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
+          dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --bigquery-emulator-live
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
         # must say to run kinit (AUTH_KERBEROS) with the failure's details, not refuse the mode or show SqlClient's bare
@@ -209,13 +224,15 @@ jobs:
         shard: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 60
+    timeout-minutes: 65
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+          # Agent starts after the health check passes; the Agent suites wait for it (AgentLiveChecks.UpAsync).
+          MSSQL_AGENT_ENABLED: 'true'
         ports:
           - 1433:1433
         options: >-
@@ -256,8 +273,17 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Start the BigQuery emulator
+        # The connections suite's BigQuery phase drives the Connect dialog against the emulator BQ-1 pins by digest (anonymous
+        # credentials, never a Google project). A service container cannot take the emulator's arguments, so it starts here,
+        # in every shard, since the shard that runs the connections suite follows measured times.
+        id: bigquery
+        timeout-minutes: 2
+        run: docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
       - name: Electron smoke tests
         timeout-minutes: 25
+        env:
+          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050
         run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs ${{ matrix.shard }}/3
       - name: Live SQL language widgets and window focus
         if: matrix.shard == 3 && (success() || failure()) && steps.build.outcome == 'success' && steps.display.outcome == 'success'

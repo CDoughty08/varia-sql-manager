@@ -23,11 +23,14 @@ only when a summary line stops being true.
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
   Unknown methods and members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
+- **Providers.** One `ProviderId` (`src/shared/providers.ts`: `sqlserver`, `bigquery`) names the engine everywhere. A
+  `methodPolicies` entry serves SQL Server only unless its `providers` says otherwise, and a request for another engine is
+  refused with `UNSUPPORTED_PROVIDER` by main and again by `SqlService.DispatchAsync` (docs/ipc.md#providers).
 - **Logs and secrets.** Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text,
-  names, values, credentials or connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the
+  names, values, credentials or connection strings. Passwords never reach disk in clear: not `mssql-connections.json`, process arguments, the
   environment, logs, traces or previews.
   - A remembered password is only Electron `safeStorage` ciphertext (async API only, `src/main/secret-cipher.ts`) in
-    `saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
+    `mssql-saved-passwords.json` (atomic, 0600, quarantined if unreadable), keyed by its history entry's id and bound to its
     server, login and TLS settings by a hash beside it and a check inside the ciphertext. Only main reads or decrypts it;
     the renderer learns only which entries have one, and main injects it into `connections.connect`/`.databases` only
     for a matching binding. Save remembers a typed password only when a `connections.databases` check with `remember`
@@ -38,6 +41,18 @@ only when a summary line stops being true.
     `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, never sent to main
     or the renderer. Only connect and Load databases open a browser sign-in, under the request's token (Stop); sign-in
     hosts and token resources the server names are allowlisted.
+  - BigQuery credentials (docs/bigquery.md): main finds and reads the key, federation configuration or ADC file (by
+    opaque reference, at most 64 KiB) and sends its content only in a sensitive request; the backend loads it only through
+    typed loads with every URL pinned to Google's endpoints, and keeps tokens in memory. Each connection pins the
+    verified principal, and a refresh that signs in as another one fails `AUTH_IDENTITY`. The one exception to main
+    reading credential files: a federation configuration's `credential_source.file` rotates, so the backend reads it
+    itself on every token exchange, only at the path a configuration main read names, and only a regular local file of
+    at most 64 KiB outside Varia's user data and the known credential folders (judged by its canonical path; UNC shares,
+    device and NT paths, network drives and `/proc`, `/sys`, `/dev` are refused), and only once the user confirmed that
+    path in the Connect dialog (kept in `bigquery-connections.json`; main fails closed without it). The renderer names a
+    key file only by the reference main's picker returned and sees only its file name. BigQuery connects go through
+    `ConnectionOpenService` like SQL Server's, with the same target pins. `VARIA_TEST_BIGQUERY_ENDPOINT`
+    (a loopback emulator) reaches only unpackaged backends and uses anonymous credentials.
   - New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels
     only in the sensitive `actions.execute`, reaches SQL only as one parameter in a constant batch, and is scrubbed from
     replies; Script writes `<password>`.
@@ -56,8 +71,7 @@ only when a summary line stops being true.
   most one backend generation and never re-sent. UI result caches are 256 windows and 16 Mi units; the worker cache is
   64 MiB.
 - **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- **Preferences files** (`settings.json`, `appearance.json`, `connections.json`, `workspace-layouts.json`,
-  `saved-passwords.json` (0600), `shortcuts.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+- **Preferences files** (`settings.json`, `appearance.json`, `mssql-connections.json`, `workspace-layouts.json`, `mssql-saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
   quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
   `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
 
@@ -65,6 +79,20 @@ only when a summary line stops being true.
 
 docs/connection-ownership.md describes main's authentication, receipt, checkpoint and pruning contracts.
 
+- **Profile files and the 0.9.0 migration.** The profile lives under names 0.9.0 never reads, so a downgrade still opens
+  0.9.0's own files: `mssql-connections.json`, `bigquery-connections.json`, `mssql-saved-passwords.json`,
+  `WorkbenchSession/` and `WorkbenchAutoRecover/` (`profileFiles`, `src/main/profile-migration.ts`). At startup, before
+  any store reads, each 0.9.0 file or folder is parsed with today's schema and written atomically under the new name (a
+  folder through a staging folder); the 0.9.0 files are never written. A 0.10.0 file a store wrote after a failed attempt
+  is merged into, never replaced: connections it lacks by id and key are added with their 0.9.0 ids, passwords are keyed
+  to the matching entry unless the file has one for the same credentials, AutoRecover records join within its caps, and a
+  session folder 0.10.0 made (even empty) keeps what it holds while 0.9.0's unsaved tabs are offered through AutoRecover.
+  Finished steps, and the records already copied, are recorded in `profile-migration.json`, so a store's own file neither
+  hides 0.9.0's nor brings back what the user discarded; a failed or partial step retries at the next start, and saved
+  passwords wait for the connections, whose library their store reconciles against. A marker that exists but cannot be
+  used counts every step done (a newer version's is left alone; a corrupt one is quarantined and replaced). An unreadable
+  0.9.0 file is quarantined. Logs carry only the step and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session
+  files are version 3 and AutoRecover records version 2, each with `provider` and BigQuery's 1,024-character datasets.
 - **Targets.** `src/shared/connection-targets.ts`: target ID, saved-profile hint and backend handle are distinct. Persist
   only the strict nonsecret target/workspace shapes, never lifecycle, handles, operation epochs or main-only comparison
   keys. `ConnectionIdentityRegistry` (`src/main/connection-identity.ts`) compares only authenticated live handles by
@@ -162,6 +190,13 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     `PeekCard placement="editor"`); Ctrl+click opens a Peek tab (`edit.openPeekTab`). A hover waits on Peek's own hover
     timer (`hoverAt`), skips reserved keywords and the name already shown, and never reports a miss. The keys run on
     `editorTextFocus || peekEditorFocus` with no query-tab precondition; Peek's own editors take no hover.
+- **Query languages.** A query document's `provider` (absent for SQL Server) picks its Monaco language (`queryLanguages`:
+  Monaco's `sql`, or Varia's `googlesql` from `languages/googlesql.ts`); the document kind stays `sql`, so
+  `isQueryDocument` is unchanged. `DocumentService` sets it from the connection a query opens on or moves to, switches
+  the model's language (`switchModelLanguage` clears every marker owner first) and keeps it on disconnect, in Reopen
+  Closed Query, hot exit and AutoRecover. Nothing runs or is sent on a switch or restore. SQL Server's language services
+  serve only `sql` models; GoogleSQL's tokens use the `.sql` colour scopes, and its signature help reads the generated
+  catalogue (`src/shared/googlesql/catalog.ts`) through `shared/googlesql/lexer.ts`. docs/googlesql.md has the behaviour.
 - **SQL text transforms** (Toggle Brackets, Move Commas to Front/End: `editor/sql-transforms.ts`) work on tokens from
   `shared/sql/lexer.ts`, never regular expressions over the text, so strings, comments, variables and quoted names never
   change. They return offset edits applied as one undo step with selections mapped through them, refuse a model over
@@ -185,6 +220,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   the renderer are validated with `portRequestSchema`, ownership and the current generation. Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in Peek's own session and results entry
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss.
+- **Column types are classified once.** A result column's `sortKind` is set by one factory (`ColumnTypes.SortKindOf`,
+  mirrored by `sortKindOf` in `src/shared/results/sort-kind.ts`); sort, filter, pivot, profiles, row identity, Copy and
+  Save, highlights and length sorts read `sortKind`, never type-name lists. SQL Server-only refinements the kinds lack
+  (uniqueidentifier order, money scale, text and ntext as keys) live beside the factory; `SortKindChecks` and
+  `tests/sort-kind.test.ts` pin each consumer's kinds for every SQL Server type.
 - **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
   names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
   `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker
@@ -210,12 +250,25 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
   results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
-  of one the view's inverse, 4 bytes a row of the result); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
+  memory, one a result, freed with it: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
-  highlights from sorted positions by binary search per painted row, theme colours only. Diffs (`Results/ResultDiff.cs`,
-  `results.diff`) store the unified diff as a derived result of the same query, marked from its hidden tone column.
+  highlights from sorted positions by binary search per painted row, theme colours only. A cell's own colour (a diff's
+  tint, NULL's) is its `background-color`; the row's highlight, a search match and the selection lie over it in that order
+  as translucent `background-image` layers set through `--rg-hl`, `--rg-hit` and `--rg-sel`, so none replaces another, and
+  no other cell rule sets an image or the `background` shorthand outside forced colours (`tests/results-diff.test.ts`).
+  Diffs (`Results/ResultDiff.cs`,
+  `results.diff`) store the unified diff as a derived result of the same query: its data columns, then a hidden suffix
+  (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
+  in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`
+  (`grid/hidden-columns.ts`) and `ResultTextWriter.Hidden`: never drawn, copied, searched, sorted, filtered or profiled,
+  and the backend's sort keys, filters, distinct values, profiles, pivots and identify's column refuse them
+  (`INVALID_PARAMS`), while search and Copy skip them and window reads serve them (the gutter reads them so); only Save
+  of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
+  to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
+  pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot
   past its bounds is refused, not shown in part), and main owns one only once it has the answer (one not sent is released
@@ -247,8 +300,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     widths are per view in `GridViewState`; the option is fixed for a view's life. `ResultsService.setOrientation` is
     the only writer (`contributions/transpose.ts` calls it); `ResultGrid` reads `orientation()`, its `turned` store feeds
     `resultsGridTransposed` and the toolbar, and a grid's menu reads orientation from its target (`argsFor`), so Peek
-    cards toggle too. Fit Column fits the target's row (`fitDrawn`). A result with a tone column (comparison, live table)
-    is never transposed (`transposedView` in `ResultsService.ts`, the one rule for grid, `orientation()`, Copy and Save).
+    cards toggle too. Fit Column fits the target's row (`fitDrawn`). A result with hidden columns (comparison, toned live
+    table) is never transposed (`transposedView` in `ResultsService.ts`, the one rule for grid, `orientation()`, Copy and
+    Save), and only `turnableKinds` (by descriptor kind) offer it; the backend refuses a transposed Save of a diff.
     `results.transpose` answers `METHOD_NOT_FOUND` (`tests/results-transpose.test.ts`). `tests/grid-orientation.test.ts`,
     `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
   - A transposed grid copies and saves as drawn, storing nothing: the request says `transposed` (and the header column),
@@ -256,8 +310,25 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     column for the rows drawn, counting the rest in `capped` (docs/ipc.md, Copy and Save Results As).
   - Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; the
     row tone column (catalogue `role: 'tone'`, last) is hidden and left out of Copy and Save (`ResultJobs`).
-- **Copy and Save** text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and
-  never leave main except to the backend.
+  - **Local tables** show through `LocalGrid` (`grid/LocalGrid.tsx`): a small read-only table the renderer already holds (a
+    Peek list, a Properties table), never a backend result. `GridView` reads any `GridSource` (the six read members of a
+    `ResultHandle`); `LocalSource` (`grid/local-source.ts`) serves the table from memory, and a sort is a new source the
+    grid swaps in. A new table object is a new grid, unless its owner keeps the view state (`state`) and the columns are the
+    same: then it is swapped into the same view (a live chart's table re-sampled each tick), so a drag or resize under way goes on. `boundTable` (`src/shared/results/local-table.ts`) holds a table to `localTableLimits`. The table is
+    built from the text shown, so a masked value copies and saves masked. Its menu and keys are Query Output's, as a grid
+    with its own source (view `live`, `LiveOutput`); a `card` has no Save, and a `fit` page (a list in a scrolling column) is
+    sized to its rows as a card is but keeps Save. A kept view state's selection is held to a new table's rows and columns. Its strip says what the bounds left out (rows
+    past the first, columns past the first, cells cut). A copy formats a page at a time, stops past the clipboard's bound,
+    and stops once a later copy of any grid begins or the page writes other text through main (`grid/copy-generation.ts`; a native copy, such as the editor's, does not stop it, as it does not stop a results copy job). A save is refused before its file is built when it could pass `saveBytes` in the format
+    chosen (`localSaveBytes`), is formatted in main a page at a time, and never recreates a deleted folder (docs/ipc.md). `LocalGrid` disposes the view it
+    mounts (GridShell leaves that to its owner). `tests/local-grid.test.ts` and results-smoke's local grid step hold this.
+    Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
+    the draft keeps a grid's selection.
+- **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
+  (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
+  (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the
+  renderer and saves in main (`varia:results-save-local`, `ResultsJobHost.saveLocal`). Export paths come only from main's
+  save dialog and never leave main except to the backend.
 - **Operations busy state.** Whole-result operations (sort or filter building a view, profile, pivot, comparison) have
   one busy state, `ResultsService.operations` (`results/operations.ts`), read by every result control. A sort or filter
   holds that grid's sorting, filtering, funnels, Save and Sort Text By off (`holdsOff`, `refused`: refused, never
@@ -386,7 +457,16 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   test schemas (unpackaged smoke runs) and a backend with test hooks. Probe SQL is constant text per probe and band in
   `Live/LiveSql.cs`, or for Activity Monitor `Activity/ActivitySql.cs` run statement by statement through
   `ActivityReader` (a statement the login may not run fails alone). Each offline lint refuses metadata built-ins,
-  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. Live Plan's `query.plan.operators`
+  temporary tables, writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY. `LiveSql.Lint` also allows,
+  after the prologue, only the statement kinds SELECT, WITH, DECLARE and IF/ELSE/BEGIN … END, and no number holding a
+  letter but a hex literal (T-SQL reads `1DELETE` as 1 and DELETE, where a regex word boundary sees one word). It
+  refuses a code or name character outside printable ASCII (SQL Server reads U+200B as whitespace, which .NET's `\s`
+  does not), a four-part (linked-server) name, a locking or isolation table hint, MAXRECURSION, QUERYTRACEON and
+  MIN_GRANT_PERCENT, functions that read the server's files, log or every page (`fn_xe_file_target_read_file`,
+  `fn_dump_dblog`, `dm_db_index_physical_stats` and kin; a file path can be a UNC share on another host), and system
+  functions that do a refused thing inside (`dm_exec_describe_first_result_set` compiles SQL from a literal,
+  `fn_my_permissions` resolves names, `CERTPRIVATEKEY` reads a secret). Its name checks read bracketed and quoted names
+  unwrapped (`l.[password_hash]` is still `password_hash`). Live Plan's `query.plan.operators`
   probe (source `query.plan`, run by `Plans/LivePlanSampler.cs` on the server pool) takes its SQL from
   `Plans/LivePlanSql.cs`: one text per permission scope (Azure SQL Database, SQL Server 2022 and later, older versions and
   Managed Instance), each with `LiveSql.UncommittedPrologue` and its permission check in the same batch, held to `LiveSql`'s
@@ -407,6 +487,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 
 Every path: constant text, values as parameters, names only through server-side `QUOTENAME`, checked by its offline
 lint, on its own pool or connection with a fixed prologue (the actual-plan collector has none, below). Never log names, SQL, values or messages.
+Metadata built-ins stay out of every read: they ignore READ UNCOMMITTED, so behind another session's uncommitted DDL they
+wait out LOCK_TIMEOUT and fail with 1222, and `HAS_PERMS_BY_NAME` waits and then answers 0 without an error. The lints
+check names as SQL Server resolves them (`CatalogSql.Uses` and `SecretUses`: bracketed or quoted names unwrapped, comments
+and spaces before a parenthesis ignored, nothing outside printable ASCII), and a lint with a word list of writes also
+refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELETE` as `1` and `DELETE`).
 
 - **Object Explorer.** Structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters,
   version gates, kinds with live status chips, whose words are in `status.ts`; regenerates `docs/object-explorer.md` and
@@ -421,6 +506,10 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
   from the first page's means the module changed, and the part says so. Closing, replacing or refreshing cancels the
   page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units, a renderer memory bound): a longer
   text is not read, never shown in part. Search Objects' details pane reads pages only up to its `shownChars`.
+- **Peek lists** (`peekLists` in `src/shared/explorer/peek.ts`) come with the facts in `explorer.peek`'s batch, each
+  `TOP (@take)` in a fixed order, and show through `PeekListGrid` (card or page preset). Columns' and Parameters'
+  Definition is composed in C# (`PeekSql.ColumnRow`, `ParameterRow`) from names the batch quotes with `QUOTENAME`, since
+  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`).
 - **View Dependencies** (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) has no SQL
   of its own: a level is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings
   (`PeekSql.Level`, joined by `PeekSql.Dependencies`), on Peek's slot and budget. A level is read only on expand, at most
@@ -530,9 +619,22 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
     `QUOTENAME` or `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), database name from the catalogue or internal
     `SsisOptions.CreateScratch`. Stop cancels any statement but the restore; a Stop or failure after it removes exactly
     what the request made, waiting at most 30 s per lock.
+- **BigQuery** (`BigQueryService`, docs/bigquery.md) runs GoogleSQL through its REST client, never legacy SQL
+  (`useLegacySql` false; `#legacySQL` is refused before a job exists). The connect probe dry-runs the constant
+  `BigQueryService.ProbeSql`; every job carries `BigQueryService.Labels`.
 
 ## UI structure
 
+- **Provider gating.** Commands, submenus, Explorer kinds, object actions, live sources, settings pages and Script As
+  kinds have `providers`, SQL Server only when absent. Commands (object and server actions' commands take their spec's)
+  are gated at run time, and submenus in Object Explorer's menu: `CommandService.isEnabled` checks a command against `activeDocumentProvider`, or
+  `explorerSelectionProvider` for an Object Explorer command or one run on an Object Explorer node or search result (whose
+  arguments stand the object's engine in), and not at all for one that finds its own object (`providerContext`;
+  `commandProviderKey`), and Object Explorer's menu leaves out items whose `providers` lack `explorerProvider`. The
+  other catalogues' `providers` are read by the lint and by the lanes that add BigQuery's surfaces. What enforces the
+  engine is the method gate (docs/ipc.md#providers). `tests/providers-catalog.test.ts` lints that an entry whose
+  `when` names a provider declares it, and that one declaring `bigquery` names no method that serves SQL Server only (the
+  methods a command lists in `methods`; the other catalogues name theirs).
 - **Commands and keys.** Commands and keybindings are declared only in `src/shared/commands/catalog.ts`.
   `KeybindingService` (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu
   first; main handles no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show
@@ -612,7 +714,7 @@ lint, on its own pool or connection with a fixed prologue (the actual-plan colle
 
 After changing a catalogue, regenerate with the command in CLAUDE.md's Generated files table: commands
 (`docs/commands.md`), Monaco keys, gestures (`docs/gestures.md`), live (`docs/live.md`, `Live/live-catalog.json`),
-explorer, scripting, actions, designer, activity, SSIS, settings (`docs/settings.md`), metrics
+explorer, scripting, actions, designer, activity, SSIS, GoogleSQL (`docs/googlesql.md`), settings (`docs/settings.md`), metrics
 (`docs/themes/metrics.md`) and icons (`docs/icons.md`). Backend catalogues embed their generated JSON.
 
 ## Product direction (agreed with the owner)

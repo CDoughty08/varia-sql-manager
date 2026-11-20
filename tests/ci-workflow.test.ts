@@ -69,6 +69,17 @@ describe('CI workflow', () => {
     expect(live.matrix.get('group')!.split(', ').map(Number)).toEqual(Array.from({ length: liveGroups }, (_, index) => index + 1))
     expect(live.steps.find(step => step.run.trim().endsWith('--live-group ${{ matrix.group }}/' + liveGroups))?.id).toBe('test')
     for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.group == 1 && (success() || failure())')
+    // BigQuery's emulator checks ride in the first live group, with no job of their own, against the emulator pinned by digest.
+    const emulator = live.steps.find(step => step.run.includes('--bigquery-emulator-live'))!
+    expect(emulator.if?.startsWith('matrix.group == 1 && (success() || failure())')).toBe(true)
+    expect(emulator.run).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64} --project=varia-emulator --dataset=varia_fixture/)
+    // And the Connect dialog's BigQuery phase (connections-smoke.mjs) runs against the same emulator in every Linux smoke shard.
+    const linux = workflow.get('smoke-linux')!.steps, start = linux.findIndex(step => step.id === 'bigquery'), shards = linux.findIndex(step => step.run.includes('smoke-shards.mjs'))
+    expect(linux[start]?.run).toBe(emulator.run.split('\n').find(line => line.includes('docker run'))!.trim())
+    expect(start).toBeGreaterThan(-1)
+    expect(start).toBeLessThan(shards)
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050\n        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs')
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).not.toContain('VARIA_TEST_BIGQUERY_PROJECT')
   })
   it('keeps triggers unfiltered, validates docs without installing runtimes, and always aggregates every job', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
@@ -130,6 +141,13 @@ describe('CI workflow', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8'), job = yaml.slice(yaml.indexOf('  smoke-linux:'), yaml.indexOf('  smoke-windows:'))
     expect(job).toContain('image: mcr.microsoft.com/mssql/server:2022-latest')
     expect(job).toContain('VARIA_TEST_SQL_USER: sa')
+  })
+  it('runs SQL Server Agent in the live and Linux smoke containers, not the benchmarks\', and requires it in the live job', () => {
+    const yaml = readFileSync('.github/workflows/ci.yml', 'utf8'), slice = (from: string, to: string) => yaml.slice(yaml.indexOf(`  ${from}:`), yaml.indexOf(`  ${to}:`))
+    for (const job of [slice('live', 'smoke-linux'), slice('smoke-linux', 'smoke-windows')]) expect(job).toContain("MSSQL_AGENT_ENABLED: 'true'")
+    expect(slice('bench-linux', 'regressions')).not.toContain('MSSQL_AGENT_ENABLED')
+    expect(slice('live', 'smoke-linux')).toContain("VARIA_TEST_SQL_AGENT: '1'")
+    expect(readFileSync('.claude/hooks/session-start.sh', 'utf8')).toMatch(/-e MSSQL_AGENT_ENABLED=true[\s\S]*export VARIA_TEST_SQL_AGENT=1/)
   })
   it('runs every platform on every code-changing pull request, drafts included, in at most 13 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])

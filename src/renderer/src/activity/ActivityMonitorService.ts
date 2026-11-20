@@ -30,6 +30,7 @@ import type { ConnectionService } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import type { TileTone } from '../../../shared/theme/tones'
 import { crossings, type TileReading } from './tiles'
+import { isBigQueryConnection } from '../services/connection-availability'
 
 /** A monitor's two pane slots: the first, and the one split view adds. */
 export type PaneSlot = 'primary' | 'secondary'
@@ -289,6 +290,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const connection = this.options.connections.get(connectionId)
     if (!connection) throw new Error('Connect to the server first.')
     if (connection.lost) throw new Error('This connection was lost when the SQL backend restarted. Reconnect it first.')
+    if (isBigQueryConnection(connection)) throw new Error('Activity Monitor is available for SQL Server connections only.')
     if (connection.lifecycle && connection.lifecycle.state !== 'connected') throw new Error('Wait for this connection to finish changing before opening Activity Monitor.')
     const label = connection.displayName || connection.server
     const document = this.options.documents.openCustom('activityMonitor', monitorTitle(label), connection.id, 'master')

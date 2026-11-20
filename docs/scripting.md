@@ -187,6 +187,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | --- | --- |
 | `NOT_FOUND` | No |
 | `NOT_SUPPORTED` | No |
+| `UNSUPPORTED_PROVIDER` | No |
 | `ENCRYPTED` | No |
 | `NO_DEFINITION` | No |
 | `PERMISSION_DENIED` | Yes |

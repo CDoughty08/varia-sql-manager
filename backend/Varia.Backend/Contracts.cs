@@ -7,7 +7,9 @@ namespace Varia.Backend;
 /// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
 /// bounds it, since the workbench shows it and SQL Server never sees it.</summary>
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
-    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null, bool NonInteractive = false);
+    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null, bool NonInteractive = false,
+    // Read for the options union and cleared at once (SqlService.ReadConnect); never written, so serialised options stay 0.9.0's.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Provider = null);
 internal sealed record AdvancedConnectionOptions(
     int CommandTimeout = 0, int ConnectTimeout = 15, bool ColumnEncryption = false, bool SecureEnclaves = false,
     string AttestationProtocol = "None", string EnclaveAttestationUrl = "", bool MultipleActiveResultSets = false,
@@ -17,9 +19,10 @@ internal sealed record AdvancedConnectionOptions(
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
 /// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect. PrincipalId is
-/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.</summary>
+/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.
+/// ProviderId is the connection's engine (Providers).</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0, string ProviderId = Providers.SqlServer);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);
@@ -37,17 +40,26 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
 /// :on error exit); by default execution continues with the next batch, as SSMS does. DiscardResults reads every row
 /// and keeps none (SSMS's Discard results after execution): result sets are counted, execution plans are kept.</summary>
-internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false);
+/// <summary>query.execute. Database is SQL Server's and required there; Dataset is a BigQuery query's default dataset
+/// (the connection's when left out), which SQL Server refuses.</summary>
+internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
 internal sealed record CancelArgs(string QueryId);
-internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
+/// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
+internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
-/// (xml, json, plan), CLR UDTs and vectors.</summary>
+/// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
+/// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.
+/// SortKind is how its values compare (Results.ColumnTypes), set from DataType whoever builds the column; a provider with
+/// another type system sets it when it does.</summary>
 internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true,
-    ResultCollation? Collation = null);
+    ResultCollation? Collation = null, int? Of = null)
+{
+    public string SortKind { get; init; } = Results.ColumnTypes.SortKindOf(DataType);
+}
 /// <summary>A char, varchar, text, nchar, nvarchar or ntext column's collation as SqlClient read it from the result's
 /// metadata (SqlClientCollation): its Windows locale id, SQL sort id (non-zero for SQL_ collations), the code page SqlClient
 /// decodes char and varchar with (0 for UTF-8), whether it is a _UTF8 collation, and its comparison flags, SqlCompareOptions'
@@ -103,7 +115,9 @@ internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
 /// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null);
+    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null,
+    BigQuery.BigQueryJobSummary? Job = null);
+
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
@@ -809,6 +823,12 @@ internal sealed record SsisCatalogSetupArgs(string ConnectionId, string RequestI
 /// <summary>What Create Catalog will do on the server: SsisCatalogSetup in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool StartupDefault, string BackupFile, string DataFile, string LogFile);
 internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
+/// <summary>agent.profile (src/shared/agent/profile.ts): one login's SQL Server Agent facts on one server.</summary>
+internal sealed record AgentProfileArgs(string ConnectionId, string RequestId);
+/// <summary>AgentProfile in src/shared/agent/profile.ts; AgentXps and DatabaseMailXps are absent when unreadable: msdb refused the login and the server-scope read failed too.</summary>
+internal sealed record AgentProfileDto(string Platform, int EngineEdition, bool MsdbAccess, bool Sysadmin, bool UserRole, bool ReaderRole, bool OperatorRole, bool PurgeHistory,
+    bool ServerServices, bool Sessions, bool AlterAnyCredential, bool Clustered, bool? AgentXps, bool? DatabaseMailXps, bool DatabaseMail);
+internal sealed record AgentProfileResult(AgentProfileDto? Profile, long ElapsedMs, ExplorerError? Error = null);
 /// <summary>activity.details (src/shared/activity/schema.ts): one session by its id and login time (server local time,
 /// yyyy-MM-ddTHH:mm:ss.fffffff); Text asks for one text whole, Locks also reads its locks. SessionActions re-checks every bound.</summary>
 internal sealed record ActivityDetailsArgs(string ConnectionId, string RequestId, int SessionId, string LoginTime, string? Text = null, bool? Locks = null);

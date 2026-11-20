@@ -1,7 +1,7 @@
 import type { VariaApi } from '../../../shared/contracts'
 import type { ConnectionFailureReason } from '../../../shared/connection-targets'
 import type { BackendStateService } from './backend'
-import type { ConnectionService } from './connections'
+import { optionsWith, type ConnectionService } from './connections'
 import { acceptConnectionReceipt } from './connection-receipts'
 import { whenConnectionDocumentsIdle, type OpenedConnection } from './connection-opening'
 import type { DocumentService } from './documents'
@@ -33,8 +33,9 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
   const whenDocumentsIdle = (signal: AbortSignal) => whenConnectionDocumentsIdle(documents, signal)
   const scheduler = new StartupReconnectService(registry, async (target, pending) => {
     if (disposed || pending.signal.aborted) return {}
+    // Either engine: a BigQuery target reconnects with its pinned account and no remembered password.
     const { autoReconnect: _autoReconnect, ...presentation } = target.details
-    const options = { ...target.options, ...presentation }, requestId = crypto.randomUUID()
+    const options = optionsWith(target.options, presentation), requestId = crypto.randomUUID()
     const attempt = connections.beginConnect(options, pending.generation, target.id, target.details)
     if (!attempt) return {}
     let cancellation: Promise<unknown> | undefined

@@ -1,5 +1,6 @@
 import type { ResultColumn } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import { sortKindOf, type SortKind } from '../../../shared/results/sort-kind'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
@@ -41,23 +42,25 @@ function owned(sets: readonly ResultSetEntry[], owner: Owner): ResultSetEntry | 
 
 /** How a set's highlights tell rows apart, chosen when its first row is highlighted and kept through re-runs. A column is
  *  kept by its name, type and position, since a result may have several columns of one name (or none named). */
-type TrackBy = { readonly column: string; readonly dataType: string; readonly ordinal: number } | { readonly row: true }
+type TrackedColumn = { readonly column: string; readonly dataType: string; readonly sortKind?: SortKind; readonly ordinal: number }
+type TrackBy = TrackedColumn | { readonly row: true }
 
-/** Types whose length, precision or scale may change without changing how the backend hashes a value: text by its
- *  characters, decimals by their digits, binary by its bytes. Any other type must stay the same to the letter. */
-const resizable = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'decimal', 'numeric', 'binary', 'varbinary'])
+/** Kinds whose length, precision or scale may change without changing how the backend hashes a value: text by its
+ *  characters, decimals by their digits, binary by its bytes. Any other type must stay the same to the letter. (Of SQL
+ *  Server's types only char, varchar, nchar, nvarchar, decimal, numeric, binary and varbinary carry a size.) */
+const resizable: ReadonlySet<SortKind> = new Set(['text', 'decimal', 'binary'])
 /** The type compared across re-runs: nvarchar(60) is nvarchar, but datetime2(3) stays datetime2(3). */
-const trackedType = (dataType: string) => {
-  const type = dataType.trim().toLowerCase(), base = type.replace(/\(.*$/, '').trim()
-  return resizable.has(base) ? base : type
+const trackedType = (column: Pick<ResultColumn, 'dataType' | 'sortKind'>) => {
+  const type = column.dataType.trim().toLowerCase(), base = type.replace(/\(.*$/, '').trim()
+  return resizable.has(sortKindOf(column)) ? base : type
 }
 
 /** The column a re-run's result has for the one highlights follow: the same name and type (a length may change), at the
  *  same position, or the only such column anywhere. -1 when there is none, -2 when there are several and picking one
  *  would be a guess. */
-export function trackedColumn(columns: readonly ResultColumn[], by: { readonly column: string; readonly dataType: string; readonly ordinal: number }): number {
-  const type = trackedType(by.dataType)
-  const same = (column: ResultColumn | undefined) => column !== undefined && column.name === by.column && trackedType(column.dataType) === type
+export function trackedColumn(columns: readonly ResultColumn[], by: TrackedColumn): number {
+  const type = trackedType(by)
+  const same = (column: ResultColumn | undefined) => column !== undefined && column.name === by.column && trackedType(column) === type
   if (same(columns[by.ordinal])) return by.ordinal
   const matches = columns.flatMap((column, at) => same(column) ? [at] : [])
   return matches.length === 1 ? matches[0] : matches.length === 0 ? -1 : -2
@@ -264,7 +267,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         binding.column = result.column
         binding.unique = result.unique
         const picked = entry.descriptor.columns[result.column]
-        marks.by ??= result.column < 0 || !picked ? { row: true } : { column: picked.name, dataType: picked.dataType, ordinal: result.column }
+        marks.by ??= result.column < 0 || !picked ? { row: true } : { column: picked.name, dataType: picked.dataType, ...picked.sortKind ? { sortKind: picked.sortKind } : {}, ordinal: result.column }
         return true
       }, error => {
         if (marks.bound === binding && (error as Error).name !== 'AbortError')

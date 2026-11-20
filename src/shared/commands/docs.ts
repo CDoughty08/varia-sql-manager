@@ -21,7 +21,7 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'output.transposeMenu': 'Query Output context menu › Transpose', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
   'ssis.operation.context': 'Integration Services Operations context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy',
-  'output.tools': 'Results toolbar › More results tools'
+  'output.tools': 'Results toolbar › More results tools', 'peek.properties.context': 'Peek Properties context menu'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
@@ -34,6 +34,7 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'ssis.operation.context': 'Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document\'s rows.',
   'search.hit.context': 'Right-click a Search Objects result (in the Search Objects tab or Object Explorer\'s search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer\'s, for the object\'s kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).',
   'output.tools': 'Click the ⋯ button at the end of the results toolbar (More results tools), or press Enter or Space on it. It holds every tool of the toolbar, so those a narrow pane folds away stay in reach, and Show Results as Tabs. Items act on the query the toolbar belongs to, as its buttons do.',
+  'peek.properties.context': 'Right-click Peek\x27s Properties pane (in the card or a Peek tab), or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, or all of them when none is, on the clipboard as Name and Value lines separated by a tab.',
   'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.'
 }
 // The theme items need no real theme list: only their fixed labels and commands are documented.

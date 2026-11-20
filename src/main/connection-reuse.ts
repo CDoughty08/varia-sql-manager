@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import { backendConnectionHandleSchema, connectionTargetLimits, connectionTargetOptions, expectedConnectionPrincipalSchema, type BackendConnectionHandle } from '../shared/connection-targets'
-import { connectionOptionsSchema } from '../shared/connections'
-import type { ConnectionOptions } from '../shared/contracts'
+import { backendConnectionHandleSchema, connectionTargetLimits, connectionTargetOptions, expectedConnectionPrincipalSchema, targetOptionsOf, type BackendConnectionHandle, type BigQueryTargetOptions } from '../shared/connection-targets'
+import { providerConnectionOptionsSchema } from '../shared/connections'
+import { bigQueryAuthenticationModes } from '../shared/auth'
+import type { ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
 import { ConnectionIdentityRegistry, type ConnectionCredentialKey, type ConnectionIdentityKey, type ConnectionPrincipalEvidence } from './connection-identity'
 import type { BackendConnectionBindingChange } from '../shared/connection-bindings'
 
@@ -10,7 +11,7 @@ export interface ConnectionReuseRequest {
   /** Main stamps this from the backend owner, never from the renderer. */
   readonly generation: number
   /** Validated options after main has resolved the exact remembered credential revision. */
-  readonly options: ConnectionOptions
+  readonly options: ProviderConnectionOptions
   /** Optional account resolved by trusted authentication infrastructure before opening SQL. */
   readonly principal?: ConnectionPrincipalEvidence
   readonly expectedPrincipal?: ConnectionPrincipalEvidence
@@ -44,7 +45,7 @@ interface Live<T extends BackendConnectionHandle> extends AuthenticatedConnectio
   readonly targetId: string
   key?: ConnectionIdentityKey
   credential?: ConnectionCredentialKey
-  options: Omit<ConnectionOptions, 'password'>
+  options: Omit<ConnectionOptions, 'password'> | BigQueryTargetOptions
   bindingRevision: number
   disconnecting: boolean
 }
@@ -62,7 +63,10 @@ interface Pending<T extends BackendConnectionHandle> {
 
 const targetIdSchema = z.uuid()
 const samePrincipal = (left: ConnectionPrincipalEvidence, right: ConnectionPrincipalEvidence) => left.authentication === right.authentication && left.id === right.id
-const validPrincipal = (principal: ConnectionPrincipalEvidence) => expectedConnectionPrincipalSchema.safeParse({ provider: 'sqlServer', ...principal }).success
+// BigQuery's evidence is its mode and the pin BigQueryIdentity verified (`bigquery:` and the identity).
+const validPrincipal = (principal: ConnectionPrincipalEvidence) => (bigQueryAuthenticationModes as readonly string[]).includes(principal.authentication)
+  ? typeof principal.id === 'string' && principal.id.startsWith('bigquery:') && expectedConnectionPrincipalSchema.safeParse({ provider: 'bigquery', project: 'varia-check', principal: principal.id }).success
+  : expectedConnectionPrincipalSchema.safeParse({ provider: 'sqlserver', ...principal }).success
 const handleKey = (handle: BackendConnectionHandle) => `${handle.generation}:${handle.id}`
 const affinityKey = (key: ConnectionIdentityKey, principal: ConnectionPrincipalEvidence) => JSON.stringify([key, principal.authentication, principal.id])
 
@@ -86,7 +90,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   constructor(deps: ConnectionReuseDeps<T>) { this.#deps = deps }
 
   connect(request: ConnectionReuseRequest, open: (signal: AbortSignal) => Promise<AuthenticatedConnection<T>>, track?: (work: Promise<void>) => void): Promise<ConnectionReuseOutcome<T>> {
-    const parsed = connectionOptionsSchema.safeParse(request.options)
+    const parsed = providerConnectionOptionsSchema.safeParse(request.options)
     if (!targetIdSchema.safeParse(request.targetId).success || !parsed.success || !Number.isSafeInteger(request.generation) || request.generation < 0
       || (request.principal && !validPrincipal(request.principal)) || (request.expectedPrincipal && !validPrincipal(request.expectedPrincipal))
       || (request.credentialIntent !== undefined && request.credentialIntent !== 'preserve' && request.credentialIntent !== 'update-credentials')
@@ -193,7 +197,9 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   applyBinding(handle: BackendConnectionHandle, change: BackendConnectionBindingChange, password?: string): boolean {
     const live = this.#live.get(handleKey(handle))
     if (!live || live.disconnecting || handle.generation !== this.#generation || change.connectionId !== handle.id || change.bindingRevision <= live.bindingRevision) return false
-    const options = connectionTargetOptions({ ...live.options, ...change.newDatabase !== undefined ? { database: change.newDatabase } : {} })
+    // Binding changes come from SQL Server's object actions only (a login's password, a database renamed).
+    if (live.options.provider === 'bigquery') return false
+    const options = connectionTargetOptions({ ...live.options as ConnectionOptions, ...change.newDatabase !== undefined ? { database: change.newDatabase } : {} })
     if (live.credential) {
       if (change.passwordChanged) {
         const material = password !== undefined ? this.#identity.authenticatedMaterial({ ...options, password }, live.principal) : undefined
@@ -228,10 +234,10 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     this.#identity.dispose()
   }
 
-  #key(options: ConnectionOptions, principal?: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
+  #key(options: ProviderConnectionOptions, principal?: ConnectionPrincipalEvidence): ConnectionIdentityKey | undefined {
     // SQL login + actual supplied password can be compared before opening; the trusted resolved principal is checked
     // separately. Dynamic authentication requires trusted account evidence, even when a username was entered.
-    return this.#identity.key(options, options.authentication === 'sql' ? undefined : principal)
+    return this.#identity.key(options, options.provider !== 'bigquery' && options.authentication === 'sql' ? undefined : principal)
   }
 
   #forgetAffinity(targetId: string): void {
@@ -318,7 +324,8 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
         } else {
           const selectedAffinityKey = affinityKey(key, answer.principal), affinity = this.#offline.get(selectedAffinityKey)
           const targetId = affinity && samePrincipal(affinity.principal, answer.principal) && ![...this.#live.values()].some(value => value.targetId === affinity.targetId) ? affinity.targetId : request.targetId
-          const live: Live<T> = { targetId, key, credential: material!.credential, options: connectionTargetOptions(request.options), bindingRevision: 0, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
+          const live: Live<T> = { targetId, key, credential: material!.credential, options: targetOptionsOf(request.options),
+ bindingRevision: 0, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
           // Only the latest binding of a target can supply offline affinity. An old credential must not attach a
           // second handle to that target after an explicit credential update opened a different live key.
           for (const [offlineKey, value] of this.#offline) if (offlineKey === selectedAffinityKey || value.targetId === targetId) this.#offline.delete(offlineKey)

@@ -3,12 +3,14 @@ import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plan
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
+import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
 import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
-import type { AuthenticationMode } from './auth'
+import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
+import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
@@ -20,6 +22,7 @@ import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
+import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -31,7 +34,8 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
-import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult, LanguageDefinition } from './language-service'
+import type { SortKind } from './results/sort-kind'
+import type { LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult, LanguageDefinition } from './language-service'
 
 /** The longest text `writeClipboardText` takes (main checks it): 8 Mi characters. */
 export const maxClipboardText = 8_388_608
@@ -65,7 +69,9 @@ export interface AdvancedConnectionOptions {
   userInstance: boolean
 }
 
+/** SQL Server's branch of the connection options union; a missing `provider` means SQL Server, so 0.9.0 files read unchanged. */
 export interface ConnectionOptions {
+  provider?: 'sqlserver'
   server: string
   database: string
   /** src/shared/auth.ts lists the types and what each needs. */
@@ -83,6 +89,47 @@ export interface ConnectionOptions {
 }
 
 /**
+ * BigQuery's branch of the connection options union (src/shared/connections.ts has its rules). `keyFile` is an opaque
+ * reference (the token main's picker returned, which a saved entry keeps): only main knows the path, and main sends the backend the file's
+ * content instead (BigQueryCredentialMaterial).
+ */
+export interface BigQueryConnectionOptions {
+  provider: 'bigquery'
+  project: string
+  location?: string
+  dataset?: string
+  extraProjects?: string[]
+  authentication: BigQueryAuthenticationMode
+  keyFile?: string
+  impersonateServiceAccount?: string
+  maximumBytesBilled?: number
+  displayName?: string
+  color?: string
+  environment?: string
+}
+/**
+ * The credential a BigQuery request signs in with, which only main builds (docs/bigquery.md, Authentication): a key or
+ * federation configuration file's JSON (`file`), the Application Default Credentials file's (`adc`), the metadata
+ * server (`metadata`, ADC's last step), or emulator mode's `anonymous`. At most 64 KiB; never stored, logged or shown.
+ */
+export interface BigQueryCredentialMaterial { source: 'file' | 'adc' | 'metadata' | 'anonymous'; json?: string }
+/** What the backend's BigQuery connect takes: the options with main's credential material (sensitive). */
+export type BigQueryBackendConnectOptions = BigQueryConnectionOptions & { credential: BigQueryCredentialMaterial; nonInteractive?: boolean }
+/** The pre-connect methods' credential (bigquery.account, bigquery.projects): the renderer names the mode and, for a key
+ *  or configuration file, its reference; main adds the material. */
+export interface BigQueryCredentialParams { authentication: BigQueryAuthenticationMode; keyFile?: string; impersonateServiceAccount?: string }
+/** How a BigQuery principal was verified (BigQueryIdentity): its pin's kind. */
+export type BigQueryAccountKind = 'serviceAccount' | 'user' | 'computeEngine' | 'external' | 'aws' | 'externalUser' | 'impersonated' | 'emulator'
+/** bigquery.account: the account line (one visible line of at most 256 characters) and the impersonated service account. */
+export interface BigQueryAccount { kind: BigQueryAccountKind; account: string; impersonated?: string }
+/** One project from BigQuery's projects.list; `friendlyName` is one visible line of at most 256 characters. */
+export interface BigQueryProject { id: string; friendlyName?: string }
+/** A page of at most 1,000 projects and the token (at most 1,024 characters) for the next. */
+export interface BigQueryProjectList { projects: BigQueryProject[]; nextPageToken?: string }
+/** Connection options of any provider, discriminated on `provider` (missing: SQL Server). */
+export type ProviderConnectionOptions = ConnectionOptions | BigQueryConnectionOptions
+
+/**
  * `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it.
  * `productVersion` (≤ 32 characters), `login` (≤ 128), `engineEdition` and `linux` (SQL Server on Linux) come from the
  * server profile probed at connect, and are absent when the probe failed.
@@ -94,8 +141,8 @@ export interface ConnectionInfo {
   credentialUpdated?: true
   /** Main's authoritative reuse coordinator selects this durable target; the backend never supplies it. */
   targetId?: string
-  /** Older SQL Server connections omit this. Language features default those connections to sqlserver. */
-  providerId?: DatabaseProviderId
+  /** The connection's engine, from the backend. An older backend omits it: such a connection is SQL Server. */
+  providerId?: ProviderId
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
   /** Set by main: the saved entry's environment label, which a connect without one kept. */
   environment?: string
@@ -106,7 +153,8 @@ export interface ConnectionInfo {
   bindingRevision?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
-export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
+/** A database, or for BigQuery a dataset with its location (absent when BigQuery names none). */
+export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean; location?: string }
 /** A table's columns in order; `truncated` means it has more than the 4,096 returned. */
 export interface TableColumns { columns: { name: string; dataType: string }[]; truncated: boolean }
 export interface BackendHealth {
@@ -119,7 +167,10 @@ export interface BackendHealth {
 export interface QueryOptions {
   connectionId: string
   sessionId: string
-  database: string
+  /** SQL Server's database, required there; a BigQuery query ignores it and uses `dataset`. */
+  database?: string
+  /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
+  dataset?: string
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
@@ -143,14 +194,20 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  /** `tone`: a live table's row tone (src/shared/live/catalog.ts), hidden by the grid and left out of Copy and Save. */
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'tone'
+  /** `xml`, `json`, `plan`, `udt` and `vector` are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
+   *  live table's or a diff's row tone (src/shared/live/catalog.ts), and a diff's suffix, `old` (a previous value), `mark`
+   *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row). */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone'
+  /** A previous-value column's (role `old`) pair index: the data column it belongs to. */
+  of?: number
   maxLength?: number
   precision?: number
   scale?: number
   nullable: boolean
   /** char, varchar, text, nchar, nvarchar and ntext: the collation SqlClient read from the result's metadata, when it could. */
   collation?: ResultCollation
+  /** How its values compare (docs/ipc.md, Column sort kinds). The backend always sends it; read it only through `sortKindOf`. */
+  sortKind?: SortKind
 }
 /**
  * A character column's collation (docs/ipc.md, Cell lengths): its Windows locale id, SQL sort id (non-zero for SQL_
@@ -228,6 +285,21 @@ export interface QueryResult {
   login?: string
   /** Per-script provider counters. Absent unless requested; separate from elapsedMs and rendering. */
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
+  /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
+  job?: BigQueryJobSummary
+}
+/** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
+ *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
+export interface BigQueryJobSummary {
+  project: string
+  jobId: string
+  location?: string
+  /** BigQuery's statement type, such as SELECT, INSERT, CREATE_TABLE or SCRIPT. */
+  statementType?: string
+  bytesProcessed?: number
+  bytesBilled?: number
+  cacheHit?: boolean
+  slotMs?: number
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
@@ -435,6 +507,11 @@ export interface ResultsSaveRequest { jobId: string; generation: number; resultI
 /** `rows`: the result's rows written. `partial`: the set was still open, so open-ended selections ended at the rows stored
  *  then. `capped`: the rows a transposed copy or save left out, for lying past the rows a transposed grid draws (0 otherwise). */
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean; capped: number }
+/** Save Results As of a local table (a Peek list, a Properties table: src/shared/results/local-table.ts): main shows the
+ *  save dialog, writes the rows given, in their order, with the TypeScript twin of ResultTextWriter, and returns only the
+ *  file's name. Bounded by `localTableLimits`. */
+export interface LocalSaveRequest { suggestedName: string; columns: { name: string; kind?: 'text' | 'number' }[]; rows: (string | null)[][] }
+export interface SavedLocalResults { fileName: string; format: ResultsFormat; rows: number }
 /** Only the file's name returns to the renderer, never its path. */
 export interface SavedResults extends ResultsJobResult { fileName: string; format: ResultsFormat }
 /** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
@@ -463,7 +540,7 @@ export interface ExplorerNode {
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
 // NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED'] as const
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -494,11 +571,13 @@ export interface RpcMethods {
   'plans.parse': { params: { xml: string }; result: PlanDocument }
   'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
-  'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
-  'connections.databases': { params: ConnectionOptions; result: DatabaseInfo[] }
+  'connections.connect': { params: ProviderConnectionOptions; result: ConnectionInfo }
+  'connections.databases': { params: ProviderConnectionOptions; result: DatabaseInfo[] }
   'connections.discover': { params: { scope: 'local' | 'network' }; result: { servers: DiscoveredServer[]; warning?: string } }
   'connections.preview': { params: ConnectionOptions; result: { connectionString: string } }
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean } }
+  'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
+  'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -542,6 +621,8 @@ export interface RpcMethods {
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
   'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
+  /** What this login may do with SQL Server Agent (roles, permissions, Agent XPs, platform), read in msdb on the Object Explorer pool. */
+  'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -596,6 +677,11 @@ export interface AuthMethods {
 export interface ResultMemoryMethods {
   'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
 }
+/** BigQuery's pre-connect methods as main sends them: the renderer's parameters with the credential material main read. */
+export interface BigQueryMainMethods {
+  'bigquery.account': { params: BigQueryCredentialParams & { credential: BigQueryCredentialMaterial }; result: BigQueryAccount }
+  'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string; credential: BigQueryCredentialMaterial }; result: BigQueryProjectList }
+}
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
@@ -606,9 +692,9 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {
-  'connections.connect': { params: ConnectionOptions & { nonInteractive?: boolean }; result: ConnectionInfo }
-  'connections.databases': { params: ConnectionOptions & { nonInteractive?: boolean }; result: DatabaseInfo[] }
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, BigQueryMainMethods, DebugMethods {
+  'connections.connect': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: ConnectionInfo }
+  'connections.databases': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: DatabaseInfo[] }
 }
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
@@ -717,8 +803,9 @@ export interface VariaApi {
   health(): Promise<ApiResult<BackendHealth>>
   /** `context` names the history entry whose remembered password main may use (when Password is empty), whether to
    *  remember the password once connected, and the `requestId` that cancelConnectionRequests stops it by. */
-  connect(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
-  discoverDatabases(options: ConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
+  connect(options: ProviderConnectionOptions, context?: ConnectContext): Promise<ApiResult<ConnectionInfo>>
+  /** Load databases, or for BigQuery the project's datasets (with their locations). */
+  discoverDatabases(options: ProviderConnectionOptions, context?: ConnectContext): Promise<ApiResult<DatabaseInfo[]>>
   /** The Connect dialog's Stop: cancels connects and Load databases by their `requestId`s (1–16), including a Microsoft
    *  Entra sign-in waiting for the web browser; `cancelled` counts those still running. They answer `CANCELLED`. */
   cancelConnectionRequests(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
@@ -731,15 +818,25 @@ export interface VariaApi {
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
-  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string }>>
+  /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
-  saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionSaveView>>
-  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
+  /** A BigQuery profile answers with BigQuery's library too (`bigQuery`); a SQL Server one leaves it out (unchanged). */
+  saveConnectionProfile(profile: ConnectionProfileInput | BigQueryProfileInput): Promise<ApiResult<ConnectionSaveView & { bigQuery?: BigQueryLibraryView }>>
+  removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }>>
   /** Set Connection Environment: main changes only the label of the entry the options name (saving it again when it left
    *  history) and returns the library it wrote. */
-  setConnectionEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
+  setConnectionEnvironment(input: ConnectionEnvironmentInput | { options: BigQueryConnectionOptions; environment?: string }): Promise<ApiResult<ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }>>
+  /** connections.pickKeyFile: main's open dialog for a service account key or federation configuration. Resolves the
+   *  reference to name it by and its file name (never the path), or null when the user cancelled. */
+  pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
+  /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
+  confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
+  /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
+  bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
+  bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
   /** One page of an Object Explorer node's children. */
@@ -783,6 +880,8 @@ export interface VariaApi {
   executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
   /** Reads what Create Catalog would do on a server, or why it cannot (`result.error`). */
   catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
+  /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
+  agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
@@ -821,6 +920,8 @@ export interface VariaApi {
   copyResults(request: ResultsCopyRequest): Promise<ApiResult<ResultsJobResult>>
   /** Save Results As; resolves to null when the dialog is cancelled. */
   saveResults(request: ResultsSaveRequest): Promise<ApiResult<SavedResults | null>>
+  /** Save Results As of a local table's rows (main formats and writes them); resolves to null when the dialog is cancelled. */
+  saveLocalResults(request: LocalSaveRequest): Promise<ApiResult<SavedLocalResults | null>>
   /** Cancels a running copy or save by its job id. */
   cancelResultsJob(jobId: string): Promise<ApiResult<{ cancelled: boolean }>>
   onResultsJob(listener: (progress: ResultsJobProgress) => void): () => void
@@ -828,6 +929,8 @@ export interface VariaApi {
   readonly testMode: boolean
   /** True only in unpackaged smoke runs that ask for it (VARIA_TEST_FOLLOW_SYSTEM_MOTION=1): motion follows the system's preference whatever the setting says. */
   readonly followSystemMotion: boolean
+  /** True when main was started with VARIA_AGENT_PREVIEW=1: SQL Server Agent's surfaces show (context key `agentEnabled`) until 0.11.0 removes the gate. */
+  readonly agentPreview: boolean
   /** File › Open: the files chosen, with what could not be read ("name: message"); one failure does not stop the rest. */
   openSqlFiles(): Promise<ApiResult<OpenedFiles>>
   saveSqlFile(options: SaveSqlFile): Promise<ApiResult<SqlFile | null>>
@@ -867,6 +970,8 @@ export interface VariaApi {
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
+  /** How many times this page has called `writeClipboardText`: a copy still formatting stops once another text was written. */
+  clipboardWrites(): number
   /** Brings one of the page's popout windows (by the `varia-popout-<uuid>` name it opened it with) to the top, restored, without
    *  activating it, so keyboard focus stays in the main window. */
   raisePopout(name: string): Promise<ApiResult<void>>

@@ -219,7 +219,9 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   their CREATE script; others say they have no definition.
 - A definition hit's matched line is marked and scrolled a third of the way into view: the index's line for a module's
   text, else the script line holding the match's preview nearest that line.
-- Tables and views also show Columns: one page of 500 from Object Explorer's Columns folder, read when first shown.
+- Tables and views also show Columns: Peek's Columns list, which comes with the properties (no read of its own), as a card
+  grid with Peek's columns (Name, Type, Nullable, Key, Identity, Computed, Default, Definition) that selects, sorts and
+  copies as a results grid does. Up to 1,024 columns are listed; a note says when there are more.
 - Header: Script to New Query, Refresh (never takes a kept script) and Hide. The Details pane button beside the result
   count hides and shows it in every tab. A hidden pane reads nothing; a new hit, closed tab, hidden pane or lost server
   cancels the reads. Object Explorer's own search has no details pane.

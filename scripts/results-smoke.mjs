@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
 } from './fixtures/ui.mjs'
@@ -181,6 +181,8 @@ const tokenColor = name => page.evaluate(value => {
   return color
 }, name)
 const computed = (locator, pseudo) => locator.evaluate((element, which) => { const style = getComputedStyle(element, which); return { color: style.color, background: style.backgroundColor } }, pseudo ?? null)
+/** A cell's translucent layers (styles.css): the selection, a search match and its row's highlight, as one computed image list. */
+const layers = locator => locator.evaluate(element => getComputedStyle(element).backgroundImage)
 /** Pixels of focusBorder's color along the top edge of grid 0, away from its first cell, as the window draws them. */
 async function focusRingPixels() {
   const box = await grid().boundingBox(), rgb = (await tokenColor('focusBorder')).match(/\d+/g).slice(0, 3).map(Number)
@@ -1156,6 +1158,202 @@ try {
   await expect(messages(page)).toContainText('Completion time:')
   console.log('Results checks: Save Results As writes CSV, tab-delimited text and JSON, shows a cancellable strip, and outlives running again; Close Results frees the results.')
 
+  // 8b. Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid. Ctrl+A,
+  // Ctrl+C and Ctrl+Shift+C are the catalogue's commands and write the text a results grid copies; a header sorts numbers
+  // by value; the menu is Query Output's without what only query results do; a card has no Save, a page saves through
+  // main's dialog; an empty table says so in its owner's words.
+  const localTable = { columns: [{ name: 'Name' }, { name: 'Type' }, { name: 'Rows', kind: 'number' }, { name: 'Note' }], rows: [['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab\there'], ['Order Lines', 'table', '9000', 'a,"b"']] }
+  const mountLocal = (table, o) => page.evaluate(([value, options]) => window.__variaGrid.mountLocal(value, options), [table, o])
+  await mountLocal(localTable, { label: 'Local list', preset: 'card' })
+  const local = localGrid(page, 'Local list'), localFrame = localGridFrame(page, 'Local list')
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 3 rows, 4 columns')
+  await expect(local.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['Name', 'Type', 'Rows', 'Note'])
+  // A card is as tall as its rows: no empty band under three rows.
+  expect(await localFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  // ...and no shorter: its last row is inside it.
+  const bottomOf = locator => locator.evaluate(element => element.getBoundingClientRect().bottom)
+  expect(await bottomOf(gridCell(local, 2, 0))).toBeLessThanOrEqual(await bottomOf(localFrame) + 0.5)
+  await gridCell(local, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+C')
+  const localTsv = rows => rows.map(row => row.map(value => value ?? 'NULL').join('\t')).join(eol)
+  await expect.poll(clipboard).toBe(localTsv([['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(localTsv([['Name', 'Type', 'Rows', 'Note'], ['Orders', 'table', '1,200', null], ['customers', 'view', '80', 'tab here'], ['Order Lines', 'table', '9000', 'a,"b"']]))
+  // Rows sorts by value (80, 1,200, 9000), then descending; the header says so and the selection follows its rows.
+  // From the grid's menu: a short column's header is too narrow to show its sort button, as in a results grid.
+  const localSort = async (column, item, of = local) => {
+    await gridCell(of, 0, column).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  await gridCell(local, 0, 0).click()
+  await localSort(2, 'Sort Ascending')
+  await expect(gridCell(local, 0, 0)).toHaveText('customers')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(local, 2, 0)).toHaveText('Order Lines')
+  await expect.poll(async () => (await local.evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.textContent))).toBe('1,200')
+  await localSort(2, 'Sort Descending')
+  await expect(gridCell(local, 0, 0)).toHaveText('Order Lines')
+  // Copy follows the order shown.
+  await gridCell(local, 0, 0).click()
+  await gridCell(local, 2, 0).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(['Order Lines', 'Orders', 'customers'].join(eol))
+  // A new table with the same columns keeps the sort, and its old view is disposed: one view left, none after unmount.
+  const rerenderLocal = (table, patch) => page.evaluate(([value, options]) => window.__variaGrid.rerenderLocal(value, options), [table, patch])
+  await rerenderLocal({ ...localTable, rows: [...localTable.rows, ['Archive', 'table', '20000', null]] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 4 rows, 4 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('Archive')
+  await expect(local.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const aliveLocal = () => page.evaluate(() => window.__variaGrid.aliveViews('local'))
+  expect(await aliveLocal()).toBe(1)
+  // A table with other columns starts unsorted: its third column sorted descending would put 'a' first.
+  await rerenderLocal({ columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] })
+  await expect(local).toHaveAttribute('aria-label', 'Local list, 2 rows, 3 columns')
+  await expect(gridCell(local, 0, 0)).toHaveText('b')
+  await expect(local.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await rerenderLocal(localTable)
+  // Query Output's menu, without what only query results do; a card has no Save.
+  await gridCell(local, 1, 1).click({ button: 'right' })
+  const localMenu = page.getByRole('menu', { name: 'Query output', exact: true })
+  const localItems = await menuItemNames(localMenu)
+  for (const item of ['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Clear Sort', 'Fit Column']) expect(localItems).toContain(item)
+  for (const item of ['Filter', 'Pivot Results…', 'Transpose', 'Column Profile', 'Close Results']) expect(localItems).not.toContain(item)
+  expect(await menuItemNames(localMenu, { disabled: true })).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  // A page saves through main's dialog: the same CSV a results grid writes, in the order shown.
+  await mountLocal(localTable, { label: 'Local page', preset: 'page', suggestedName: 'Orders-Columns' })
+  const localPage = localGrid(page, 'Local page')
+  await localSort(0, 'Sort Ascending', localPage)
+  await choose(join(saveDir, 'local.csv'))
+  await gridCell(localPage, 0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Saved 3 rows to local.csv.')
+  expect(await lastDialog()).toMatchObject({ title: 'Save Grid Results', defaultPath: expect.stringMatching(/Orders-Columns\.csv$/) })
+  const savedCsv = await readFile(join(saveDir, 'local.csv'), 'utf8')
+  // A new table shows its own strip, not the last table's notice: here that it was truncated.
+  await rerenderLocal({ columns: localTable.columns, rows: Array.from({ length: 10_001 }, (_, i) => [`Row ${i}`, 'table', String(i), null]) })
+  await expect(localGridFrame(page, 'Local page').locator(gridPart.strip)).toHaveText('Showing the first 10,000 rows.')
+  expect(savedCsv).toBe('﻿' + ['customers,view,80,tab\there', 'Order Lines,table,9000,"a,""b"""', 'Orders,table,"1,200",'].map(line => line + '\r\n').join(''))
+  // An empty table says so in its owner's words.
+  await mountLocal({ columns: localTable.columns, rows: [] }, { label: 'Local empty', preset: 'card', empty: 'No predicates apply.' })
+  await expect(localGridFrame(page, 'Local empty').locator(gridPart.overlay)).toHaveText('No predicates apply.')
+  // The card has room for it: its text fits the overlay, which ends at the card's bottom.
+  expect(await localGridFrame(page, 'Local empty').locator(gridPart.overlay).evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true)
+  // A cell cut to the bound says so in the strip, and the card makes room for the strip under its rows.
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
+  await expect(localGridFrame(page, 'Local cut').locator(gridPart.strip)).toHaveText('1 value was cut to 4,000 characters.')
+  // A card's strip is one line, an error's too (Could not copy the rows: ...): a wrapped one would take room the card never made.
+  const cutStrip = localGridFrame(page, 'Local cut').locator(gridPart.strip), stripLine = await cutStrip.evaluate(element => element.offsetHeight)
+  expect(await cutStrip.evaluate(element => { const probe = element.cloneNode(); probe.classList.add('error'); probe.textContent = 'Could not copy the rows: '.repeat(40); element.after(probe); const height = probe.offsetHeight; probe.remove(); return height })).toBe(stripLine)
+  // A new name, with the same table object, is read with its counts.
+  await rerenderLocal(null, { label: 'Local renamed' })
+  await expect(localGrid(page, 'Local renamed')).toHaveAttribute('aria-label', /^Local renamed, 2 rows, 1 column/)
+  // Columns past the bound are said to be left out too.
+  await mountLocal({ columns: Array.from({ length: 70 }, (_, i) => ({ name: `c${i}` })), rows: [Array.from({ length: 70 }, () => 'v')] }, { label: 'Local columns', preset: 'card' })
+  await expect(localGridFrame(page, 'Local columns').locator(gridPart.strip)).toHaveText('Showing the first 64 columns.')
+  await mountLocal({ columns: [{ name: 'Text' }], rows: [['x'.repeat(5000)], ['short']] }, { label: 'Local cut', preset: 'card' })
+  // ...and the cut cell is read out as truncated, as a results grid's.
+  await gridCell(localGrid(page, 'Local cut'), 0, 0).click()
+  await expect.poll(() => localGrid(page, 'Local cut').evaluate(root => document.getElementById(root.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-label') ?? '')).toMatch(/, truncated$/)
+  expect(await bottomOf(gridCell(localGrid(page, 'Local cut'), 1, 0))).toBeLessThanOrEqual(await localGridFrame(page, 'Local cut').locator(gridPart.strip).evaluate(element => element.getBoundingClientRect().top) + 0.5)
+  // An owner's kept state keeps its sort across a remount, but only for the columns it was chosen for.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  const keptGrid = localGrid(page, 'Local kept')
+  await localSort(2, 'Sort Descending', keptGrid)
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  await expect(keptGrid.getByRole('columnheader', { name: 'Rows', exact: true })).toHaveAttribute('aria-sort', 'descending')
+  const otherColumns = { columns: [{ name: 'Name' }, { name: 'Kind' }, { name: 'Size', kind: 'number' }], rows: [['b', 'x', '1'], ['a', 'y', '2']] }
+  await rerenderLocal(otherColumns)
+  await mountLocal(otherColumns, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('b')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // The old columns back do not bring their sort back: the user has not sorted them since.
+  await mountLocal(localTable, { label: 'Local kept', preset: 'card', keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  // Another kept state is another grid: its own sort, not the last one's.
+  await localSort(2, 'Sort Descending', keptGrid)
+  await rerenderLocal(localTable, { keepState: 'two' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await rerenderLocal(localTable, { keepState: 'one' })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Order Lines')
+  // A table shown unsortable drops the sort: it offers no Clear Sort to undo one, nor sort buttons; sortable again, it
+  // starts unsorted.
+  await rerenderLocal(localTable, { keepState: 'one', sortable: false })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  await expect(keptGrid.locator('[role="columnheader"][aria-sort="descending"], [role="columnheader"][aria-sort="ascending"]')).toHaveCount(0)
+  await expect(keptGrid.locator(gridPart.sortButton)).toHaveCount(0)
+  await rerenderLocal(localTable, { keepState: 'one', sortable: true })
+  await expect(gridCell(keptGrid, 0, 0)).toHaveText('Orders')
+  // A fitted page (a list among other content) is as tall as its rows, as a card is, and keeps Save. A kept selection comes
+  // back over a table with fewer rows held to them, so Copy copies what is left rather than rows that are gone.
+  const fitOptions = { label: 'Local fit', preset: 'page', fit: true, maxRows: 20, keepState: 'fit' }
+  await mountLocal(localTable, fitOptions)
+  const fitGrid = localGrid(page, 'Local fit'), fitFrame = localGridFrame(page, 'Local fit')
+  const fitShown = async row => {
+    const box = await gridCell(fitGrid, row, 0).boundingBox(), view = await fitFrame.locator(gridPart.scroller).evaluate(element => ({ top: element.getBoundingClientRect().top, height: element.clientHeight }))
+    return !!box && box.y + box.height <= view.top + view.height + 0.5
+  }
+  await expect.poll(() => fitShown(2)).toBe(true)
+  expect(await fitFrame.evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(140)
+  await gridCell(fitGrid, 2, 3).click()
+  await gridCell(fitGrid, 2, 3).click({ button: 'right' })
+  await expect(page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitem', { name: 'Save Results As…', exact: true })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await mountLocal({ columns: localTable.columns, rows: localTable.rows.slice(0, 1) }, fitOptions)
+  await expect(fitGrid).toHaveAttribute('aria-label', 'Local fit, 1 row, 4 columns')
+  await fitGrid.focus()
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('NULL')
+  // A header wide enough for its sort button sorts by value from it, then descending.
+  await mountLocal({ columns: [{ name: 'Name of the object shown' }, { name: 'Row count of the table', kind: 'number' }], rows: [['Orders', '1,200'], ['customers', '80'], ['Order Lines', '9000']] }, { label: 'Local header', preset: 'card' })
+  const headerGrid = localGrid(page, 'Local header'), rowsHeader = headerGrid.getByRole('columnheader', { name: 'Row count of the table', exact: true })
+  await rowsHeader.hover()
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'ascending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('customers')
+  await rowsHeader.locator(gridPart.sortButton).click()
+  await expect(rowsHeader).toHaveAttribute('aria-sort', 'descending')
+  await expect(gridCell(headerGrid, 0, 0)).toHaveText('Order Lines')
+  // A card wider than its frame makes room for the platform's scroll bar under its rows, and a narrow table after it gives
+  // that room back.
+  const headerHeight = () => localGridFrame(page, 'Local header').evaluate(element => element.getBoundingClientRect().height)
+  const narrowHeight = await headerHeight()
+  const scrollbar = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;top:-1000px;width:100px;height:100px;overflow:scroll'; document.body.append(probe); const size = probe.offsetHeight - probe.clientHeight; probe.remove(); return size })
+  // Overlay scroll bars (macOS) take no room, so there is nothing to make room for. A card past its rows scrolls: columns
+  // that fit its frame but not beside the vertical scroll bar still get room for the horizontal one.
+  if (scrollbar > 0) {
+    await rerenderLocal({ columns: Array.from({ length: 16 }, (_, i) => ({ name: `A rather long column name ${i}` })), rows: [['a'], ['b'], ['c']] })
+    await expect.poll(headerHeight).toBeCloseTo(narrowHeight + scrollbar, 0)
+    await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: [['a'], ['b'], ['c']] })
+    await expect.poll(headerHeight).toBeCloseTo(narrowHeight, 0)
+    await rerenderLocal({ columns: [{ name: 'Name of the object shown' }], rows: Array.from({ length: 40 }, (_, i) => [`row ${i}`]) })
+    const tallFrame = localGridFrame(page, 'Local header'), tallHeight = await headerHeight()
+    // The scroller as wide as the columns and half a scroll bar, whatever the frame's border: beside the vertical bar they
+    // overflow, without it they would fit. The columns can still settle narrower after the first measure (a slow runner), so
+    // each poll sizes the frame again from the head's current width until the scroller overflows only beside the bar.
+    const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
+    await expect.poll(async () => {
+      const measured = await tallFrame.evaluate((element, [half, parts]) => {
+        const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
+        element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
+        return `${scroller.scrollWidth} in ${scroller.clientWidth} of ${scroller.offsetWidth}`
+      }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
+      const [scroll, client, offset] = measured.split(/ in | of /).map(Number)
+      return scroll > client && offset > scroll || measured
+    }, { timeout: 15_000 }).toBe(true)
+    // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
+    await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
+    await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
+    await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)
+  } else console.log('Results checks: local card scroll bar room skipped (overlay scroll bars take none).')
+  await page.evaluate(() => window.__variaGrid.unmountLocal())
+  await expect(page.locator(part.localGrid)).toHaveCount(0)
+  expect(await aliveLocal()).toBe(0)
+  console.log('Results checks: local grids select, copy and copy with headers as results grids do, sort numbers by value, show Query Output\'s menu, save a page through main and say when they are empty.')
+
   // 9. Values: XML, JSON and plan cells are links. A click opens the whole value, formatted, in a new tab named as SSMS
   // names it, in its language, not dirty and with no connection, where Execute and F5 do nothing and the output pane
   // has no results; Enter opens a plan; a value tab saves with its own filter and closes without a SQL session; a 2 MB
@@ -1306,7 +1504,7 @@ try {
   await run('SELECT 42 -- ACTUAL_PLAN_FIXTURE')
   await expect(outputTab(/^Execution plan/)).toHaveCount(0)
   console.log('Results checks: actual plan capture keeps data grids separate, shows multiple plans on one canvas, and can be toggled off for the next run.')
-  await checkClientStatistics(page, expect, run, false)
+  await checkClientStatistics(page, expect, run, false, application)
 
   // A JSON value opens formatted, in JSON.
   await run('-- varia-fake: sets=L1*3')
@@ -2236,17 +2434,22 @@ try {
     expect(await nullCell.evaluate(element => getComputedStyle(element).fontStyle)).toBe('italic')
     expect((await computed(cell(1, 3), '::after')).color).toBe(await tokenColor('resultsGrid.truncationForeground'))
     expect((await computed(cell(2, 4))).color).toBe(await tokenColor('errorForeground'))
+    // The selection is a translucent layer over the cell's own colour, which it keeps.
+    const own = (await computed(cell(0, 0))).background
     await cell(0, 0).click()
-    const selection = { color: await tokenColor('resultsGrid.selectionForeground'), background: await tokenColor('resultsGrid.selectionBackground') }
-    await expect.poll(() => computed(cell(0, 0))).toEqual(selection)
+    await expect.poll(() => computed(cell(0, 0))).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: own })
+    const selection = await tokenColor('resultsGrid.selectionOverlay')
+    await expect.poll(() => layers(cell(0, 0))).toContain(selection)
     await page.screenshot({ path: resolve('artifacts', `results-${mode}.png`) })
     await textbox().focus()
-    const inactive = await tokenColor('resultsGrid.inactiveSelectionBackground')
-    await expect.poll(async () => (await computed(cell(0, 0))).background).toBe(inactive)
+    const inactive = await tokenColor('resultsGrid.inactiveSelectionOverlay')
+    await expect.poll(() => layers(cell(0, 0))).toContain(inactive)
+    expect(await layers(cell(0, 0))).not.toContain(selection)
     // A selected NULL takes the grid's text color while the grid is not focused: its tint is too faint on that fill.
     await nullCell.click()
     await textbox().focus()
-    await expect.poll(() => computed(nullCell)).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: inactive })
+    await expect.poll(() => computed(nullCell)).toEqual({ color: await tokenColor('resultsGrid.foreground'), background: nullColors.background })
+    await expect.poll(() => layers(nullCell)).toContain(inactive)
     await cell(0, 0).click()
     await expect(nullCell).toHaveAttribute('data-identity', 'kept')
   }
@@ -2578,56 +2781,108 @@ try {
   // 14f. Compare with Previous Result: the second result against the first, aligned by ItemId in the backend, adds their
   // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
   // name changed only in case underlined (equal by the collation), a removed and an added row, a row of context between.
+  // Only the data columns are columns: the change marker and each input's row number are drawn in the row header's gutter
+  // (no Change, R1 or R2 header), which names the row's kind and both rows for screen readers.
   await run('SELECT * FROM Items -- DIFF_FIXTURE')
   await expect(cell(3, 0, grid('Result 2'))).toHaveText('5')
   await cell(0, 0, grid('Result 2')).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Compare with Previous Result', exact: true }).click()
   const diff = grid('Result 3')
-  await expect(cell(5, 3, diff)).toHaveText('5')
-  for (const name of ['Change', 'R1', 'R2', 'ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
-  const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2, 3, 4, 5].map(column => cell(row, column, diff).textContent()))))
+  await expect(cell(5, 0, diff)).toHaveText('5')
+  for (const name of ['ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+  for (const name of ['Change', 'R1', 'R2', 'Old row', 'New row']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(0)
+  // The row-number corner and the three data columns.
+  await expect(diff.getByRole('columnheader')).toHaveCount(4)
+  const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, diff).textContent()))))
   expect(await diffRows()).toEqual([
-    ['\u2212', '1', 'NULL', '1', 'apple', '1.50'],
-    ['+', 'NULL', '1', '1', 'apple', '1.75'],
-    [' ', '2', '2', '2', 'PEAR', '2.00'],
-    ['\u2212', '3', 'NULL', '3', 'plum', '3.00'],
-    [' ', '4', '3', '4', 'fig', '4.00'],
-    ['+', 'NULL', '4', '5', 'kiwi', '5.00']
+    ['1', 'apple', '1.50'],
+    ['1', 'apple', '1.75'],
+    ['2', 'PEAR', '2.00'],
+    ['3', 'plum', '3.00'],
+    ['4', 'fig', '4.00'],
+    ['5', 'kiwi', '5.00']
   ])
-  await expect(diff.locator(gridPart.removedRow)).toHaveCount(2)
-  await expect(diff.locator(gridPart.addedRow)).toHaveCount(2)
+  // The gutter: each row's mark and its number in its own input (the old one's on a − row), its name on the row's header
+  // and in the tooltip. Both halves of the changed entry name both rows.
+  const gutters = [
+    ['\u22121', 'Changed, old values; row 1 in Result 1, row 1 in Result 2'],
+    ['+1', 'Changed, new values; row 1 in Result 1, row 1 in Result 2'],
+    ['2', 'Unchanged; row 2 in Result 1, row 2 in Result 2'],
+    ['\u22123', 'Removed; row 3 in Result 1'],
+    ['3', 'Unchanged; row 4 in Result 1, row 3 in Result 2'],
+    ['+4', 'Added; row 4 in Result 2']
+  ]
+  for (const [row, [drawn, name]] of gutters.entries()) {
+    await expect(diff.locator(`[aria-rowindex="${row + 2}"] ${gridPart.rowHeader}`)).toHaveText(name)
+    await expect(diff.locator(`${gridPart.rowNumber}[title^="${name}"]`)).toHaveText(drawn)
+  }
+  await expect(diff.locator(gridPart.diffMark).filter({ hasText: /^[\u2212+]$/ })).toHaveCount(4)
+  // The changed entry's halves are not added and removed rows: only their changed values are coloured, struck through on
+  // the old half and bold on the new; the removed and added rows keep a wash over every cell, and unchanged rows none.
+  await expect(diff.locator(gridPart.removedRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.addedRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.changedOldRow)).toHaveCount(1)
+  await expect(diff.locator(gridPart.changedNewRow)).toHaveCount(1)
   await expect(diff.locator(gridPart.changedCell)).toHaveCount(2)
-  await expect(cell(0, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
-  await expect(cell(1, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
-  await expect(cell(2, 4, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
+  const transparent = 'rgba(0, 0, 0, 0)'
+  const fill = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
+  const look = locator => locator.evaluate(element => { const style = getComputedStyle(element); return { weight: style.fontWeight, line: style.textDecorationLine } })
+  expect(await fill(cell(0, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedRemovedBackground'))
+  expect(await fill(cell(1, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedAddedBackground'))
+  expect(await look(cell(0, 2, diff))).toEqual({ weight: '400', line: 'line-through' })
+  expect(await look(cell(1, 2, diff))).toEqual({ weight: '600', line: 'none' })
+  for (const [row, column] of [[0, 0], [1, 1], [2, 0], [4, 2]]) expect(await fill(cell(row, column, diff)), `${row}, ${column}`).toBe(transparent)
+  for (const column of [0, 1, 2]) expect(await fill(cell(3, column, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
+  for (const column of [0, 1, 2]) expect(await fill(cell(5, column, diff))).toBe(await tokenColor('resultsGrid.diffAddedBackground'))
+  await expect(cell(0, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(1, 2, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(2, 1, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
   await expect(strip('Result 3')).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
   await expect(page.getByText('Differences: Result 1 \u2192 Result 2', { exact: true })).toBeVisible()
   // The active cell names a changed value and its row's kind for screen readers.
-  await cell(1, 5, diff).click()
-  await expect(cell(1, 5, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
-  // Where the features meet: a highlighted removed row shows its highlight over the diff's tone, and a search match on a
-  // changed value shows the match's tint over the changed one.
-  const background = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
-  const removedTone = await background(diff.locator(gridPart.removedRow).first())
+  await cell(1, 2, diff).click()
+  await expect(cell(1, 2, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
+  // Where the features meet, nothing hides the diff's colour: the selection, a highlight and a search match are layers
+  // over it, in that order from the top.
+  const changedTint = await tokenColor('resultsGrid.diffChangedAddedBackground')
+  expect(await fill(cell(1, 2, diff))).toBe(changedTint)
+  await expect.poll(() => layers(cell(1, 2, diff))).toContain(await tokenColor('resultsGrid.selectionOverlay'))
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
   const highlightedRemoved = diff.locator(gridPart.highlightedRow).and(diff.locator(gridPart.removedRow))
   await expect(highlightedRemoved).toHaveCount(1)
-  await expect.poll(() => background(highlightedRemoved)).not.toBe(removedTone)
-  // The changed value's own tint, measured now that the selection moved off it.
-  const changedTint = await background(cell(1, 5, diff))
+  const blue = await tokenColor('resultsGrid.highlightBlueBackground')
+  await expect.poll(() => layers(cell(3, 0, diff))).toContain(blue)
+  expect(await fill(cell(3, 0, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
+  // The highlighted, selected removed row: both layers, the selection's first (on top).
+  const selectionLayers = [await tokenColor('resultsGrid.selectionOverlay'), await tokenColor('resultsGrid.inactiveSelectionOverlay')]
+  const removedLayers = await layers(cell(3, 1, diff))
+  const selectedAt = Math.max(...selectionLayers.map(color => removedLayers.indexOf(color)))
+  expect(selectedAt, removedLayers).toBeGreaterThanOrEqual(0)
+  expect(selectedAt).toBeLessThan(removedLayers.indexOf(blue))
+  expect(await fill(cell(3, 1, diff))).toBe(await tokenColor('resultsGrid.diffRemovedBackground'))
   await searchBox.click()
   await page.keyboard.type('1.75')
-  const changedMatch = cell(1, 5, diff).and(diff.locator(gridPart.searchMatch))
+  const changedMatch = cell(1, 2, diff).and(diff.locator(gridPart.searchMatch))
   await expect(changedMatch).toHaveCount(1)
-  await expect.poll(() => background(changedMatch)).not.toBe(changedTint)
+  await expect.poll(() => layers(changedMatch)).toContain(await tokenColor('resultsGrid.hitOverlay'))
+  expect(await fill(changedMatch)).toBe(changedTint)
+  // Both themes, for review: the changed values, a highlighted and selected removed row, and a search match.
+  await cell(3, 1, diff).click()
+  for (const mode of ['dark', 'light']) {
+    await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+    await expect.poll(() => fill(cell(1, 2, diff))).toBe(await tokenColor('resultsGrid.diffChangedAddedBackground'))
+    await diff.screenshot({ path: resolve('artifacts', `results-compare-${mode}.png`) })
+  }
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await searchBox.click()
   await searchBox.press('Escape')
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked; highlights and search matches show over its tones.')
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights, search matches and the selection lie over its colours without hiding them.')
 
   // 14g. The Compare popover: on Result 1's grid it offers the other Table, Result 2 (never the comparison), as the old
   // side with Result 1 as the new. With one target it shows no list, only the two sides, and says nothing that does not
@@ -3046,7 +3301,7 @@ try {
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.
     await run('SELECT 1 AS warm;')
-    await checkClientStatistics(page, expect, run, true)
+    await checkClientStatistics(page, expect, run, true, application)
     const liveText = n => liveRow(n).map(value => value ?? 'NULL')
     // Row 1 painted, timed in the page from just before F5 (a poll from here would add its own interval). The server holds
     // a part-filled packet until the batch ends, so RAISERROR WITH NOWAIT sends the last rows before the wait.

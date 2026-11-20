@@ -50,7 +50,7 @@ describe('durable connection target snapshots', () => {
 
   it('validates independent target, profile and credential-revision identifiers without accepting secret fingerprints', () => {
     const profileId = id(), credential = { profileId, revision: id() }
-    const expectedPrincipal = { provider: 'sqlServer', authentication: 'sql', id: 'reader' }
+    const expectedPrincipal = { provider: 'sqlserver', authentication: 'sql', id: 'reader' }
     const parsed = persistedConnectionTargetSchema.parse({ ...target(), profileId, credential, expectedPrincipal })
     expect(parsed).toMatchObject({ profileId, credential, expectedPrincipal })
     for (const record of [parsed, parsed.details, parsed.credential, parsed.expectedPrincipal]) expect(Object.isFrozen(record)).toBe(true)
@@ -72,7 +72,7 @@ describe('durable connection target snapshots', () => {
   })
 
   it('bounds an authentication completion without treating omission as an instruction to forget credentials', () => {
-    const principal = { provider: 'sqlServer', authentication: 'sql', id: 'reader' }
+    const principal = { provider: 'sqlserver', authentication: 'sql', id: 'reader' }
     const credential = { profileId: id(), revision: id() }
     const authenticated = connectionAuthenticationSchema.parse({ principal, credential })
     expect(authenticated).toEqual({ principal, credential })

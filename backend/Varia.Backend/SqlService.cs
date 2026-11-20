@@ -8,6 +8,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
+using Varia.Backend.BigQuery;
 using Varia.Backend.Activity;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
@@ -36,7 +37,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
-        "ssis.describe", "ssis.execute", "ssis.catalogSetup"
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup",
+        "bigquery.account", "bigquery.projects", "agent.profile"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -91,6 +93,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly SessionActions sessionActions;
     private readonly EntraService entra;
     private readonly LanguageServiceBroker language;
+    private readonly BigQueryService bigQuery;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -173,7 +176,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <param name="packHidden">Packs results hidden for a few seconds (<see cref="ResultPacker"/>), turning the store's packing on
     /// request if it is off. The backend process asks (<see cref="FromEnvironment"/>); the checks ask only where they test the
     /// policy, so no other check's budget figures depend on how long it takes.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null, bool packHidden = false)
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null, bool packHidden = false, BigQueryEnvironment? bigQuery = null)
     {
         // Before any session opens: the checks host the service in their own process, so the floor is the service's, not Program's.
         ThreadPoolFloor.Ensure();
@@ -188,6 +191,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         this.hooks = hooks;
         this.publish = publish;
+        this.bigQuery = new BigQueryService(bigQuery ?? BigQueryEnvironment.Production());
+        ConnectionProvider = id => this.bigQuery.Owns(id) ? Providers.BigQuery : Providers.SqlServer;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
@@ -241,10 +246,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The user's limit, in MiB, as main read it from the settings when it started this process.
         var limit = ResultStore.LimitFromEnvironment(Environment.GetEnvironmentVariable("VARIA_RESULT_MEMORY_MIB"));
         // The product packs hidden results (ResultPacker), which turns the store's packing on request.
-        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish, packHidden: true);
+        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish, packHidden: true, bigQuery: BigQueryEnvironment.FromEnvironment());
     }
 
     public IReadOnlyList<string> Methods { get; }
+    /// <summary>The BigQuery engine (the checks reach its connections and limits through it).</summary>
+    internal BigQueryService BigQuery => bigQuery;
     /// <summary>Stored query results (the live checks read them back through it).</summary>
     public ResultStore Results => store;
     /// <summary>Object Explorer's node provider (the checks set its test options).</summary>
@@ -393,13 +400,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" => RequestLane.Results,
-        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
+        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -411,7 +418,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -420,7 +427,44 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>The request's token: CANCEL frames and its header deadline. Live checks call without a context.</summary>
     private static CancellationToken Token(RequestContext? context) => context?.Token ?? CancellationToken.None;
 
-    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context = null) => method switch
+    /// <summary>Which engine owns a connection handle. Every handle is SQL Server's until a BigQuery service registers its own;
+    /// offline checks put a stub provider here.</summary>
+    internal Func<string, string?> ConnectionProvider { get; set; }
+    /// <summary>Which engine owns the query, session or result a handle-less request names; null leaves it SQL Server's, as
+    /// every such id is today. Offline checks put a stub provider here.</summary>
+    internal Func<string, JsonElement, string?>? RequestProvider { get; set; }
+
+    /// <summary>The engine a request is for: the options' <c>provider</c> for a method that opens a connection, the handle's
+    /// for one that names a <c>connectionId</c> (a language request's, in its context), and otherwise the engine that owns the query, session or result it names.</summary>
+    internal string ProviderOf(string method, JsonElement parameters)
+    {
+        if (Array.IndexOf(Providers.ParameterMethods, method) >= 0) return Providers.OfOptions(parameters);
+        if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("connectionId", out var id) && id.ValueKind == JsonValueKind.String)
+            return ConnectionProvider(id.GetString()!) ?? Providers.SqlServer;
+        // A language request names its connection in its context.
+        if (parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object
+            && context.TryGetProperty("connectionId", out var contextId) && contextId.ValueKind == JsonValueKind.String)
+            return ConnectionProvider(contextId.GetString()!) ?? Providers.SqlServer;
+        // BigQuery's handle-less methods (bigquery.account, bigquery.projects) are BigQuery's by declaration.
+        if (Providers.Of(method) is [Providers.BigQuery]) return Providers.BigQuery;
+        return RequestProvider?.Invoke(method, parameters) ?? Providers.SqlServer;
+    }
+
+    /// <summary>Main refuses a method for a connection of another engine before sending it; this checks again first thing,
+    /// before any service runs, and answers UNSUPPORTED_PROVIDER as an error response.</summary>
+    internal void CheckProvider(string method, JsonElement parameters)
+    {
+        if (!Providers.Of(method).Contains(ProviderOf(method, parameters)))
+            throw new RequestException("UNSUPPORTED_PROVIDER", "This method is not available for this kind of connection.");
+    }
+
+    public async Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context = null)
+    {
+        CheckProvider(method, parameters);
+        return await RouteAsync(method, parameters, json, context);
+    }
+
+    private async Task<object> RouteAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context) => method switch
     {
         "system.health" => health ??= new
         {
@@ -430,11 +474,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             SmoVersion = typeof(Server).Assembly.GetName().Version?.ToString(),
             SqlClientVersion = typeof(SqlConnection).Assembly.GetName().Version?.ToString()
         },
-        "connections.connect" => await ConnectAsync(Read<ConnectOptions>(parameters, json), Token(context), context),
-        "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json), Token(context)),
+        "connections.connect" => Providers.OfOptions(parameters) == Providers.BigQuery
+            ? await bigQuery.ConnectAsync(Read<BigQueryConnectOptions>(parameters, json), Token(context), context)
+            : await ConnectAsync(ReadConnect(parameters, json), Token(context), context),
+        "connections.databases" => Providers.OfOptions(parameters) == Providers.BigQuery
+            ? await bigQuery.DiscoverDatasetsAsync(Read<BigQueryConnectOptions>(parameters, json), Token(context))
+            : await DiscoverDatabasesAsync(ReadConnect(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
-        "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
+        "connections.preview" => ConnectionSettings.Preview(ReadConnect(parameters, json)),
         "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
+        "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
+        "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -443,7 +493,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "language.close" => await language.CloseAsync(Read<LanguageCloseArgs>(parameters, json).DocumentId, Token(context)),
         "language.definition" => (object?)await definitions.ResolveAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
         "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),
-        "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
+        "databases.list" => Read<ConnectionArgs>(parameters, json) is var listArgs && bigQuery.Owns(listArgs.ConnectionId)
+            ? await bigQuery.DatasetsAsync(listArgs.ConnectionId, Token(context))
+            : await DatabasesAsync(listArgs, Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "plans.parse" => PlanParser.Read(Read<PlanParseArgs>(parameters, json), Token(context)),
@@ -492,12 +544,21 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
         "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
+        "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
+
+    /// <summary>The connection options union: the provider first, then SQL Server's strict record. CheckProvider has already
+    /// refused another engine's options, since no method that opens a connection serves one yet. The record reads
+    /// <c>provider</c> itself rather than the options being rewritten without it, which would copy the password into
+    /// buffers nothing zeroes; it is cleared so options are equal however the request spelled SQL Server.</summary>
+    private static ConnectOptions ReadConnect(JsonElement value, JsonSerializerOptions json) => Providers.OfOptions(value) == Providers.SqlServer
+        ? Read<ConnectOptions>(value, json) with { Provider = null }
+        : throw new RequestException("UNSUPPORTED_PROVIDER", "This method is not available for this kind of connection.");
 
     private static string Name(string? value, int maxLength = 128)
     {
@@ -748,6 +809,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
+        // A BigQuery handle has none of the SQL Server state below.
+        if (bigQuery.Owns(args.ConnectionId))
+        {
+            // Its running queries end as cancelled before the client they read through is disposed.
+            foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
+            return new { Disconnected = bigQuery.Disconnect(args.ConnectionId) };
+        }
         bool removed;
         string? connectionString;
         lock (bindingGate)
@@ -1108,6 +1176,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
+        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -1173,7 +1243,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long recordsAffected = -1;
         QueryFailure? failure = null;
         var status = "completed";
-        var database = args.Database;
+        var database = args.Database!;
         // Only the first errors are reported in the summary; a looping statement can raise millions while its batch keeps
         // running. Messages keep them all, in order, up to their own caps.
         var errors = new List<string>();
@@ -1264,7 +1334,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
-                await connection.ChangeDatabaseAsync(args.Database, token);
+                await connection.ChangeDatabaseAsync(args.Database!, token);
             database = connection.Database;
             if ((args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
             {
@@ -1850,7 +1920,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         for (var i = 0; i < keys.Length; i++)
         {
             var sort = args.Sort[i];
-            if (sort.Column < 0 || sort.Column >= set.Columns.Count || Array.FindIndex(args.Sort, 0, i, other => other.Column == sort.Column) >= 0)
+            if (!Shown(set, sort.Column) || Array.FindIndex(args.Sort, 0, i, other => other.Column == sort.Column) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each sort key needs a distinct column of the result.");
             keys[i] = new ViewKey(sort.Column, sort.Descending, sort.Mode switch
             {
@@ -1899,6 +1969,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
+    /// <summary>A column a request may name: one of the result's, and not hidden (ResultTextWriter.Hidden: a tone, a diff's
+    /// marker, row numbers or previous values).</summary>
+    private static bool Shown(ResultSetBuffer set, int column) => column >= 0 && column < set.Columns.Count && !ResultTextWriter.Hidden(set.Columns[column]);
+
     /// <summary>A view request's filters, checked against the result; cells name positions in the result or a view of it.</summary>
     private ViewFilter[] ViewFilters(ResultsViewArgs args, ResultSetBuffer set)
     {
@@ -1912,14 +1986,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null
                     || filter.Columns is not { Length: >= 1 } || filter.Columns.Length > columns
-                    || filter.Columns.Any(column => column < 0 || column >= columns) || filter.Columns.Distinct().Count() != filter.Columns.Length)
+                    || filter.Columns.Any(column => !Shown(set, column)) || filter.Columns.Distinct().Count() != filter.Columns.Length)
                     throw new RequestException("INVALID_PARAMS", "A duplicates filter needs distinct columns of the result.");
                 filters[i] = new ViewFilter(FilterOp.Duplicates, -1, null, false, null, filter.Columns);
                 continue;
             }
             if (filter.Op == "groups")
             {
-                if (filter.Column is not { } listed || filter.SnapshotId is not { } snapshotId || snapshotId == 0 || filter.Rows is not null || filter.Nulls is not null
+                if (filter.Column is not { } listed || !Shown(set, listed) || filter.SnapshotId is not { } snapshotId || snapshotId == 0 || filter.Rows is not null || filter.Nulls is not null
                     || filter.Cells is not null || filter.Columns is not null)
                     throw new RequestException("INVALID_PARAMS", "A groups filter needs a column and a value list of it.");
                 var snapshot = store.FindSnapshot(args.ResultId, snapshotId) ?? throw SnapshotClosed();
@@ -1945,7 +2019,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 "between" => FilterOp.Between,
                 _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates, groups or keepRows.")
             };
-            if (filter.Column is not { } column || column < 0 || column >= columns || filter.Columns is not null
+            if (filter.Column is not { } column || !Shown(set, column) || filter.Columns is not null
                 || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
                 || filter.Rows is { Length: > ViewSorter.MaxFilterValues })
                 throw new RequestException("INVALID_PARAMS", "A filter needs a column of the result and either up to 4,096 rows or the selected cells.");
@@ -2009,7 +2083,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Up to 32 columns are profiled at a time.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         for (var i = 0; i < args.Columns.Length; i++)
-            if (args.Columns[i] < 0 || args.Columns[i] >= set.Columns.Count || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
+            if (!Shown(set, args.Columns[i]) || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
@@ -2071,7 +2145,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        if (args.Column < 0 || args.Column >= set.Columns.Count)
+        if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
@@ -2173,8 +2247,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || by is null || (by == IdentityBy.Column) != args.Column.HasValue)
             throw new RequestException("INVALID_PARAMS", "Rows are told apart by auto, column (with a column) or row.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        if (args.Column is { } column && (column < 0 || column >= set.Columns.Count))
+        if (args.Column is { } column && !Shown(set, column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
+        // A diff's rows are told apart only by their entries (RowIdentity.Entries): no column of it is a key.
+        if (set.Kind == "diff" && by == IdentityBy.Column)
+            throw new RequestException("INVALID_PARAMS", "A comparison's rows are told apart by their entries, not by a column.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
         using var pin = set.Pin();
         // A packed result is read fused (RowIdentity.Build).
@@ -2339,6 +2416,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model), derived: true)
                 ?? throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+            set.DiffInputs = (args.Left, args.Right);
             void Release()
             {
                 if (store.Release([set.ResultId]) > 0) ReportMemory();
@@ -2451,8 +2529,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// values whose aggregates suit their columns (SUM and AVG only of numbers).</summary>
     private static PivotSpec PivotSpecOf(ResultsPivotArgs args, ResultSetBuffer set)
     {
-        var count = set.Columns.Count;
-        bool Shown(int column) => column >= 0 && column < count && !ResultTextWriter.Hidden(set.Columns[column]);
+        bool Shown(int column) => SqlService.Shown(set, column);
         for (var i = 0; i < args.Rows.Length; i++)
             if (!Shown(args.Rows[i]) || Array.IndexOf(args.Rows, args.Rows[i], 0, i) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each row column must be a distinct column of the result.");
@@ -2981,6 +3058,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssis.Dispose();
         ssisActions.Dispose();
         CancelAll();
+        bigQuery.Dispose();
         foreach (var session in sessions.Values) session.Close();
         sessions.Clear();
         pools.Clear();

@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
+import { xvfbArgs } from './fixtures/xvfb.mjs'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
 import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, toolbarButton, unsavedMark, expectEditorShown } from './fixtures/ui.mjs'
 
@@ -378,7 +379,7 @@ try {
   // 11. A second instance, started with a file, hands it to this one and quits; the file opens here.
   const second = join(folder, 'second.sql')
   await writeFile(second, 'SELECT 2 AS second')
-  const instance = spawn(electronPath, ['.', second, ...process.getuid?.() === 0 ? ['--no-sandbox'] : []], { env, stdio: 'ignore' })
+  const instance = spawn(electronPath, xvfbArgs(['.', second, ...process.getuid?.() === 0 ? ['--no-sandbox'] : []]), { env, stdio: 'ignore' })
   const exitCode = await new Promise((resolve, reject) => { instance.once('exit', resolve); instance.once('error', reject) })
   expect(exitCode).toBe(0)
   await expect(activeTab()).toHaveAttribute('aria-label', 'second.sql')
@@ -491,7 +492,7 @@ try {
   // 15. AutoRecover: a copy of a query with unsaved changes (saved now, not in five minutes) survives a renderer crash,
   // whose prompt says so, and the reloaded workbench offers it; Recover Selected opens it with its text, unsaved. Saved
   // again and then killed, the app offers it at the next start, and Discard Selected deletes every copy.
-  const recoveryFolder = join(profile, 'AutoRecover')
+  const recoveryFolder = join(profile, 'WorkbenchAutoRecover')
   const recoverDialog = () => page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
   /** Runs script in the page through main: Playwright's page for a crashed renderer cannot be used after its reload. */
   const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)

@@ -40,9 +40,8 @@ internal sealed class ResultTextWriter
     private static readonly SearchValues<byte> ClipboardSpecial = SearchValues.Create("\t\n\r\0"u8);
     private static readonly SearchValues<byte> CsvSpecial = SearchValues.Create(",\"\n\r"u8);
     private static readonly SearchValues<byte> JsonSpecial = SearchValues.Create([.. Enumerable.Range(0, 0x20).Select(value => (byte)value), (byte)'"', (byte)'\\', 0xE2]);
-    private static readonly HashSet<string> NumberTypes = ["tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney", "real", "float"];
     private static readonly byte[] Hex = "0123456789ABCDEF"u8.ToArray();
-    private enum ValueKind : byte { Text, Number, Bit, Binary }
+    internal enum ValueKind : byte { Text, Number, Bit, Binary }
 
     private readonly IBufferWriter<byte> output;
     private readonly TextOptions options;
@@ -72,15 +71,21 @@ internal sealed class ResultTextWriter
     public long TruncatedCells { get; private set; }
     private ReadOnlySpan<byte> Eol => options.Crlf ? "\r\n"u8 : "\n"u8;
 
-    /// <summary>A column that is never text to copy or save: a live table's row tone (role tone), which the grid shows as the
-    /// row's colour. Copy and Save leave it out of their columns, headers and JSON keys alike.</summary>
-    public static bool Hidden(ResultColumn column) => column.Role == "tone";
+    /// <summary>A column that is not data: a live table's or a diff's row tone (role tone), which the grid shows as the row's
+    /// colour, and a diff's hidden suffix (roles old, mark, leftRow, rightRow), which it draws in the row header. Copy, search,
+    /// sort, filters and profiles leave them out; only Save of a diff writes the marker and row numbers (ResultJobs). The
+    /// renderer's isHiddenColumn tests the same roles.</summary>
+    public static bool Hidden(ResultColumn column) => column.Role is "old" or "mark" or "leftRow" or "rightRow" or "tone";
 
-    private static ValueKind Kind(ResultColumn column)
+    internal static ValueKind Kind(ResultColumn column)
     {
         if (column.Wire == "binary") return ValueKind.Binary;
-        var type = column.DataType.Split('(')[0].Trim().ToLowerInvariant();
-        return type == "bit" ? ValueKind.Bit : NumberTypes.Contains(type) ? ValueKind.Number : ValueKind.Text;
+        return column.SortKind switch
+        {
+            ColumnTypes.Boolean => ValueKind.Bit,
+            ColumnTypes.Integer or ColumnTypes.Decimal or ColumnTypes.Float => ValueKind.Number,
+            _ => ValueKind.Text
+        };
     }
 
     /// <summary>JSON object keys: a blank name becomes Column{ordinal}, and a repeated one gets _2, _3 and so on.</summary>

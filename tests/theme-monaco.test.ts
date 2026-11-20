@@ -5,6 +5,7 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { parseThemeFile } from '../src/shared/theme/format'
 import { documentTokenScopes, toMonacoTheme } from '../src/shared/theme/monaco'
 import { jsonLanguage } from '../src/renderer/src/languages/json'
+import { googleSqlLanguage } from '../src/renderer/src/languages/googlesql'
 import { colorKeys, sqlScopes } from '../src/shared/theme/registry'
 import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 
@@ -59,6 +60,14 @@ describe('Monaco theme', () => {
       for (const token of emitted) expect(tokens.filter(value => value === token), token).toHaveLength(1)
     }
   })
+  it('colours GoogleSQL with the SQL scopes alone, so custom syntax colours apply to both query languages', () => {
+    const emitted = tokensOf(googleSqlLanguage as Language)
+    emitted.delete('white.sql')
+    expect([...emitted].filter(token => !sqlScopes.some(scope => scope + '.sql' === token))).toEqual([])
+    for (const scope of ['keyword', 'operator', 'predefined', 'string', 'number', 'comment', 'comment.quote', 'identifier', 'identifier.quote', 'delimiter', 'delimiter.parenthesis', 'delimiter.square']) {
+      expect(emitted, scope).toContain(scope + '.sql')
+    }
+  })
   it('colours every token of the XML and JSON tokenizers exactly once, as the SQL scope it stands for', async () => {
     const emitted = [...await monacoTokens('xml'), ...tokensOf(jsonLanguage as Language)]
     expect(emitted.sort()).toEqual(Object.keys(documentTokenScopes).sort())
@@ -80,7 +89,7 @@ describe('Monaco theme', () => {
       const data: Monaco.editor.IStandaloneThemeData = toMonacoTheme(theme)
       expect(data.base).toBe(type === 'dark' ? 'vs-dark' : 'vs')
       expect(data.inherit).toBe(true)
-      expect(Object.keys(data.colors)).toHaveLength(289)
+      expect(Object.keys(data.colors)).toHaveLength(293)
       expect(Object.keys(data.colors)).toEqual([...colorKeys])
       for (const value of Object.values(data.colors)) expect(value).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       expect(data.rules[0]).toEqual({ token: '', foreground: theme.colors['editor.foreground'].slice(1), background: theme.colors['editor.background'].slice(1) })

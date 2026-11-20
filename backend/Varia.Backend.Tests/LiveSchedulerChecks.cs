@@ -61,6 +61,91 @@ internal static class LiveSchedulerChecks
 
     private static string LiveType(string activityType) => activityType switch { "text" => "nvarchar", "bool" => "bit", _ => activityType };
 
+    /// <summary>Statements the live lint's word boundaries and deny list once let through. T-SQL ends a number where its digits
+    /// end (SQL Server 2025 deletes the row for <c>SELECT 1DELETE FROM @t</c> and runs the text for <c>SELECT 1e1EXEC (…)</c>), and
+    /// a statement kind the deny list did not name passed. Every lint that reuses the live lint refuses each of them.</summary>
+    internal static readonly (string Name, string Statement)[] LiveLintNearMisses =
+    [
+        ("glued delete", "DECLARE @t TABLE (a int); SELECT 1DELETE FROM @t;"),
+        ("glued exponent exec", "SELECT 1e1EXEC (N'SELECT 42');"),
+        ("glued decimal exec", "SELECT 1.5EXEC (N'SELECT 42');"),
+        ("glued money exec", "SELECT $1EXEC (N'SELECT 42');"),
+        ("glued hex insert", "DECLARE @t TABLE (a int); SELECT 0xINSERT @t VALUES (1);"),
+        ("set option", "SELECT 1 AS a; SET IMPLICIT_TRANSACTIONS ON;"),
+        ("receive", "SELECT 1 AS a; RECEIVE message_body FROM dbo.q;"),
+        ("send", "DECLARE @h uniqueidentifier; SEND ON CONVERSATION @h (N'x');"),
+        ("end conversation", "DECLARE @h uniqueidentifier; END CONVERSATION @h;"),
+        ("begin dialog", "DECLARE @h uniqueidentifier; BEGIN DIALOG @h FROM SERVICE s TO SERVICE N's';"),
+        ("checkpoint", "SELECT 1 AS a; CHECKPOINT;"),
+        ("setuser", "SELECT 1 AS a; SETUSER;"),
+        ("revert", "SELECT 1 AS a; REVERT;"),
+        ("disable trigger", "SELECT 1 AS a; DISABLE TRIGGER t ON dbo.x;"),
+        ("enable trigger", "SELECT 1 AS a; ENABLE TRIGGER t ON dbo.x;"),
+        ("writetext", "DECLARE @p varbinary(16); WRITETEXT dbo.t.c @p N'x';"),
+        ("next value for", "SELECT NEXT VALUE FOR dbo.s AS n;"),
+        ("raiserror with log", "SELECT 1 AS a; RAISERROR (N'x', 10, 1) WITH LOG;"),
+        ("if print", "SELECT 1 AS a; IF 1 = 1 PRINT N'x';"),
+        // SQL Server reads U+200B and U+001F as whitespace; .NET's \s does not, so they split a multi-word pattern.
+        ("next value for split by a zero-width space", "SELECT NEXT​VALUE FOR dbo.s AS n;"),
+        ("next value for split by a unit separator", "SELECT NEXT\u001FVALUE\u001FFOR dbo.s AS n;"),
+        ("built-in split by a zero-width space", "SELECT OBJECT_NAME​(3) AS n;"),
+        ("four-part name", "SELECT o.name FROM L.master.sys.objects AS o;"),
+        ("four-part name, bracketed", "SELECT o.name FROM [L].[master].[sys].[objects] AS o;"),
+        ("four-part name, default parts", "SELECT o.name FROM L..sys.objects AS o;"),
+        ("four-part name, spaced", "SELECT o.name FROM L . master . sys . objects AS o;"),
+        ("exclusive lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (TABLOCKX);"),
+        ("update lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (UPDLOCK, HOLDLOCK);"),
+        ("exclusive row lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (XLOCK);"),
+        ("table lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (TABLOCK);"),
+        ("page lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (PAGLOCK);"),
+        ("serializable hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (SERIALIZABLE);"),
+        ("repeatable read hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (REPEATABLEREAD);"),
+        ("read committed lock hint", "SELECT COUNT(*) AS n FROM sys.objects WITH (READCOMMITTEDLOCK);"),
+        ("unbounded recursion", "WITH r AS (SELECT 1 AS a UNION ALL SELECT a + 1 FROM r) SELECT a FROM r OPTION (MAXRECURSION 0);"),
+        ("name-resolving built-ins", "SELECT IDENT_CURRENT(N'dbo.t') AS i, TYPE_ID(N'int') AS t;"),
+        ("statistics date", "SELECT STATS_DATE (1, 1) AS s;"),
+        ("principal id", "SELECT DATABASE_PRINCIPAL_ID(N'x') AS p, SUSER_SID(N'x') AS s;"),
+        ("xel file over a share", "SELECT f.event_data FROM sys.fn_xe_file_target_read_file(N'\\\\h\\s\\x*.xel', NULL, NULL, NULL) AS f;"),
+        ("trace file", "SELECT t.TextData FROM sys.fn_trace_gettable(N'\\\\h\\s\\t.trc', 1) AS t;"),
+        ("file system", "SELECT f.full_filesystem_path FROM sys.dm_os_enumerate_filesystem(N'\\\\h\\s\\', N'*') AS f;"),
+        ("log dump", "SELECT d.[Current LSN] FROM sys.fn_dump_dblog(NULL, NULL, N'DISK', 1, N'x') AS d;"),
+        // A bracketed or quoted name is the name it holds: SQL Server returned the hash bytes for l.[password_hash].
+        ("bracketed password hash", "SELECT TOP (1) l.[password_hash] FROM sys.sql_logins AS l ORDER BY l.principal_id;"),
+        ("quoted password hash", "SELECT TOP (1) l.\"password_hash\" FROM sys.sql_logins AS l ORDER BY l.principal_id;"),
+        ("star over bracketed sql_logins", "SELECT TOP (1) * FROM sys.[sql_logins] AS l ORDER BY l.principal_id;"),
+        ("bracketed log reader", "SELECT TOP (1) x.[Current LSN] FROM sys.[fn_dblog](NULL, NULL) AS x ORDER BY x.[Current LSN];"),
+        ("quoted file system reader", "SELECT f.file_or_directory_name FROM sys.\"dm_os_enumerate_filesystem\"(N'C:\\', N'*') AS f;"),
+        ("bracketed temporary table", "SELECT t.a FROM [#t] AS t;"),
+        ("audit file v2", "SELECT a.event_time FROM sys.fn_get_audit_file_v2(N'\\\\h\\s\\*.sqlaudit', NULL, NULL, NULL, NULL) AS a;"),
+        ("backup log dump", "SELECT d.Operation FROM sys.fn_dump_dblog_xtp(NULL, NULL, N'DISK', 1, N'x') AS d;"),
+        ("live event stream", "SELECT s.object_name FROM sys.fn_MSxe_read_event_stream(N'system_health', 0) AS s;"),
+        ("every page of every index", "SELECT p.page_count FROM sys.dm_db_index_physical_stats(NULL, NULL, NULL, NULL, N'DETAILED') AS p;"),
+        ("more name-resolving built-ins", "SELECT FILE_IDEX(N'x') AS a, FILEGROUPPROPERTY(N'PRIMARY', N'IsDefault') AS b, DATABASEPROPERTY(N'x', N'IsShutDown') AS c, APPLOCK_TEST(N'public', N'x', N'Exclusive', N'Session') AS d;"),
+        // The server resolves a full-width name in brackets or quotes as its ASCII twin (width-insensitive catalog collation).
+        ("full-width bracketed log reader", "SELECT TOP (1) d.[Current LSN] FROM sys.[ｆｎ_dblog](NULL, NULL) AS d ORDER BY d.[Current LSN];"),
+        ("full-width quoted password hash", "SELECT TOP (1) l.\"ｐassword_hash\" FROM sys.sql_logins AS l ORDER BY l.name;"),
+        ("read committed hint", "SELECT TOP (1) o.name FROM sys.objects AS o WITH (READCOMMITTED) ORDER BY o.name;"),
+        ("hash index scan", "SELECT h.total_bucket_count FROM sys.dm_db_xtp_hash_index_stats AS h;"),
+        // Functions whose own definitions do a refused thing: the lint matches names, so it refuses the wrapper by name.
+        ("compiles a literal naming a linked server", "SELECT d.name FROM sys.dm_exec_describe_first_result_set(N'SELECT a FROM s.d.dbo.t', NULL, 0) AS d;"),
+        ("compiles a plan guide", "SELECT v.msgnum FROM sys.plan_guides AS g CROSS APPLY sys.fn_validate_plan_guide(g.plan_guide_id) AS v;"),
+        ("ekm provider keys", "SELECT k.key_name FROM sys.dm_cryptographic_provider_keys(1) AS k;"),
+        ("ledger digests from a url","SELECT TOP (1) d.digest FROM sys.fn_ledger_retrieve_digests_from_url(N'https://h/x') AS d ORDER BY d.digest;"),
+        ("referenced entities", "SELECT r.referenced_entity_name FROM sys.dm_sql_referenced_entities(N'dbo.p', N'OBJECT') AS r;"),
+        ("my permissions", "SELECT p.permission_name FROM sys.fn_my_permissions(N'dbo.t', N'OBJECT') AS p;"),
+        ("database access", "SELECT HAS_DBACCESS(N'msdb') AS a;"),
+        ("certificate private key", "SELECT CERTPRIVATEKEY(c.certificate_id, N'x') AS k FROM sys.certificates AS c;"),
+        ("decrypt by key", "SELECT DECRYPTBYKEYAUTOCERT(CERT_ID(N'c'), NULL, 0x00) AS v;"),
+        ("full-text keywords", "SELECT k.keyword FROM sys.dm_fts_index_keywords(1, 1) AS k;"),
+        ("buffer pool walk", "SELECT COUNT(*) AS n FROM sys.dm_os_buffer_descriptors AS b;"),
+        ("file exists", "SELECT f.file_exists FROM sys.dm_os_file_exists(N'C:\\x') AS f;"),
+        ("page allocations", "SELECT a.allocated_page_page_id FROM sys.dm_db_database_page_allocations(1, NULL, NULL, NULL, N'DETAILED') AS a;"),
+        ("trace flag hint","SELECT COUNT(*) AS n FROM sys.objects OPTION (QUERYTRACEON 8649);"),
+        ("memory grant hint", "SELECT COUNT(*) AS n FROM sys.objects OPTION (MIN_GRANT_PERCENT = 100);"),
+        ("fetch from a cursor", "SELECT 1 AS a; FETCH NEXT FROM c;"),
+        ("fetch after rows, from a cursor", "SELECT 1 AS rows FETCH NEXT FROM c;")
+    ];
+
     private static void SqlChecks(Action<bool, string> check)
     {
         var catalog = LiveCatalog.Current;
@@ -172,6 +257,8 @@ internal static class LiveSchedulerChecks
             ["opendatasource"] = LiveSql.UncommittedPrologue + "SELECT * FROM OPENDATASOURCE(N'SQLNCLI', N'x').m.sys.objects;",
             ["spid outside the session probe"] = LiveSql.UncommittedPrologue + "SELECT @@SPID;"
         };
+        foreach (var (name, statement) in LiveLintNearMisses) bad[name] = LiveSql.UncommittedPrologue + statement;
+        bad["glued delete, read committed"] = LiveSql.CommittedPrologue + LiveLintNearMisses[0].Statement;
         var missed = bad.Where(item => LiveSql.Lint(item.Value).Count == 0).Select(item => item.Key).ToList();
         var good = new[]
         {
@@ -179,7 +266,16 @@ internal static class LiveSchedulerChecks
             "SELECT TOP 5 s.session_id, ROW_NUMBER() OVER (ORDER BY s.login_time) AS n FROM sys.dm_exec_sessions AS s ORDER BY s.session_id;",
             "SELECT x.session_id FROM (SELECT TOP (10) s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id) AS x;",
             "SELECT p.cntr_value FROM sys.dm_os_performance_counters AS p WHERE p.counter_name = N'DROP INTO EXEC -- /*';",
-            "SELECT 1 AS [order -- by];"
+            "SELECT 1 AS [order -- by];",
+            "SELECT 0x AS a, 0x0A AS b, 1.5 AS c, 10 AS d, s.open_transaction_count FROM sys.dm_exec_sessions AS s WHERE s.session_id > 50;",
+            "IF 1 = 1 SELECT 1 AS a;\nELSE BEGIN\nSELECT 2 AS a;\nEND;",
+            "SELECT 1 AS [1DELETE], N'SET 1e1EXEC' AS b;",
+            "SELECT a.id FROM (SELECT s.session_id AS id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id DESC OFFSET @tail0 ROWS FETCH NEXT 1 ROWS ONLY) AS a;",
+            "SELECT s.session_id FROM sys.dm_exec_sessions AS s ORDER BY s.session_id OFFSET 0 ROW FETCH FIRST @take ROW ONLY;",
+            "DECLARE @x xml = N'<i>1</i>'; SELECT n.c.value(N'.', N'int') AS v, t.c.query(N'.').value(N'.', N'int') AS w FROM @x.nodes(N'/i') AS n(c) CROSS APPLY @x.nodes(N'/i') AS t(c);",
+            "SELECT o.name FROM master.sys.objects AS o JOIN master..sysobjects AS s ON s.id = o.object_id ORDER BY o.name;",
+            "SELECT CASE WHEN COL_LENGTH(N'sys.dm_exec_query_stats', N'total_spills') IS NULL THEN 0 ELSE 1 END AS spills;",
+            "SELECT 0X0A AS a, N'​ é' AS b, o.name FROM master.sys.objects AS o WITH (NOLOCK) WHERE o.object_id > 0;"
         }.Where(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text).Count != 0).ToList();
         check(missed.Count == 0 && good.Count == 0,
             "the live lint refuses metadata functions (however spaced), temporary tables, writes, DDL, transactions, waits, dynamic SQL, remote reads, comments, a TOP without an ORDER BY at its own level and a missing prologue, and reads no code as a literal, comment or name it is not: "
@@ -200,6 +296,12 @@ internal static class LiveSchedulerChecks
             && LivePlanSql.Lint(LivePlanSql.Server[LiveSql.UncommittedPrologue.Length..]).Contains("does not start with a live prologue"),
             "the Live Plan probe's texts pass the live lint, pick their permission by edition and version, match both the session and its connection, and name DB_NAME() only once, in Azure's permission check: "
             + string.Join(", ", planProblems));
+        var planMissed = LiveLintNearMisses.Where(miss => LivePlanSql.Lint(LivePlanSql.Server.Replace("SELECT CAST(1 AS int);", miss.Statement, StringComparison.Ordinal)).Count == 0)
+            .Select(miss => miss.Name).ToList();
+        check(planMissed.Count == 0, "the Live Plan lint refuses a number glued to a word and every statement kind but a read's, as the live lint does: " + string.Join(", ", planMissed));
+        // The live table suite runs only with scratch databases, but its texts (the one OFFSET … FETCH caller) are checked here too.
+        var tableLint = LiveTableDataChecks.Texts.SelectMany(text => LiveSql.Lint(LiveSql.UncommittedPrologue + text)).ToList();
+        check(tableLint.Count == 0, "the live table checks' probe texts pass the live lint offline: " + string.Join("; ", tableLint));
         // Values are read by declared position, so every read checks what it got against the declaration.
         var overviewQuery = new LiveQuery("check", LiveSql.MaxBand, "SELECT 1;", ["ms_ticks", "start_ticks", "cpu_ms", "schedulers", "runnable_tasks", "batch_requests", "compilations", "recompilations", "user_sessions"],
             "ms_ticks", "start_ticks", []);

@@ -1,0 +1,64 @@
+1: SELECT t.name, `my-proj.analytics.events_2026`.event_id, s.date, s.range
+    keyword                SELECT
+    identifier             t
+    delimiter              .
+    identifier             name
+    delimiter              ,
+    identifier.quote       `my-proj.analytics.events_2026`
+    delimiter              .
+    identifier             event_id
+    delimiter              ,
+    identifier             s
+    delimiter              .
+    identifier             date
+    delimiter              ,
+    identifier             s
+    delimiter              .
+    identifier             range
+2: FROM `my-proj.analytics.events_2026` AS t
+    keyword                FROM
+    identifier.quote       `my-proj.analytics.events_2026`
+    keyword                AS
+    identifier             t
+3: JOIN `bigquery-public-data`.samples.shakespeare s USING (word)
+    operator               JOIN
+    identifier.quote       `bigquery-public-data`
+    delimiter              .
+    identifier             samples
+    delimiter              .
+    identifier             shakespeare
+    identifier             s
+    keyword                USING
+    delimiter.parenthesis  (
+    identifier             word
+    delimiter.parenthesis  )
+4: WHERE t.user_id = @user_id AND t.created > @@script.creation_time
+    keyword                WHERE
+    identifier             t
+    delimiter              .
+    identifier             user_id
+    operator               =
+    identifier             @user_id
+    operator               AND
+    identifier             t
+    delimiter              .
+    identifier             created
+    operator               >
+    predefined             @@script.creation_time
+5:   AND `escaped \` tick` IS NOT NULL;
+    operator               AND
+    identifier.quote       `escaped \` tick`
+    operator               IS
+    operator               NOT
+    keyword                NULL
+    delimiter              ;
+6: SELECT @@dataset_id, @@project_id, @@row_count, ?;
+    keyword                SELECT
+    predefined             @@dataset_id
+    delimiter              ,
+    predefined             @@project_id
+    delimiter              ,
+    predefined             @@row_count
+    delimiter              ,
+    operator               ?
+    delimiter              ;

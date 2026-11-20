@@ -98,6 +98,8 @@ internal sealed class ResultSetBuffer
     private int unpackTotal, unpackDone;
     private TruncationReason refused;
     private volatile bool incomplete;
+    /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
+    private SearchMemo? searchMemo;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -126,6 +128,9 @@ internal sealed class ResultSetBuffer
     public string Kind { get; }
     /// <summary>The query's name for this set (a #Name marker, ResultNames.cs); null when it has none.</summary>
     public string? ResultName { get; init; }
+    /// <summary>A diff's two input results (results.diff), recorded when it is written: its row identity (results.identify)
+    /// hashes each entry's (input, row) pairs, ordered by input result id.</summary>
+    public (uint Left, uint Right)? DiffInputs { get; set; }
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
     /// <summary>Each column's byte rule (ColumnPlan's; a live table's text counts as UTF-16).</summary>
@@ -161,6 +166,10 @@ internal sealed class ResultSetBuffer
 
     /// <summary>Counts a row read from the server, whether or not it is stored.</summary>
     public void CountRow() => Interlocked.Increment(ref rowsRead);
+
+    /// <summary>Counts rows read past without reading them: those a BigQuery result holds beyond the rows Varia read (its
+    /// totalRows), so the set reports every row its query returned, as a SQL Server set counts the rows it reads past.</summary>
+    public void CountRows(long rows) { if (rows > 0) Interlocked.Add(ref rowsRead, rows); }
 
     /// <summary>Records why a row was not stored; the first reason sticks.</summary>
     public void Skip(TruncationReason reason) => Interlocked.CompareExchange(ref truncated, (int)reason, 0);
@@ -508,6 +517,22 @@ internal sealed class ResultSetBuffer
 
     /// <summary>Whether memory taken as spare may still be kept (<see cref="ResultStore.HasSpare"/>).</summary>
     public bool HasSpare => store.HasSpare(Budget);
+
+    /// <summary>What the result's last search kept for the next to narrow from (<see cref="Narrowing"/>), or null.</summary>
+    internal SearchMemo? SearchMemo => Volatile.Read(ref searchMemo);
+
+    /// <summary>Keeps a search's memo in place of the last, taking over the spare room its search reserved for it
+    /// (<see cref="TryReserveSpare"/>) and returning the last one's; a freed set keeps none and returns the room.</summary>
+    internal void KeepSearchMemo(SearchMemo memo)
+    {
+        lock (gate)
+        {
+            if (gone) { store.Return(Budget, memo.Bytes); return; }
+            if (searchMemo is { } last) ReturnLocked(last.Bytes);
+            charged += memo.Bytes;
+            Volatile.Write(ref searchMemo, memo);
+        }
+    }
 
     /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
     /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
@@ -870,6 +895,8 @@ internal sealed class ResultSetBuffer
         gone = true;
         pages.Clear();
         cache.Clear();
+        // Its bytes are in charged, returned below.
+        Volatile.Write(ref searchMemo, null);
         store.Held(-packedBytes, -packedLogical, -cacheBytes);
         packedBytes = packedLogical = cacheBytes = 0;
         var freed = charged;

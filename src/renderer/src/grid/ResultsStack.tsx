@@ -4,24 +4,16 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { distinctName, entryName, entryNumber, entrySecondary, resultTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { stackReveals } from './result-picker'
+import { visibleColumnCount } from './hidden-columns'
+import { scrollbarSize } from './scrollbar'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
-let scrollbar: number | undefined
-/** The platform's scroll bar thickness (classic scroll bars take room; overlay ones take none). */
-export function scrollbarSize(): number {
-  if (scrollbar !== undefined) return scrollbar
-  const probe = document.createElement('div')
-  probe.style.cssText = 'position:absolute;top:-1000px;width:100px;height:100px;overflow:scroll'
-  document.body.append(probe)
-  scrollbar = probe.offsetHeight - probe.clientHeight
-  probe.remove()
-  return scrollbar
-}
+export { scrollbarSize }
 
 /**
  * Each set's height sized to its rows once it has them all (`contentHeight`), undefined while it streams. A horizontal scroll
@@ -147,7 +139,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
 }) {
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry), number = entrySecondary(entry)
+  const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
   // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
   const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.
@@ -474,9 +466,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       // The value is the upper grid's height, which the splitter moves between the two grids' floors.
       const height = Math.round(layout.heights[index])
       // Named by the result above it, by its name or else its number, as that result's grid is.
-      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${resultTitle(entry)}`}
+      items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${entryTitle(entry)}`}
         aria-valuenow={height} aria-valuemin={Math.round(floors[index])} aria-valuemax={Math.round(Math.max(floors[index], layout.heights[index] + layout.heights[index + 1] - floors[index + 1]))}
-        aria-valuetext={`${resultTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
+        aria-valuetext={`${entryTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
         onPointerDown={event => splitterDown(index, event)} onPointerMove={splitterMove} onPointerUp={splitterUp} onLostPointerCapture={() => { drag.current = undefined }}
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }

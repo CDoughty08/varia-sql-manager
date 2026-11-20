@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comparison results: UX options</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    --bg: light-dark(#fff, #16181d); --chrome: light-dark(#f7f8fa, #111317); --input: light-dark(#fff, #101216);
+    --text: light-dark(#1c1f26, #d9dce3); --secondary: light-dark(#3a404b, #bcc1cb); --muted: light-dark(#5c6370, #9298a4);
+    --border: light-dark(#e3e6eb, #262a31); --gridline: light-dark(#eceef2, #1f2228); --control: light-dark(#878e9b, #6a7184);
+    --hover: light-dark(#dfe2e7, #262a32); --active: light-dark(#e7ebfc, #21273b); --badge: light-dark(#d6dae0, #30343e);
+    --accent: light-dark(#4453d0, #8f9cff); --on-accent: light-dark(#fff, #0e1230);
+    --add: light-dark(#146f3b, #74d19c); --rem: light-dark(#b42229, #f39a9a); --chg: light-dark(#2a78d6, #5b9cf0);
+    --warn: light-dark(#875800, #e4bb6a);
+    --page: light-dark(#eef0f3, #0c0d10);
+    --ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+    margin: 0; padding: 20px 24px 48px; background: var(--page); color: var(--text); font: 13px/1.5 var(--ui);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 14px; margin: 28px 0 8px; }
+  .lede { color: var(--muted); max-width: 920px; margin: 0 0 14px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; margin: 0 0 12px; }
+  .bar label { color: var(--muted); font-size: 12px; margin-right: 6px; }
+  .seg { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+  button, select { font: inherit; color: inherit; }
+  .seg button { height: 22px; padding: 0 9px; border: 0; background: transparent; border-radius: 3px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--active); color: var(--text); font-weight: 600; }
+
+  /* ---- the Varia frame ---- */
+  .app { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; height: 560px; display: flex; flex-direction: column; overflow: hidden; font-size: 12px; line-height: 16px; position: relative; }
+  .doctabs { display: flex; background: var(--chrome); border-bottom: 1px solid var(--border); height: 30px; padding: 3px 6px 0; gap: 2px; flex: none; }
+  .doctab { padding: 0 12px; display: flex; align-items: center; gap: 6px; color: var(--muted); border-radius: 4px 4px 0 0; white-space: nowrap; }
+  .doctab.on { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-bottom: 0; box-shadow: inset 0 2px var(--accent); }
+  .tb { min-height: 36px; padding: 5px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
+  .tb .title { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+  .sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 0; }
+  .sides { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 4px; height: 24px; overflow: hidden; }
+  .sides .side { padding: 0 8px; display: flex; align-items: center; gap: 5px; height: 100%; }
+  .sides .side b { font-weight: 600; }
+  .sides .dot { width: 8px; height: 8px; border-radius: 2px; }
+  .sides .swap { border: 0; border-left: 1px solid var(--border); border-right: 1px solid var(--border); height: 100%; width: 28px; background: transparent; cursor: pointer; color: var(--accent); font-size: 14px; }
+  .sides .swap:hover, .btn:hover { background: var(--hover); }
+  .btn { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+  .btn.o { border-color: var(--border); }
+  .btn[aria-pressed="true"] { background: var(--active); font-weight: 600; }
+  .btn kbd { font: 10px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; }
+  .menu { position: absolute; top: 28px; left: 0; z-index: 20; min-width: 270px; background: light-dark(#fff, #1d2026); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; }
+  .mi { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 4px; cursor: pointer; }
+  .mi:hover { background: var(--hover); } .mi.ind { padding-left: 24px; } .mi.off { opacity: .45; } .mi small, .mnote { color: var(--muted); }
+  .msep { height: 1px; background: var(--border); margin: 4px 0; } .mnote { padding: 2px 8px 4px; font-size: 11px; line-height: 15px; white-space: normal; }
+  .keybtn { cursor: pointer; } .keybtn[aria-expanded="true"] { border-color: var(--accent); }
+  .sel { height: 24px; border: 1px solid var(--control); border-radius: 4px; background: var(--input); padding: 0 4px; }
+  .lbl { color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; cursor: pointer; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .chip[aria-pressed="true"] { color: var(--text); border-color: color-mix(in srgb, var(--c) 55%, var(--border)); background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .chip[aria-pressed="false"] { opacity: .6; text-decoration: line-through; text-decoration-color: var(--control); }
+  .chip i { font-style: normal; font-weight: 700; color: var(--c); }
+  .chip b { font-weight: 600; }
+  .body { flex: 1; min-height: 0; display: flex; }
+  .gridwrap { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+  .scroller { flex: 1; overflow: auto; position: relative; padding-right: 10px; }
+  .mini { position: absolute; right: 0; top: 24px; bottom: 0; width: 10px; background: var(--chrome); border-left: 1px solid var(--border); }
+  .mini span { position: absolute; left: 2px; right: 2px; height: 3px; border-radius: 1px; }
+  .grid { min-width: max-content; font-family: var(--mono); font-size: 12px; }
+  .row { display: grid; height: 20px; align-items: stretch; border-bottom: 1px solid var(--gridline); }
+  .row.head { position: sticky; top: 0; z-index: 3; height: 24px; background: var(--chrome); font-family: var(--ui); border-bottom: 1px solid var(--border); }
+  .cell { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; border-right: 1px solid var(--gridline); line-height: 19px; position: relative;
+    background-color: var(--d, transparent);
+    background-image: linear-gradient(var(--hv, transparent), var(--hv, transparent)), linear-gradient(var(--sl, transparent), var(--sl, transparent)); }
+  .head .cell { gap: 5px; color: var(--secondary); font-weight: 500; background: none; }
+  .head .cell small { color: var(--muted); font-weight: 400; }
+  .head .cell.chgcol { box-shadow: inset 0 -2px var(--chg); }
+  .head .cell .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--chg); flex: none; }
+  .row:not(.head):hover { --hv: light-dark(rgba(0,0,0,.045), rgba(255,255,255,.05)); }
+  .row.sel { --sl: color-mix(in srgb, var(--accent) 17%, transparent); }
+  .cell.act { outline: 1.5px solid var(--accent); outline-offset: -1.5px; z-index: 1; --sl: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .cell i.null { color: var(--muted); font-style: italic; }
+  .cell.dim { color: var(--muted); }
+  .cell del { color: color-mix(in srgb, var(--rem) 85%, var(--muted)); text-decoration-thickness: 1px; opacity: .85; }
+  .cell ins { text-decoration: none; font-weight: 600; color: var(--text); }
+  .cell .arrow { color: var(--muted); font-family: var(--ui); }
+  .gut { padding: 0 6px 0 0; gap: 0; justify-content: flex-start; cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; border-right: 1px solid var(--border); background-color: var(--chrome); }
+  .gut .bar3 { width: 3px; align-self: stretch; margin-right: 5px; background: var(--k, transparent); }
+  .gut .mk { width: 12px; text-align: center; font-weight: 700; color: var(--k, var(--muted)); font-family: var(--ui); }
+  .gut .flag { margin-left: 5px; color: var(--warn); font: 700 12px var(--ui); cursor: help; } .gut .flag.q { opacity: .85; }
+  .hint { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--warn) 10%, transparent); flex: none; }
+  .hint b { color: var(--warn); } .hint .sp { margin-left: auto; }
+  .gut .n { margin-left: 3px; font-variant-numeric: tabular-nums; }
+  .collapsed { display: flex; align-items: center; justify-content: center; gap: 8px; height: 20px; background: var(--chrome); color: var(--muted); font-family: var(--ui); cursor: pointer; border-bottom: 1px solid var(--gridline); border-top: 1px dashed var(--border); }
+  .collapsed:hover { color: var(--text); background: var(--hover); }
+  .row.cur-old { --k: var(--rem); }
+  .foot { border-top: 1px solid var(--border); background: var(--chrome); padding: 4px 10px; display: flex; gap: 10px; align-items: center; color: var(--muted); flex: none; min-height: 26px; }
+  .foot .info { display: flex; gap: 6px; align-items: center; }
+  .foot a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .foot button.x { border: 0; background: transparent; cursor: pointer; color: var(--muted); }
+  .foot .sp { margin-left: auto; }
+  .profile { width: 300px; border-left: 1px solid var(--border); background: var(--bg); overflow: auto; flex: none; }
+  .profile header { padding: 8px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  .profile header b { display: block; font-size: 12px; }
+  .profile header span { color: var(--muted); }
+  .card { padding: 8px 10px; border-bottom: 1px solid var(--gridline); }
+  .card .nm { display: flex; justify-content: space-between; gap: 8px; }
+  .card .nm b { font-weight: 600; } .card .nm small { color: var(--muted); }
+  .stack { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 6px 0 4px; background: var(--gridline); }
+  .stack i { display: block; height: 100%; }
+  .card .ex { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .legend-note { color: var(--muted); }
+
+  /* ---- "as shipped" look ---- */
+  .app.shipped .cell { background-image: none; }
+  .app.shipped .row.sel .cell, .app.shipped .row .cell.act { background: color-mix(in srgb, var(--accent) 45%, #000 0%) !important; color: #fff; outline-offset: -1px; }
+  .app.shipped .gutcol { display: none; }
+
+  /* ---- commentary ---- */
+  table.notes { border-collapse: collapse; width: 100%; max-width: 1100px; background: var(--bg); border: 1px solid var(--border); }
+  table.notes th, table.notes td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.notes th { background: var(--chrome); font-weight: 600; font-size: 12px; }
+  table.notes td:first-child { width: 28px; font-weight: 700; color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; max-width: 1100px; }
+  .box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  .box h3 { margin: 0 0 4px; font-size: 13px; } .box p, .box ul { margin: 4px 0; color: var(--secondary); } .box ul { padding-left: 18px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--chrome); padding: 0 4px; border-radius: 3px; border: 1px solid var(--border); }
+  .rec { color: var(--add); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Comparison results: UX options</h1>
+<p class="lede">Design reference for reworking the Differences grid (<code>results.diff</code> and its grid). It uses the Varia Dark and Light palettes and Compact metrics, as the other
+  results-pane mocks do. It is not production code: the diff is computed in the page from invented rows, and the grid is a stand-in for <code>GridView</code>.
+  Try the <b>Match rows by</b> list, the direction swap, the filter chips, <b>F8</b> for the next change, and click cells and rows to see selection layered over the diff colours.</p>
+
+<div class="bar">
+  <span><label>Look</label><span class="seg" id="lookSeg"><button data-v="shipped">As shipped</button><button data-v="proposed" aria-pressed="true">Proposed</button></span></span>
+  <span><label>Rows</label><span class="seg" id="layoutSeg"><button data-v="merged" aria-pressed="true">One row per entry</button><button data-v="unified">Two rows (−/+)</button></span></span>
+  <span><label>Added/removed rows</label><span class="seg" id="washSeg"><button data-v="wash" aria-pressed="true">Faint wash</button><button data-v="none">Gutter only</button></span></span>
+  <span><label>Data</label><span class="seg" id="dataSeg"><button data-v="orders" aria-pressed="true">Orders (invented)</button><button data-v="dupes">Repeated keys</button><button data-v="sample">Your sample query</button></span></span>
+  <span><label>Theme</label><span class="seg" id="themeSeg"><button data-v="dark" aria-pressed="true">Dark</button><button data-v="light">Light</button></span></span>
+</div>
+
+<section class="app" id="app" aria-label="Differences result"></section>
+
+<h2>What each of your points becomes</h2>
+<table class="notes">
+  <tr><th>#</th><th>Your point</th><th>In the proposed look</th></tr>
+  <tr><td>1</td><td>Emphasize the cells that changed</td><td>A changed cell gets a strong tint and shows <del style="color:var(--rem)">old</del> → <b>new</b>. Unchanged cells in a changed row fade to muted text. The header of a column that has changes gets a blue underline and a dot, so a change off-screen to the right is still visible.</td></tr>
+  <tr><td>2</td><td>Change / R1 / R2 are not data</td><td>They become a <b>gutter</b> like the grid's row-number column: a 3px colour bar, a <b>+</b> / <b>−</b> / <b>~</b> marker and the row number. Hovering it gives “Row 3 in Sample Query, row 4 in Awesome Query”. They are not columns: they are not sorted, filtered, profiled, copied or saved. A copy can offer “with Change column” explicitly.</td></tr>
+  <tr><td>3</td><td>Selection and hover hide the diff colours</td><td>Diff colour is the cell's <i>background colour</i>. Hover and selection are translucent <i>layers on top</i> (17% accent for a row, 12% plus a 1.5px outline for the active cell), so a selected added row is still green underneath. Try it on any tinted cell.</td></tr>
+  <tr><td>4</td><td>“Column Profile Result 3” lies</td><td>Open <b>Profile</b>: the panel reads <b>Column Profile · Comparison</b> with “Sample Query → Awesome Query” under it, and each column card shows its changed / added / removed / same cells instead of generic value stats. In a menu, tab and Save the comparison keeps its own name.</td></tr>
+  <tr><td>5</td><td>Matching rows should still be in the diff</td><td>They are. <b>Context</b> is All rows (the default) or Changes only; in Changes only, unchanged rows collapse to “⋯ 6 unchanged rows” bars that expand on click. The Unchanged chip hides them entirely. No “N rows of context” setting: it was confusing and the two choices cover the need.</td></tr>
+  <tr><td>6</td><td>Highlight cells, not rows</td><td>Changed rows carry no row colour at all, only cell tints and the gutter bar. Rows that exist on one side only are different: every cell is new or gone, so they take a faint wash (switch to <b>Gutter only</b> to see the strict version).</td></tr>
+  <tr><td>7</td><td>Compare order is the direction, one row per entry</td><td><b>One row per entry</b> is the default: a changed row shows once, with each changed cell as old → new. The sides bar reads like a diff header (<b>−</b> Sample Query ⇄ <b>+</b> Awesome Query); the swap button reverses added and removed. Two rows (−/+) stays available for people who want git's unified shape.</td></tr>
+</table>
+
+<h2>Other things I noticed</h2>
+<div class="grid2">
+  <div class="box"><h3>Matching is the real problem in your sample</h3>
+    <p>Rows matched by <code>test</code>, and <code>test</code> is the column that differs (1 vs 2), so nothing matched: one removed, one added. That is correct but unhelpful.
+    Open <b>Match rows by</b> (Your sample query data), choose <b>Row position</b>, and it becomes one changed row. The menu is a checklist like the filter menus: tick several columns for a composite key (try <code>customer</code> + <code>status</code> on Orders). The footer today says “rows matched by test” without any way to change it.</p>
+    <p class="rec">Proposal: a Match rows by menu in the toolbar (Row position, or one or more key columns), with the key columns marked by ⚷ in their headers.</p></div>
+  <div class="box"><h3>Uncertain matches: two different cases</h3>
+    <p><b>≈ Repeated key</b> is a real ambiguity: the key appears more than once on a side, so rows are paired in order. The gutter shows ≈ with the explanation, and a chip counts them. Try <b>Repeated keys</b> in Data (sku W-100 appears twice).</p>
+    <p><b>? Possible match</b> is only a hint: a removed and an added row share most other values, so the key probably changed. It shows a strip with a one-click <b>Match by row position</b>, and never changes the counts. Try <b>Your sample query</b> with the test key. A row with different data is simply removed or added, with no hint.</p></div>
+  <div class="box"><h3>Navigation through changes</h3>
+    <p>Previous / Next change (<b>Shift+F8</b> / <b>F8</b>) jumps cell to cell, wrapping, and says “Change 2 of 5” in the toolbar. A scroll strip on the right marks where changes are, like an editor's overview ruler.</p></div>
+  <div class="box"><h3>Noise columns</h3>
+    <p><code>server_time</code> differs on every run. An <b>Ignore columns…</b> list (remembered with the comparison) would drop such columns from matching and from the change count. Not drawn here: it needs its own design for the paired-column rule.</p></div>
+  <div class="box"><h3>Summary and notices</h3>
+    <p>The orange sentence in the footer becomes four clickable chips (counts that also filter), and “Filters and sorts on the inputs were not applied” becomes a dismissible information line, not a warning colour: nothing is wrong.</p></div>
+  <div class="box"><h3>Tab and name</h3>
+    <p>“Differences: Sample Query → …” is cut off. Show the two names in the toolbar's sides bar (full width) and let the tab say <b>Diff: Sample Query</b> with the full name as its tooltip.</p></div>
+  <div class="box"><h3>Not in this mock</h3>
+    <ul><li>Side-by-side layout (two grids, scrolling together).</li><li>Intra-cell text diff for long strings (highlight the changed characters).</li><li>Copy / Save as a patch or with the Change column.</li><li>A soft-difference style (text equal by collation, “~”) is drawn as a dashed underline in the real grid.</li></ul></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s), esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+const DATA = {
+  orders: {
+    names: ['Orders Mon', 'Orders Tue'],
+    cols: [['id','int',70],['customer','nvarchar(64)',150],['status','nvarchar(16)',150],['amount','decimal(10,2)',170],['updated_at','datetime2(0)',290],['note','nvarchar(128)',150]],
+    A: [[1001,'Northwind Traders','Open','1240.00','2026-11-10 08:12:03',null],[1002,'Contoso Ltd','Open','310.50','2026-11-10 08:30:41','Rush'],[1003,'Fabrikam','Shipped','88.00','2026-11-10 09:02:10',null],
+        [1004,'Adventure Works','Open','5120.00','2026-11-10 09:15:55',null],[1005,'Tailspin Toys','Open','42.99','2026-11-10 09:40:00',null],[1006,'Wingtip','Open','760.00','2026-11-10 10:01:12',null],
+        [1007,'Litware','Shipped','15.00','2026-11-10 10:20:31',null],[1008,'Proseware','Open','2200.00','2026-11-10 10:44:09',null],[1009,'Lucerne Publishing','Open','99.00','2026-11-10 11:05:48',null],[1010,"Margie's Travel",'Open','180.25','2026-11-10 11:30:02',null]],
+    B: [[1001,'Northwind Traders','Open','1240.00','2026-11-10 08:12:03',null],[1002,'Contoso Ltd','Shipped','310.50','2026-11-11 07:58:20',null],[1003,'Fabrikam','Shipped','88.00','2026-11-10 09:02:10',null],
+        [1004,'Adventure Works','Open','4980.00','2026-11-10 09:15:55',null],[1006,'Wingtip','Open','760.00','2026-11-10 10:01:12',null],[1007,'Litware','Shipped','15.00','2026-11-10 10:20:31',null],
+        [1008,'Proseware','Open','2200.00','2026-11-11 06:12:44',null],[1009,'Lucerne Publishing','Open','99.00','2026-11-10 11:05:48',null],[1010,"Margie's Travel",'Open','180.25','2026-11-10 11:30:02',null],
+        [1011,'Coho Winery','Open','640.00','2026-11-11 08:01:00',null],[1012,'Relecloud','Open','75.00','2026-11-11 08:03:17','New']],
+    key: 'id'
+  },
+  dupes: {
+    names: ['Stock Mon', 'Stock Tue'],
+    cols: [['sku','nvarchar(16)',130],['location','nvarchar(32)',150],['qty','int',150]],
+    A: [['W-100','Aisle 1',40],['W-100','Aisle 2',12],['W-200','Aisle 1',7],['W-300','Aisle 3',0]],
+    B: [['W-100','Aisle 1',40],['W-100','Aisle 2',15],['W-200','Aisle 1',7],['W-400','Aisle 2',5]], key: 'sku'
+  },
+  sample: {
+    names: ['Sample Query', 'Awesome Query'],
+    cols: [['test','int',110],['server_name','nvarchar(128)',170],['database_name','nvarchar(128)',170],['server_time','datetime2(7)',220]],
+    A: [[1,'DOUGHTY-LEGION','master','2026-11-15 18:43:26.0483545']], B: [[2,'DOUGHTY-LEGION','master','2026-11-15 18:43:26.0483545']], key: 'test'
+  }
+}
+const S = { look: 'proposed', layout: 'merged', wash: 'wash', data: 'orders', theme: 'dark', swapped: false, keys: ['id'], keyMenu: false, ctx: 'all', vis: {added:true, removed:true, changed:true, same:true}, profile: false, sel: null, expanded: new Set(), note: true, nav: -1 }
+
+function model() {
+  const d = DATA[S.data], A = S.swapped ? d.B : d.A, B = S.swapped ? d.A : d.B
+  const names = S.swapped ? [d.names[1], d.names[0]] : d.names
+  const kis = S.keys.map(n => d.cols.findIndex(c => c[0] === n)).filter(i => i >= 0), ki = kis.length ? 0 : -1, kf = r => kis.map(i => r[i]).join('')
+  const entries = []
+  const diff = (a, b) => { const s = []; d.cols.forEach((_, i) => { if (a[i] !== b[i]) s.push(i) }); return s }
+  if (ki < 0) {
+    for (let i = 0; i < Math.max(A.length, B.length); i++) {
+      const a = A[i], b = B[i]
+      if (a && b) { const c = diff(a, b); entries.push({ kind: c.length ? 'changed' : 'same', a, b, ai: i + 1, bi: i + 1, cells: c }) }
+      else if (b) entries.push({ kind: 'added', b, bi: i + 1, cells: [] }); else entries.push({ kind: 'removed', a, ai: i + 1, cells: [] })
+    }
+  } else {
+    const aq = new Map(), pairOf = new Map(), usedA = new Set()
+    A.forEach((r, i) => { const k = kf(r); if (!aq.has(k)) aq.set(k, []); aq.get(k).push(i) })
+    B.forEach((b, bi) => { const q = aq.get(kf(b)); if (q && q.length) { const i = q.shift(); pairOf.set(bi, i); usedA.add(i) } })
+    let ap = 0
+    const flush = upto => { while (ap < upto) { if (!usedA.has(ap)) entries.push({ kind: 'removed', a: A[ap], ai: ap + 1, cells: [] }); ap++ } }
+    B.forEach((b, bi) => {
+      if (pairOf.has(bi)) { const i = pairOf.get(bi); flush(i); const a = A[i]; ap = Math.max(ap, i + 1); const c = diff(a, b); entries.push({ kind: c.length ? 'changed' : 'same', a, b, ai: i + 1, bi: bi + 1, cells: c }) }
+      else entries.push({ kind: 'added', b, bi: bi + 1, cells: [] })
+    })
+    flush(A.length)
+  }
+  let amb = 0, poss = 0; const possKeys = new Set()
+  if (kis.length) {
+    const cA = new Map(), cB = new Map(), kname = kis.map(i => d.cols[i][0]).join(' + ')
+    A.forEach(r => cA.set(kf(r), (cA.get(kf(r)) || 0) + 1)); B.forEach(r => cB.set(kf(r), (cB.get(kf(r)) || 0) + 1))
+    entries.forEach(e => { const k = kf(e.a || e.b), na = cA.get(k) || 0, nb = cB.get(k) || 0
+      if (na > 1 || nb > 1) { e.amb = `Key ${kname} = ${k.split('').join(', ')} is repeated (${na} in ${names[0]}, ${nb} in ${names[1]}). Rows were paired in order.`; amb++ } })
+    const rem = entries.filter(e => e.kind === 'removed'), add = entries.filter(e => e.kind === 'added'), nk = d.cols.map((_, i) => i).filter(i => !kis.includes(i)), taken = new Set()
+    rem.forEach(r => { let best = null, bs = 0
+      add.forEach(a => { if (taken.has(a)) return; const sc = nk.filter(i => r.a[i] === a.b[i] && r.a[i] !== null).length; if (sc > bs) { bs = sc; best = a } })
+      if (best && bs >= 2 && bs / nk.length >= 0.5) { taken.add(best); r.poss = `Looks like row ${best.bi} in ${names[1]} (${bs} of ${nk.length} other values equal)`; best.poss = `Looks like row ${r.ai} in ${names[0]} (${bs} of ${nk.length} other values equal)`; poss++; kis.forEach(i => { if (r.a[i] !== best.b[i]) possKeys.add(d.cols[i][0]) }) } })
+  }
+  return { d, names, entries, kis, amb, poss, possKeys }
+}
+const count = (m, k) => m.entries.filter(e => e.kind === k).length
+const val = v => v === null ? '<i class="null">NULL</i>' : esc(v)
+const KC = { added: 'var(--add)', removed: 'var(--rem)', changed: 'var(--chg)', same: 'transparent' }
+const MARK = { added: '+', removed: '−', changed: '~', same: '' }
+
+function lines(m) { // the visible lines: {type:'row'|'gap', ...}
+  const out = [], E = m.entries, ctxN = S.ctx === 'all' ? Infinity : +S.ctx
+  const near = E.map((e, i) => e.kind !== 'same' || E.slice(Math.max(0, i - ctxN), i + ctxN + 1).some(x => x.kind !== 'same'))
+  let run = []
+  const endRun = () => { if (run.length) { const key = run[0]; if (S.expanded.has(key) || !S.vis.same) {} ; if (!S.vis.same) {} else if (S.expanded.has(key)) run.forEach(i => out.push({ type: 'row', e: E[i], i })); else out.push({ type: 'gap', n: run.length, key }); run = [] } }
+  E.forEach((e, i) => {
+    if (e.kind === 'same' && !near[i]) { run.push(i); return }
+    endRun()
+    if (e.kind === 'same' && !S.vis.same) return
+    if (e.kind !== 'same' && !S.vis[e.kind]) return
+    out.push({ type: 'row', e, i })
+  }); endRun()
+  return out
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme
+  const m = model(), { d, names } = m, shipped = S.look === 'shipped'
+  const cols = d.cols, tpl = (shipped ? '70px 50px 50px ' : '90px ') + cols.map(c => c[2] + 'px').join(' ')
+  const changedCols = new Set(m.entries.flatMap(e => e.cells))
+  const keyIdx = new Set(m.kis)
+  // header
+  let head = shipped
+    ? `<div class="cell"><span>Change</span><small>nvarchar(1)</small></div><div class="cell">R1 <small>bigint</small></div><div class="cell">R2 <small>bigint</small></div>`
+    : `<div class="cell gut" style="background:none" title="Change marker and row number: not data"><span class="mk">&nbsp;</span><span class="n">#</span></div>`
+  if (shipped) head = `<div class="cell"></div>` + head // keeps template width
+  cols.forEach((c, i) => { head += `<div class="cell${!shipped && changedCols.has(i) ? ' chgcol' : ''}">${!shipped && keyIdx.has(i) ? '<span title="Match key" style="color:var(--warn)">⚷</span>' : ''}<span>${esc(c[0])}</span> <small>${esc(c[1])}</small>${!shipped && changedCols.has(i) ? '<span class="pip" title="Has changes"></span>' : ''}</div>` })
+  // rows
+  const L = lines(m); let ri = 0, html = '', marks = ''; const vis = []
+  const wash = S.look === 'proposed' && S.wash === 'wash'
+  const rowHTML = (e, side, i) => { // side: 'a' | 'b' | 'both' (merged)
+    const kind = side === 'a' ? 'removed' : side === 'b' && e.kind === 'changed' ? 'added' : e.kind
+    const rid = ri++, sel = S.sel && S.sel.r === rid && S.sel.c === undefined
+    const row = side === 'a' ? e.a : e.b || e.a
+    let g
+    const tip = e.kind === 'added' ? `Row ${e.bi} in ${names[1]} only` : e.kind === 'removed' ? `Row ${e.ai} in ${names[0]} only` : `Row ${e.ai} in ${names[0]}, row ${e.bi} in ${names[1]}`
+    const rn = side === 'a' ? e.ai : e.bi ?? e.ai
+    const mk = e.kind === 'changed' && side === 'both' ? '~' : MARK[kind]
+    g = shipped
+      ? `<div class="cell" style="padding:0"></div><div class="cell">${MARK[kind] || ' '}</div><div class="cell">${side === 'b' || e.kind === 'added' ? '<i class="null">NULL</i>' : e.ai ?? ''}</div><div class="cell">${side === 'a' || e.kind === 'removed' ? '<i class="null">NULL</i>' : e.bi ?? ''}</div>`
+      : `<div class="cell gut" data-gut="${rid}" title="${tip}" style="--k:${KC[kind]}"><span class="bar3"></span><span class="mk">${mk}</span><span class="n">${rn}</span>${e.amb ? `<span class="flag" title="${esc(e.amb)}">≈</span>` : e.poss ? `<span class="flag q" title="${esc(e.poss)}">?</span>` : ''}</div>`
+    let cells = ''
+    cols.forEach((c, ci) => {
+      const hit = e.cells.includes(ci); let bg = '', cls = '', inner = val(row[ci])
+      if (shipped) { if (kind === 'added') bg = 'color-mix(in srgb,var(--add) 22%,transparent)'; else if (kind === 'removed') bg = 'color-mix(in srgb,var(--rem) 22%,transparent)' }
+      else {
+        if (kind === 'added' || kind === 'removed') bg = wash ? `color-mix(in srgb,${KC[kind]} 11%,transparent)` : ''
+        if (e.kind === 'changed') {
+          if (side === 'both') { if (hit) { bg = 'color-mix(in srgb,var(--chg) 27%,transparent)'; inner = `<del>${val(e.a[ci])}</del><span class="arrow">→</span><ins>${val(e.b[ci])}</ins>` } else cls = 'dim' }
+          else if (hit) { bg = `color-mix(in srgb,${KC[kind]} 30%,transparent)`; inner = `<b style="font-weight:600">${val(row[ci])}</b>` } else cls = 'dim'
+        }
+      }
+      const act = S.sel && S.sel.r === rid && S.sel.c === ci
+      cells += `<div class="cell ${cls}${act ? ' act' : ''}" data-r="${rid}" data-c="${ci}" ${bg ? `style="--d:${bg}"` : ''}>${inner}</div>`
+    })
+    vis.push({ e, hits: e.cells, rid })
+    return `<div class="row${sel || (S.sel && S.sel.r === rid && S.sel.c === undefined) ? ' sel' : ''}" style="grid-template-columns:${tpl}" data-rid="${rid}">${g}${cells}</div>`
+  }
+  L.forEach(l => {
+    if (l.type === 'gap') { html += `<div class="collapsed" data-gap="${l.key}">⋯ ${l.n} unchanged row${l.n > 1 ? 's' : ''} <span style="color:var(--accent)">Show</span></div>`; return }
+    const e = l.e
+    if (S.layout === 'unified' && e.kind === 'changed') { html += rowHTML(e, 'a', l.i) + rowHTML(e, 'b', l.i) }
+    else html += rowHTML(e, 'both', l.i)
+  })
+  // overview strip
+  const total = Math.max(1, ri)
+  vis.forEach(v => { if (v.e.kind !== 'same') marks += `<span style="top:${v.rid / total * 100}%;background:${KC[v.e.kind]}"></span>` })
+  // toolbar
+  const counts = ['added', 'removed', 'changed', 'same'].map(k => ({ k, n: count(m, k) }))
+  const label = { added: 'added', removed: 'removed', changed: 'changed', same: 'unchanged' }
+  const chips = counts.map(c => `<button class="chip" data-chip="${c.k}" aria-pressed="${S.vis[c.k]}" style="--c:${c.k === 'same' ? 'var(--muted)' : KC[c.k]}">${c.k === 'same' ? '' : `<i>${MARK[c.k]}</i>`}<b>${c.n}</b> ${label[c.k]}</button>`).join('')
+  const changeCells = vis.flatMap(v => v.e.kind === 'changed' ? v.hits.map(c => [v.rid, c]) : [])
+  const ambChip = m.amb ? `<span class="chip" style="--c:var(--warn);color:var(--text);cursor:help" title="Rows whose key repeats were paired in order. Hover ≈ in the gutter."><i>≈</i><b>${m.amb}</b> repeated key</span>` : ''
+  const hint = !S.hintOff && m.poss ? `<div class="hint"><b>?</b><span><b style="color:var(--text)">Possible match.</b> ${m.poss} removed and ${m.poss} added row${m.poss > 1 ? 's look' : ' looks'} like the same row${m.poss > 1 ? 's' : ''} with a changed key (${[...m.possKeys].map(esc).join(', ')}). Counts and colours are unchanged.</span><button class="btn o" id="hintpos">Match by row position</button><button class="btn" id="hintx" title="Dismiss">✕</button></div>` : ''
+  const keyText = S.keys.length ? S.keys.join(' + ') : 'Row position'
+  const keyMenu = S.keyMenu ? `<div class="menu" id="keymenu"><label class="mi"><input type="radio" name="kmode" data-kmode="pos"${S.keys.length ? '' : ' checked'}> Row position <small>(1st with 1st, 2nd with 2nd)</small></label><label class="mi"><input type="radio" name="kmode" data-kmode="cols"${S.keys.length ? ' checked' : ''}> Key columns</label><div class="msep"></div>${d.cols.map(c => `<label class="mi ind${S.keys.length ? '' : ' off'}"><input type="checkbox" data-kcol="${esc(c[0])}"${S.keys.includes(c[0]) ? ' checked' : ''}${S.keys.length ? '' : ' disabled'}> ${esc(c[0])} <small>${esc(c[1])}</small></label>`).join('')}<div class="msep"></div><div class="mnote">${S.keys.length > 1 ? 'A row matches when all ' + S.keys.length + ' columns are equal.' : 'Pick several columns for a composite key.'} Matching is by value; a repeated key pairs in order.</div></div>` : ''
+  const bar = shipped
+    ? `<div class="tb"><span class="title">⇄ Comparison</span><span class="lbl">${m.entries.length} rows, ${cols.length + 3} columns</span></div>`
+    : `<div class="tb">
+        <span class="title">⇄ Comparison</span>
+        <span class="sides" title="Compare order is the direction"><span class="side"><span class="dot" style="background:var(--rem)"></span><b>−</b> ${esc(names[0])}</span><button class="swap" id="swap" title="Swap sides: added and removed trade places">⇄</button><span class="side"><span class="dot" style="background:var(--add)"></span><b>+</b> ${esc(names[1])}</span></span>
+        <span class="sep"></span><span class="lbl">Match rows by</span><span style="position:relative"><button class="sel keybtn" id="keybtn" aria-expanded="${S.keyMenu}">${S.keys.length ? '⚷ ' : ''}${esc(keyText)} ▾</button>${keyMenu}</span>
+        <span class="sep"></span><span class="lbl">Context</span><select class="sel" id="ctx">${['all:All rows', '0:Changes only'].map(o => { const [v, t] = o.split(':'); return `<option value="${v}"${S.ctx === v ? ' selected' : ''}>${t}</option>` }).join('')}</select>
+        <span class="sep"></span>${chips}${ambChip}
+        <span class="sep"></span><button class="btn o" id="prev" ${changeCells.length ? '' : 'disabled'} title="Previous change (Shift+F8)">↑</button><button class="btn o" id="next" ${changeCells.length ? '' : 'disabled'} title="Next change (F8)">↓ <kbd>F8</kbd></button>
+        <span class="lbl" id="navtxt">${changeCells.length ? (S.nav >= 0 ? `Change ${S.nav + 1} of ${changeCells.length}` : `${changeCells.length} changed cell${changeCells.length > 1 ? 's' : ''}`) : ''}</span>
+        <span style="margin-left:auto;display:flex;gap:4px"><button class="btn" id="prof" aria-pressed="${S.profile}" title="Column Profile of this comparison">▤ Profile</button><button class="btn" title="Save results as…">💾</button></span>
+      </div>`
+  const foot = shipped
+    ? `<div class="foot" style="color:var(--warn)"><span><u style="color:var(--accent)">${esc(names[0])}</u> → <u style="color:var(--accent)">${esc(names[1])}</u>, rows matched by ${esc(S.keys.length ? S.keys.join(', ') : 'position')}: ${count(m, 'changed')} changed rows, ${count(m, 'added')} added row, ${count(m, 'removed')} removed row, ${count(m, 'same')} unchanged. Filters and sorts on the inputs were not applied.</span></div>`
+    : `<div class="foot">${S.note ? `<span class="info">ⓘ Filters and sorts on the inputs were not applied. <a>Compare filtered rows instead</a><button class="x" id="note" title="Dismiss">✕</button></span>` : ''}<span class="sp">Rows ${vis.length} of ${m.entries.length + count(m, 'changed') * (S.layout === 'unified' ? 1 : 0)}</span></div>`
+  // profile
+  let prof = ''
+  if (S.profile && !shipped) {
+    prof = `<aside class="profile"><header><b>Column Profile · Comparison</b><span>${esc(names[0])} → ${esc(names[1])}</span></header>` + cols.map((c, ci) => {
+      const t = { same: 0, changed: 0, added: 0, removed: 0 }; let ex = ''
+      m.entries.forEach(e => { if (e.kind === 'same') t.same++; else if (e.kind === 'changed') { if (e.cells.includes(ci)) { t.changed++; ex = ex || `${e.a[ci] ?? 'NULL'} → ${e.b[ci] ?? 'NULL'}` } else t.same++ } else t[e.kind]++ })
+      const n = Math.max(1, m.entries.length), w = k => `<i style="width:${t[k] / n * 100}%;background:${k === 'same' ? 'var(--control)' : KC[k]}"></i>`
+      return `<div class="card"><div class="nm"><b>${esc(c[0])}${keyIdx.has(ci) ? ' ⚷' : ''}</b><small>${esc(c[1])}</small></div><div class="stack">${w('same')}${w('changed')}${w('added')}${w('removed')}</div><div class="ex">${t.changed} changed · ${t.added} added · ${t.removed} removed · ${t.same} same${ex ? `<br>e.g. ${esc(ex)}` : ''}</div></div>`
+    }).join('') + `</aside>`
+  }
+  const tabLabel = shipped ? `Differences: ${names[0]} → ...` : `Diff: ${names[0]}`
+  $('#app').className = 'app' + (shipped ? ' shipped' : '')
+  $('#app').innerHTML = `<div class="doctabs"><span class="doctab">${esc(d.names[0])} ✕</span><span class="doctab">${esc(d.names[1])} ✕</span><span class="doctab on" title="Differences: ${esc(names[0])} → ${esc(names[1])}">⇄ ${esc(tabLabel)} ✕</span></div>${bar}
+    ${shipped ? '' : hint}<div class="body"><div class="gridwrap"><div class="scroller"><div class="grid"><div class="row head" style="grid-template-columns:${tpl}">${head}</div>${html}</div></div>${shipped ? '' : `<div class="mini">${marks}</div>`}${foot}</div>${prof}</div>`
+  S._cells = changeCells
+}
+
+// events
+const seg = (id, key, fn) => $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; S[key] = b.dataset.v; $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); fn && fn(); render() })
+seg('#lookSeg', 'look'); seg('#layoutSeg', 'layout'); seg('#washSeg', 'wash'); seg('#themeSeg', 'theme')
+seg('#dataSeg', 'data', () => { S.keys = [DATA[S.data].key]; S.lastKeys = null; S.hintOff = false; S.swapped = false; S.sel = null; S.nav = -1; S.expanded.clear(); S.hintOff = false })
+const goto = n => { const cs = S._cells; if (!cs.length) return; S.nav = (n + cs.length) % cs.length; const [r, c] = cs[S.nav]; S.sel = { r, c }; render(); document.querySelector('.cell.act')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }
+$('#app').addEventListener('click', e => {
+  if (e.target.closest('#keymenu')) return
+  const t = e.target.closest('[data-c],[data-gut],[data-gap],[data-chip],#swap,#prof,#next,#prev,#note,#keybtn,#hintpos,#hintx'); if (!t) { if (S.keyMenu) { S.keyMenu = false; render() } return }
+  if (S.keyMenu && t.id !== 'keybtn') S.keyMenu = false
+  if (t.dataset.c !== undefined) S.sel = { r: +t.dataset.r, c: +t.dataset.c }
+  else if (t.dataset.gut !== undefined) S.sel = { r: +t.dataset.gut }
+  else if (t.dataset.gap !== undefined) S.expanded.add(+t.dataset.gap)
+  else if (t.dataset.chip) S.vis[t.dataset.chip] = !S.vis[t.dataset.chip]
+  else if (t.id === 'swap') { S.swapped = !S.swapped; S.sel = null; S.nav = -1; S.expanded.clear(); S.hintOff = false }
+  else if (t.id === 'hintpos') { S.keys = []; S.sel = null; S.nav = -1; S.expanded.clear(); S.hintOff = false }
+  else if (t.id === 'hintx') S.hintOff = true
+  else if (t.id === 'keybtn') S.keyMenu = !S.keyMenu
+  else if (t.id === 'prof') S.profile = !S.profile
+  else if (t.id === 'note') S.note = false
+  else if (t.id === 'next') return goto(S.nav + 1)
+  else if (t.id === 'prev') return goto(S.nav - 1)
+  render()
+})
+$('#app').addEventListener('change', e => { const t = e.target
+  if (t.dataset.kmode) { S.keys = t.dataset.kmode === 'pos' ? [] : [S.lastKeys?.length ? S.lastKeys : [DATA[S.data].key]].flat(); if (t.dataset.kmode === 'pos') S.lastKeys = S.keys.length ? S.keys : S.lastKeys; S.sel = null; S.nav = -1; S.expanded.clear(); S.hintOff = false }
+  if (t.dataset.kcol) { const n = t.dataset.kcol; S.keys = t.checked ? [...S.keys, n] : S.keys.filter(k => k !== n); if (!S.keys.length) S.keys = [n]; S.lastKeys = S.keys; S.sel = null; S.nav = -1; S.expanded.clear(); S.hintOff = false }
+  if (t.id === 'ctx') { S.ctx = e.target.value; S.expanded.clear(); S.hintOff = false } render() })
+addEventListener('keydown', e => { if (e.key === 'F8') { e.preventDefault(); goto(S.nav + (e.shiftKey ? -1 : 1)) } })
+const q = new URLSearchParams(location.search)
+if (q.get('theme') === 'light') { S.theme = 'light'; $('#themeSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === 'light')) }
+if (q.get('look') === 'shipped') { S.look = 'shipped'; $('#lookSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === 'shipped')) }
+if (q.get('profile')) S.profile = true
+render()
+</script>
+</body>
+</html>

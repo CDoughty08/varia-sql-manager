@@ -14,6 +14,7 @@ import { actionContextValues, actionMenuState } from '../src/shared/actions/cata
 import { ssisVerbContextValues, ssisVerbMenuState } from '../src/shared/ssis/catalog'
 import { childrenShown, lastDescendant, rowIndex, RowKind, rowKindOf, syntheticId, treeKey } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { explorerNodeProvider } from '../src/shared/providers'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -1606,6 +1607,27 @@ describe('ExplorerService: connections', () => {
     expect(explorer.menuNode(security.id)).toBeUndefined()
     expect(explorer.node(root)).toMatchObject({ expanded: true, lost: false, connectionId: fresh.id })
   })
+  it('shows a BigQuery connection as a root of its own with BigQuery commands and no catalog to load until its Explorer', async () => {
+    class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
+    const backend = fakeBackend(), connections = new Connections([])
+    const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => callback() })
+    disposals.push(() => explorer.dispose())
+    const bigQuery: LiveConnection = { ...info('varia-alpha'), server: 'varia-alpha', serverVersion: 'BigQuery', login: 'ada@example.com', providerId: 'bigquery', targetId: uuid(950), options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } }
+    connections.set([bigQuery])
+    await settle()
+    const root = explorer.rootIds[0]!
+    expect(explorer.node(root)).toMatchObject({ label: 'varia-alpha', hasChildren: false, expanded: false, sublabel: '(BigQuery - ada@example.com)' })
+    expect(backend.api.explorerChildren).not.toHaveBeenCalled()
+    expect(explorer.menuNode(root)).toMatchObject({ provider: 'bigquery' })
+    expect(explorerNodeProvider(explorer.menuNode(root))).toBe('bigquery')
+    // A reconnect under a new handle keeps it childless.
+    connections.set([{ ...bigQuery, lost: true }])
+    await settle()
+    connections.set([{ ...bigQuery, id: cid('varia-alpha-2'), generation: 2 }])
+    await settle()
+    expect(explorer.node(root)).toMatchObject({ lost: false, hasChildren: false })
+    expect(backend.api.explorerChildren).not.toHaveBeenCalled()
+  })
   it('updates target details in place and hides only Explorer membership while keeping other targets in order', async () => {
     class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
     const backend = fakeBackend(), connections = new Connections([])
@@ -1798,8 +1820,8 @@ describe('ExplorerService: selection, targets and context', () => {
     f.explorer.select(databases)
     expect(listener).toHaveBeenCalledTimes(1)
     expect(f.explorer.context.getSnapshot()).toEqual({
-      explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
-      explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false,
+      explorerHasSelection: true, explorerSelectionProvider: 'sqlserver', explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
+      explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false, explorerSelectionPeekable: false, explorerSelectionDependencies: false, explorerSelectionAgentRole: '',
       ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false, explorerGroupBySchema: false,
       // The Databases folder's own actions (Attach D1d, Restore Database D1f, Restore Files and Filegroups D1g), on a SQL Server box edition.
       explorerActionAttach: 'enabled', explorerActionRestore: 'enabled', explorerActionRestoreFiles: 'enabled'

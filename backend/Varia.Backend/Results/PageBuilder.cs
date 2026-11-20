@@ -43,6 +43,7 @@ internal sealed class PageBuilder
     private int rows;
     private int next = -1;
     private long rowBytes;
+    private int reserved;
     private long dataBytes;
     // The lengths sidecar: each committed row's DATALENGTH sum, the open row's, and the sparse entries (CellLengths.cs).
     private uint[] rowLengths = new uint[FirstPageRows];
@@ -104,6 +105,7 @@ internal sealed class PageBuilder
         if (rows == rowLengths.Length) Array.Resize(ref rowLengths, Math.Min(MaxRows, rowLengths.Length * 2));
         next = 0;
         rowBytes = 0;
+        reserved = 0;
         rowData = 0;
         openCells = 0;
         lastCell = -1;
@@ -157,7 +159,11 @@ internal sealed class PageBuilder
     }
 
     /// <summary>Bytes the current row may still add before its cells become truncated prefixes.</summary>
-    private int RowBudget => (int)Math.Max(0, MaxRowBytes - rowBytes);
+    private int RowBudget => (int)Math.Max(0, MaxRowBytes - rowBytes - reserved);
+
+    /// <summary>Holds bytes of the open row back from the cells appended next, so cells that must be stored whole (a
+    /// diff's marker and tone, after its data) still fit when the data reaches the row limit; 0 releases them.</summary>
+    public void ReserveRowBytes(int bytes) => reserved = Math.Clamp(bytes, 0, MaxRowBytes);
 
     public void AppendNull(bool error = false)
     {

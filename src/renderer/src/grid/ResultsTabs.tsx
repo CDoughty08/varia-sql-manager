@@ -8,6 +8,7 @@ import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
 import { minGridHeight } from './stack'
+import { visibleColumnCount } from './hidden-columns'
 import { groupView, pickerRequests, selectedEntry, selectedGroup, selectedItem, topItems } from './result-picker'
 import ResultsPicker from './ResultsPicker'
 
@@ -87,7 +88,7 @@ export function tabsFold(height: number, scrollbar: number = scrollbarSize()): '
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
 const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number }) {
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const columns = entry.descriptor.columns.length, number = entrySecondary(entry)
+  const columns = visibleColumnCount(entry.descriptor), number = entrySecondary(entry)
   // A named result's number leads its facts, as in its Stacked caption, so two tabs of one name are told apart on screen.
   const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (entry.descriptor.kind === 'executionPlan') facts.push('execution plan')
@@ -384,14 +385,16 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       {shown.map((item, place) => {
         const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
-        // A named result's tooltip has its whole name (the tab may cut it short) and its number; a named comparison's, its name.
-        const tip = [item.number ? `${item.name} · ${item.number}` : item.named ? item.name : '', batch].filter(Boolean).join(' · ')
-        // A named result's accessible name carries its number too, so a screen reader tells two of one name apart.
+        // A named result's tooltip has its whole name (the tab may cut it short) and its number; a comparison's, its full name
+        // ("Differences: Result 1 → Result 3"), as its tab shows only "old → new".
+        const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : '', batch].filter(Boolean).join(' · ')
+        // A named result's accessible name carries its number too, so a screen reader tells two of one name apart; a
+        // comparison's is its full name.
         const spoken = item.number ? `${item.name}, ${item.number}` : item.name
         return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}>
-          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...item.number ? { 'aria-label': spoken } : {}}
+          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...item.number || item.short ? { 'aria-label': spoken } : {}}
             aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => select(item.group ? groupView(item.group) : item.key)}>
-            {item.group?.planSet && <Icon name="execution-plan" />}{item.comparison && <Icon name="git-compare" />}<span className="rt-name">{item.name}</span>
+            {item.group?.planSet && <Icon name="execution-plan" />}{item.comparison && <Icon name="git-compare" />}<span className="rt-name">{item.short ?? item.name}</span>
           </button>
           {!tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${spoken}`} title={closeTitle(spoken, others)} disabled={running}
             onClick={event => close(item.key, 'result', event)}><Icon name="close" /></button>}

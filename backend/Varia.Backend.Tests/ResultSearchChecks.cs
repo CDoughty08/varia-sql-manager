@@ -242,7 +242,7 @@ internal static class ResultSearchChecks
         var before = Held.Bytes(store);
         var found = Call<ResultsSearchResult>("results.search", new { resultId = set.ResultId, text = "cafe", fromRow = 0, maxMatches = 100 });
         check(SqlService.MethodNames.Contains("results.search") && found.Total == 4 && found.MatchRows.SequenceEqual([0L, 1, 2, 3]) && found.MatchColumns.SequenceEqual([1, 1, 1, 3])
-            && found.Complete && found.Approximate && found.Rows == 6 && Held.Bytes(store) == before, "results.search answers the matches of a result and holds no memory after it");
+            && found.Complete && found.Approximate && found.Rows == 6 && Held.Bytes(store) - (set.SearchMemo?.Bytes ?? 0) == before, "results.search answers the matches of a result and holds no memory after it but its type-ahead memo");
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         var viewed = Call<ResultsSearchResult>("results.search", new { resultId = set.ResultId, text = "1", fromRow = 1, maxMatches = 2, viewId = view.ViewId });
         check(viewed.MatchRows.SequenceEqual([1L, 1]) && viewed.First == 1 && viewed.Total == 5, "results.search searches through a view by its positions");
@@ -449,8 +449,8 @@ internal static class ResultSearchChecks
         var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId });
         var added = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "added", fromRow = 0, maxMatches = 100 });
         var three = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "3", fromRow = 0, maxMatches = 100 });
-        var tone = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
-        check(tone >= 0 && diff.Added == 1 && added.Total == 0 && three.Total == 2 && three.MatchColumns.All(column => column != tone),
-            "a search of a diff result skips its hidden tone column: \"added\" matches nothing and a digit only the grid's cells, R2 and id (" + added.Total + ", " + three.Total + ")");
+        var hidden = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
+        check(hidden == 2 && diff.Added == 1 && added.Total == 0 && three.Total == 1 && three.MatchColumns.All(column => column < hidden),
+            "a search of a diff result skips its hidden suffix (marker, row numbers, tone): \"added\" matches nothing and a digit only the data cell, not the row number (" + added.Total + ", " + three.Total + ")");
     }
 }

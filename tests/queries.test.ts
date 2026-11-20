@@ -717,3 +717,22 @@ describe('query orchestration', () => {
     pending.resolve({ ok: true, value: output({ status: 'cancelled' }) }); await run
   })
 })
+
+describe('BigQuery execution', () => {
+  it("sends a BigQuery tab's dataset and none of SQL Server's options, whatever the settings and the tab hold", async () => {
+    const f = fixture(undefined, undefined, { 'queryExecution.stopOnError': true })
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    f.documents.update(f.tab.id, { database: 'sales_2026', includeActualPlan: true, includeLivePlan: true, includeClientStatistics: true })
+    await f.queries.execute(f.tab.id)
+    const sent = f.queryApi.execute.mock.calls[0][0]
+    expect(sent).toMatchObject({ connectionId: 'server-a', sessionId: f.tab.id, dataset: 'sales_2026' })
+    for (const option of ['database', 'stopOnError', 'includeActualPlan', 'includeLivePlan', 'includeClientStatistics']) expect(sent, option).not.toHaveProperty(option)
+    // No live plan is expected from a run that never asked for one.
+    expect(f.queries.getSnapshot()[f.tab.id]?.livePlan).toBeUndefined()
+    // A tab with no dataset leaves it to the connection's.
+    f.documents.update(f.tab.id, { database: '' })
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('dataset')
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('database')
+  })
+})

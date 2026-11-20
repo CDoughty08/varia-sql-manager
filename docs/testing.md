@@ -11,8 +11,9 @@ rules.
   lock (below). A stopped check prints its running lanes' output.
 - `npm run test:smoke` runs the suites in package.json's `test:smoke`; `node scripts/smoke-shards.mjs 2/3` runs one CI
   shard. The fixture launches the hidden smoke window with `--disable-frame-rate-limit` (Chromium otherwise draws it at
-  one frame a second, and every Playwright press waits for frames). `VARIA_SMOKE_PROFILE=<dir>` saves a Playwright trace
-  of each launch there; it holds the environment, so never upload one from a run with secrets.
+  one frame a second, and every Playwright press waits for frames). Every Electron launch under xvfb that opens a
+  window adds `--disable-gpu` through `xvfbArgs` (`scripts/fixtures/xvfb.mjs` says why). `VARIA_SMOKE_PROFILE=<dir>`
+  saves a Playwright trace of each launch there; it holds the environment, so never upload one from a run with secrets.
 - `npm run test:smoke:wsl -- <suite>...` runs smoke suites on Linux from a Windows checkout, through WSL (below). Run
   it for a change that can behave differently on Linux (window state, menus, clipboard, file paths) before pushing.
 - `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group 1/3`
@@ -114,6 +115,11 @@ npm run test:smoke:wsl -- --all
   `KRB5CCNAME` to a cache that does not exist) runs `tests/kerberos-live.test.ts`: Integrated authentication without a
   ticket must fail cleanly. A real Kerberos round trip needs a KDC and a domain-joined SQL Server, so it is a manual
   check: `kinit`, then connect with Windows authentication to a server name or SPN registered for Kerberos.
+- **BigQuery.** `VARIA_TEST_BIGQUERY_ENDPOINT` (a loopback http address such as `http://localhost:9050`, honoured only by
+  unpackaged builds) puts the backend in emulator mode against `ghcr.io/goccy/bigquery-emulator`, and
+  `-- --bigquery-emulator-live` runs the emulator checks (docs/bigquery.md#testing has the `docker run` line; on Windows use
+  `127.0.0.1`). The offline checks need nothing: `-- --bigquery-checks` runs them alone. No check ever contacts a real
+  Google Cloud project, and none reads a project id or credential from the environment.
 - **Password tracing.** `VARIA_TEST_SQL_XE=1` (set only for CI's disposable SQL Server container) runs the live check that an
   Extended Events session cannot read a password from the RPC; docs/object-actions.md has what it records.
 - **Restore fixtures.** `VARIA_UPDATE_RESTORE_FIXTURES=1` makes `RestoreLiveChecks` rewrite the scrubbed restore-planner
@@ -151,6 +157,18 @@ npm run test:smoke:wsl -- --all
   `SSISDB`; only the opt-in `VARIA_TEST_SSIS_CREATE=1` creates and drops it, on a server whose owner allows it and only
   when it has no `SSISDB`: it never drops a catalog it did not create. docs/integration-services.md records what is
   verified.
+- **SQL Server Agent.** `VARIA_TEST_SQL_AGENT=1` (set by CI's live job and, for a container with Agent enabled, the
+  session hook) runs the Agent live suites: they wait for Agent to come up (Agent XPs on and an Agent session; it starts
+  after the container's health check), up to `agentLimits.agentUpWaitMs`, and fail if it never does; without the variable
+  they skip with one line saying why. CI's live and Linux smoke containers set `MSSQL_AGENT_ENABLED=true`. With
+  `VARIA_TEST_SQL_SCRATCH=1` they also create a scratch job and login, named with the run prefix and a kind tag (`_job`,
+  `_sch`, `_op`, `_al`, `_px`, `_cr`; logins `_l…`), dropped in `finally` and swept by `ScratchDatabase.SweepAsync` once
+  the prefix is 6 hours old. Each scratch job run adds rows to Agent's server-wide history cap, pushing out real jobs'
+  oldest rows on a shared server, so a suite runs few jobs. Other Agent suites never stop Agent. docs/sql-server-agent.md
+  records what is verified.
+- **SQL Server Agent's release gate.** `VARIA_AGENT_PREVIEW=1` shows Agent's surfaces (context key `agentEnabled`) in
+  any build until 0.11.0 removes the gate; `electron.launch` in `scripts/fixtures/smoke.mjs` sets it unless the
+  suite's environment says otherwise, so smoke runs open the release gate.
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs
@@ -160,7 +178,8 @@ npm run test:smoke:wsl -- --all
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
     prompts stay; docs/hot-exit.md), `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (the fixture's default unless a launch passes
     `motion: true`: the renderer reduces motion whenever the emulated `prefers-reduced-motion` asks, without the
-    Reduce motion when the system asks setting), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
+    Reduce motion when the system asks setting), `VARIA_TEST_WINDOW_STATE=1` (the main window keeps its place between
+    launches, and main sets `globalThis.__variaWindowPlacement`; docs/popout-windows.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
     cipher);
   - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
     holdNextRenderer and releaseHolders);

@@ -32,7 +32,7 @@ export function cyclePanel(root: ParentNode, active: Element | null, step: 1 | -
  * focused grid's active row, else the active row of the monitor's session pane focused last.
  */
 export function activityContribution({ commands, activity, documents, connections, explorer, quickInput, events, menuTargets }: Pick<Workbench, 'commands' | 'activity' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'events' | 'menuTargets'>): Disposable {
-  const live = (id: string | undefined) => id !== undefined && connections.isLive(id) ? id : undefined
+  const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
     if (node) return node.kind === 'server' && !node.lost ? live(node.connectionId) : undefined
@@ -55,11 +55,11 @@ export function activityContribution({ commands, activity, documents, connection
   const root = (id: string) => typeof document === 'undefined' ? undefined : document.querySelector(`[data-activity-monitor="${CSS.escape(id)}"]`) ?? undefined
   const registrations = [
     commands.register('activity.open', {
-      when: args => { const node = explorerNodeOf(args); return !node || (node.kind === 'server' && !node.lost && connections.isLive(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return !node || (node.kind === 'server' && !node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => {
         const connectionId = target(args)
         if (connectionId) return open(connectionId)
-        const choices = connections.live()
+        const choices = connections.liveSqlServer()
         if (choices.length === 1) return open(choices[0].id)
         if (!choices.length) { events.emit({ type: 'activity.connectRequested' }); return }
         quickInput.show({ ariaLabel: 'Activity Monitor', placeholder: 'Select a server to monitor', noun: 'servers', items: serverItems(choices), onDidAccept: item => open(item.id) })

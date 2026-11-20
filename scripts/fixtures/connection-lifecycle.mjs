@@ -256,7 +256,7 @@ export async function connectionLifecycle() {
     const executions = (await calls()).filter(call => call.method === 'query.execute').length
     await writeFile(join(control, 'reject-passwords'), '')
     await app.close(); app = undefined
-    const saved = await readFile(join(profile, 'Session', 'session.json'), 'utf8')
+    const saved = await readFile(join(profile, 'WorkbenchSession', 'session.json'), 'utf8')
     expect(saved).not.toContain(secret)
     expect(saved).not.toContain('correct-horse-marker')
     expect(JSON.parse(saved).workspace.targets.filter(target => target.inExplorer).map(target => target.details.displayName)).toEqual(order)

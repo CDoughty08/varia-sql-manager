@@ -24,8 +24,11 @@ database management tools in one app, with SSMS's features and keys and a modern
 - **Monitoring**: Activity Monitor (sessions, blocking, expensive queries, waits, file I/O) and the Integration Services
   Catalog, with live data that refreshes on its own.
 - **Workbench**: VS Code-style command palette (F1), editor groups, popout windows, hot exit that restores tabs and
-  connections, remappable keyboard shortcuts and mouse gestures, Dark, Light or System themes, customizable.
+  connections, a main window that reopens where you left it (safely back on screen if a monitor is gone), remappable keyboard shortcuts and mouse gestures, Dark, Light or System themes, customizable.
 - **Authentication**: SQL Server, Windows (Kerberos on Linux and macOS) and Microsoft Entra ID.
+- **BigQuery (in progress)**: connect to Google BigQuery from the same Connect dialog (gcloud credentials, a service
+  account key or identity federation), with saved connections, favourites and a dataset picker; running queries comes
+  next ([BigQuery](docs/bigquery.md)).
 
 Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 

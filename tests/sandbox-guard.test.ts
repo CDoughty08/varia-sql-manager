@@ -193,8 +193,8 @@ describe('Chromium sandbox guard', () => {
     // The three stores that keep file paths in the profile all follow the smoke profile.
     expect(main).toContain('const pathsRefused = profilePathsRefused(smokeProfile)')
     expect(main).toContain("const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), { ...systemRecent ? { system: systemRecent } : {}, pathsRefused })")
-    expect(main).toContain("const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })")
-    expect(main).toContain("const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })")
+    expect(main).toContain("const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })")
+    expect(main).toContain("const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })")
     for (const store of ['RecentFilesStore', 'RecoveryStore', 'SessionStore']) expect(main.match(new RegExp(`new ${store}\\(`, 'g')), store).toHaveLength(1)
     // Every read or registration of a path in main: launch files, Recent Files and the Open dialog (openPath), a restored
     // session (reopenDocument, twice), and a recovered query. A new one needs its source checked against this rule.

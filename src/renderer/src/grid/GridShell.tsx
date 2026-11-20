@@ -206,7 +206,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.error ? undefined : strip.text}>
+        : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.text}>
           {action ? <><span className="rg-strip-text">{strip.text}</span>
             <button ref={actionRef} type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
               onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget || event.currentTarget.isConnected) actionFocused.current = false }}>

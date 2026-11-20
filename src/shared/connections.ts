@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import type { AdvancedConnectionOptions, ConnectionOptions } from './contracts'
-import { authenticationModes, requiresUser, showsIdentity, usesPassword } from './auth'
+import type { AdvancedConnectionOptions, BigQueryConnectionOptions, ConnectionOptions, ProviderConnectionOptions } from './contracts'
+import { authenticationModes, bigQueryAuthenticationModes, requiresUser, showsIdentity, usesKeyFile, usesPassword, type BigQueryAuthenticationMode } from './auth'
 import { environmentSchema } from './environments'
+import { normalizedProvider } from './providers'
 
 export const advancedDefaults: AdvancedConnectionOptions = {
   commandTimeout: 0, connectTimeout: 15, columnEncryption: false, secureEnclaves: false,
@@ -45,12 +46,60 @@ export const advancedConnectionSchema = z.object({
   serverCertificate: path, attachDbFilename: path, failoverPartner: z.string().max(256), failoverPartnerSpn: z.string().max(512),
   multiSubnetFailover: z.boolean(), serverSpn: z.string().max(512), userInstance: z.boolean()
 }).partial().strict()
+/** SQL Server's branch: today's strict fields, and a `provider` that is absent in every 0.9.0 file. */
 export const connectionOptionsSchema = z.object({
+  provider: z.literal('sqlserver').optional(),
   server: z.string().trim().min(1, 'Enter a server name.').max(256), database: z.string().trim().max(128), authentication: z.enum(authenticationModes),
   username: text.optional(), password: z.string().max(1024).optional(), trustServerCertificate: z.boolean(),
   encrypt: z.enum(['optional', 'mandatory', 'strict']).optional(), hostNameInCertificate: z.string().max(256).optional(),
   displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional(), advanced: advancedConnectionSchema.optional()
 }).strict().refine(value => !requiresUser(value.authentication) || !!value.username?.trim(), { error: issue => (issue.input as ConnectionOptions).authentication === 'sql' ? 'SQL authentication requires a username.' : 'This authentication requires a user name.' })
+
+/**
+ * BigQuery's names, checked per kind in zod and again in C# (BigQueryConnectOptions): Google's project id grammar
+ * (domain-scoped `example.com:proj` included) up to 128 characters, datasets of letters, digits and underscores up to 1,024.
+ * SQL Server's 128-character names stay on its own branch.
+ */
+export const bigQueryLimits = { project: 128, dataset: 1024, location: 64, extraProjects: 16, serviceAccount: 254 } as const
+export const bigQueryProjectSchema = z.string().max(bigQueryLimits.project).regex(/^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]$/, 'Enter a Google Cloud project id.')
+export const bigQueryDatasetSchema = z.string().min(1).max(bigQueryLimits.dataset).regex(/^\w+$/, 'A dataset name has only letters, numbers and underscores.')
+export const bigQueryConnectionOptionsSchema = z.object({
+  provider: z.literal('bigquery'), project: bigQueryProjectSchema,
+  location: z.string().min(1).max(bigQueryLimits.location).regex(/^[A-Za-z\d-]+$/).optional(), dataset: bigQueryDatasetSchema.optional(),
+  extraProjects: z.array(bigQueryProjectSchema).max(bigQueryLimits.extraProjects).optional(),
+  authentication: z.enum(bigQueryAuthenticationModes),
+  // An opaque reference (the token main's picker returned, which a saved entry keeps), never a path: only main knows where the file is.
+  keyFile: z.uuid().optional(),
+  impersonateServiceAccount: z.email().max(bigQueryLimits.serviceAccount).optional(),
+  maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional()
+}).strict().refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), { error: issue => usesKeyFile((issue.input as BigQueryConnectionOptions).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' })
+const keyFileRule = { error: (issue: { input: unknown }) => usesKeyFile((issue.input as { authentication: BigQueryAuthenticationMode }).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' }
+/** bigquery.account's parameters (and bigquery.projects' with a page token): the mode and, for a key or configuration file,
+ *  its reference. Main adds the credential material; the renderer never sends it. */
+const bigQueryCredentialShape = {
+  authentication: z.enum(bigQueryAuthenticationModes), keyFile: z.uuid().optional(), impersonateServiceAccount: z.email().max(bigQueryLimits.serviceAccount).optional()
+}
+// A projects.list page token, as BigQueryLimits.CheckPageToken bounds it.
+const bigQueryPageToken = z.string().min(1).max(1024).regex(/^[^\p{Cc}]+$/u)
+export const bigQueryCredentialParamsSchema = z.object(bigQueryCredentialShape).strict()
+  .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
+export const bigQueryProjectsParamsSchema = z.object({ ...bigQueryCredentialShape, pageToken: bigQueryPageToken.optional() }).strict()
+  .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
+// One visible line, as BigQueryIdentity.Account writes it.
+const bigQueryLine = (max: number) => z.string().min(1).max(max).regex(/^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u)
+/** The pre-connect answers, checked in main before the renderer sees them (BigQueryContracts.cs bounds them the same). */
+export const bigQueryAccountSchema = z.object({
+  kind: z.enum(['serviceAccount', 'user', 'computeEngine', 'external', 'aws', 'externalUser', 'impersonated', 'emulator']), account: bigQueryLine(256),
+  impersonated: z.email().max(bigQueryLimits.serviceAccount).optional()
+}).strict()
+export const bigQueryProjectListSchema = z.object({
+  projects: z.array(z.object({ id: bigQueryProjectSchema, friendlyName: bigQueryLine(256).optional() }).strict()).max(1000),
+  nextPageToken: bigQueryPageToken.optional()
+}).strict()
+/** Connection options of any provider; a missing `provider` is SQL Server. */
+export const providerConnectionOptionsSchema = z.union([connectionOptionsSchema, bigQueryConnectionOptionsSchema])
+export const isBigQueryOptions = (options: { readonly provider?: string }): options is BigQueryConnectionOptions => options.provider === 'bigquery'
 
 // Persistence is built from a whitelist; neither passwords nor raw connection strings enter the file.
 export function savedConnection(options: ConnectionOptions): Omit<ConnectionOptions, 'password'> {
@@ -79,7 +128,13 @@ const savedOptionsSchema = connectionOptionsSchema.refine(value => value.passwor
 export const connectionLibrarySchema = z.object({
   version: z.literal(1), profiles: z.array(z.object({ id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), registered: z.boolean(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(), autoReconnect: connectionAutoReconnectSchema.optional() }).strict()).max(200)
 }).strict().refine(value => new Set(value.profiles.map(profile => profile.id)).size === value.profiles.length, 'Duplicate connection IDs.')
-export function connectionKey(options: ConnectionOptions): string {
+/** Which saved entry a connection is: SQL Server's key is unchanged from 0.9.0 (it never names the provider); BigQuery's
+ *  names the provider, project, default dataset, authentication, key file reference and impersonated account. */
+export function connectionKey(options: ProviderConnectionOptions): string {
+  if (isBigQueryOptions(options)) {
+    const clean = bigQueryConnectionOptionsSchema.parse(options)
+    return JSON.stringify(['bigquery', clean.project, clean.dataset ?? '', clean.authentication, clean.keyFile ?? '', clean.impersonateServiceAccount?.toLowerCase() ?? ''])
+  }
   const clean = savedConnection(options)
   return JSON.stringify([clean.server.toLowerCase(), clean.database.toLowerCase(), clean.authentication, clean.username ?? '',
     clean.encrypt ?? 'mandatory', clean.trustServerCertificate, clean.hostNameInCertificate ?? '', { ...advancedDefaults, ...clean.advanced }])
@@ -94,7 +149,10 @@ export function canRememberPassword(authentication: ConnectionOptions['authentic
  * Everything that decides where a password goes and how the server is verified. A remembered password is sent only to
  * a request with the same binding, so changing the database, name, color or environment keeps it, and anything else needs it typed.
  */
-export function credentialBinding(options: Omit<ConnectionOptions, 'password'>): string {
+export function credentialBinding(options: Omit<ConnectionOptions, 'password'> | Pick<BigQueryConnectionOptions, 'provider' | 'project' | 'authentication' | 'impersonateServiceAccount'>, resolved: { readonly keyPath?: string; readonly principal?: string } = {}): string {
+  // A BigQuery binding names the provider, so it can never equal a SQL Server one; main supplies the key file's path
+  // (the options carry only a reference) and the principal it pinned.
+  if (options.provider === 'bigquery') return JSON.stringify(['bigquery', options.project, options.authentication, resolved.keyPath ?? '', options.impersonateServiceAccount?.toLowerCase() ?? '', resolved.principal ?? ''])
   return JSON.stringify([options.server.trim().toLowerCase(), options.authentication, options.username ?? '', options.encrypt ?? 'mandatory',
     options.encrypt !== 'strict' && options.trustServerCertificate, options.hostNameInCertificate ?? '', options.advanced?.serverCertificate ?? '',
     options.advanced?.failoverPartner ?? '', options.advanced?.networkProtocol ?? 'default'])
@@ -117,7 +175,18 @@ export function rememberedProfile(profiles: readonly ConnectionProfile[], savedI
  *  Environment (or cleared it); without it a connect that carries no label keeps the one its entry has. */
 // These inline shapes avoid a runtime cycle: connection-targets itself builds its allowlist from this module.
 const contextCredential = z.object({ profileId: z.uuid(), revision: z.uuid() }).strict()
-const contextPrincipal = z.object({ provider: z.literal('sqlServer'), authentication: z.enum(authenticationModes), id: z.string().min(1).max(256).refine(value => !!value.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) }).strict()
+const visibleLine = (value: string) => !!value.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
+const principalText = z.string().min(1).max(256).refine(visibleLine, 'An account identifier must be a visible single line.')
+/**
+ * A verified account, tagged by provider: SQL Server's authentication mode and principal id, or BigQuery's billing project
+ * and pinned identity. The 0.9.0 spelling `sqlServer` reads as `sqlserver`. connection-targets.ts re-exports it as the
+ * target's expected principal; it lives here so this module needs nothing from that one.
+ */
+export const connectionPrincipalSchema = z.preprocess(value => value !== null && typeof value === 'object' && 'provider' in value ? { ...value, provider: normalizedProvider(value.provider) } : value, z.discriminatedUnion('provider', [
+  z.object({ provider: z.literal('sqlserver'), authentication: z.enum(authenticationModes), id: principalText }).strict(),
+  z.object({ provider: z.literal('bigquery'), project: bigQueryProjectSchema, principal: principalText }).strict()
+]))
+const contextPrincipal = connectionPrincipalSchema
 export const connectContextSchema = z.object({
   profileId: z.uuid().optional(), selectedProfileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional(), setsEnvironment: z.boolean().optional(),
   autoReconnect: connectionAutoReconnectSchema.optional(),

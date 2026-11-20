@@ -121,6 +121,8 @@ describe('GestureService', () => {
       // Except on macOS, where Control+double-click never arrived (Control+click is a right-click): ⌘ instead.
       'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'popout.returnToMain': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with dragging a server onto a query: the modifier inserts its name instead (⌥, macOS's copy modifier).
+      'explorer.dropServerName': (event, platform) => !!(platform === 'darwin' ? event.altKey : event.ctrlKey),
       'documentTabs.rows': event => !!event.ctrlKey,
       'documentTabs.scroll': () => true,
       'documentTabs.rename': () => true

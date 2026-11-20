@@ -111,6 +111,12 @@ export const errorCodes = [
   // Backend: a Microsoft Entra sign-in failed or must be repeated; the message says what to do.
   'AUTH_ENTRA',
   'AUTH_IDENTITY',
+  // Backend: BigQuery failures (docs/bigquery.md, Errors): a sign-in to repeat, a key or configuration file Varia cannot
+  // use, the API or billing off for the project, a quota or rate limit, legacy SQL, and a missing permission.
+  'AUTH_EXPIRED', 'AUTH_KEY_FILE', 'API_DISABLED', 'BILLING_DISABLED', 'QUOTA', 'LEGACY_SQL', 'PERMISSION_DENIED',
+  // Backend: a BigQuery query's dataset in another location, a result over BigQuery's response limit, and a query over the
+  // connection's maximum bytes billed.
+  'LOCATION_MISMATCH', 'RESULT_TOO_LARGE', 'COST_CAP',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.
@@ -125,6 +131,9 @@ export const errorCodes = [
   'BUDGET_STOPPED',
   // Backend and main: an Object Explorer requestId that is already running.
   'DUPLICATE_REQUEST',
+  // Backend and main: the method has no such engine (its `providers` lack the connection's provider). Not NOT_SUPPORTED
+  // ("this server cannot have it") or AUTH_UNSUPPORTED (an authentication failure).
+  'UNSUPPORTED_PROVIDER',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

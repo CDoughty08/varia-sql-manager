@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkLargeComparison } from './fixtures/plan-comparison.mjs'
-import { backendReady, documentTabs, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, localGrid, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -67,7 +67,23 @@ async function compareHistory(savedFile, actualVersusEstimate = false) {
   await expect(comparison.getByRole('status').filter({ hasText: /paired statements/ })).toContainText(/[1-9]\d* paired operators/)
   await comparison.getByRole('button', { name: 'Differences', exact: true }).click()
   await expect.poll(async () => (await l.getByRole('tree', { name: 'Plan operators', exact: true }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32)
-  await expect(comparison.getByRole('table', { name: 'Operator differences', exact: true })).toContainText('Elapsed (ms, max thread)')
+  // Each Differences table is the results grid (LocalGrid, page): Copy with Headers takes its rows as shown.
+  const operators = localGrid(comparison, 'Operator differences')
+  await expect(operators).toContainText('Elapsed (ms, max thread)')
+  await application.evaluate(({ clipboard }) => clipboard.writeText(''))
+  await gridCell(operators, 0, 0).click()
+  await page.keyboard.press('Control+A'); await page.keyboard.press('Control+Shift+C')
+  await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/^Operator metric \/ property\tLeft\tRight\tDelta \/ change\r?\nActual rows \(total across threads\)\t/)
+  // The statements' table shows on demand, under the operators'.
+  const statements = localGrid(comparison, 'Statement differences')
+  const statementsToggle = comparison.getByRole('button', { name: 'Statement estimates, parameters, memory grants and warnings', exact: true })
+  await expect(statements).toHaveCount(0)
+  await statementsToggle.click()
+  await expect(statementsToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(statements).toContainText('Estimated statement cost (optimizer units)')
+  await expect(operators).toBeVisible()
+  await statementsToggle.click()
+  await expect(statements).toHaveCount(0)
   if (savedFile) {
     await expect(comparison).toContainText('Capture type, estimation mode and execution status unavailable')
     await page.screenshot({ path: resolve('artifacts/plan-comparison.png') })

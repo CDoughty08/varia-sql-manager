@@ -12,11 +12,16 @@ import type { DatabasePropertiesService, PropertiesState } from '../src/renderer
 import Segmented, { segmentedMaximum, segmentKey } from '../src/renderer/src/kit/Segmented'
 import Switch from '../src/renderer/src/kit/Switch'
 import { databaseStatusPill, fieldControl, problemSections, switchStates } from '../src/renderer/src/properties/fields'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import { databaseModel } from './fixtures/database-properties'
 import { computed, selectorParts } from './fixtures/css-cascade'
 import { stylesheetRules } from './fixtures/css-rules'
+import { workbenchFixture } from './fixtures/workbench'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
+/** Files draws its list as a local grid, which reads the workbench. */
+const inWorkbench = (element: ReactElement) => html(createElement(WorkbenchProvider, { workbench: { ...workbenchFixture(), platform: 'win32' } as unknown as Workbench, children: element }))
 const rules = stylesheetRules()
 const valueOf = (selector: string, property: string, at: readonly string[] = []) =>
   rules.filter(rule => rule.selector === selector && rule.at.join(' ') === at.join(' ')).flatMap(rule => rule.declarations).find(declaration => declaration.property === property)?.value
@@ -128,8 +133,14 @@ describe('property sheet hints and sections', () => {
       if (def.description) expect(field, def.key).toContain(`id="${id}-description"`)
     }
   })
+  it('lists the database files in a page grid, as the results grid draws rows, not an HTML table', () => {
+    const files = inWorkbench(createElement(FilesSection, sectionProps()))
+    expect(files).not.toContain('<table')
+    expect(files).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit="" style="height:\d+px;flex:none">/)
+    expect(files).toContain('aria-label="Database files"')
+  })
   it('puts Files\' facts and its Owner field in groups of their own', () => {
-    const files = html(createElement(FilesSection, sectionProps()))
+    const files = inWorkbench(createElement(FilesSection, sectionProps()))
     expect([...files.matchAll(/<h3 class="properties-group-title"[^>]*>([^<]+)<\/h3>/g)].map(match => match[1])).toEqual(['Database', 'Ownership', 'Database files'])
     expect(files.indexOf('Ownership')).toBeLessThan(files.indexOf('for="properties-doc-owner"'))
     expect(files.indexOf('Use full-text indexing')).toBeLessThan(files.indexOf('Ownership'))
@@ -208,18 +219,15 @@ describe('property sheet styles', () => {
     // No property rule follows the frame's width, which counts the section list too.
     expect(rules.filter(rule => rule.at.some(at => /^@container \(/.test(at)) && /\.propert/.test(rule.selector))).toEqual([])
   })
-  it('sizes the files and filegroups grids to their text and wraps a long value rather than cutting it, keeping words whole that fit', () => {
+  it('sizes the editable tables (New Database\'s files and filegroups, Restore\'s files) to their text and wraps a long value rather than cutting it, keeping words whole that fit', () => {
     expect(declared('.properties-table > .object-dialog-grid', 'table-layout')).toBe('auto')
     // anywhere would let the auto layout size each column to one letter and split words that fit (Not Applicabl|e).
     for (const cell of ['.properties-table > .object-dialog-grid td', '.properties-table > .object-dialog-grid th']) {
       expect([declared(cell, 'white-space'), declared(cell, 'overflow-wrap'), declared(cell, 'text-overflow')], cell).toEqual(['normal', 'break-word', 'clip'])
     }
     expect(declared('.properties-table > .object-dialog-grid [data-wrap="never"]', 'white-space')).toBe('nowrap')
-    // Only the path breaks anywhere: it takes the width the names and words leave.
+    // Only a path breaks anywhere: it takes the width the names and words leave.
     expect(declared('.properties-table > .object-dialog-grid [data-wrap="anywhere"]', 'overflow-wrap')).toBe('anywhere')
-    const files = html(createElement(FilesSection, sectionProps()))
-    expect([...files.matchAll(/<th scope="col" data-wrap="never">([^<]+)<\/th>/g)].map(match => match[1])).toEqual(['File Type', 'Size (MB)'])
-    expect([...files.matchAll(/<td data-wrap="anywhere"><bdi>([^<]+)<\/bdi>/g)].map(match => match[1])).toEqual(['C:\\Data', 'C:\\Data'])
   })
   it('sizes its fields from the control token and checks the controls\' contrast on the document', () => {
     expect(densityUse.control).toContain('.property-input')

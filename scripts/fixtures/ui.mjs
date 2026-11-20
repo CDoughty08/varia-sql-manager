@@ -115,6 +115,7 @@ export const part = {
   resultTabs: '.rt-root',
   /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
   liveGrid: '.live-grid',
+  localGrid: '.local-grid',
   // Object Explorer
   explorerLabel: '.oe-label',
   explorerText: '.oe-text',
@@ -250,10 +251,11 @@ export const part = {
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
   // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
-  // status region says the same), the legend's line samples, and the scroll box that holds View as table.
+  // status region says the same), the legend's line samples, and View as table's box (caption and grid) and caption.
   chartTooltip: '.live-chart-tip',
   chartSwatch: '.live-chart-swatch',
   chartTableWrap: '.live-chart-table-wrap',
+  chartTableCaption: '.live-chart-table-caption',
   // Restore Database's Backup Timeline (src/renderer/src/restore/BackupTimeline.tsx): a backup's mark on the track (full,
   // differential or log, by kind) and the legend's samples, which draw the same shapes.
   restoreTimelineFull: '.restore-timeline-track .restore-timeline-full',
@@ -299,6 +301,8 @@ export const gridPart = {
   rowHeader: '[role="rowheader"]',
   /** The drawn row numbers (screen readers read each row's own header instead). */
   rowNumber: '.rg-rn',
+  /** A comparison's gutter mark (− or +) before its row number, drawn only (the row's header names its kind and rows). */
+  diffMark: '.rg-dm',
   cell: '[role="gridcell"]',
   selectedCell: '[role="gridcell"][aria-selected="true"]',
   loadingCell: '.rg-c.is-load',
@@ -343,6 +347,9 @@ export const gridPart = {
    *  value, and one equal to the other only by collation. */
   addedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-added',
   removedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-removed',
+  /** A changed row's old (−) and new (+) halves in a comparison: only their changed cells are coloured. */
+  changedOldRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-changedOld',
+  changedNewRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-changedNew',
   changedCell: '[role="gridcell"].is-chg',
   softCell: '[role="gridcell"].is-soft',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
@@ -386,6 +393,8 @@ export const queryConnection = page => queryBar(page).getByRole('group', { name:
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
 export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
+/** What a server dragged from Object Explorer onto a query will do (the card under a tab, the editor's plate, the insert hint). */
+export const serverDropCard = page => page.getByRole('status', { name: 'Server drop', exact: true })
 export const banner = page => page.locator(part.banner)
 /** The command and file banners: errors are alerts, warnings are statuses. */
 export const errorBanner = page => page.locator(part.banner + '[role="alert"]')
@@ -714,12 +723,13 @@ export const messageLines = page => messages(page).locator('pre')
 export const errorMessages = page => messages(page).locator(part.errorMessage)
 /**
  * CSS for the results grid of the result numbered so ("Result 2"): the grid whose accessible name starts with it
- * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator; a result Varia made (a pivot, a
- * diff) is numbered like the others by its grid's name, after the query's own.
+ * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator. A result Varia made (a pivot, a
+ * diff) is numbered after the query's own; its grid is named for itself ("Differences: Result 1 → Result 2, …"), so it is
+ * found by the number it keeps in `data-result-number`.
  */
 export const resultGridSelector = (name = 'Result 1', view) => {
   if (!/^Result \d+$/.test(name)) throw new Error(`"${name}" is not a result's number; find its grid with resultGrid.`)
-  if (view === undefined) return `${gridPart.root}[aria-label^="${name} of "]`
+  if (view === undefined) return `${gridPart.root}:is([aria-label^="${name} of "], [data-result-number="${name.slice('Result '.length)}"])`
   if (!resultViews.includes(view)) throw new Error(`"${view}" is not a view of a result; use one of ${resultViews.join(', ')}.`)
   return `${gridPart.root}[data-result-group="${name.slice('Result '.length)}"][data-result-view="${view}"]`
 }
@@ -831,6 +841,13 @@ export const liveGridOverlay = frame => frame.locator(gridPart.overlay)
 export const liveGridStrip = frame => frame.locator(gridPart.strip)
 /** The "n new rows · Jump to latest" button of a log scrolled up from its tail. */
 export const liveGridNewRows = frame => frame.getByRole('button', { name: /new rows? · Jump to latest$/ })
+
+// Local grids (LocalGrid): a table the renderer holds (a Peek list, a Properties table) in the results grid, named by its owner.
+
+export const localGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
+/** Its frame: the strip (a truncation, a failed copy, a save) and the overlay an empty table's words show in. `scope` is the
+ *  page or a locator (a document) to look in; the grid it holds is matched from the page, as `has` resolves inside the frame. */
+export const localGridFrame = (scope, name) => scope.locator(part.localGrid).filter({ has: localGrid(typeof scope.page === 'function' ? scope.page() : scope, name) })
 
 // Object Explorer
 
@@ -1085,5 +1102,7 @@ export const chartTooltip = box => box.locator(part.chartTooltip)
 /** The legend, named after the chart's title: shown only for two or more series. */
 export const chartLegend = box => box.getByRole('list', { name: / series$/ })
 export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('line')
-/** View as table's scroll box, a region named after the chart's title. */
-export const chartTableRegion = box => box.getByRole('region', { name: / table$/ })
+/** View as table's grid (LocalGrid, card), named after the chart's title ("Synthetic metrics table, 12 rows, 2 columns"). */
+export const chartTable = box => box.getByRole('grid', { name: / table(?:, |$)/ })
+/** The line above it: how many of the window's samples it lists. */
+export const chartTableCaption = box => box.locator(part.chartTableCaption)

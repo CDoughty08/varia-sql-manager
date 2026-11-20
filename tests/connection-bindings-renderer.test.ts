@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionBindingsChanged } from '../src/shared/connection-bindings'
 import { keptSession } from '../src/renderer/src/services/session'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
+import type { SqlServerTargetOptions } from '../src/shared/connection-targets'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
-const principal = { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'sid:reader' }
+const principal = { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'sid:reader' }
 const cleanups: (() => void)[] = []
 afterEach(() => cleanups.splice(0).forEach(cleanup => cleanup()))
 function fixture() {
@@ -17,7 +18,7 @@ function fixture() {
   }
   accept(targetId, handle)
   const change = (revision: number, database = 'Renamed'): ConnectionBindingsChanged['changes'][number] => ({ targetId, handle: { id: handle, generation: 1 }, revision,
-    options: { ...f.connectionTargets.get(targetId)!.options, database }, authentication: { principal, credential: { profileId: id(200), revision: id(201) } } })
+    options: { ...f.connectionTargets.get(targetId)!.options as SqlServerTargetOptions, database }, authentication: { principal, credential: { profileId: id(200), revision: id(201) } } })
   const push = (...changes: ConnectionBindingsChanged['changes']) => f.api.pushConnectionBindings({ generation: 1, changes })
   return { ...f, targetId, handle, accept, change, push }
 }
@@ -56,7 +57,7 @@ describe('authoritative runtime connection bindings', () => {
     expect(f.connectionTargets.getSnapshot()).toBe(before)
     f.push({ ...f.change(3), authentication: { principal, credential: null } })
     expect(f.connectionTargets.get(f.targetId)?.credential).toBeUndefined()
-    expect(f.connectionTargets.get(f.targetId)?.options.database).toBe('Renamed')
+    expect((f.connectionTargets.get(f.targetId)?.options as SqlServerTargetOptions | undefined)?.database).toBe('Renamed')
   })
 
   it('preserves disconnect operations and resets ordering for a fresh handle, never applying the old handle late', () => {
@@ -70,9 +71,9 @@ describe('authoritative runtime connection bindings', () => {
     f.accept(f.targetId, id(52))
     const fresh = { ...f.change(1, 'Fresh'), handle: { id: id(52), generation: 1 }, authentication: { principal, credential: null } }
     f.push(fresh)
-    expect(f.connectionTargets.get(f.targetId)?.options.database).toBe('Fresh')
+    expect((f.connectionTargets.get(f.targetId)?.options as SqlServerTargetOptions | undefined)?.database).toBe('Fresh')
     f.push(f.change(999, 'Stale'))
-    expect(f.connectionTargets.get(f.targetId)?.options.database).toBe('Fresh')
+    expect((f.connectionTargets.get(f.targetId)?.options as SqlServerTargetOptions | undefined)?.database).toBe('Fresh')
   })
 
   it('rejects invalid event payloads and releases the single workbench subscription on dispose', () => {

@@ -37,6 +37,9 @@ internal static class LiveTableDataChecks
         return LiveCatalog.Create(LiveCatalog.Current.Limits, probes, [new LiveSourceJson(Source, "Scratch", "Scratch", "server", false, [ItemsProbe, LogProbe])]);
     }
 
+    /// <summary>The probe texts, which the offline live lint checks too (this suite runs only with scratch databases).</summary>
+    internal static readonly string[] Texts = [ItemsSql, LogSql, TailSql];
+
     private const string ItemsSql =
         "SELECT TOP (100) i.id, i.label, i.amount, CONVERT(datetime2(3), '2026-10-08T12:34:56.123') AS seen FROM dbo.VariaLiveItems AS i ORDER BY i.id;\n"
         + "SELECT TOP (100) c.id AS cid, CONVERT(int, 100 / c.amount) AS ratio, CONVERT(numeric(10, 2), c.amount / 4.0) AS share,\n"

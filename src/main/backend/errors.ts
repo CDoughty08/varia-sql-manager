@@ -21,6 +21,8 @@ export const sentences = {
   lostQuery: "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection.",
   closing: 'The application is closing.',
   reloaded: 'The workbench was reloaded.',
+  unsupportedProvider: 'This command is not available for this kind of connection.',
+  unsupportedOptions: 'Stop on error, actual and live plans and client statistics are SQL Server options, and a dataset is a BigQuery one; turn off the options this connection does not have.',
   connectionLost: 'This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone.',
   sessionEnded: 'The SQL session ended with the SQL backend, so SQL Server rolled back its transaction.',
   resultUnavailable: 'These results are no longer available because the SQL backend restarted.',

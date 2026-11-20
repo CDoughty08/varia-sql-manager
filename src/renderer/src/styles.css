@@ -631,7 +631,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-note.error { color: var(--varia-errorForeground); }
 .peek-properties { padding-bottom: var(--varia-space-3); }
 .peek-group { margin: var(--varia-space-2) var(--varia-space-3) var(--varia-space-0); font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-descriptionForeground); }
-.peek-facts { margin: 0; }
+.peek-facts { margin: 0; user-select: text; }
+.peek-properties-pane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
 .peek-fact dt { color: var(--varia-descriptionForeground); }
 .peek-tabs { display: flex; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
@@ -952,6 +953,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-panel { display: flex; flex: 0 0 300px; flex-direction: column; min-height: 0; max-width: 45%; border-left: 1px solid var(--varia-panel-border); background: var(--varia-sideBar-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .profile-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 26px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--varia-panel-border); }
 .profile-title { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.profile-head.with-subject { border-bottom: 0; }
+.profile-subject { flex-shrink: 0; padding: 0 8px 4px; border-bottom: 1px solid var(--varia-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); }
 .profile-note { flex-shrink: 0; padding: 4px 8px; color: var(--varia-descriptionForeground); }
 .profile-note.error { color: var(--varia-errorForeground); }
@@ -1032,7 +1035,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
 .rt-tab[data-selected] > [role="tab"] { font-weight: 600; }
 /* A tab that shows a name the query gave ends it in an ellipsis at its widest (--varia-resultTab); its tooltip has it
-   whole. An unnamed result's or comparison's tab is as wide as its words, as before. */
+   whole. An unnamed result's tab is as wide as its words, as before, and so is a comparison's, whose sides are shortened
+   in the middle instead. */
 .rt-tab[data-named] { max-width: var(--varia-resultTab); }
 .rt-tab .rt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rt-tab > [role="tab"] > .codicon, .rt-tab > .rt-close { flex: none; }
@@ -1175,37 +1179,45 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
 .rg-rows { position: absolute; top: 0; left: 0; }
 .rg-row { position: absolute; left: 0; height: 20px; contain: strict; }
-.rg-row.odd { background: var(--varia-resultsGrid-alternateRowBackground); }
+/* A highlighted row and a comparison's added or removed row replace the stripe (their layers lie over the grid alone). */
+.rg-row.odd:where(:not(.hl, .tone-added, .tone-removed)) { background: var(--varia-resultsGrid-alternateRowBackground); }
 /* A live grid row's tone (LiveGrid): its own background instead of the stripe, and its text color; selected cells keep theirs. */
 .rg-row.tone-error { background: var(--varia-resultsGrid-rowErrorBackground); color: var(--varia-resultsGrid-rowErrorForeground); }
 .rg-row.tone-warning { background: var(--varia-resultsGrid-rowWarningBackground); color: var(--varia-resultsGrid-rowWarningForeground); }
 .rg-row.tone-running { background: var(--varia-resultsGrid-rowRunningBackground); color: var(--varia-resultsGrid-rowRunningForeground); }
 .rg-row.tone-muted { background: var(--varia-resultsGrid-rowMutedBackground); color: var(--varia-resultsGrid-rowMutedForeground); }
 /* On a toned row a NULL keeps its color but not its tint, which would leave it too faint to read. */
-.rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background: none; }
-/* A result diff (results.diff): added and removed rows take their colour over the stripe, as do their numbers; a changed
-   value a stronger one (selection and a search match keep their own); a value equal only by collation is underlined.
-   Before the highlight rules, which share their specificity, so a highlighted diff row shows its highlight. */
-.rg-row.tone-added { background: var(--varia-resultsGrid-diffAddedBackground); }
-.rg-row.tone-removed { background: var(--varia-resultsGrid-diffRemovedBackground); }
-.rg-row.tone-added .rg-c.is-null, .rg-row.tone-removed .rg-c.is-null { background: none; }
-.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
-.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
-.rg-row.tone-added .rg-c.is-chg.is-null, .rg-row.tone-removed .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
+.rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background-color: transparent; }
+/* A result diff (results.diff). Its colour is the cells' background-color (--rg-tint): a faint wash over every cell of an
+   added or removed row, NULLs included, and on a changed row's old (−) and new (+) halves a stronger one over the changed
+   cells only, struck through on the old half and bold on the new; unchanged rows and a half's other cells keep the stripe.
+   Highlights, search matches and the selection lie over it as translucent layers (below), so none hides it. A value
+   equal only by collation is underlined. */
+.rg-row.tone-added .rg-c { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); background-color: var(--rg-tint); }
+.rg-row.tone-removed .rg-c { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); background-color: var(--rg-tint); }
+.rg-row.tone-changedNew .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedAddedBackground); background-color: var(--rg-tint); font-weight: 600; }
+.rg-row.tone-changedOld .rg-c.is-chg { --rg-tint: var(--varia-resultsGrid-diffChangedRemovedBackground); background-color: var(--rg-tint); text-decoration-line: line-through; }
+/* A link's and a read error's underline (and the error's wavy style) stay under the strikethrough. */
+.rg-row.tone-changedOld .rg-c.is-chg:is(.is-err, .is-link) { text-decoration-line: underline line-through; }
 .rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
-.rg-rn.tone-added:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffAddedBackground), var(--varia-resultsGrid-diffAddedBackground)); }
-.rg-rn.tone-removed:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffRemovedBackground), var(--varia-resultsGrid-diffRemovedBackground)); }
-/* Highlighted rows (grid/highlights.ts): the row takes its colour over the stripe; its number keeps the header under it. */
-.rg-row.hl-yellow { background: var(--varia-resultsGrid-highlightYellowBackground); }
-.rg-row.hl-green { background: var(--varia-resultsGrid-highlightGreenBackground); }
-.rg-row.hl-blue { background: var(--varia-resultsGrid-highlightBlueBackground); }
-.rg-row.hl-purple { background: var(--varia-resultsGrid-highlightPurpleBackground); }
-.rg-row.hl-red { background: var(--varia-resultsGrid-highlightRedBackground); }
-.rg-rn.hl-yellow:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightYellowBackground), var(--varia-resultsGrid-highlightYellowBackground)); }
-.rg-rn.hl-green:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightGreenBackground), var(--varia-resultsGrid-highlightGreenBackground)); }
-.rg-rn.hl-blue:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightBlueBackground), var(--varia-resultsGrid-highlightBlueBackground)); }
-.rg-rn.hl-purple:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightPurpleBackground), var(--varia-resultsGrid-highlightPurpleBackground)); }
-.rg-rn.hl-red:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightRedBackground), var(--varia-resultsGrid-highlightRedBackground)); }
+/* A comparison's gutter (GridView.paintGutter): a 3 px kind bar on the left, kept when the row is selected, the mark, then
+   the row's number in its own input. An added or removed row's number takes its wash too, under its highlight. */
+.rg[data-gutter='diff'] .rg-rn { display: flex; justify-content: space-between; gap: 6px; padding-left: 9px; }
+.rg[data-gutter='diff'] .rg-rn:is(.tone-added, .tone-changedNew) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground); }
+.rg[data-gutter='diff'] .rg-rn:is(.tone-removed, .tone-changedOld) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground); }
+/* The active search match's row keeps its underline beside the bar. */
+.rg[data-gutter='diff'] .rg-rn.cur:is(.tone-added, .tone-changedNew) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedAddedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
+.rg[data-gutter='diff'] .rg-rn.cur:is(.tone-removed, .tone-changedOld) { box-shadow: inset 3px 0 0 var(--varia-resultsGrid-diffChangedRemovedBackground), inset 0 -2px 0 var(--varia-warningForeground); }
+.rg-dm { flex: none; font-weight: 600; }
+.rg-rn.tone-added { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); }
+.rg-rn.tone-removed { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); }
+/* Highlighted rows (grid/highlights.ts): a translucent layer over each cell (below) and over the row's number. */
+.rg-row.hl-yellow, .rg-rn.hl-yellow { --rg-hl: var(--varia-resultsGrid-highlightYellowBackground); }
+.rg-row.hl-green, .rg-rn.hl-green { --rg-hl: var(--varia-resultsGrid-highlightGreenBackground); }
+.rg-row.hl-blue, .rg-rn.hl-blue { --rg-hl: var(--varia-resultsGrid-highlightBlueBackground); }
+.rg-row.hl-purple, .rg-rn.hl-purple { --rg-hl: var(--varia-resultsGrid-highlightPurpleBackground); }
+.rg-row.hl-red, .rg-rn.hl-red { --rg-hl: var(--varia-resultsGrid-highlightRedBackground); }
+.rg-rn:is(.hl, .tone-added, .tone-removed):not(.sel) { background-image: linear-gradient(var(--rg-hl, transparent), var(--rg-hl, transparent)), linear-gradient(var(--rg-tint, transparent), var(--rg-tint, transparent)); }
 .rg-rn.hl:not(.sel) { color: var(--varia-resultsGrid-highlightRowNumberForeground); }
 /* Each row's own header is for screen readers; the numbers are drawn in one sticky column beside the rows. */
 .rg-rh { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -1258,24 +1270,48 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-rn.cur { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 .rg-c { position: absolute; top: 0; height: 20px; box-sizing: border-box; padding: 0 6px; white-space: pre; overflow: hidden; text-overflow: clip; unicode-bidi: isolate; contain: strict; border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
-.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); font-style: italic; }
-.rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-truncationForeground); }
+.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background-color: var(--varia-resultsGrid-nullBackground); font-style: italic; }
+/* The ellipsis hides the text under it, so it is opaque: the grid's colour under the cell's own layers. */
+.rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; color: var(--varia-resultsGrid-truncationForeground); background-color: var(--varia-resultsGrid-background);
+  background-image: linear-gradient(var(--rg-sel, transparent), var(--rg-sel, transparent)), linear-gradient(var(--rg-hit, transparent), var(--rg-hit, transparent)), linear-gradient(var(--rg-hl, transparent), var(--rg-hl, transparent)), linear-gradient(var(--rg-tint, transparent), var(--rg-tint, transparent)); }
+/* Over any layer or diff colour the ellipsis takes the cell's own text colour, which is checked against those stacks. */
+.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after { color: inherit; }
 /* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
 .rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
-.rg:focus-within .rg-c.is-sel, .rg:focus-within .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
-.rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-inactiveSelectionBackground); }
-/* NULL's tint is too faint on the unfocused selection's fill; it takes the grid's text color there. */
-.rg:not(:focus-within) .rg-c.is-sel.is-null { color: var(--varia-resultsGrid-foreground); }
+/* NULL, link, read-error and white space mark colours are checked on the grid, the stripe and the selection only: on a
+   diff colour, a highlight or a search match they take the grid's text colour (italics and the underlines still tell them
+   apart). Forced colours keep their system colours. */
+@media (forced-colors: none) {
+  .rg-c:is(.is-null, .is-link, .is-err):is(.is-hit, .is-chg), :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c:is(.is-null, .is-link, .is-err) { color: var(--varia-resultsGrid-foreground); }
+  /* A link on the focused selection too, as when the selection had its own text colour. */
+  .rg:focus-within .rg-c.is-sel.is-link { color: var(--varia-resultsGrid-foreground); }
+  /* White space marks likewise; in a selected cell they take its text colour (a later rule). */
+  .rg-c:is(.is-hit, .is-chg) .rg-ws, :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c .rg-ws { color: var(--varia-resultsGrid-foreground); }
+}
+/* The selection is a tint over the cell's own colour, so cells keep their text colour (resultsGrid.selectionForeground is
+   for opaque selection fills, such as Table Designer rows). */
+.rg:focus-within .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-selectionOverlay); }
+.rg:not(:focus-within) .rg-c.is-sel { --rg-sel: var(--varia-resultsGrid-inactiveSelectionOverlay); }
+/* NULL's tint is too faint on the selection; it takes the grid's text color there. */
+.rg-c.is-sel.is-null { color: var(--varia-resultsGrid-foreground); }
 /* Search in results (GridView's marks): matches tinted, the active one outlined, and columns a column-name search leaves out
-   faded, in the warning hue the search marks share with truncation (the theme has no search tokens yet). A selected match
-   keeps the selection's fill, with the outline when it is the active one. */
-.rg-c.is-hit { background: var(--varia-banner-warningBackground); }
+   faded. A selected match shows both layers, with the outline when it is the active one. */
+.rg-c.is-hit { --rg-hit: var(--varia-resultsGrid-hitOverlay); }
+/* A cell's layers (docs/results-tools.md § Comparisons): its own colour (a diff's tint, NULL's) is background-color; over
+   it, bottom first, the row's highlight, a search match and the selection, each a translucent image, so every one shows
+   through those above it. The active cell is an outline. */
+.rg-c:is(.is-sel, .is-hit), .rg-row.hl .rg-c { background-image: linear-gradient(var(--rg-sel, transparent), var(--rg-sel, transparent)), linear-gradient(var(--rg-hit, transparent), var(--rg-hit, transparent)), linear-gradient(var(--rg-hl, transparent), var(--rg-hl, transparent)); }
 .rg-c.is-cur { box-shadow: inset 0 0 0 2px var(--varia-warningForeground); }
 .rg-c.is-dim, .rg-ch.dim { opacity: 0.4; }
 .rg-ch.hit { background: var(--varia-banner-warningBackground); }
 .rg-ch.cur { background: var(--varia-banner-warningBackground); box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
-@media (forced-colors: active) { .rg-c.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
+/* Forced colours: a match is Mark, outranking a diff's colour and the layers (`.rg-row.tone-changedOld .rg-c.is-chg` is
+   four classes), which would otherwise stay under forced-color-adjust: none. */
+@media (forced-colors: active) {
+  .rg-row .rg-c.is-hit.is-hit, .rg-row .rg-c.is-hit.is-hit.is-trunc::after { forced-color-adjust: none; background: Mark; color: MarkText; }
+  .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
@@ -1289,6 +1325,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    error strip wraps instead, keeping Retry in view; it comes after the set was sized. */
 .rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
 .rg-strip.error { white-space: normal; color: var(--varia-errorForeground); }
+/* A card or fitted page is sized to its rows and one strip line (LocalGrid): its own error (Could not copy the rows: ...) stays on that
+   line, the sentence in its tooltip; a grid failure's strip still wraps to keep Retry in view. */
+.local-grid:is([data-local-grid="card"], [data-local-fit]) .rg-strip.error:not(:has(button)) { white-space: nowrap; }
 .rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 /* A strip with a button (Stop query while a truncated query runs): the text is cut, the button always shows. */
 .rg-strip.has-action { display: flex; align-items: center; }
@@ -1312,10 +1351,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-c.is-null:not(.is-sel) { color: GrayText; }
   /* Forced colors drop row tones' backgrounds: a toned row's number gets a bar, and a muted row dimmed text. */
   .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
-  .rg-rn.tone-added { border-left: 3px solid CanvasText; }
-  .rg-rn.tone-removed { border-left: 3px dashed CanvasText; }
-  /* Weaker than any other cell outline (:where adds nothing), so the active cell and the active search match keep theirs. */
+  .rg-rn:is(.tone-added, .tone-changedNew) { border-left: 3px solid CanvasText; }
+  .rg-rn:is(.tone-removed, .tone-changedOld) { border-left: 3px dashed CanvasText; }
+  /* Weaker than any other cell outline (:where adds nothing), so the active cell and the active search match keep theirs;
+     on the selection's fill it takes the selection's text colour. Strikethrough and bold still tell old from new. */
   .rg-c:where(.is-chg) { outline: 1px solid CanvasText; outline-offset: -2px; }
+  .rg-c.is-sel:where(.is-chg) { outline-color: HighlightText; }
   .rg-rn.hl { border-left: 3px double CanvasText; }
   .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
@@ -1428,15 +1469,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
-.client-statistics { overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+/* The report fills the pane: tools and status above, the grid (LocalGrid, page) in what is left, the notes under it. */
+.client-statistics { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.client-statistics > .local-grid { flex: 1; min-height: 160px; }
+.client-statistics > details { flex: none; }
 .client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
 .client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
 .client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
-.client-statistics table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-.client-statistics th, .client-statistics td { border-bottom: 1px solid var(--varia-widget-border); padding: var(--varia-space-2); text-align: left; vertical-align: top; }
-.client-statistics td { white-space: nowrap; }
-.client-statistics td:last-child { white-space: normal; }
-.client-statistics th[scope="row"] { font-weight: 500; }
 .memory-status { margin-left: var(--varia-space-2); }
 /* Discard results after execution (DiscardStatus): shown only while it is on, as plain as the memory control beside it. */
 .discard-status { display: flex; margin-left: var(--varia-space-2); }
@@ -1648,6 +1687,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .advanced-dialog { width: min(640px, calc(100vw - 40px)); }
 .advanced-dialog .property-row { grid-template-columns: 230px minmax(0, 1fr); }
 .advanced-dialog .field-note { margin-top: 16px; }
+.connect-inline-action { margin-left: 6px; font-size: var(--varia-size-xs); padding: 1px 7px; }
+.bq-account .field-note { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.bq-unit { flex: 0 0 84px; width: 84px; }
+.bq-extra-projects { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; grid-column: 2; }
+.bq-extra-projects li { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--varia-size-sm); }
+.bq-source-path { font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); overflow-wrap: anywhere; }
 .dialog-heading h2 { font-weight: 600; font-size: var(--varia-size-lg); margin: 0 0 22px; }
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }
 .field-note { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
@@ -2149,17 +2194,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
 .live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
 .live-chart[data-table] .live-chart-canvas { display: none; }
-/* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
-.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; outline: none; }
-.live-chart-table-wrap:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
-/* As wide as the plot it replaces, so the caption takes one line; the header stays in view as the rows scroll (on the
-   chart's surface, which LiveChart sets on the thead). */
-.live-chart-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
-.live-chart-table caption { padding-bottom: 2px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
-.live-chart-table thead { position: sticky; top: 0; z-index: 1; }
-.live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
-.live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
-.live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
+/* The table takes the plot's place at its size: a one-line caption, then the grid (LocalGrid, card) in the room left,
+   sized by LiveChart to the rows that fit, so it never spills over the card or what is around it. */
+.live-chart-table-wrap { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.live-chart-table-caption { flex: none; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
+.live-chart-table-room { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+/* Never taller than the room: a strip (a failed copy) takes a row from the grid rather than going out of sight. */
+.live-chart-table-room > .local-grid { max-height: 100%; }
 @media (forced-colors: active) {
   .live-chart-swatch line { stroke: CanvasText; }
   /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */
@@ -2390,12 +2431,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .ssis-properties > div { display: contents; }
 .ssis-properties dt { color: var(--varia-descriptionForeground); }
 .ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.ssis-properties-table { overflow-x: auto; }
-/* Fixed layout and one-line rows: the list draws only the rows near the view (PropertiesList.tsx), so columns must not
-   change width as rows come and go, and every row must be as tall as the spacers assume. */
-.ssis-properties-table .object-dialog-grid { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
-.ssis-properties-table .ssis-properties-spacer td { padding: 0; border: 0; }
-.ssis-properties-empty, .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+/* A list is a fitted page LocalGrid (properties-view.tsx): as tall as its rows, since the section column scrolls. */
+.ssis-properties-grid { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--varia-panel-border); }
+.ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
 /* A narrow document puts its section list across the top, and its verbs under the title. */
 @container (max-width: 640px) {
@@ -2486,6 +2524,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
+/* A Properties list (PropertiesGrid): a fitted page grid, as tall as its rows and as wide as the section. */
+.properties-grid { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+.properties-grid + .field-note { margin-top: var(--varia-space-2); }
 /* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so its scroller is a tab
    stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
    series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
@@ -2726,10 +2767,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-details-fields dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .activity-details-text { max-height: 16em; margin: 0; overflow: auto; padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 .activity-details-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.activity-details-table { width: 100%; border-collapse: collapse; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
-.activity-details-table th, .activity-details-table td { padding: 2px var(--varia-space-1); border-bottom: 1px solid var(--varia-panel-border); text-align: left; overflow-wrap: anywhere; }
-.activity-details-table thead th { color: var(--varia-descriptionForeground); font-weight: 600; }
-.activity-details-table tbody th { font-weight: 400; }
 .activity-details-load { display: flex; flex-direction: column; align-items: flex-start; gap: var(--varia-space-1); }
 .activity-details-foot { flex: none; padding: var(--varia-space-1) var(--varia-space-3); border-top: 1px solid var(--varia-panel-border); }
 .connection-modal.sub-dialog.activity-kill { width: min(460px, calc(100vw - 48px)); }
@@ -2916,10 +2953,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
 .search-details-definition { position: relative; isolation: isolate; }
 .search-details-match { position: absolute; left: 0; right: 0; z-index: -1; height: var(--varia-line-sm); background: var(--varia-list-inactiveSelectionBackground); pointer-events: none; }
-.search-details-columns { margin: 0; padding: var(--varia-space-1) var(--varia-space-3); list-style: none; }
-.search-details-columns li { display: flex; align-items: baseline; gap: var(--varia-space-2); line-height: var(--varia-line-md); }
-.search-details-column { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-details-column-type { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.search-details-columns { display: flex; flex-direction: column; padding: var(--varia-space-1) var(--varia-space-3); }
 .index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
 .index-status .codicon { font-size: var(--varia-glyph-sm); }
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
@@ -3028,3 +3062,36 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row[data-drop="before"] { box-shadow: inset 0 2px 0 var(--varia-focusBorder); }
 .explorer-row[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--varia-focusBorder); }
 .explorer-tree[data-peek-armed] .explorer-row[data-peekable], .explorer-tree[data-peek-armed] .explorer-row[data-peekable] * { cursor: zoom-in; }
+/* A server or database dragged from Object Explorer onto a query (ServerDropLayer.tsx). Query tabs show a dashed socket,
+   other documents dim; the tab under the pointer fills with the drop color, or shows a plain border when it refuses. */
+.editor-groups-root[data-server-drag] .query-tab[data-query]::after { content: ""; position: absolute; left: var(--varia-space-2); right: var(--varia-space-2); bottom: 3px; height: 2px; border-radius: var(--varia-radius-sm); background: repeating-linear-gradient(90deg, var(--varia-focusBorder) 0 6px, transparent 6px 10px); opacity: 0.7; pointer-events: none; }
+.editor-groups-root[data-server-drag] .query-tab:not([data-query]) { opacity: 0.5; }
+.editor-groups .dv-tab[data-server-drop="accept"] .query-tab { background: var(--varia-editorGroup-dropBackground); box-shadow: inset 0 0 0 1px var(--varia-focusBorder); }
+.editor-groups .dv-tab[data-server-drop="accept"] .query-tab::after { opacity: 1; background: var(--varia-focusBorder); }
+.editor-groups .dv-tab[data-server-drop="refuse"] .query-tab { box-shadow: inset 0 0 0 1px var(--varia-editorWidget-border); }
+.server-drop-anchor { position: fixed; z-index: 13000; pointer-events: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) both; }
+.server-drop-insert { translate: -50% 0; }
+.server-drop-card, .server-drop-plate { max-width: 340px; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.server-drop-title { font-weight: 600; }
+.server-drop-move { display: flex; align-items: center; gap: var(--varia-space-1); margin-top: var(--varia-space-1); }
+.server-drop-from { color: var(--varia-descriptionForeground); text-decoration: line-through; }
+.server-drop-note, .server-drop-hint { margin-top: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.server-drop-hint { padding-top: var(--varia-space-1); border-top: 1px solid var(--varia-editorWidget-border); }
+.server-drop-overlay { position: fixed; z-index: 12000; display: grid; place-items: center; pointer-events: none; background: var(--varia-editorGroup-dropBackground); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) both; }
+.server-drop-overlay::before { content: ""; position: absolute; inset: var(--varia-space-2); border: 2px dashed var(--varia-focusBorder); border-radius: var(--varia-radius-lg); }
+.server-drop-overlay[data-refused] { background: transparent; }
+.server-drop-overlay[data-refused]::before { border-color: var(--varia-editorWidget-border); }
+.server-drop-plate { position: relative; width: 340px; padding: var(--varia-space-4); text-align: center; }
+.server-drop-plate .server-drop-move { justify-content: center; }
+.server-drop-plug { display: inline-grid; place-items: center; width: 40px; height: 40px; margin-bottom: var(--varia-space-2); border-radius: var(--varia-radius-pill); border: 1px solid var(--varia-editorWidget-border); color: var(--varia-focusBorder); }
+.server-drop-plate[data-refused] .server-drop-plug { color: var(--varia-descriptionForeground); }
+/* The drop: a chip flies into the tab (ServerDropLayer animates it); once the query has moved, a wash in the server's color
+   passes behind the tab's text while its details cross-fade, and the color rule on the tab's top edge eases out from the
+   center. The tab's --tab-accent is its connection color. */
+.server-drop-chip { position: fixed; z-index: 13001; display: inline-flex; align-items: center; gap: var(--varia-space-1); translate: -50% -50%; padding: 2px var(--varia-space-2); border: 1px solid var(--varia-focusBorder); border-radius: var(--varia-radius-sm); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-weight: 600; white-space: nowrap; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .query-tab::before { content: ""; position: absolute; left: 0; right: 0; top: -2px; height: 2px; background: var(--tab-accent, var(--varia-tab-activeBorderTop)); transform-origin: center; animation: server-drop-stripe calc(var(--varia-motion-base) * 4) var(--varia-motion-base) var(--varia-motion-ease) both; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .query-tab::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--tab-accent, var(--varia-tab-activeBorderTop)) 50%, transparent) no-repeat; background-size: 60% 100%; animation: server-drop-wash calc(var(--varia-motion-base) * 6) var(--varia-motion-ease) both; pointer-events: none; }
+.editor-groups .dv-tab[data-server-landing] .tab-metadata { animation: server-drop-details calc(var(--varia-motion-base) * 4.5) var(--varia-motion-ease) both; }
+@keyframes server-drop-stripe { from { transform: scaleX(0); opacity: 0.4; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes server-drop-wash { 0% { opacity: 0; background-position: -60% 0; } 20%, 70% { opacity: 0.18; } 100% { opacity: 0; background-position: 160% 0; } }
+@keyframes server-drop-details { 0% { opacity: 1; } 35% { opacity: 0; filter: blur(2px); } 100% { opacity: 1; } }

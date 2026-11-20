@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (349)
+## Commands (350)
 
 ### File
 
@@ -319,6 +319,7 @@ keys it uses are listed below.
 | Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |
 | Copy Fully Qualified Name (not in the palette) | `search.copyQualifiedName` | Ctrl+Shift+C (`searchHitsFocus`) | Ctrl+Shift+C (`searchHitsFocus`) | ⇧⌘C (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Fully Qualified Name |
 | Copy Bracketed Name (not in the palette) | `search.copyBracketedName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Bracketed Name |
+| Copy Properties (not in the palette) | `peek.copyProperties` | — | — | — | Always | Peek Properties context menu › Copy |
 
 ### Table Designer
 
@@ -1044,7 +1045,15 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
-## Context keys (161)
+#### Peek Properties context menu (`peek.properties.context`)
+
+Right-click Peek's Properties pane (in the card or a Peek tab), or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, or all of them when none is, on the clipboard as Name and Value lines separated by a tab.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `peek.copyProperties` | Always |
+
+## Context keys (167)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1056,6 +1065,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `isMac` | boolean | static | The app runs on macOS. |
 | `isWindows` | boolean | static | The app runs on Windows. |
 | `isLinux` | boolean | static | The app runs on Linux or another platform treated like it. |
+| `agentEnabled` | boolean | static | SQL Server Agent's surfaces show: main was started with `VARIA_AGENT_PREVIEW=1` (the release gate until 0.11.0). While it is false, Object Explorer keeps its planned SQL Server Agent folder and every Agent command, menu item and document is left out. |
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
@@ -1079,6 +1089,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
+| `activeDocumentProvider` | `''`, `'sqlserver'`, `'bigquery'` | state | The engine of the active document (`src/shared/providers.ts`): 'sqlserver' or 'bigquery', or '' with no document open. A command's `providers` is checked against it, except an Object Explorer command's, one run on an Object Explorer node or search result, and one that finds its own object (`commandProviderKey`). |
 | `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
@@ -1149,6 +1160,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `updateAvailable` | boolean | state | A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off). |
 | `updateReady` | boolean | state | A newer release was downloaded and verified: Help › Restart to Update installs it. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
+| `explorerSelectionProvider` | `''`, `'sqlserver'`, `'bigquery'` | state | The engine of the server the selected Object Explorer node is on: 'sqlserver' or 'bigquery', or '' with no selection. The `providers` of an Object Explorer command, and of any command run on an Object Explorer node or a search result (whose arguments stand the object's engine in), is checked against it (`commandProviderKey`). Keep it out of keybinding `when` clauses. |
 | `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFilterable` | boolean | state | The selected Object Explorer node is a folder that Filter Settings can filter. |
@@ -1171,6 +1183,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
 | `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
 | `explorerSelectionDependencies` | boolean | state | The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
+| `explorerSelectionAgentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | state | The login's SQL Server Agent role on the server of the selected Object Explorer node, when that node is an Agent node (`agentRoleOf` in `src/shared/agent/profile.ts`): 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' while `agent.profile` is being read, or 'profileFailed' when it failed; '' for any other node. Keep it out of keybinding `when` clauses. |
 | `explorerActionSelectTop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Select Top 1000 Rows: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -1203,7 +1216,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
-| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
+| `explorerProvider` | `''`, `'sqlserver'`, `'bigquery'` | target | The engine of the server the Object Explorer node the menu is for is on: 'sqlserver' or 'bigquery', or '' for the empty area. Items whose `providers` lack it are left out. |
+| `agentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | target | The login's SQL Server Agent role on the server of the Object Explorer node the menu is for, when that node is an Agent node: 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' (not read yet) or 'profileFailed'; '' for any other node. |
+| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a grid with its own source: a live view's (an Activity Monitor pane) or a local table's (a Peek list). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |
 | `outputGridBare` | boolean | target | The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it. |
 | `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |

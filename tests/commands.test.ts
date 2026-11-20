@@ -119,7 +119,7 @@ describe('command execution', () => {
   it.each(['restored', 'disconnected', 'backend-lost'] as const)('requests explicit reconnect for a %s target without executing SQL, and blocks changes in flight', async state => {
     const { commands, documents, connections, connectionTargets, targets, events, api } = fixture()
     const targetId = crypto.randomUUID(), handle = crypto.randomUUID(), requested: string[] = []
-    const proof = { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'reader' } }
+    const proof = { principal: { provider: 'sqlserver' as const, authentication: 'sql' as const, id: 'reader' } }
     api.push(readyBackend(1))
     const attempt = connections.beginConnect(connectionOptions, 1, targetId)!
     connections.accept({ ...connectionInfo(handle), targetId }, connectionOptions, targetId, proof, attempt)

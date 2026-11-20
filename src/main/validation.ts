@@ -2,15 +2,18 @@ import { z } from 'zod'
 import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
-import { connectionOptionsSchema } from '../shared/connections'
+import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
+import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
+import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
+import { agentProfileResultSchema, agentProfileSchema } from '../shared/agent/profile.ts'
 import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema, languageDefinitionSchema } from '../shared/language-service'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
@@ -19,6 +22,8 @@ export const maxScriptCharacters = 1_000_000
 const tooLargeScript = 'The script is too large to execute (limit: 1,000,000 characters). Execute a smaller selection.'
 const connectionId = z.uuid()
 const database = name
+// A BigQuery dataset id (src/shared/connections.ts); SQL Server refuses one (methods.ts, queryOptionsAllow).
+const dataset = bigQueryDatasetSchema
 export const requestSchemas = {
   'language.status': z.object({}).strict(),
   'language.complete': languageRequestSchema,
@@ -30,16 +35,19 @@ export const requestSchemas = {
   'plans.parse': planParseSchema,
   'plans.estimate': estimatedPlanRequestSchema,
   'system.health': z.object({}).strict(),
-  'connections.connect': connectionOptionsSchema,
-  'connections.databases': connectionOptionsSchema,
+  // Either engine's options; main adds BigQuery's credential material before sending (never from the renderer).
+  'connections.connect': providerConnectionOptionsSchema,
+  'connections.databases': providerConnectionOptionsSchema,
   'connections.preview': connectionOptionsSchema,
   'connections.discover': z.object({ scope: z.enum(['local', 'network']) }).strict(),
   'connections.disconnect': z.object({ connectionId }).strict(),
+  'bigquery.account': bigQueryCredentialParamsSchema,
+  'bigquery.projects': bigQueryProjectsParamsSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
-    connectionId, sessionId: z.uuid(), database, sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
+    connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional()
@@ -64,19 +72,30 @@ export const requestSchemas = {
   'ssis.execute': ssisExecuteSchema,
   'ssis.catalogSetup': ssisCatalogSetupSchema,
   'activity.details': activityDetailsRequestSchema,
-  'activity.kill': activityKillRequestSchema
+  'activity.kill': activityKillRequestSchema,
+  'agent.profile': agentProfileSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
+/** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
+const databaseListSchema = z.array(z.object({
+  name: z.string().min(1).max(1024), isSystem: z.boolean(), isSnapshot: z.boolean(), location: z.string().min(1).max(64).regex(/^[A-Za-z\d-]+$/).optional()
+}).strict()).max(32_767)
 // Shown as the dialog's User name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.connect': z.object({
-    id: z.uuid(), server: z.string().max(256), database: z.string().max(128), serverVersion: z.string().max(256), generation: z.number().int().min(0),
+    // A BigQuery dataset name may be 1,024 characters; SQL Server's database names stay at 128.
+    id: z.uuid(), server: z.string().max(256), database: z.string().max(1024), serverVersion: z.string().max(256), generation: z.number().int().min(0),
     displayName: z.string().max(128).optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), commandTimeout: z.number().int().min(0).max(86400).optional(),
-    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.literal('sqlserver').optional(),
+    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.enum(providerIds).optional(),
     principalId: connectionPrincipalIdSchema.optional(), bindingRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
-  }).strict(),
+  }).strict().refine(value => value.providerId === 'bigquery' ? value.principalId?.startsWith('bigquery:') !== false : value.database.length <= 128 && !value.principalId?.startsWith('bigquery:'),
+    'A connection answer must match its provider.'),
+  'bigquery.account': bigQueryAccountSchema,
+  'bigquery.projects': bigQueryProjectListSchema,
+  'connections.databases': databaseListSchema,
+  'databases.list': databaseListSchema,
   'language.status': languageStatusSchema,
   'language.complete': languageCompletionsSchema,
   'language.hover': languageHoverSchema,
@@ -88,7 +107,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'plans.estimate': estimatedPlanResultSchema,
   'connections.identity': z.object({ principal: principal.optional() }).strict(),
   // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
-  'actions.execute': actionExecuteResultSchema
+  'actions.execute': actionExecuteResultSchema,
+  'agent.profile': agentProfileResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {
@@ -123,6 +143,14 @@ export const copyPartSchema = z.object({ rows: rangesSchema(Number.MAX_SAFE_INTE
 const turned = { transposed: z.boolean().optional(), headerColumn: z.number().int().min(0).max(limits.page.maxColumns - 1).optional() }
 const turnedRule = [(request: { transposed?: boolean; headerColumn?: number }) => request.headerColumn === undefined || request.transposed === true, 'Only a transposed request has a header column.'] as const
 export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, headers: z.boolean(), parts: z.array(copyPartSchema).min(1).max(64), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)
+/** varia:results-save-local: a local table's rows, held to localTableLimits (rows as wide as the columns, 4 Mi characters in all). */
+export const localSaveRequestSchema = z.object({
+  suggestedName: z.string().min(1).max(limits.jobs.suggestedName),
+  columns: z.array(z.object({ name: z.string().max(localTableLimits.nameChars), kind: z.enum(['text', 'number']).optional() }).strict()).min(1).max(localTableLimits.columns),
+  rows: z.array(z.array(z.string().max(localTableLimits.cellChars).nullable()).max(localTableLimits.columns)).max(localTableLimits.rows)
+}).strict()
+  .refine(request => request.rows.every(row => row.length === request.columns.length), 'Every row has a cell per column.')
+  .refine(request => request.rows.reduce((sum, row) => sum + row.reduce((chars, cell) => chars + (cell?.length ?? 0), 0), 0) <= localTableLimits.textChars, 'The table is too large.')
 /** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
  *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
 export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()

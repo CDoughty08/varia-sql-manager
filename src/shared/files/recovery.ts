@@ -1,7 +1,8 @@
 import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
+import type { ProviderId } from '../providers'
 
 /**
- * AutoRecover (Tools › Options › Environment › AutoRecover). Main keeps one record a query in `<userData>/AutoRecover/`,
+ * AutoRecover (Tools › Options › Environment › AutoRecover). Main keeps one record a query in `<userData>/WorkbenchAutoRecover/`,
  * readable only by the user; the renderer names records by uuid and never sees a path it did not already show.
  */
 export const recoveryLimits = {
@@ -14,13 +15,16 @@ export const recoveryLimits = {
   pathChars: 4096,
   serverChars: 256,
   databaseChars: 128,
+  /** A BigQuery query's dataset (its `database`), on BigQuery records only. */
+  datasetChars: 1024,
   /** Ids in one discard. */
   discardIds: 256
 } as const
 /** Why a write was refused at the caps; a fixed sentence, as the banner shows it. */
 export const recoveryCapMessage = 'AutoRecover keeps at most 64 queries (256 MB).'
 
-/** What the renderer asks main to keep for one query: main adds the file's path from its own registration. */
+/** What the renderer asks main to keep for one query: main adds the file's path from its own registration. `provider` is
+ *  the query's engine (absent: SQL Server); a BigQuery query's `database` is its dataset. */
 export interface RecoveryWrite {
   readonly id: string
   readonly name: string
@@ -29,6 +33,7 @@ export interface RecoveryWrite {
   readonly eol: LineEnding
   readonly server?: string
   readonly database?: string
+  readonly provider?: ProviderId
   readonly text: string
 }
 /** A kept query as the Recover dialog lists it: no text. `savedAt` is an ISO time; `path` is the file it was saved to. */
@@ -49,6 +54,8 @@ export interface RecoveredDocument {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly file?: SqlFile
+  /** The query's engine as kept (absent: SQL Server): it reopens in that engine's language, with no connection. */
+  readonly provider?: ProviderId
 }
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */

@@ -67,7 +67,7 @@ internal sealed record LiveQuery(string Probe, int Band, string Body, string[] C
 
 /// <summary>The SQL of every one-batch live probe that reads SQL Server (docs/live.md; the Activity Monitor's probes run several
 /// statements each, from Activity/ActivitySql.cs, which this lint also checks): constant text per probe and band, values only
-/// as parameters, no metadata built-ins (they ignore LOCK_TIMEOUT and the isolation level), no temporary tables, writes,
+/// as parameters, no metadata built-ins (they ignore the isolation level and wait out LOCK_TIMEOUT behind uncommitted DDL), no temporary tables, writes,
 /// transactions, waits or dynamic SQL. Every command starts with its scope's prologue, since a pooled connection can carry
 /// another command's SET state. Lint renders every variant; the checks run it offline. Every read checks the columns it got
 /// against the declaration (LiveQuery.Returns), and the live checks run every query at the server's band to compare them.</summary>
@@ -301,14 +301,53 @@ internal static partial class LiveSql
                 if (For(probe.Id, band) is { } query) yield return query;
     }
 
-    private static readonly string[] Builtins = [.. CatalogSql.Builtins, "DB_NAME(", "DB_ID(", "OBJECT_ID(", "FILE_NAME(", "FILE_ID(", "INDEXPROPERTY(", "COLUMNPROPERTY(", "SCHEMA_ID("];
+    private static readonly string[] Builtins = [.. CatalogSql.Builtins, "DB_NAME(", "DB_ID(", "OBJECT_ID(", "FILE_NAME(", "FILE_ID(", "INDEXPROPERTY(", "COLUMNPROPERTY(", "SCHEMA_ID(",
+        "IDENT_CURRENT(", "IDENT_SEED(", "IDENT_INCR(", "TYPE_ID(", "TYPEPROPERTY(", "STATS_DATE(", "FILEGROUP_NAME(", "FILEGROUP_ID(", "FILEPROPERTY(", "FILEPROPERTYEX(",
+        "INDEXKEY_PROPERTY(", "DATABASE_PRINCIPAL_ID(", "USER_ID(", "SUSER_ID(", "SUSER_SID(", "FILE_IDEX(", "FILEGROUPPROPERTY(", "DATABASEPROPERTY(", "APPLOCK_TEST("];
+    // COL_LENGTH stays allowed: the Activity Monitor's capability probe asks it of a system view, which takes no lock.
     /// <summary>The built-ins as words, so a space before the parenthesis hides none (OBJECTPROPERTY also covers OBJECTPROPERTYEX).</summary>
     private static readonly (string Name, Regex Pattern)[] BuiltinPatterns = [.. Builtins.Select(builtin => (builtin.TrimEnd('('),
         new Regex(@"\b" + Regex.Escape(builtin.TrimEnd('(')) + (builtin.EndsWith('(') ? @"\s*\(" : ""), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))];
 
     // OPENQUERY, OPENROWSET and OPENDATASOURCE run text on another server (or through a provider), inside a literal the lint blanks.
-    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE|MERGE|GRANT|REVOKE|DENY|INTO|EXEC|EXECUTE|WAITFOR|USE|KILL|SHUTDOWN|DBCC|RECONFIGURE|BACKUP|RESTORE|OPENQUERY|OPENROWSET|OPENDATASOURCE|XLOCK|UPDLOCK|TABLOCK|TABLOCKX|PAGLOCK|HOLDLOCK|SERIALIZABLE|REPEATABLEREAD|READCOMMITTEDLOCK|READCOMMITTED|MAXRECURSION|QUERYTRACEON|MIN_GRANT_PERCENT)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Forbidden();
+    /// <summary>Functions that read the server's files, any path a UNC share included, which reaches another host as OPENROWSET
+    /// would; the log or backups, which fn_dump_dblog reads through a scheduler it leaves behind; every page of an index or
+    /// database; or the live event stream, which never ends.</summary>
+    [GeneratedRegex(@"\b(fn_xe_file_target_read_file|fn_trace_gettable|fn_get_audit_file\w*|fn_dblog\w*|fn_dbslog\w*|fn_filelog\w*|fn_full_dblog\w*|fn_dump_dblog\w*|fn_MSxe_read_event_stream|fn_db_backup_file_snapshots|dm_os_enumerate_filesystem|dm_os_file_exists|dm_db_index_physical_stats|dm_db_database_page_allocations|dm_db_xtp_hash_index_stats|dm_fts_index_keywords\w*|dm_os_buffer_descriptors|fn_ledger_retrieve_digests_from_url)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ServerFiles();
+    /// <summary>System functions that do inside what the lint refuses outside: compile SQL from a literal or a plan guide
+    /// (which may name a linked server or OPENQUERY the lint never sees), call an EKM provider (a key vault over the
+    /// network), resolve names through OBJECT_ID, DB_ID and kin, or read a secret.</summary>
+    [GeneratedRegex(@"\b(dm_exec_describe_first_result_set\w*|fn_validate_plan_guide|dm_cryptographic_provider_\w+|dm_sql_referenced_entities|dm_sql_referencing_entities|fn_my_permissions|fn_listextendedproperty|fn_isrolemember|fn_hadr_\w+|fn_cdc_\w+|HAS_DBACCESS|CERTPRIVATEKEY|DECRYPTBY\w+|fn_repldecrypt\w*)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Wrappers();
+    /// <summary>A number with a letter in it. T-SQL ends a number where its digits end, so <c>1DELETE</c> is the number 1 and the
+    /// keyword DELETE, which <see cref="Forbidden"/>'s word boundary reads as one word. Only a hex literal may hold letters.</summary>
+    [GeneratedRegex(@"(?<![\w@#])[0-9][\w$.]*", RegexOptions.CultureInvariant)]
+    private static partial Regex Number();
+    [GeneratedRegex(@"^(?:[0-9]+(?:\.[0-9]*)?|0[xX][0-9A-Fa-f]*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainNumber();
+    /// <summary>A four-part name (<c>server.database.schema.object</c>, parts optional but the last), which reads through a
+    /// linked server as OPENQUERY would. Bracketed and quoted parts are blanked to <c>[x]</c> before this runs.</summary>
+    [GeneratedRegex(@"(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)?\s*\.\s*(?:\[x\]|[A-Za-z_][\w@#$]*)", RegexOptions.CultureInvariant)]
+    private static partial Regex FourPartName();
+    /// <summary>Code outside printable ASCII, tab and line breaks. SQL Server reads some characters .NET's <c>\s</c> does not
+    /// (U+200B, U+001C–U+001F) as whitespace, which would split every multi-word pattern here, and resolves a full-width name in
+    /// brackets (sys.[ｆｎ_dblog]) as its ASCII twin. It reads the names text: literals blanked, identifiers kept.</summary>
+    [GeneratedRegex(@"[^\x20-\x7E\t\r\n]", RegexOptions.CultureInvariant)]
+    private static partial Regex Unprintable();
+    /// <summary>Every statement keyword but SELECT, WITH, DECLARE and the control flow IF, ELSE and BEGIN … END (BEGIN only before
+    /// one of those, so BEGIN TRAN and BEGIN DIALOG are refused; END CONVERSATION by its second word). Every T-SQL statement opens
+    /// with a keyword, so this is an allow list of statement kinds, where <see cref="Forbidden"/> is a deny list. FETCH passes
+    /// only as ORDER BY's paging clause, <c>OFFSET … ROWS FETCH NEXT n ROWS ONLY</c>.</summary>
+    [GeneratedRegex(@"(?<![\w@#])(?:ADD|ALTER|BACKUP|BREAK|BULK|CHECKPOINT|CLOSE|COMMIT|CONTINUE|CONVERSATION|CREATE|CURSOR|DBCC|DEALLOCATE|DELETE|DENY|DIALOG|DISABLE|DROP|ENABLE|EXEC|EXECUTE|(?<!\bROWS?\s+)FETCH|FETCH(?!\s+(?:NEXT|FIRST)\s+(?:@\w+|[0-9]+)\s+ROWS?\s+ONLY(?![\w$]))|GET|GOTO|GRANT|INSERT|INTO|KILL|MERGE|MOVE|OPEN|PRINT|RAISERROR|READTEXT|RECEIVE|RECONFIGURE|RESTORE|RETURN|REVERT|REVOKE|ROLLBACK|SAVE|SEND|SET|SETUSER|SHUTDOWN|SIGNATURE|THROW|TRUNCATE|UPDATE|UPDATETEXT|USE|WAITFOR|WHILE|WRITETEXT|NEXT\s+VALUE\s+FOR|BEGIN(?!\s+(?:SELECT|WITH|DECLARE|IF)(?![\w$])))(?![\w$])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StatementKeyword();
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Whitespace();
     [GeneratedRegex(@"\bBEGIN\s+(TRAN|TRANSACTION|DISTRIBUTED)\b|\bSAVE\s+TRAN|\bCOMMIT\b|\bROLLBACK\b", RegexOptions.IgnoreCase)]
     private static partial Regex Transaction();
     [GeneratedRegex(@"\bTOP\b", RegexOptions.IgnoreCase)]
@@ -340,11 +379,31 @@ internal static partial class LiveSql
             return " ";
         }
         if (commented || code.Contains("/*", StringComparison.Ordinal)) problems.Add("has a comment");
-        foreach (var (name, pattern) in BuiltinPatterns) if (pattern.IsMatch(code)) problems.Add("uses " + name);
-        problems.AddRange(CatalogSql.SecretUses(code));
-        if (code.Contains('#')) problems.Add("uses a temporary table");
-        if (code.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
+        // A bracketed or quoted name is still the name it holds (l.[password_hash], sys.[fn_dblog], [#t]), so the checks for
+        // names read the code with identifiers unwrapped; the keyword checks read it with them blanked, as SQL Server does.
+        var names = Token().Replace(text, token => token.Value[0] switch
+        {
+            '-' or '/' => " ",
+            '[' => token.Value[1..^1].Replace("]]", "]", StringComparison.Ordinal),
+            '"' => token.Value[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal),
+            _ => "''"
+        });
+        foreach (var (name, pattern) in BuiltinPatterns) if (pattern.IsMatch(names)) problems.Add("uses " + name);
+        problems.AddRange(CatalogSql.SecretUses(names));
+        if (names.Contains('#')) problems.Add("uses a temporary table");
+        if (names.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
+        foreach (Match match in ServerFiles().Matches(names)) problems.Add("reads server files through " + match.Value);
+        foreach (Match match in Wrappers().Matches(names)) problems.Add("calls " + match.Value + ", which does what the lint refuses");
         foreach (Match match in Forbidden().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
+        // The statement after the prologue (whose SET options are the prologue's own): no number glued to a word, and no
+        // statement kind but a read's.
+        var statement = code.StartsWith(UncommittedPrologue, StringComparison.Ordinal) ? code[UncommittedPrologue.Length..]
+            : code.StartsWith(CommittedPrologue, StringComparison.Ordinal) ? code[CommittedPrologue.Length..] : code;
+        foreach (Match number in Number().Matches(statement))
+            if (!PlainNumber().IsMatch(number.Value)) problems.Add("glues a word to the number " + number.Value);
+        foreach (Match match in StatementKeyword().Matches(statement)) problems.Add("uses " + Whitespace().Replace(match.Value, " ").ToUpperInvariant());
+        if (Unprintable().IsMatch(names)) problems.Add("has a character outside printable ASCII in its code or names");
+        if (FourPartName().IsMatch(code)) problems.Add("reads a four-part name through a linked server");
         if (Transaction().IsMatch(code)) problems.Add("controls a transaction");
         if (!TopsOrdered(code)) problems.Add("takes TOP without ORDER BY");
         if (code.Contains("@@SPID", StringComparison.OrdinalIgnoreCase) && !text.EndsWith(Session, StringComparison.Ordinal) && !text.EndsWith(SsisSession, StringComparison.Ordinal))

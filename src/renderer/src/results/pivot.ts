@@ -2,9 +2,11 @@
 // pivot grid shows. PivotService runs it; PivotPanel draws the draft.
 import type { PivotAggregate, PivotValueSpec, ResultColumn } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+import { sortKindOf } from '../../../shared/results/sort-kind'
 import type { PivotSpec } from './ResultClient'
 import { formatCount, plural } from './status'
 import { pivotName } from './ResultsService'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 /** The aggregates in the panel's order, with their names (as a spreadsheet's value field settings name them). */
 export const pivotAggregates: readonly { readonly aggregate: PivotAggregate; readonly label: string }[] = [
@@ -16,12 +18,11 @@ export const pivotAggregates: readonly { readonly aggregate: PivotAggregate; rea
   { aggregate: 'max', label: 'Max' }
 ]
 
-const typeName = (column: ResultColumn) => column.dataType.split('(')[0].trim().toLowerCase()
-const numericTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
+const numericKinds: ReadonlySet<string> = new Set(['integer', 'decimal', 'float'])
 
 /** Whether SUM and AVG take a column: exact and approximate numerics, not bit (ResultPivoter.IsNumeric in C#). */
 export function isNumericColumn(column: ResultColumn): boolean {
-  return column.wire === 'text' && numericTypes.has(typeName(column))
+  return column.wire === 'text' && numericKinds.has(sortKindOf(column))
 }
 
 /** Whether a value of `aggregate` may use `column` (undefined: the rows, which only Count counts). */
@@ -44,7 +45,7 @@ export const emptyDraft: PivotDraft = { rows: [], values: [{ aggregate: 'count' 
 
 /** Columns a pivot may use: every column but a diff's tone. */
 export function pivotColumns(columns: readonly ResultColumn[]): number[] {
-  return columns.flatMap((column, index) => column.role === 'tone' ? [] : [index])
+  return columns.flatMap((column, index) => isHiddenColumn(column) ? [] : [index])
 }
 
 /** The draft kept to what `columns` allows: columns that exist and are not hidden, distinct row columns, a column group that

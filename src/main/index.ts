@@ -47,6 +47,7 @@ import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
+import { migrateProfile, profileFiles } from './profile-migration'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
@@ -64,14 +65,16 @@ import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
+import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
-import { userInfo } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import { maxClipboardText, type ApiResult, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { isBigQueryOptions } from '../shared/connections'
+import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -87,6 +90,12 @@ import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, tes
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
+import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type WindowPlacement } from './window-state'
+import { BigQueryCredentials, BigQueryKeyFiles, federationSource, readCredentialFile } from './bigquery-credentials'
+import { BigQueryConnectionStore } from './bigquery-connection-store'
+import { connectionHistory } from './connection-history'
+import { confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
+import { bigQueryEmulatorEndpoint } from './backend/spawn-spec'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -134,6 +143,18 @@ let sessionCheckpoint: SessionCheckpoint | undefined
 const connectionAuthentication = new ConnectionAuthenticationGuard()
 let credentialRequestsPending = () => false
 let connectionOpen: ConnectionOpenService | undefined
+// BigQuery's credential material (docs/bigquery.md, Authentication): key files by reference, and ADC found and read here.
+const bigQueryKeyFiles = new BigQueryKeyFiles()
+// BigQuery's saved connections (bigquery-connections.json), created with the other stores once the app is ready.
+let bigQueryStore: BigQueryConnectionStore | undefined
+const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
+  env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined,
+  sourceConfirmed: async (keyPath, source) => !!bigQueryStore && await bigQueryStore.sourceConfirmed(keyPath, source),
+  restoreKeyFiles: async () => { await bigQueryStore?.load() }
+})
+/** BigQuery's options as the backend takes them: main adds the credential material the renderer never holds. */
+const withBigQueryCredential = async (params: unknown): Promise<unknown> => isBigQueryOptions(params as { provider?: string })
+  ? { ...params as BigQueryConnectionOptions, credential: await bigQueryCredentials.material(params as BigQueryConnectionOptions) } : params
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
@@ -178,6 +199,13 @@ if (smokeProfile) {
   app.setPath('userData', smokeProfile)
   console.error(`Remote debugging is on for a packaged smoke run (${packagedSmokeVariable}=1) on its own profile; saved passwords are locked.`)
 }
+// The main window's place between runs (window-state.ts). Smoke suites open at the default place unless they ask for it
+// (VARIA_TEST_WINDOW_STATE=1), so one suite's resized window never carries into its next launch.
+const windowStateKept = process.env.VARIA_SMOKE_TEST !== '1' || (testSeams && process.env.VARIA_TEST_WINDOW_STATE === '1')
+const windowStates = new WindowStateStore(join(app.getPath('userData'), 'window-state.json'))
+// Read at once, so the first window waits for nothing more than a small file read already done.
+const windowStateRead = windowStateKept ? windowStates.load().catch(() => undefined) : Promise.resolve(undefined)
+let windowTracker = new WindowStateTracker({ platform: process.platform, save: state => windowStates.save(state) })
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
 // A packaged smoke run on its debugging port reads no file its profile names (sandbox-guard.ts): the three stores below
@@ -187,9 +215,9 @@ const pathsRefused = profilePathsRefused(smokeProfile)
 const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRecentDocuments(process.platform, app)
 const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), { ...systemRecent ? { system: systemRecent } : {}, pathsRefused })
 // AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
-const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
+const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
-const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
+const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
 const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending(), async () => {
   await connectionOpen?.whenCancelledWorkDrained()
 }, generation => {
@@ -203,6 +231,8 @@ let sessionTaken = false
 const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
 // Smoke suites read colours and boxes as soon as a state changes, so they reduce motion under emulated media without the setting.
 const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'
+// SQL Server Agent's release gate, read once: its surfaces show only with VARIA_AGENT_PREVIEW=1 until 0.11.0 (src/shared/agent/gate.ts).
+const agentPreview = agentPreviewEnabled(process.env)
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
@@ -307,6 +337,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   resultsJobs?.reset()
   connectionOpen?.reset({ replaceRenderer: true })
   if (!hotExitAvailable) connectionOpen?.retainTargets([])
+
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -573,21 +604,30 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   rendererReady = false
   rendererUnresponsive = false
   const chrome = appearance.windowChrome(), controls = windowControls()
+  // A replacement window takes its predecessor's place as it is; a new one, the saved place checked against the displays now.
+  const placement = place.bounds || !windowStateKept ? undefined : restoredPlacement()
   mainWindow = new BrowserWindow({
-    title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, minWidth: 1024, minHeight: 700,
+    title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, ...placement?.bounds, minWidth: 1024, minHeight: 700,
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
     // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
     ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : [])],
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit']), ...(followSystemMotion ? ['--varia-follow-system-motion'] : []), ...(agentPreview ? [agentPreviewArgument] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
   })
   const window = mainWindow, contents = window.webContents
-  if (place.maximized) window.maximize()
-  // Smoke runs on a virtual display show the window, inactive: Linux sometimes ran no animation frames in a never-shown one
-  // (scripts/fixtures/xvfb.mjs).
-  if (testSeams && process.env.VARIA_TEST_SHOW_WINDOW === '1') window.showInactive()
+  // Windows can size a window created on a display of another scale factor by the wrong factor; placing it again once it
+  // is on that display corrects it.
+  const placed = placement?.bounds
+  if (process.platform === 'win32' && placed?.x !== undefined && placed.y !== undefined) {
+    const actual = window.getBounds()
+    if (actual.x !== placed.x || actual.y !== placed.y || actual.width !== placed.width || actual.height !== placed.height) window.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
+  }
+  // A hidden smoke window stays hidden: maximize() would show it.
+  if (place.maximized || (placement?.maximized && process.env.VARIA_SMOKE_TEST !== '1')) window.maximize()
+  if (windowStateKept) windowTracker.track(window, placed?.x !== undefined && placed.y !== undefined ? { x: placed.x, y: placed.y, width: placed.width, height: placed.height } : undefined)
+  if (testSeams && placement) Object.assign(globalThis, { __variaWindowPlacement: placement })
   if (process.platform !== 'darwin') {
     // The application menu stays hidden: the renderer draws the title-bar menus and handles F10 and Alt itself.
     mainWindow.setAutoHideMenuBar(false)
@@ -726,6 +766,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   })
 }
 
+/** The main window's saved place (the latest this run, after a macOS reopen), checked against the displays connected now. */
+function restoredPlacement(): WindowPlacement {
+  const displays = { workAreas: screen.getAllDisplays().map(display => display.workArea), primary: screen.getPrimaryDisplay().workArea }
+  const wayland = onWayland(process.platform, { ozonePlatform: app.commandLine.getSwitchValue('ozone-platform'), ozonePlatformHint: app.commandLine.getSwitchValue('ozone-platform-hint') }, process.env)
+  return placeWindow(windowTracker.current(), displays, { canPosition: !wayland })
+}
+
 /**
  * Chromium starts a new renderer only once it has seen the old one go. When only the watchdog saw it (a process that
  * inherited the renderer's channel still holds it open), a reload would go to the dead renderer and leave the window
@@ -762,6 +809,8 @@ app.whenReady().then(async () => {
   }
   // The page and its popouts share the default session; any download there is the page's own (download-guard.ts).
   refuseDownloads(session.defaultSession)
+  // 0.9.0's files are copied to 0.10.0's names once, before any store reads them; the 0.9.0 files stay as they were.
+  await migrateProfile(app.getPath('userData'))
   if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy(), { keepServed: !app.isPackaged }))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
@@ -770,7 +819,7 @@ app.whenReady().then(async () => {
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
   loaded.catch(() => {})
-  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale() }), {
+  backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale(), userData: app.getPath('userData') }), {
     appVersion: app.getVersion(),
     // The backend starts with the result memory limit as it is at each launch: its first launch waits for the settings
     // (a read of one small file). Changes after that go to the running backend (ResultMemoryLimit).
@@ -846,29 +895,31 @@ app.whenReady().then(async () => {
   if (testSeams) testHooks = installTestHooks(backend, results)
   backend.start()
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
-  const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
-  // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
+  const connectionStore = new ConnectionStore(join(app.getPath('userData'), profileFiles.connections.current))
+  bigQueryStore = new BigQueryConnectionStore(join(app.getPath('userData'), profileFiles.bigQueryConnections.current), bigQueryKeyFiles)
+  const history = connectionHistory(connectionStore, bigQueryStore)
+  // Remember password: OS-protected ciphertext beside the connections file, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
-  const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), profileFiles.savedPasswords.current), secretCipher)
   // A smoke profile disables secret storage on purpose, as a keyring-less desktop does.
   workspaceSealer = new ConnectionWorkspaceSealer(secretCipher, { trustUnsealed: !!smokeProfile })
   credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
   connectionOpen = new ConnectionOpenService({
-    authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
+    authentication: connectionAuthentication, savedPasswords, connections: history,
     generation: () => backend.current?.generation,
     open: async (params, generation, signal) => {
       const requestId = randomUUID(), load = connectionRequests.begin(requestId)
       const cancel = () => { connectionRequests.cancel([requestId]) }
       signal.addEventListener('abort', cancel, { once: true })
       if (signal.aborted) cancel()
-      try { return await validateOpenedConnection(await backend.request('connections.connect', params as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
+      try { return await validateOpenedConnection(await backend.request('connections.connect', await withBigQueryCredential(params) as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
       finally { signal.removeEventListener('abort', cancel); load.end() }
     },
     close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation }),
     bindingsChanged: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:connection-bindings-changed', event) }
   })
   connectionOpen.backendState(backend.state)
-  const library = connectionLibrary({ connections: connectionStore, savedPasswords })
+  const library = connectionLibrary({ connections: connectionStore, savedPasswords, bigQuery: bigQueryStore })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme: settledNativeTheme(nativeTheme, popouts) })
   await appearance.initialize()
@@ -937,6 +988,29 @@ app.whenReady().then(async () => {
   handle('varia:connections-save', value => library.save(value))
   handle('varia:connections-remove', value => library.remove(value))
   handle('varia:connections-environment', value => library.setEnvironment(value))
+  // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
+  // name, never its path, and for a federation configuration the token file it reads (decision 49).
+  handle('varia:connections-pick-key-file', async value => {
+    const { authentication } = pickKeyFileParamsSchema.parse(value)
+    const what = authentication === 'serviceAccountKey' ? 'The key file' : 'The federation configuration file'
+    const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: authentication === 'serviceAccountKey' ? 'Choose a service account key' : 'Choose a federation configuration', filters: [{ name: 'JSON files', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
+    const path = selection.canceled ? undefined : selection.filePaths[0]
+    if (!path) return null
+    // Read now, under the same rules as a connect, so a file Varia cannot use is refused at once with its reason.
+    const json = await readCredentialFile(path, { json: true, what })
+    const keyFile = bigQueryKeyFiles.register(path), source = authentication === 'externalAccount' ? await federationSource(json) : undefined
+    return { keyFile, name: basename(path), ...source !== undefined ? { source, sourceConfirmed: await bigQueryStore!.sourceConfirmed(path, source) } : {} }
+  })
+  // Decision 49: the user confirmed the token file a picked configuration reads. Main re-reads the configuration, so only
+  // the source it names now is confirmed, never a path the page supplied.
+  handle('varia:connections-confirm-source', async value => {
+    const { keyFile, source } = confirmSourceParamsSchema.parse(value)
+    const path = bigQueryKeyFiles.path(keyFile)
+    if (!path) throw new Error('The configuration file is no longer available. Choose it again.')
+    const current = await federationSource(await readCredentialFile(path, { json: true, what: 'The federation configuration file' }))
+    if (current === undefined || current !== source) throw new Error('The configuration file changed. Choose it again.')
+    await bigQueryStore!.confirmSource(path, source)
+  })
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
   // Import and export take no path from the page: main opens the dialogs and uses only the paths they return.
@@ -1016,27 +1090,35 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
       if (method === 'connections.connect') {
         if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
-        const outcome = await connectionOpen.connect(validated as ConnectionOptions, context)
+        // Either engine: BigQuery's credential material is added when the owner sends it (withBigQueryCredential).
+        const outcome = await connectionOpen.connect(validated as ProviderConnectionOptions, context)
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }
       if (method === 'connections.databases') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
-        const outcome = await connectionOpen.databases(validated as ConnectionOptions, context, async (params, signal) => {
+        const outcome = await connectionOpen.databases(validated as ProviderConnectionOptions, context, async (params, signal) => {
           const requestId = randomUUID(), load = connectionRequests.begin(requestId)
           const cancel = () => { connectionRequests.cancel([requestId]) }
           signal.addEventListener('abort', cancel, { once: true })
           if (signal.aborted) cancel()
-          try { return validateResult('connections.databases', await backend.request('connections.databases', params as ConnectionOptions, { onSent: load.sent })) }
+          try { return validateResult('connections.databases', await backend.request('connections.databases', await withBigQueryCredential(params) as ConnectionOptions, { onSent: load.sent })) }
           finally { signal.removeEventListener('abort', cancel); load.end() }
         })
         if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
         return { ok: true, value: outcome.value }
       }
+      // BigQuery before connecting: main adds the credential material the renderer never holds.
+      if (method === 'bigquery.account' || method === 'bigquery.projects') {
+        const params = validated as RpcMethods['bigquery.projects']['params']
+        const credential = await bigQueryCredentials.material(params)
+        return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
+      }
+
       if (method === 'connections.disconnect') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
@@ -1080,7 +1162,7 @@ app.whenReady().then(async () => {
         outcome = { ok: false, error }
       }
       // History and remembered passwords for the connect methods; other methods pass through.
-      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: connectionStore, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
+      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: history, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }
@@ -1092,6 +1174,7 @@ app.whenReady().then(async () => {
   // clipboard or chooses the file, and only the file's name goes back.
   handle('varia:results-copy', value => jobs.copy(value))
   handle('varia:results-save', value => jobs.save(value))
+  handle('varia:results-save-local', value => jobs.saveLocal(value))
   handle('varia:results-job-cancel', value => jobs.cancel(value))
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.
@@ -1174,7 +1257,7 @@ app.whenReady().then(async () => {
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
     const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined
-    return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
+    return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
@@ -1243,7 +1326,7 @@ app.whenReady().then(async () => {
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
   // a full results grid copy.
-  handle('varia:clipboard-write', value => clipboard.writeText(z.string().max(maxClipboardText).parse(value)))
+  handle('varia:clipboard-write', value => { const text = z.string().max(maxClipboardText).parse(value); jobs.supersedeCopy(); return clipboard.writeText(text) })
   // Raises one of the page's own popouts, named as it opened it, without activating it.
   handle('varia:popout-raise', value => {
     const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow
@@ -1297,6 +1380,7 @@ app.whenReady().then(async () => {
     } catch (error) { closeApproved = false; throw error }
   })
   buildMenu()
+  windowTracker = new WindowStateTracker({ platform: process.platform, save: state => windowStates.save(state) }, await windowStateRead)
   createWindow()
   started = true
   // The full catalogue only feeds the menu, so it loads after the window is on its way.
@@ -1317,7 +1401,8 @@ app.on('will-quit', event => {
   event.preventDefault()
   // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
   app.releaseSingleInstanceLock()
-  void backend.stop().finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
+  // The window's last place is written by then too (its close started the write), within a bound of its own.
+  void Promise.all([backend.stop(), windowTracker.flush()]).finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
 })
 
 /** Main's record of a release that could not be staged or swapped in (update-staging.ts), in the profile. */

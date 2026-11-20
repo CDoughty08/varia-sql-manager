@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
 import { tableLimits, type TablePropertiesModel } from '../../../shared/actions/tables.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
@@ -10,7 +11,9 @@ import PropertyField, { FactList, FieldHints, FieldHintStrip, fieldAria } from '
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import Switch from '../kit/Switch'
-import { generalFacts, lockEscalationSegments, storageFacts, tablePages, tokenText, versioningFacts } from './table-fields'
+import { permissionsTable, partitionsTable, predicatesTable } from './grids'
+import PropertiesGrid from './PropertiesGrid'
+import { generalFacts, lockEscalationSegments, storageFacts, tablePages, versioningFacts } from './table-fields'
 import type { TablePropertiesService, TablePropertiesState } from './TablePropertiesService'
 
 const fieldId = (documentId: string, key: string) => `table-properties-${documentId}-${key}`
@@ -46,18 +49,10 @@ function GeneralSection({ state, model, draft, editable, service }: SectionProps
 }
 
 function PermissionsSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const heading = `${state.id}-permissions-grid`
+  const table = useMemo(() => permissionsTable(model), [model])
   return <div className="properties-permissions">
-    <h3 className="properties-group-title" id={heading}>Permissions granted or denied on the table</h3>
-    {model.permissions.length === 0 ? <p className="field-note">No permissions are granted or denied on this table.</p> : <div className="properties-table">
-      <table className="object-dialog-grid" aria-labelledby={heading}>
-        <thead><tr><th scope="col">Principal</th><th scope="col" data-wrap="never">Type</th><th scope="col">Permission</th><th scope="col">Column</th><th scope="col" data-wrap="never">State</th><th scope="col">Grantor</th></tr></thead>
-        <tbody>{model.permissions.map((row, index) => <tr key={index}>
-          <td><bdi>{displayText(row.principal)}</bdi></td><td data-wrap="never">{tokenText(row.principalType)}</td><td>{row.permission}</td><td><bdi>{row.column ? displayText(row.column) : ''}</bdi></td>
-          <td data-wrap="never">{row.state === 'GRANT_WITH_GRANT_OPTION' ? 'Grant with grant' : tokenText(row.state)}</td><td><bdi>{displayText(row.grantor)}</bdi></td>
-        </tr>)}</tbody>
-      </table>
-    </div>}
+    <h3 className="properties-group-title">Permissions granted or denied on the table</h3>
+    <PropertiesGrid table={table} label="Permissions" empty="No permissions are granted or denied on this table." suggestedName={`${state.label} permissions`} />
     <p className="field-note">{model.permissionsTruncated ? `The table has more than ${tableLimits.permissions.toLocaleString()} permissions; the first are listed. ` : ''}Grant, deny and revoke permissions in a query window.</p>
   </div>
 }
@@ -85,7 +80,7 @@ function ChangeTrackingSection({ state, model, draft, editable, errors, service 
 }
 
 function StorageSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const facts = storageFacts(model), heading = `${state.id}-partitions-grid`
+  const facts = storageFacts(model), partitions = useMemo(() => partitionsTable(model), [model])
   return <div className="properties-storage">
     <h3 className="properties-group-title">Compression</h3>
     <FactList facts={facts.compression} />
@@ -96,15 +91,8 @@ function StorageSection({ state, model }: Pick<SectionProps, 'state' | 'model'>)
     <h3 className="properties-group-title">General</h3>
     <FactList facts={facts.general} />
     {model.storage.partitioned && <>
-      <h3 className="properties-group-title" id={heading}>Partitions</h3>
-      <div className="properties-table">
-        <table className="object-dialog-grid" aria-labelledby={heading}>
-          <thead><tr><th scope="col" data-wrap="never">Partition</th><th scope="col" data-wrap="never">Rows</th><th scope="col">Compression</th><th scope="col">Filegroup</th></tr></thead>
-          <tbody>{model.storage.partitions.map(row => <tr key={row.number}>
-            <td data-wrap="never">{row.number}</td><td data-wrap="never">{row.rows.toLocaleString()}</td><td>{tokenText(row.compression)}</td><td><bdi>{displayText(row.filegroup ?? '')}</bdi></td>
-          </tr>)}</tbody>
-        </table>
-      </div>
+      <h3 className="properties-group-title">Partitions</h3>
+      <PropertiesGrid table={partitions} label="Partitions" empty="No partitions are listed." suggestedName={`${state.label} partitions`} />
       {model.storage.partitionsTruncated && <p className="field-note">The table has more partitions than are listed.</p>}
     </>}
     <p className="field-note">Change compression and partitioning with Manage Compression and Create Partition in a query window.</p>
@@ -112,18 +100,10 @@ function StorageSection({ state, model }: Pick<SectionProps, 'state' | 'model'>)
 }
 
 function SecurityPredicatesSection({ state, model }: Pick<SectionProps, 'state' | 'model'>) {
-  const heading = `${state.id}-predicates-grid`, predicates = model.securityPredicates ?? []
+  const table = useMemo(() => predicatesTable(model), [model])
   return <div className="properties-security-predicates">
-    <h3 className="properties-group-title" id={heading}>Row-level security predicates on the table</h3>
-    <div className="properties-table">
-      <table className="object-dialog-grid" aria-labelledby={heading}>
-        <thead><tr><th scope="col">Security policy</th><th scope="col" data-wrap="never">Type</th><th scope="col" data-wrap="never">Operation</th><th scope="col">Predicate</th><th scope="col" data-wrap="never">Enabled</th></tr></thead>
-        <tbody>{predicates.map((row, index) => <tr key={index}>
-          <td><bdi>{displayText(row.policy)}</bdi></td><td data-wrap="never">{tokenText(row.type)}</td><td data-wrap="never">{row.operation ? tokenText(row.operation) : 'All'}</td>
-          <td data-wrap="anywhere"><code>{displayText(row.predicate)}{row.predicateTruncated ? '…' : ''}</code></td><td data-wrap="never">{row.enabled ? 'True' : 'False'}</td>
-        </tr>)}</tbody>
-      </table>
-    </div>
+    <h3 className="properties-group-title">Row-level security predicates on the table</h3>
+    <PropertiesGrid table={table} label="Security predicates" empty="No security predicates apply to this table." suggestedName={`${state.label} security predicates`} />
     {model.securityPredicatesTruncated && <p className="field-note">The table has more predicates than are listed.</p>}
   </div>
 }

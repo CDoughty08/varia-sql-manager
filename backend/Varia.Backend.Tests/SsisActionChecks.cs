@@ -68,6 +68,7 @@ internal static class SsisActionChecks
             ("EXEC (@stmt);", "runs dynamic SQL"),
             ("EXECUTE @procedure;", "runs dynamic SQL"),
             ("EXEC [catalog].[stop_operation] @operation_id = @operation_id; UPDATE [catalog].[operations] SET status = 3;", "writes on its own: UPDATE"),
+            ("EXEC [catalog].[stop_operation] @operation_id = @operation_id; SELECT 1.UPDATE [catalog].[operations] SET status = 3;", "glues a word to the number 1.UPDATE"),
             ("EXEC [catalog].[stop_operation] @operation_id = @operation_id; DROP TABLE [catalog].[operations];", "writes on its own: DROP"),
             ("EXEC [catalog].[stop_operation] @operation_id = N'1';", "has the literal N'1'"),
             ("EXEC [catalog].[stop_operation] @operation_id = @operation_id; -- SYNCHRONIZED", "names SYNCHRONIZED"),

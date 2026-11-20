@@ -4,6 +4,7 @@ import { columnTitle } from '../grid/selection'
 import { outputOf } from '../menus/targets'
 import { entryOf } from '../results/ResultsService'
 import { focusedOutput } from './output'
+import { isHiddenColumn } from '../grid/hidden-columns'
 
 /** The picker's row for "Row N" headers; a column's row has its index as id. */
 const rowNumbers = 'rows'
@@ -33,7 +34,7 @@ export function transposeContribution({ commands, results, documents, menuTarget
   const headerOf = (target: NonNullable<ReturnType<typeof targetOf>>) => {
     const column = target.column ?? results.selection(target.tabId, target.key)?.active.column
     const columns = target.set.descriptor.columns
-    return column !== undefined && Number.isInteger(column) && column >= 0 && column < columns.length && columns[column].role !== 'tone' ? column : undefined
+    return column !== undefined && Number.isInteger(column) && column >= 0 && column < columns.length && !isHiddenColumn(columns[column]) ? column : undefined
   }
   const registrations = [
     commands.register('output.transpose', {
@@ -75,7 +76,7 @@ export function transposeContribution({ commands, results, documents, menuTarget
           activeId: now.transposed && now.headerColumn !== undefined ? String(now.headerColumn) : rowNumbers,
           items: [
             { id: rowNumbers, label: 'Row number', description: 'Row 1, Row 2, …' },
-            ...target.set.descriptor.columns.flatMap((column, index) => column.role === 'tone' ? [] : [{ id: String(index), label: columnTitle(column.name), description: column.dataType }])
+            ...target.set.descriptor.columns.flatMap((column, index) => isHiddenColumn(column) ? [] : [{ id: String(index), label: columnTitle(column.name), description: column.dataType }])
           ],
           ...args?.anchor ? { anchor: args.anchor } : {},
           // The entry may have been closed, or the query run again, while the list was open: the service then refuses.

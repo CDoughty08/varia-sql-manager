@@ -98,6 +98,7 @@
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
     {"code":"NOT_SUPPORTED","retryable":false},
+    {"code":"UNSUPPORTED_PROVIDER","retryable":false},
     {"code":"PERMISSION_DENIED","retryable":true},
     {"code":"IN_USE","retryable":true},
     {"code":"BLOCKED","retryable":true},

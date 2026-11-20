@@ -2,7 +2,7 @@ import type { BackendStatus, RecentFile } from '../../../shared/contracts'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
-import { isQueryDocument, isTextDocument } from '../documents'
+import { documentProvider, isQueryDocument, isTextDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { EditorGroupSnapshot } from '../services/editor-groups'
 import type { BookmarkSnapshot } from '../editor/bookmarks'
@@ -84,6 +84,8 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
 
 export interface ContextInputs {
   readonly platform: Platform
+  /** SQL Server Agent's release gate (`agentEnabled`): main's VARIA_AGENT_PREVIEW=1, fixed for the run. */
+  readonly agentEnabled?: boolean
   readonly focus?: FocusFacts
   readonly documents: DocumentSnapshot
   readonly queries: QuerySnapshot
@@ -162,6 +164,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const operations = active ? inputs.ssis?.byDocument[active.id] : undefined
   const groups = inputs.editorGroups?.groups ?? [], activeGroup = active ? groups.find(group => group.documents.includes(active.id)) : undefined
   return contextRecord(inputs.platform, {
+    agentEnabled: !!inputs.agentEnabled,
     ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus || focus.peekEditorFocus,
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
@@ -170,7 +173,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     resultsColumnProfile: !!inputs.resultsColumnProfile, resultsProfileSelectedOnly: !!inputs.resultsProfileSelectedOnly, resultsRowSize: !!inputs.resultsRowSize, resultsTabs: inputs.resultsLayout === 'tabs', resultsGridTransposed: !!active && !!inputs.resultsTurned?.[active.id],
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
-    hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
+    // A query's engine follows its connection; every other document is SQL Server's.
+    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,
     propertiesRefreshable: !!properties?.refreshable, activeDocumentIsTableProperties: active?.kind === 'tableProperties',
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,
@@ -194,6 +198,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
 
 export interface ContextKeyOptions {
   readonly platform: Platform
+  /** SQL Server Agent's release gate (`agentEnabled`, `window.varia.agentPreview`); fixed for the run, so not a store. */
+  readonly agentEnabled?: boolean
   readonly documents: ExternalStore<DocumentSnapshot>
   readonly queries: ExternalStore<QuerySnapshot>
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -259,7 +265,7 @@ export class ContextKeyService implements Disposable {
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
-      platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
+      platform: options.platform, agentEnabled: options.agentEnabled, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], resultsColumnProfile: options.settings?.getSnapshot().values['queryResults.grid.columnProfile'], resultsProfileSelectedOnly: options.settings?.getSnapshot().values['queryResults.grid.columnProfileSelectedOnly'], resultsRowSize: options.settings?.getSnapshot().values['queryResults.grid.rowSize'], resultsLayout: options.settings?.getSnapshot().values['queryResults.grid.layout'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultSets: options.resultSets?.getSnapshot(), resultsSteppable: options.resultsSteppable?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,

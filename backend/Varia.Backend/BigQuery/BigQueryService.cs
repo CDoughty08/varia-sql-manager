@@ -1,0 +1,328 @@
+using System.Collections.Concurrent;
+using Google.Apis.Bigquery.v2.Data;
+using Google.Apis.Http;
+using Google.Cloud.BigQuery.V2;
+using Varia.Backend.Protocol;
+
+namespace Varia.Backend.BigQuery;
+
+/// <summary>
+/// The system proxy, except for cloud instance metadata: those requests are plain http on the instance's link-local
+/// address and answer with credentials (an AWS role's keys, an Azure or Compute Engine token), so they never cross a proxy.
+/// </summary>
+internal sealed class MetadataDirectProxy(System.Net.IWebProxy inner) : System.Net.IWebProxy
+{
+    public System.Net.ICredentials? Credentials { get => inner.Credentials; set => inner.Credentials = value; }
+    public Uri? GetProxy(Uri destination) => IsMetadata(destination) ? null : inner.GetProxy(destination);
+    public bool IsBypassed(Uri host) => IsMetadata(host) || inner.IsBypassed(host);
+
+    public static bool IsMetadata(Uri uri) =>
+        uri.Host.StartsWith("169.254.", StringComparison.Ordinal) || string.Equals(uri.Host, "[fd00:ec2::254]", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(uri.Host, "metadata.google.internal", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Google's HTTP client factory with instance metadata kept off the proxy and its answers capped
+/// (<see cref="MetadataResponseCap"/>), for the requests Varia makes and those the library makes itself.</summary>
+internal sealed class MetadataSafeHttpClientFactory() : HttpClientFactory(new MetadataDirectProxy(HttpClient.DefaultProxy))
+{
+    protected override HttpMessageHandler CreateHandler(CreateHttpClientArgs args) => new MetadataResponseCap { InnerHandler = base.CreateHandler(args) };
+}
+
+/// <summary>
+/// Caps an instance metadata answer at 64 KiB before anything buffers it: off-cloud, anything on the network can answer
+/// the link-local address, and the library reads its metadata answers whole. Google's own APIs are not capped here.
+/// </summary>
+internal sealed class MetadataResponseCap : DelegatingHandler
+{
+    public const int MaxBytes = 64 * 1024;
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var response = await base.SendAsync(request, cancellationToken);
+        if (request.RequestUri is not { } uri || !MetadataDirectProxy.IsMetadata(uri)) return response;
+        try
+        {
+            // Instance metadata never redirects; a redirect would take the library's next request to another host, past
+            // this cap and back onto the proxy.
+            if ((int)response.StatusCode is >= 300 and < 400)
+                throw new RequestException("AUTH_IDENTITY", "The instance metadata service redirected the request elsewhere, so Varia did not follow it.");
+            if (response.Content.Headers.ContentLength > MaxBytes) throw TooLarge();
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var buffer = new byte[MaxBytes + 1];
+            var read = 0;
+            while (read < buffer.Length && await stream.ReadAsync(buffer.AsMemory(read), cancellationToken) is var count and > 0) read += count;
+            if (read > MaxBytes) throw TooLarge();
+            var bounded = new ByteArrayContent(buffer, 0, read);
+            foreach (var header in response.Content.Headers) bounded.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            bounded.Headers.ContentLength = read;
+            response.Content.Dispose();
+            response.Content = bounded;
+            return response;
+        }
+        catch { response.Dispose(); throw; }
+    }
+
+    static RequestException TooLarge() => new("AUTH_IDENTITY", "The instance metadata service answered with more than 64 KiB, so Varia did not use it.");
+}
+
+/// <summary>
+/// Where BigQuery requests go and how: Google's endpoint, or the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (emulator mode:
+/// anonymous credentials, no connect probe and no sessions, faked estimates); the HTTP client factory every request and
+/// credential uses (the offline checks put their fake here); and the federation subject token rules.
+/// </summary>
+internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Http, SubjectTokens Subjects)
+{
+    public bool Emulator => Endpoint is not null;
+
+    /// <summary>Google's endpoint with the system proxy and certificate store (decision 19).</summary>
+    public static BigQueryEnvironment Production() => new(null, new MetadataSafeHttpClientFactory(), SubjectTokens.FromEnvironment());
+
+    /// <summary>The backend process's environment. Main passes VARIA_TEST_BIGQUERY_ENDPOINT only to unpackaged builds
+    /// (spawn-spec.ts), and only a loopback http address is honoured, so no build can be pointed at another host.</summary>
+    public static BigQueryEnvironment FromEnvironment() => Production() with { Endpoint = EmulatorEndpoint(Environment.GetEnvironmentVariable("VARIA_TEST_BIGQUERY_ENDPOINT")) };
+
+    public static Uri? EmulatorEndpoint(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp || !uri.IsLoopback || !string.IsNullOrEmpty(uri.UserInfo)
+            || uri.Query.Length > 0 || uri.Fragment.Length > 0 || uri.AbsolutePath != "/")
+            throw new InvalidOperationException("VARIA_TEST_BIGQUERY_ENDPOINT must be a loopback http address such as http://localhost:9050.");
+        return uri;
+    }
+
+    /// <summary>The REST base the client uses: the emulator's, or Google's default.</summary>
+    public string? BaseUri => Endpoint is null ? null : new Uri(Endpoint, "bigquery/v2/").ToString();
+}
+
+/// <summary>One BigQuery connection handle: its options (without credential material), client, pinned principal and the
+/// default location (the options', or the default dataset's).</summary>
+internal sealed class BigQueryConnection(string id, BigQueryConnectOptions options, BigQueryClient client, BigQueryPrincipal principal, string? location) : IDisposable
+{
+    public string Id { get; } = id;
+    public BigQueryConnectOptions Options { get; } = options;
+    public BigQueryClient Client { get; } = client;
+    public BigQueryPrincipal Principal { get; } = principal;
+    public string? Location { get; } = location;
+    public void Dispose() => Client.Dispose();
+}
+
+/// <summary>A dry run's estimate; emulator mode fakes it (the emulator does not dry-run).</summary>
+internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false);
+
+/// <summary>
+/// The BigQuery engine (docs/bigquery.md): BigQuery connections in a registry keyed by the same handle ids as SQL Server's,
+/// connect (credential, identity pin, the probe), disconnect, and the pre-connect methods. SqlService routes a handle here
+/// by its provider after the provider check.
+/// </summary>
+internal sealed partial class BigQueryService(BigQueryEnvironment environment) : IDisposable
+{
+    public const string ApplicationName = "VariaSqlManager";
+    /// <summary>The connect probe (docs/bigquery-plan.md, SQL the backend runs): a free dry run that proves bigquery.jobs.create.</summary>
+    public const string ProbeSql = "SELECT 1";
+    public const string ProbePermission = "bigquery.jobs.create";
+    /// <summary>Labels on every job Varia creates, so Job History can mark them.</summary>
+    public static readonly IReadOnlyDictionary<string, string> Labels = new Dictionary<string, string> { ["varia_client"] = "varia" };
+
+    private readonly ConcurrentDictionary<string, BigQueryConnection> connections = new();
+
+    public BigQueryEnvironment Environment => environment;
+    /// <summary>Connect's budget inside main's 45 s deadline (12 s inside its 15 s for a background reconnect); the checks shorten it.</summary>
+    internal TimeSpan ConnectLimit { get; set; } = TimeSpan.FromSeconds(40);
+    internal TimeSpan BackgroundConnectLimit { get; set; } = TimeSpan.FromSeconds(12);
+    /// <summary>The pre-connect methods' budget inside their 30 s deadline.</summary>
+    internal TimeSpan PreConnectLimit { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>How long the metadata server may take to answer before ADC concludes there is none.</summary>
+    internal TimeSpan MetadataLimit { get; set; } = TimeSpan.FromSeconds(3);
+
+    public bool Owns(string connectionId) => connections.ContainsKey(connectionId);
+    public BigQueryConnection? Find(string connectionId) => connections.GetValueOrDefault(connectionId);
+    public int Count => connections.Count;
+
+    public async Task<ConnectionInfo> ConnectAsync(BigQueryConnectOptions options, CancellationToken token, RequestContext? context = null)
+    {
+        BigQueryLimits.Check(options, environment.Emulator);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(options.NonInteractive ? BackgroundConnectLimit : ConnectLimit);
+        var bounded = budget.Token;
+        var stored = options with { Credential = null };
+        BigQueryClient? client = null;
+        try
+        {
+            var (credential, principal) = await SignInAsync(options.Authentication, options.ImpersonateServiceAccount, options.Credential!, bounded);
+            client = Client(options.Project, credential, options.Location);
+            var location = options.Location;
+            if (!environment.Emulator)
+                await ProbeAsync(client, options.Project, location, bounded);
+            if (location is null && options.Dataset is { } dataset)
+                location = await DatasetLocationAsync(client, options.Project, dataset, bounded);
+            var id = Guid.NewGuid().ToString();
+            connections[id] = new BigQueryConnection(id, stored, client, principal, location);
+            client = null;
+            if (context is not null)
+            {
+                var released = 0;
+                void Release() { if (Interlocked.Exchange(ref released, 1) == 0) Disconnect(id); }
+                context.Unsent = context.Dropped = Release;
+            }
+            return new(id, options.Project, options.Dataset ?? "", "BigQuery", options.DisplayName, options.Color, Login: principal.Account,
+                PrincipalId: principal.PrincipalId, ProviderId: Providers.BigQuery);
+        }
+        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, ProbePermission, KindOf(options.Authentication), token: token); }
+        finally { client?.Dispose(); }
+    }
+
+    static string? KindOf(string authentication) => authentication switch { "serviceAccountKey" => "serviceAccount", "externalAccount" => "externalAccount", _ => null };
+
+    /// <summary>Removes a handle and disposes its client. Results stay readable after a disconnect, as SQL Server's do.</summary>
+    public bool Disconnect(string connectionId)
+    {
+        if (!connections.TryRemove(connectionId, out var connection)) return false;
+        connection.Dispose();
+        return true;
+    }
+
+    /// <summary>bigquery.account: the account line before connecting.</summary>
+    public async Task<BigQueryAccount> AccountAsync(BigQueryCredentialArgs args, CancellationToken token)
+    {
+        BigQueryLimits.CheckCredential(args.Authentication, args.KeyFile, args.ImpersonateServiceAccount, args.Credential, environment.Emulator);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(PreConnectLimit);
+        try
+        {
+            var (_, principal) = await SignInAsync(args.Authentication, args.ImpersonateServiceAccount, args.Credential!, budget.Token);
+            return new(principal.Kind, principal.Account, principal.Impersonated);
+        }
+        catch (Exception error) { throw BigQueryErrors.Map(error, kind: KindOf(args.Authentication), token: token); }
+    }
+
+    /// <summary>bigquery.projects: one page of projects.list (BigQuery v2, not Resource Manager, which needs another API).</summary>
+    public async Task<BigQueryProjectList> ProjectsAsync(BigQueryProjectsArgs args, CancellationToken token)
+    {
+        BigQueryLimits.CheckCredential(args.Authentication, args.KeyFile, args.ImpersonateServiceAccount, args.Credential, environment.Emulator);
+        BigQueryLimits.CheckPageToken(args.PageToken);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(PreConnectLimit);
+        try
+        {
+            var (credential, _) = await SignInAsync(args.Authentication, args.ImpersonateServiceAccount, args.Credential!, budget.Token);
+            // projects.list names no project; the client needs one, which is never sent.
+            using var client = Client("varia-pre-connect", credential, null);
+            var request = client.Service.Projects.List();
+            request.MaxResults = BigQueryLimits.ProjectsPerPage;
+            request.PageToken = args.PageToken;
+            var page = await request.ExecuteAsync(budget.Token);
+            var projects = new List<BigQueryProject>();
+            foreach (var project in page.Projects ?? [])
+            {
+                // The emulator names a project only by its id; Google fills projectReference too.
+                var id = project.ProjectReference?.ProjectId ?? project.Id;
+                if (!BigQueryLimits.IsProject(id) || projects.Count >= BigQueryLimits.ProjectsPerPage) continue;
+                var name = project.FriendlyName is { Length: > 0 } friendly ? BigQueryIdentity.Account(friendly) : null;
+                projects.Add(new(id!, name is { Length: > BigQueryLimits.FriendlyName } ? name[..BigQueryLimits.FriendlyName] : name));
+            }
+            var next = page.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } value && !value.Any(char.IsControl) ? value : null;
+            return new(projects, next);
+        }
+        catch (Exception error) { throw BigQueryErrors.Map(error, kind: KindOf(args.Authentication), token: token); }
+    }
+
+    /// <summary>Resolves the credential main read and pins its identity. Emulator mode signs nothing.</summary>
+    internal async Task<(Google.Apis.Auth.OAuth2.ICredential Credential, BigQueryPrincipal Principal)> SignInAsync(string authentication, string? impersonate, BigQueryCredentialMaterial material, CancellationToken token)
+    {
+        if (environment.Emulator) return (AnonymousCredential.Instance, BigQueryIdentity.Anonymous);
+        LoadedCredential loaded;
+        if (material.Source == "metadata")
+        {
+            if (!await MetadataServerAsync(token)) throw new RequestException("AUTH_EXPIRED", BigQueryErrors.NoCredentials);
+            loaded = BigQueryCredentials.Metadata(environment.Http);
+        }
+        else
+        {
+            var checkedFile = BigQueryCredentials.Parse(material.Json!, authentication, material.Source);
+            // The library's own parse (a malformed private key, a value of the wrong JSON type) is a bad file too; its
+            // message can quote the file, so it is not passed on.
+            try { loaded = BigQueryCredentials.Load(checkedFile, environment.Http, environment.Subjects); }
+            catch (Exception error) when (error is not RequestException and not OperationCanceledException)
+            {
+                throw new RequestException("AUTH_KEY_FILE", "The key file could not be loaded: a field holds a value Google's format does not allow. Choose the file again.");
+            }
+        }
+        // A refused sign-in means what the credential it came from is (a deleted key, a refused federation token, an
+        // expired user sign-in), whichever mode found it; ADC can hold any of them.
+        var kind = loaded.Kind switch { "serviceAccount" => "serviceAccount", "external" or "aws" => "externalAccount", _ => null };
+        try
+        {
+            if (impersonate is not null) loaded = loaded.Impersonate(impersonate, environment.Http);
+            var principal = await BigQueryIdentity.ResolveAsync(loaded, environment.Http, token);
+            var pinned = new PinnedCredential(loaded, principal, environment.Http);
+            pinned.Verified(await BigQueryIdentity.TokenAsync(loaded.Credential, token));
+            return (pinned, principal);
+        }
+        catch (Exception error) when (error is not RequestException && BigQueryErrors.Map(error, kind: kind, token: token) is RequestException mapped) { throw mapped; }
+    }
+
+    /// <summary>Whether a metadata server answers (ADC's last step), within <see cref="MetadataLimit"/>.</summary>
+    async Task<bool> MetadataServerAsync(CancellationToken token)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+        limit.CancelAfter(MetadataLimit);
+        try
+        {
+            using var client = environment.Http.CreateHttpClient(new CreateHttpClientArgs());
+            using var request = new HttpRequestMessage(HttpMethod.Get, BigQueryIdentity.MetadataEmailUrl);
+            request.Headers.Add("Metadata-Flavor", "Google");
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, limit.Token);
+            return response.IsSuccessStatusCode && response.Headers.TryGetValues("Metadata-Flavor", out var flavor) && flavor.Contains("Google");
+        }
+        catch (Exception) when (!token.IsCancellationRequested) { return false; }
+    }
+
+    internal BigQueryClient Client(string project, Google.Apis.Auth.OAuth2.ICredential credential, string? location) => new BigQueryClientBuilder
+    {
+        ProjectId = project, DefaultLocation = location, Credential = credential, HttpClientFactory = environment.Http,
+        BaseUri = environment.BaseUri, ApplicationName = ApplicationName,
+        // Explicit, so GOOGLE_CLOUD_UNIVERSE_DOMAIN cannot move BigQuery (and its bearer token) to another host; the emulator
+        // names its own address instead.
+        UniverseDomain = environment.Emulator ? null : BigQueryCredentials.Universe
+    }.Build();
+
+    /// <summary>The connect probe: a dry run of SELECT 1 in the billing project. It proves bigquery.jobs.create and bills nothing.</summary>
+    internal static async Task ProbeAsync(BigQueryClient client, string project, string? location, CancellationToken token) =>
+        await DryRunAsync(client, project, location, ProbeSql, token);
+
+    /// <summary>A dry run (free): the bytes a query would process. Emulator mode answers a faked estimate.</summary>
+    internal async Task<BigQueryEstimate> EstimateAsync(BigQueryConnection connection, string sql, CancellationToken token)
+    {
+        if (environment.Emulator) return new(0, Faked: true);
+        if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+        try { return new(await DryRunAsync(connection.Client, connection.Options.Project, connection.Location, sql, token)); }
+        catch (Exception error) { throw BigQueryErrors.Map(error, connection.Options.Project, ProbePermission, token: token); }
+    }
+
+    static async Task<long> DryRunAsync(BigQueryClient client, string project, string? location, string sql, CancellationToken token)
+    {
+        var job = new Job
+        {
+            JobReference = location is null ? null : new JobReference { ProjectId = project, Location = location },
+            Configuration = new JobConfiguration
+            {
+                DryRun = true, Labels = new Dictionary<string, string>(Labels),
+                Query = new JobConfigurationQuery { Query = sql, UseLegacySql = false }
+            }
+        };
+        var answer = await client.Service.Jobs.Insert(job, project).ExecuteAsync(token);
+        return answer.Statistics?.TotalBytesProcessed ?? answer.Statistics?.Query?.TotalBytesProcessed ?? 0;
+    }
+
+    /// <summary>The default dataset's location (datasets.get), the connection's location when the options name none.</summary>
+    static async Task<string?> DatasetLocationAsync(BigQueryClient client, string project, string dataset, CancellationToken token)
+    {
+        var answer = await client.Service.Datasets.Get(project, dataset).ExecuteAsync(token);
+        return answer.Location is { Length: > 0 and <= BigQueryLimits.Location } location && BigQueryLimits.LocationId().IsMatch(location) ? location : null;
+    }
+
+    public void Dispose()
+    {
+        foreach (var id in connections.Keys) Disconnect(id);
+    }
+}

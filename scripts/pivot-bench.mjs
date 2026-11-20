@@ -7,6 +7,7 @@ import { lowMemoryStop, lowMemoryText, stopIfLowMemory } from './fixtures/memory
 import { pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, outputStatus, part, pivotPanel, resultsToolbar } from './fixtures/ui.mjs'
+import { xvfbArgs } from './fixtures/xvfb.mjs'
 
 // End-to-end Pivot timings (hand-run: node scripts/pivot-bench.mjs [--rows N] [--runs N]; not part of check or CI): the built
 // app and the Release backend against VARIA_TEST_SQL_SERVER. Each case runs a query of synthetic rows (numbers from a cross
@@ -177,7 +178,7 @@ async function pivotCase(name, sql, sets, group, { before, detail = '', asColumn
 }
 
 try {
-  app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  app = await electron.launch({ args: xvfbArgs(['.']), env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   // A hidden window gets about one animation frame a second; show it without focus.

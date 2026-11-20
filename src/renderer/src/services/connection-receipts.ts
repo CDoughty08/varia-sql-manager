@@ -1,4 +1,4 @@
-import type { ApiResult, ConnectionOptions } from '../../../shared/contracts'
+import type { ApiResult, ProviderConnectionOptions } from '../../../shared/contracts'
 import type { ConnectionDetails } from '../../../shared/connection-targets'
 import { adoptConnection, type OpenedConnection } from './connection-opening'
 import type { ConnectionAttempt, ConnectionService, TargetConnectionInfo } from './connections'
@@ -13,7 +13,7 @@ export async function acceptConnectionReceipt({ api, connections, info, options,
   api: ConnectionReceiptApi
   connections: ConnectionService
   info: TargetConnectionInfo & { readonly credentialUpdated?: true }
-  options: ConnectionOptions
+  options: ProviderConnectionOptions
   details: ConnectionDetails
   attempt: ConnectionAttempt
   requestId: string

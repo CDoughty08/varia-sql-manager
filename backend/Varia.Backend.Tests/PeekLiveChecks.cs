@@ -402,7 +402,12 @@ internal static class PeekLiveChecks
             + "CREATE TRIGGER [DTR]]'表] ON DATABASE FOR CREATE_TABLE, DROP_TABLE AS SET NOCOUNT ON;\nGO\nDISABLE TRIGGER [DTR]]'表] ON DATABASE;\nGO\n"
             + "CREATE SYNONYM " + s + ".[SY]]'表] FOR " + s + ".[T]]'表];\nCREATE SYNONYM " + s + ".[SYR] FOR [Remote]]Srv].[Db].[dbo].[X];\nGO\n"
             + "CREATE TYPE " + s + ".[AT]]'表] FROM nvarchar(20) NOT NULL;\nGO\nCREATE TYPE " + s + ".[TT]]'表] AS TABLE (Id int NOT NULL PRIMARY KEY, Name nvarchar(10) NULL, Phone " + s + ".[AT]]'表] NULL);\nGO\n"
-            + "CREATE PROCEDURE " + s + ".[UsesTypes] @a " + s + ".[AT]]'表], @t " + s + ".[TT]]'表] READONLY AS SELECT 1;\nGO\n"
+            // Every column shape Peek's Columns list declares: identity, a collation of its own and a named default, an alias type,
+            // persisted and plain computed columns, SPARSE, ROWGUIDCOL, a masked column.
+            + "CREATE TABLE " + s + ".[Shapes]]'表] (Id int IDENTITY(5,2) NOT NULL, Code varchar(10) COLLATE Latin1_General_100_BIN2 NOT NULL CONSTRAINT [DF_Pk4Code] DEFAULT ('x'), "
+            + "Phone " + s + ".[AT]]'表] NULL, Total AS (Id * 2) PERSISTED NOT NULL, Half AS (Id / 2), Note nvarchar(max) SPARSE NULL, [Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid()), "
+            + "Mail varchar(100) MASKED WITH (FUNCTION = 'partial(1,\"X''X\",0)') NULL);\nGO\n"
+            + "CREATE PROCEDURE " + s + ".[UsesTypes] @a " + s + ".[AT]]'表], @t " + s + ".[TT]]'表] READONLY, @n nvarchar(10) = N'it''s', @o int = -1 OUTPUT AS SELECT 1;\nGO\n"
             + "SELECT NEXT VALUE FOR " + s + ".[S]]'表];\nGO\n", database);
         // The scratch login: random password (never printed), a server role, CONNECT SQL denied, and a hostile-named user here.
         var password = "Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12));
@@ -491,6 +496,32 @@ internal static class PeekLiveChecks
                 && tableTypeUses.UsedBy.Any(item => item is { Name: "UsesTypes", Kind: "procedure" }) && !tableTypeUses.UsedBy.Any(item => item.Name.StartsWith("TT_", StringComparison.Ordinal)),
                 "a hostile-named table type peeks, and lists the procedure that takes it but not its own table object: " + Facts(tableType));
 
+            // Columns and Parameters: every field, and a Definition that is valid T-SQL, proved by declaring a copy from the lines.
+            var shapes = await Peek(service, connectionId, Own("table", "Shapes]'表"), json);
+            var shapeRows = shapes.Lists?.GetValueOrDefault("columns")?.Rows ?? [];
+            string? Definition(string column) => shapeRows.FirstOrDefault(row => row[0] as string == column)?[7] as string;
+            check(shapes is { Error: null } && shapeRows.Count == 8
+                && shapeRows[0] is ["Id", "int", false, null, "5, 2", null, null, "[Id] int IDENTITY(5,2) NOT NULL"]
+                && shapeRows[1] is ["Code", "varchar(10)", false, null, null, null, "('x')", "[Code] varchar(10) COLLATE Latin1_General_100_BIN2 NOT NULL DEFAULT ('x')"]
+                && Definition("Phone") == "[Phone] " + s + ".[AT]]'表] NULL" && shapeRows[2][1] as string == "AT]'表(nvarchar(20))"
+                && Definition("Total") == "[Total] AS ([Id]*(2)) PERSISTED NOT NULL" && shapeRows[3][5] as string == "([Id]*(2))" && Definition("Half") == "[Half] AS ([Id]/(2))"
+                && Definition("Note") == "[Note] nvarchar(max) SPARSE NULL" && Definition("Row]'表") == "[Row]]'表] uniqueidentifier ROWGUIDCOL NOT NULL DEFAULT (newid())"
+                && Definition("Mail") == "[Mail] varchar(100) MASKED WITH (FUNCTION = N'partial(1, \"X''X\", 0)') NULL",
+                "a table's Columns list shows every field and declares each column as CREATE TABLE writes it: " + (shapes.Error?.Message ?? JsonSerializer.Serialize(shapeRows)));
+            var copied = await sql("CREATE TABLE " + s + ".[ShapesCopy] (" + string.Join(", ", shapeRows.Select(row => row[7] as string)) + ");\n", database);
+            check(copied.Status == "completed", "the Definition column declares a table again: " + copied.Error);
+            var usesTypes = await Peek(service, connectionId, Own("procedure", "UsesTypes"), json);
+            var parameters = usesTypes.Lists?.GetValueOrDefault("parameters")?.Rows ?? [];
+            check(usesTypes is { Error: null } && parameters.Count == 4 && parameters[0] is ["@a", "AT]'表(nvarchar(20))", "Input", null, string a] && a == "@a " + s + ".[AT]]'表]"
+                && parameters[1] is ["@t", _, "Input", null, string t] && t == "@t " + s + ".[TT]]'表] READONLY"
+                && parameters[2] is ["@n", "nvarchar(10)", "Input", "N'it''s'", "@n nvarchar(10) = N'it''s'"] && parameters[3] is ["@o", "int", "Input/Output", "-1", "@o int = -1 OUTPUT"],
+                "a procedure's Parameters list shows each parameter's type, direction and default, and declares it: " + (usesTypes.Error?.Message ?? JsonSerializer.Serialize(parameters)));
+            var redeclared = await sql("CREATE PROCEDURE " + s + ".[UsesTypesCopy] " + string.Join(", ", parameters.Select(row => row[4] as string)) + " AS SELECT 1;\n", database);
+            check(redeclared.Status == "completed", "the Definition column declares the parameters again: " + redeclared.Error);
+            var typeColumns = tableType.Lists?.GetValueOrDefault("columns")?.Rows ?? [];
+            check(typeColumns is [["Id", "int", false, "PK", null, null, null, "[Id] int NOT NULL"], ["Name", "nvarchar(10)", true, ..], ["Phone", _, true, ..]],
+                "a table type's Columns list reads its table object's columns, with its key: " + JsonSerializer.Serialize(typeColumns));
+
             // The scratch database, read on the server.
             var scratch = await Peek(service, connectionId, new ObjectRefDto("database", null, null, database), json);
             var files = scratch.Lists?.GetValueOrDefault("files")?.Rows ?? [];
@@ -546,7 +577,8 @@ internal static class PeekLiveChecks
         }
         finally
         {
-            var dropped = await sql("DROP USER IF EXISTS [peek_usage];\nDROP USER IF EXISTS [U]]'表];\nDROP PROCEDURE IF EXISTS " + s + ".[UsesTypes];\nDROP TYPE IF EXISTS " + s + ".[TT]]'表];\n"
+            var dropped = await sql("DROP USER IF EXISTS [peek_usage];\nDROP USER IF EXISTS [U]]'表];\nDROP PROCEDURE IF EXISTS " + s + ".[UsesTypes];\nDROP PROCEDURE IF EXISTS " + s + ".[UsesTypesCopy];\n"
+                + "DROP TABLE IF EXISTS " + s + ".[ShapesCopy];\nDROP TABLE IF EXISTS " + s + ".[Shapes]]'表];\nDROP TYPE IF EXISTS " + s + ".[TT]]'表];\n"
                 + "DROP TYPE IF EXISTS " + s + ".[AT]]'表];\nDROP SYNONYM IF EXISTS " + s + ".[SYR];\nDROP SYNONYM IF EXISTS " + s + ".[SY]]'表];\n"
                 + "IF EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'DTR]''表') DROP TRIGGER [DTR]]'表] ON DATABASE;\n"
                 + "DROP TABLE IF EXISTS " + s + ".[T]]'表];\nDROP TABLE IF EXISTS " + s + ".[UsesS];\nDROP SEQUENCE IF EXISTS " + s + ".[S]]'表];\nDROP SCHEMA IF EXISTS " + s + ";\n", database);

@@ -2,6 +2,7 @@
 // (port-messages.ts) and live ticks (src/shared/live/schema.ts) carry it.
 import { z } from 'zod'
 import { limits } from './wire/protocol'
+import { sortKinds } from '../results/sort-kind'
 
 const u32 = z.number().int().min(1).max(0xffffffff)
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
@@ -13,8 +14,9 @@ const collationSchema = z.object({
   options: z.number().int().min(0).max(65535).refine(value => (value & ~compareOptions) === 0)
 }).strict()
 const columnSchema = z.object({
-  name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector', 'tone']).optional(),
-  maxLength: count.optional(), precision: count.optional(), scale: count.optional(), nullable: z.boolean(), collation: collationSchema.optional()
+  name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector', 'old', 'mark', 'leftRow', 'rightRow', 'tone']).optional(),
+  maxLength: count.optional(), precision: count.optional(), scale: count.optional(), nullable: z.boolean(), collation: collationSchema.optional(),
+  of: z.number().int().min(0).max(limits.page.maxColumns - 1).optional(), sortKind: z.enum(sortKinds).optional()
 }).strict()
 /** A result name's bounds, the backend's ResultNames.MaxChars and refused characters: C0 and C1 controls, line and paragraph
  *  separators, bidirectional marks, embeddings, overrides and isolates, and the BOM (docs/named-result-sets-scope.md). */

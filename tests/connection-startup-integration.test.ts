@@ -6,7 +6,7 @@ import { connectionOptions, readyBackend, workbenchFixture } from './fixtures/wo
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const target = (): PersistedConnectionTarget => ({ id: id(1), options: connectionTargetOptions(connectionOptions), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true,
-  expectedPrincipal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' }, credential: { profileId: id(200), revision: id(201) } })
+  expectedPrincipal: { provider: 'sqlserver', authentication: 'sql', id: 'reader' }, credential: { profileId: id(200), revision: id(201) } })
 function fixture(records: readonly PersistedConnectionTarget[] = [target()]) {
   const value = workbenchFixture(), ready = deferred<void>()
   value.connectionTargets.restore({ version: 1, targets: records })

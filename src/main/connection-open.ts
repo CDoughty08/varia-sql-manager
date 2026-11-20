@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import type { BackendState, ConnectionInfo, ConnectionOptions } from '../shared/contracts'
+import type { BackendState, ConnectionInfo, ConnectionOptions, ProviderConnectionOptions } from '../shared/contracts'
 import { connectContextSchema, type ConnectContext } from '../shared/connections'
 import { backendConnectionHandleSchema, connectionAuthenticationSchema, connectionTargetLimits, type BackendConnectionHandle, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
 import { connectionBindingsChangedSchema, type ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { ActionExecuteRequest, ActionExecuteResult } from '../shared/actions/schema'
 import { BackendError } from './backend/errors'
 import { ConnectionReuseCoordinator } from './connection-reuse'
-import { verifiedConnectionAuthentication } from './connection-principal'
+import { verifiedBigQueryAuthentication, verifiedConnectionAuthentication } from './connection-principal'
 import { admitVerifiedCredentialReference, ConnectionPreparationError, hasPendingCredentialRequests, prepare, rejectCredentialReference, settle, settleReused, type ConnectionRequestDeps, type PreparedRequest, type Settled } from './connection-requests'
 import { validateResult } from './validation'
 
@@ -53,11 +53,27 @@ export async function validateOpenedConnection(value: unknown, generation: numbe
     throw error
   }
 }
+/** Binding changes are SQL Server's alone (applyBinding refuses BigQuery's), so a BigQuery binding is never a mutation's. */
+function sqlServerBinding<T extends { options: Omit<ConnectionOptions, 'password'> | { provider: 'bigquery' } }>(binding: T | undefined): (T & { options: Omit<ConnectionOptions, 'password'> }) | undefined {
+  return binding && binding.options.provider !== 'bigquery' ? binding as T & { options: Omit<ConnectionOptions, 'password'> } : undefined
+}
 class OpenFailure { constructor(readonly result: Extract<Settled, { ok: false }>) {} }
-function failureReason(error: unknown): ConnectionFailureReason {
+/**
+ * Why a connect failed, for the target's lifecycle. BigQuery's CONNECTION_LOST means Google could not be reached (the
+ * backend is fine), so it is a network failure, not backend loss; its sign-in failures ask for the dialog.
+ */
+function failureReason(error: unknown, provider: ProviderConnectionOptions['provider'] = 'sqlserver'): ConnectionFailureReason {
   if (error instanceof ConnectionPreparationError) return error.reason
   if (!(error instanceof BackendError)) return 'unknown'
   if (error.code === 'CANCELLED') return 'cancelled'
+  if (provider === 'bigquery') {
+    if (error.code === 'BACKEND_LOST') return 'backend-lost'
+    if (error.code === 'CONNECTION_LOST' || error.code === 'TIMEOUT') return 'network'
+    if (error.code === 'AUTH_EXPIRED') return 'sign-in-required'
+    if (error.code === 'AUTH_IDENTITY') return 'identity-changed'
+    if (error.code === 'AUTH_KEY_FILE') return 'credentials-required'
+    return 'unknown'
+  }
   if (error.code === 'BACKEND_LOST' || error.code === 'CONNECTION_LOST') return 'backend-lost'
   if (error.code === 'AUTH_ENTRA') return 'sign-in-required'
   if (error.code === 'AUTH_IDENTITY') return 'identity-changed'
@@ -97,8 +113,9 @@ export class ConnectionOpenService {
 
   constructor(private readonly deps: ConnectionOpenDeps) { this.reuse = this.coordinator() }
 
-  async connect(options: ConnectionOptions, contextValue: unknown): Promise<Settled> {
+  async connect(options: ProviderConnectionOptions, contextValue: unknown): Promise<Settled> {
     let receipt: Receipt | undefined, prepared: PreparedRequest | undefined, ownsSettlement = false
+    const provider = options.provider === 'bigquery' ? 'bigquery' : 'sqlserver'
     try {
       const context = connectContextSchema.parse(contextValue ?? {})
       receipt = this.begin(context)
@@ -110,10 +127,13 @@ export class ConnectionOpenService {
       if (generation === undefined) throw new BackendError('BACKEND_UNAVAILABLE', 'Wait for the SQL backend to become ready.')
       this.markLostBefore(generation)
       const active = receipt, request = prepared
-      const { nonInteractive: _nonInteractive, ...comparisonOptions } = request.params as ConnectionOptions & { nonInteractive?: boolean }
+      const { nonInteractive: _nonInteractive, ...comparisonOptions } = request.params as ProviderConnectionOptions & { nonInteractive?: boolean }
+      // prepare() refused a principal of another provider, mode or project. BigQuery's pin is compared as its mode and identity.
+      const expected = request.context?.expectedPrincipal
+      const expectedPrincipal = expected?.provider === 'sqlserver' ? expected : expected?.provider === 'bigquery' ? { authentication: options.authentication, id: expected.principal } : undefined
       const result = await this.reuse.connect({
         targetId: request.context!.targetId!, generation, options: comparisonOptions,
-        expectedPrincipal: request.context?.expectedPrincipal, credentialIntent: request.context?.credentialIntent,
+        expectedPrincipal, credentialIntent: request.context?.credentialIntent,
         forceAuthenticate: request.requireFreshAuthentication,
         signal: active.controller.signal
       }, async signal => {
@@ -121,6 +141,14 @@ export class ConnectionOpenService {
         if ((connection.bindingRevision ?? 0) !== 0) {
           await this.closeUnowned(connection)
           throw new BackendError('AUTH_IDENTITY', 'The connection settings changed during authentication. Reconnect explicitly.')
+        }
+        if (options.provider === 'bigquery') {
+          const verified = verifiedBigQueryAuthentication(connection, options)
+          if (!verified) {
+            await this.closeUnowned(connection)
+            throw new BackendError('AUTH_IDENTITY', 'The authenticated Google account could not be verified. Reconnect explicitly.')
+          }
+          return { connection, principal: { authentication: options.authentication, id: verified.principal.principal } }
         }
         const proof = verifiedConnectionAuthentication(connection, options.authentication)
         if (!proof) {
@@ -133,7 +161,7 @@ export class ConnectionOpenService {
         if (result.status === 'failed') {
           const failure = await settle(request, { ok: false, error: result.error }, this.deps)
           active.state = 'cancelled'
-          return failure.ok ? failure : { ...failure, connectionFailure: failureReason(failure.error) }
+          return failure.ok ? failure : { ...failure, connectionFailure: failureReason(failure.error, provider) }
         }
         if (result.status === 'cancelled') throw cancelled()
         throw new ConnectionPreparationError(result.status === 'identity-changed' ? 'identity-changed' : 'unknown', result.status === 'identity-changed'
@@ -174,7 +202,7 @@ export class ConnectionOpenService {
       return { ok: true, value: info }
     } catch (error) {
       if (receipt) { receipt.state = 'cancelled'; this.release(receipt) }
-      return error instanceof OpenFailure ? { ...error.result, connectionFailure: failureReason(error.result.error) } : { ok: false, error, connectionFailure: failureReason(error) }
+      return error instanceof OpenFailure ? { ...error.result, connectionFailure: failureReason(error.result.error, provider) } : { ok: false, error, connectionFailure: failureReason(error, provider) }
     } finally {
       if (!ownsSettlement) prepared?.release?.()
       this.flushPrunes()
@@ -183,7 +211,8 @@ export class ConnectionOpenService {
   }
 
   /** Load databases shares Connect's pre-keyring cancellation owner, but never creates a reusable transport receipt. */
-  async databases(options: ConnectionOptions, contextValue: unknown, load: (params: unknown, signal: AbortSignal) => Promise<unknown>): Promise<Settled> {
+  async databases(options: ProviderConnectionOptions, contextValue: unknown, load: (params: unknown, signal: AbortSignal) => Promise<unknown>): Promise<Settled> {
+
     let receipt: Receipt | undefined, prepared: PreparedRequest | undefined, ownsSettlement = false
     try {
       const context = connectContextSchema.parse(contextValue ?? {})
@@ -386,14 +415,14 @@ export class ConnectionOpenService {
       // Project all confirmed durable changes before vault I/O: a generation loss must not leave later affected pins
       // claiming the old secret while one replacement write is draining.
       const plans = (result?.bindingChanges ?? []).flatMap(change => {
-        const handle = { id: change.connectionId, generation: mutation.generation }, key = handleKey(handle), owner = this.handles.get(key), before = this.reuse.binding(handle)
+        const handle = { id: change.connectionId, generation: mutation.generation }, key = handleKey(handle), owner = this.handles.get(key), before = sqlServerBinding(this.reuse.binding(handle))
         if (!owner?.accepted || !before) return []
         if (!this.reuse.applyBinding(handle, change, change.passwordChanged ? mutation.password : undefined)) {
           if (change.bindingRevision > before.bindingRevision) this.reuse.invalidateBinding(handle)
           return []
         }
         applied.add(key)
-        const after = this.reuse.binding(handle)!, pin = this.deps.authentication.resolve(before.targetId)
+        const after = sqlServerBinding(this.reuse.binding(handle))!, pin = this.deps.authentication.resolve(before.targetId)
         if (!pin?.expectedPrincipal) { this.reuse.invalidateBinding(handle); return [] }
         if (change.passwordChanged && pin.credential) rejectCredentialReference(this.deps.savedPasswords, pin.credential, before.options)
         const authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: change.passwordChanged ? null : pin.credential ?? null })

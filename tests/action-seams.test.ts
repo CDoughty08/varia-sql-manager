@@ -126,7 +126,7 @@ describe('password hashes', () => {
         const comment = /^\s*(\/\/|\*|\/\*\*)/.test(line)
         // CatalogSql.SecretUses, the lint every other lint calls.
         const lint = name === 'backend/Varia.Backend/Explorer/CatalogSql.cs'
-          && /^\s*(if \(LoginFunction\(\)\.IsMatch|foreach \(var token in new\[\] \{ "password_hash", "PasswordHash" \}|\[GeneratedRegex\(@"\\bLOGINPROPERTY|if \(text\.Contains\("sql_logins")/.test(line)
+          && /^\s*(if \(LoginFunction\(\)\.IsMatch|foreach \(var token in new\[\] \{ "password_hash", "PasswordHash" \}|\[GeneratedRegex\(@"\\bLOGINPROPERTY|if \((?:text|both)\.Contains\("sql_logins")/.test(line)
         // ActionSql.LoginLock (D4d), the one statement that may call LOGINPROPERTY: only of @name, only for the lock-out
         // properties, and its own lint's pattern for such a call.
         const loginLock = name === 'backend/Varia.Backend/Actions/ActionSql.cs' && !comment && (line.trim() === String.raw`[GeneratedRegex(@"\bLOGINPROPERTY\(@name, N'(\w+)'\)")]`

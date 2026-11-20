@@ -37,7 +37,9 @@ The eight tiles (below) show their value, unit and secondary figures over a spar
 click on the tile) expands its chart under the tiles; every chart may be expanded at once, each row of charts keeping a
 usable height (the document scrolls when they and the panes do not fit), and the first two
 are expanded on first open, so SSMS's view is there at once. An expanded chart draws the tile's value and its secondary
-series that share its unit, with axes, a crosshair shared by the charts and "View as table" (its last 60 samples). A tile
+series that share its unit, with axes, a crosshair shared by the charts and "View as table": up to 60 samples spread
+across its window, newest first, in a results grid in the plot's place that follows each sample and copies as a result does (Ctrl+Shift+C
+with headers, ⇧⌘C on macOS). A tile
 past a threshold is outlined in its tone with a glyph, and the crossing is announced once. Without the server-state
 permission the document still opens: it says which permission it needs (VIEW SERVER PERFORMANCE STATE from SQL Server
 2022, VIEW SERVER STATE before it and on Managed Instance), offers **Copy GRANT statement** when it knows the login
@@ -658,8 +660,9 @@ Right-click a row: **Details…** and **Kill Process…** head Query Output's me
 row, else the active row of the session pane focused last. SSMS binds no key to either, and neither does Varia.
 
 The Details flyout is a nonmodal panel beside the monitor, which keeps sampling: the session's identity and state, its
-current statement, batch and last batch, its waits, transactions and tempdb usage, and its locks on Load locks. Refresh
-reads it again, Copy copies every section as text, and Close (or Escape) cancels a read still running. A section that
+current statement, batch and last batch, its waits, transactions and tempdb usage, and its locks on Load locks. Waits,
+Transactions and Locks are card grids: select cells or press Ctrl+A, then Ctrl+C or Ctrl+Shift+C to copy them with their
+headers, as from a results grid; counts sort by value. Refresh reads it again, Copy copies every section as text, and Close (or Escape) cancels a read still running. A section that
 could not be read says why while the others show; a session that ended, or whose id now belongs to another session,
 says so in place of its sections.
 

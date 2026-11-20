@@ -7,9 +7,10 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
+  dependenciesDialog, dependenciesTree, dependencyNode, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
+import { activeDocument, emptyQueryStripPoint, queryServer, serverDropCard } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -344,9 +345,9 @@ try {
   await expect(loginTabs.getByRole('tab')).toHaveText(['Definition', 'Server roles', 'User mapping'])
   const dependencyCalls = (await stubCalls('explorer.peekDependencies')).length
   await loginTabs.getByRole('tab', { name: 'Server roles', exact: true }).click()
-  await expect(loginCard.getByRole('table', { name: 'Server roles', exact: true }).getByRole('cell', { name: 'sysadmin', exact: true })).toBeVisible()
+  await expect(gridCell(localGrid(loginCard, 'Server roles'), 0, 0)).toHaveText('sysadmin')
   await loginTabs.getByRole('tab', { name: 'User mapping', exact: true }).click()
-  await expect(loginCard.getByRole('table', { name: 'User mapping', exact: true }).getByRole('cell', { name: 'AppData', exact: true })).toBeVisible()
+  await expect(gridCell(localGrid(loginCard, 'User mapping'), 0, 0)).toHaveText('AppData')
   await expect(loginCard.getByRole('tabpanel')).toContainText('1 database could not be read.')
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(dependencyCalls)
   await page.keyboard.press('Escape')
@@ -667,7 +668,10 @@ try {
   const peeked = (await stubCalls('explorer.peek')).at(-1)
   expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
-  // Tab wraps within the card, so Esc keeps reaching it.
+  // Tab wraps within the card, so Esc keeps reaching it: back from the card to the Properties pane (a stop for its Copy
+  // menu), then the definition.
+  await page.keyboard.press('Shift+Tab')
+  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   await expect(peekDefinitionText(peekCard)).toBeFocused()
   await page.keyboard.type('x')
@@ -691,7 +695,9 @@ try {
   expect(await stubCalls('query.execute')).toHaveLength(executes)
   await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   await peekDefinitionText(peekCard).focus()
-  // A read-only editor lets Tab move focus, so the card's loop still wraps.
+  // A read-only editor lets Tab move focus, so the card's loop still wraps, past the Properties pane.
+  await page.keyboard.press('Tab')
+  await expect(peekCard.getByRole('region', { name: 'Properties', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
@@ -700,13 +706,61 @@ try {
   await peekRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
   await expect(peekCard).toBeFocused()
-  // The tabs: Columns lists the tree's Columns folder, Dependencies both ways (a dependency in this database peeks in the same
-  // card, and Back returns), and Top rows runs only once chosen, in the results grid. Arrow keys only move focus:
-  // passing Top rows on the way to Dependencies reads nothing.
+  // Properties: Copy in their menu writes every fact as Name<TAB>Value lines, or only those whose text is selected.
+  const eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const peekProperties = peekCard.getByRole('region', { name: 'Properties', exact: true })
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await peekProperties.focus()
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
+  expect((await clipboard()).split(eol)).toContain('Row count\t12,345')
+  await peekProperties.getByText('Row count', { exact: true }).evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range) })
+  await peekProperties.focus()
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toBe('Row count\t12,345')
+  // A selection dragged with the mouse, then the menu from the keyboard (which KeybindingService takes before the pane sees it).
+  await page.evaluate(() => getSelection().removeAllRanges())
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  const dataSpace = await peekProperties.getByText('Data space', { exact: true }).boundingBox()
+  await page.mouse.move(dataSpace.x + 1, dataSpace.y + dataSpace.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(dataSpace.x + dataSpace.width - 1, dataSpace.y + dataSpace.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => page.evaluate(() => getSelection().toString())).not.toBe('')
+  await page.keyboard.press('Shift+F10')
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toBe('Data space\t2.00 MB')
+  // A right-click with nothing selected copies every fact, though macOS selects the word under the pointer as it opens the menu.
+  await page.evaluate(() => getSelection().removeAllRanges())
+  await peekProperties.getByText('Row count', { exact: true }).click({ button: 'right' })
+  await menu('Peek properties').getByRole('menuitem', { name: 'Copy', exact: true }).click()
+  await expect.poll(clipboard).toMatch(new RegExp(`^Schema\tdbo${eol}Created\t2024-01-02 03:04${eol}`))
+  await expect(peekCard).toBeVisible()
+  // The tabs: Columns is a grid of the list that came with the facts (no request of its own), each row with its declaration;
+  // Dependencies both ways (a dependency in this database peeks in the same card, and Back returns), and Top rows runs only
+  // once chosen, in the results grid. Arrow keys only move focus: passing Top rows on the way to Dependencies reads nothing.
   const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
+  const childrenCalls = (await stubCalls('explorer.children')).length
   await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
-  await expect(peekCard.getByRole('tabpanel')).toContainText('CustomerName')
-  await expect(peekCard.getByRole('tabpanel')).toContainText('(PK, int, not null)')
+  const peekColumns = localGrid(peekCard, 'Columns')
+  await expect(peekColumns).toHaveAttribute('aria-label', /^Columns, 2 rows, 8 columns/)
+  await expect(gridCell(peekColumns, 1, 0)).toHaveText('CustomerName')
+  expect(await stubCalls('explorer.children')).toHaveLength(childrenCalls)
+  // Select all and Copy with Headers write the list as a results grid copies it, the Definition column ready to paste.
+  await gridCell(peekColumns, 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe([['Name', 'Type', 'Nullable', 'Key', 'Identity', 'Computed', 'Default', 'Definition'],
+    ['Id', 'int', 'False', 'PK', '1, 1', 'NULL', 'NULL', '[Id] int IDENTITY(1,1) NOT NULL'],
+    ['CustomerName', 'nvarchar(50)', 'True', 'NULL', 'NULL', 'NULL', "(N'')", "[CustomerName] nvarchar(50) NULL DEFAULT (N'')"]].map(row => row.join('\t')).join(eol))
+  // A card's list has no Save Results As (a Peek tab's does).
+  await gridCell(peekColumns, 0, 0).click({ button: 'right' })
+  expect(await menuItemNames(menu('Query output'), { disabled: true })).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeVisible()
+  await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).focus()
   expect(await stubCalls('explorer.peekDependencies')).toHaveLength(0)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
@@ -750,6 +804,13 @@ try {
   await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
   // A table has Table Properties, so its tab offers Properties.
   await expect(peekActions.getByRole('button', { name: /^Properties/ })).toBeEnabled()
+  // A Peek tab's list fills the tab and saves: Save Results As is in its menu.
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Columns', exact: true }).click()
+  await gridCell(localGrid(peekDocument, 'Columns'), 0, 0).click({ button: 'right' })
+  expect(await menuItemNames(menu('Query output'), { disabled: true })).not.toContain('Save Results As…')
+  expect(await menuItemNames(menu('Query output'))).toContain('Save Results As…')
+  await page.keyboard.press('Escape')
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).click()
   await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await topRowRuns()).length).toBe(4)
@@ -1383,9 +1444,18 @@ try {
     await expect(tabHits.nth(1)).toBeFocused()
     await expect(details).toHaveAccessibleName('Details: dbo.table2')
     await expect(details.getByLabel('Definition', { exact: true })).toContainText('CREATE TABLE [dbo].[table2]')
-    // A table's columns are one page of Object Explorer's Columns folder.
+    // A table's columns are Peek's Columns list, which came with its properties (no read of its own), in a card grid with
+    // Peek's columns: Select all and Copy with Headers write it as a results grid copies it.
+    const searchChildren = (await stubCalls('explorer.children')).length
     await details.getByRole('radio', { name: 'Columns', exact: true }).click()
-    await expect(details.getByRole('list', { name: 'Columns', exact: true })).toContainText('Id')
+    const searchColumns = localGrid(details, 'Columns')
+    await expect(searchColumns).toHaveAttribute('aria-label', /^Columns, 1 row, 8 columns/)
+    await gridCell(searchColumns, 0, 0).click()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.press('Control+Shift+C')
+    const searchEol = process.platform === 'win32' ? '\r\n' : '\n'
+    await expect.poll(clipboard).toBe([['Name', 'Type', 'Nullable', 'Key', 'Identity', 'Computed', 'Default', 'Definition'], ['Id', 'int', 'False', 'NULL', 'NULL', 'NULL', 'NULL', '[Id] int NOT NULL']].map(row => row.join('\t')).join(searchEol))
+    expect(await stubCalls('explorer.children')).toHaveLength(searchChildren)
     await details.getByRole('radio', { name: 'Definition', exact: true }).click()
     // The Details pane button hides the pane (and its reads) and shows it again on the selection.
     const toggleDetails = page.locator(part.objectSearchTab).getByRole('button', { name: 'Details pane', exact: true })
@@ -2335,6 +2405,68 @@ try {
   expect((await active())?.label).toBe('dbo.usp_8')
   await setStub({ holdParameters: false, procedures: 0 })
   console.log('Object Explorer checks: expanding a folder with one child auto-expands it and selects the end, never a System folder, by Right, Enter, Numpad +, chevron and double-click; switching query tabs or wheeling meanwhile keeps the tree where it was put, and clicking a row or turning the setting off stops it.')
+
+  // 13d. Dragging a server onto a query moves it there, through Change Connection: onto its tab (a card says what the drop
+  // will do), onto its editor (the overlay's plate), and with Ctrl over the editor the name goes in at the caret instead.
+  // Dropped on a tab strip's empty space, a server opens a new query on it.
+  // A fresh window and profile, so the step starts from six connected servers and their queries alone.
+  {
+    await application.close()
+    application = undefined
+    env.VARIA_TEST_USER_DATA = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
+    await launch()
+    await application.evaluate(installExplorerStub, explorerStubData())
+    for (const server of ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']) await connect(server)
+    const serverOf = () => queryServer(page).evaluate(select => select.selectedOptions[0]?.textContent ?? '')
+    // Synthetic drag events with a real DataTransfer, as step 7's fallback: with the Chromium sandbox on Windows, the
+    // platform's drag loop does not deliver Playwright's pointer moves as dragover.
+    const dragOnto = async (name, to, { ctrl = false, card } = {}) => {
+      const id = await (await explorerRow(page, name)).getAttribute('id')
+      await page.evaluate(({ id, to, ctrl }) => {
+        const row = document.getElementById(id), dataTransfer = new DataTransfer()
+        const at = { clientX: to.x, clientY: to.y, bubbles: true, cancelable: true, ctrlKey: ctrl, dataTransfer }
+        row.dispatchEvent(new DragEvent('dragstart', at))
+        const target = document.elementFromPoint(to.x, to.y)
+        for (const type of ['dragenter', 'dragover']) target.dispatchEvent(new DragEvent(type, at))
+        window.__variaServerDrag = { row, target, at }
+      }, { id, to, ctrl })
+      if (card) await expect(serverDropCard(page)).toContainText(card)
+      await page.evaluate(() => {
+        const { row, target, at } = window.__variaServerDrag
+        target.dispatchEvent(new DragEvent('drop', at))
+        row.dispatchEvent(new DragEvent('dragend', at))
+        delete window.__variaServerDrag
+      })
+      await expect(serverDropCard(page)).toHaveCount(0)
+    }
+    const centre = async locator => { const box = await locator.boundingBox(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 } }
+    // Only the last server's query stays open, so its tab and the strip's empty space are in view.
+    const query = await activeDocumentName(page)
+    await activeDocument(page).click({ button: 'right' })
+    await page.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
+    await expect.poll(serverOf).toContain('pin-f')
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: `Move ${query} to pin-b` })
+    await expect.poll(serverOf).toContain('pin-b')
+    // The same server is refused: nothing changes, and the card says why.
+    await dragOnto('pin-b', await centre(activeDocument(page)), { card: 'already on pin-b' })
+    await expect.poll(serverOf).toContain('pin-b')
+    const editorPoint = await centre(page.locator(part.activeEditorGroup).locator(part.editorPane).first())
+    await dragOnto('pin-c', editorPoint, { card: `Move ${query} to pin-c` })
+    await expect.poll(serverOf).toContain('pin-c')
+    const before = await queryEditorText(page)
+    await dragOnto('pin-d', editorPoint, { ctrl: true, card: 'Insert the name' })
+    await expect.poll(() => queryEditorText(page)).toContain('pin-d')
+    expect(await serverOf()).toContain('pin-c')
+    expect(before).not.toContain('pin-d')
+    await page.keyboard.press('Control+Z')
+    const strip = await emptyQueryStripPoint(page.locator(part.activeEditorGroup))
+    expect(strip).not.toBeNull()
+    await dragOnto('pin-e', strip, { card: 'Open a new query on pin-e' })
+    await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
+    await expect.poll(serverOf).toContain('pin-e')
+    console.log('Object Explorer checks: a server dropped on a query tab or its editor moves the query there, the same server is refused, Ctrl inserts the name, and the strip opens a new query.')
+  }
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

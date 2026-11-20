@@ -2,7 +2,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
-import { backendReady, outputStatus, outputView, queryBarButton } from './fixtures/ui.mjs'
+import { backendReady, localGrid, outputStatus, outputView, queryBarButton } from './fixtures/ui.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
@@ -36,14 +36,14 @@ for (const live of [false, ...(process.env.VARIA_TEST_SQL_SERVER ? [true] : [])]
       await page.keyboard.press('Control+A'); await page.keyboard.insertText(sql); await page.keyboard.press('F5')
       await expect(outputStatus(page)).toContainText(running ? /^Executing · / : /^Completed( with errors)? · /)
     }
-    await checkClientStatistics(page, expect, run, live)
+    await checkClientStatistics(page, expect, run, live, app)
     if (live) {
       await queryBarButton(page, 'Include Client Statistics').click()
       await run("WAITFOR DELAY '00:00:05'; SELECT 1;", { running: true })
       await app.evaluate(() => globalThis.__variaTest.kill())
       await outputView(page, 'Client Statistics').click()
       await expect(page.getByRole('status').filter({ hasText: /^Run 1: unavailable/ })).toBeVisible()
-      await expect(page.getByRole('table', { name: 'Client statistics comparison' }).getByRole('columnheader', { name: 'Average (0 runs)', exact: true })).toBeVisible()
+      await expect(localGrid(page, 'Client statistics comparison').getByRole('columnheader', { name: 'Average (0 runs)', exact: true })).toBeVisible()
       await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
       console.log('Client statistics backend-loss/restart check passed.')
     }

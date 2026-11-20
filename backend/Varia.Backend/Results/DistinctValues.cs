@@ -30,7 +30,8 @@ internal sealed class DistinctSnapshot
     private bool nullTicked;
     private (FilterOp Op, int[] Rows, bool Nulls)? frozen;
     private string? digest;
-    private (string Text, int[] ByValue, int[] ByCount)? lastSearch;
+    // Marks: each group's 1 when it matched, 2 when it did not but a narrowed search must look at it again.
+    private (string Text, int[] ByValue, int[] ByCount, byte[] Marks, SearchNarrowing.Kind Kind, SearchNarrowing.Needs Needs, string? Fold)? lastSearch;
     // The groups by their representative row, made by the first search while the result is packed (under the search lock),
     // so a search reads each packed page once.
     private int[]? byRow;
@@ -216,30 +217,62 @@ internal sealed class DistinctSnapshot
     }
 
     /// <summary>The groups whose display text contains the search, in value order and in count order, kept until another
-    /// search; found under the search lock, never the ticks'.</summary>
+    /// search; found under the search lock, never the ticks'. A search whose text extends the last one's
+    /// (<see cref="SearchNarrowing.Extends"/>, as the user types) reads only the groups the last one matched or marked to
+    /// look at again; <see cref="LastNarrowed"/> says whether it did.</summary>
     private (int[] ByValue, int[] ByCount) Matches(string search, CancellationToken token)
     {
         lock (searching)
         {
             if (lastSearch is { } last && last.Text == search) return (last.ByValue, last.ByCount);
             var matcher = ResultSearcher.MatcherFor(Set.Columns[Column], Set.Wires[Column], search);
+            var kind = matcher?.Kind ?? SearchNarrowing.Kind.None;
+            var fold = (matcher as ResultSearcher.CultureMatcher)?.Folded;
             var scratch = new ResultSearcher.Scratch();
-            var hit = new bool[reps.Length];
+            var marks = new byte[reps.Length];
             var found = 0;
+            LastNarrowed = false;
+            var needs = SearchNarrowing.Needs.None;
             if (matcher is not null)
-                source.Each(reps.Length, group => reps[group], (group, view, local) =>
+            {
+                void Visit(int group, PageView view, int local)
                 {
-                    if (!matcher.Matches(view.Span(Column, local), scratch)) return;
-                    hit[group] = true;
-                    found++;
-                }, token, () => byRow ??= KeptPages.ByRow(reps));
+                    if (matcher.Matches(view.Span(Column, local), scratch, out var recheck)) { marks[group] = 1; found++; }
+                    else if (recheck) marks[group] = 2;
+                }
+                if (lastSearch is { } previous && SearchNarrowing.Extends(previous.Text, [previous.Kind], [previous.Needs], [previous.Fold], search, [kind], [fold]))
+                {
+                    if (matcher is ResultSearcher.CultureMatcher culture) culture.KeepPrechecking = true;
+                    needs = previous.Needs;
+                    var count = 0;
+                    foreach (var mark in previous.Marks) if (mark != 0) count++;
+                    var candidates = new int[count];
+                    for (int group = 0, at = 0; group < previous.Marks.Length; group++) if (previous.Marks[group] != 0) candidates[at++] = group;
+                    source.Each(count, item => reps[candidates[item]], (item, view, local) => Visit(candidates[item], view, local), token);
+                    LastNarrowed = true;
+                }
+                else source.Each(reps.Length, group => reps[group], Visit, token, () => byRow ??= KeptPages.ByRow(reps));
+                needs |= matcher.Needs;
+            }
             var byValue = new int[found];
             var ranked = new int[found];
-            for (int group = 0, at = 0; group < reps.Length; group++) if (hit[group]) byValue[at++] = group;
-            for (int i = 0, at = 0; i < byCount.Length; i++) if (hit[byCount[i]]) ranked[at++] = byCount[i];
-            lastSearch = (search, byValue, ranked);
+            for (int group = 0, at = 0; group < reps.Length; group++) if (marks[group] == 1) byValue[at++] = group;
+            for (int i = 0, at = 0; i < byCount.Length; i++) if (marks[byCount[i]] == 1) ranked[at++] = byCount[i];
+            lastSearch = (search, byValue, ranked, marks, kind, needs, fold);
             return (byValue, ranked);
         }
+    }
+
+    /// <summary>Whether the last search that read values narrowed from the one before it (the checks).</summary>
+    internal bool LastNarrowed { get; private set; }
+
+    /// <summary>The rules the last search's ruled-out values need of a later text (checks only).</summary>
+    internal SearchNarrowing.Needs LastNeeds { get { lock (searching) return lastSearch?.Needs ?? SearchNarrowing.Needs.None; } }
+
+    /// <summary>Forgets the last search, so the next reads every value (the checks' reference).</summary>
+    internal void ForgetSearch()
+    {
+        lock (searching) lastSearch = null;
     }
 }
 

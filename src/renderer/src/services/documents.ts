@@ -3,7 +3,8 @@ import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../..
 import { cleanTabName } from '../../../shared/files/session'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
-import { afterClose, isCustomKind, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
+import type { ProviderId } from '../../../shared/providers'
+import { afterClose, documentInfo, isCustomKind, isQueryDocument, queryLanguages, type CustomDocumentKind, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -34,7 +35,7 @@ interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; vi
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
-interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
+interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly provider?: ProviderId; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
@@ -73,6 +74,12 @@ export interface DocumentOptions {
   readonly server?: (connectionId: string) => string | undefined
   /** Resolves only an exact current backend handle, never a server-name match. */
   readonly target?: (connectionId: string) => string | undefined
+  /** A live connection's engine, which a query on it takes (with its language); undefined for an unknown handle. */
+  readonly provider?: (connectionId: string) => ProviderId | undefined
+  /** Puts a model in another language and clears its markers, which belonged to the old one. */
+  readonly setLanguage?: (model: editor.ITextModel, language: string) => void
+  /** A query with text changed engine with its connection: the editor says so, since its SQL is unlikely to run as is. */
+  readonly providerChanged?: (document: QueryDocument) => void
 }
 /** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
 export function settingsDocumentOptions(values: () => SettingsValues): Required<Pick<DocumentOptions, 'modelOptions' | 'matchBrackets'>> {
@@ -126,9 +133,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const closed = this.closedQueries.pop()
     if (!closed) return
     this.closedCharacters -= closed.text.length
-    const { name, text, database, eol, viewState, baseName, lastServer } = closed
+    const { name, text, database, eol, viewState, baseName, lastServer, provider } = closed
     const document = this.add(name, text, database, undefined, true, undefined, undefined, false, eol,
-      { ...baseName !== undefined ? { baseName } : {}, ...lastServer ? { lastServer } : {} }, viewState)
+      { ...baseName !== undefined ? { baseName } : {}, ...lastServer ? { lastServer } : {}, ...provider ? { provider } : {} }, viewState)
     this.focusActive()
     return document
   }
@@ -142,7 +149,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const viewState = state ? { ...state, cursorState: state.cursorState.slice(0, 1), contributionsState: {} } : undefined
     const text = entry.model.getValue(), lastServer = document.connectionId ? this.options.server?.(document.connectionId) : document.lastServer
     this.closedQueries.push({ name: document.name, ...document.baseName !== undefined ? { baseName: document.baseName } : {}, text, database: document.database,
-      ...lastServer ? { lastServer } : {}, eol: entry.model.getEOL() === '\r\n' ? 'crlf' : 'lf', viewState })
+      ...lastServer ? { lastServer } : {}, ...document.provider ? { provider: document.provider } : {}, eol: entry.model.getEOL() === '\r\n' ? 'crlf' : 'lf', viewState })
     this.closedCharacters += text.length
     while (this.closedQueries.length > closedQueryLimits.count || this.closedCharacters > closedQueryLimits.characters) this.closedCharacters -= this.closedQueries.shift()!.text.length
   }
@@ -251,7 +258,20 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** A name change from the document's owner (a save, a designer's table name) goes under the user's rename, if any. */
   update(id: string, patch: DocumentPatch): void {
     const { name, ...rest } = patch
-    this.replace(id, name === undefined ? rest : { ...rest, ...this.named(id, name) })
+    const switched = patch.connectionId ? this.switchProvider(id, patch.connectionId) : undefined
+    this.replace(id, { ...rest, ...name === undefined ? {} : this.named(id, name), ...switched ? { provider: switched === 'sqlserver' ? undefined : switched } : {} })
+    const document = switched && this.get(id)
+    if (document && (this.entries.get(id)?.model.getValueLength() ?? 0) > 0) this.options.providerChanged?.(document)
+  }
+  /**
+   * A query that moves to a connection of another engine takes that engine and its language, and its markers go; it
+   * keeps both when it disconnects. Returns the new engine, or undefined when it did not change.
+   */
+  private switchProvider(id: string, connectionId: string): ProviderId | undefined {
+    const document = this.get(id), model = this.entries.get(id)?.model, provider = this.options.provider?.(connectionId)
+    if (this.disposed || !document || !model || !provider || !isQueryDocument(document) || provider === (document.provider ?? 'sqlserver')) return undefined
+    this.options.setLanguage?.(model, queryLanguages[provider])
+    return provider
   }
   private named(id: string, name: string): Pick<QueryDocument, 'name'> | Pick<QueryDocument, 'baseName'> {
     return this.get(id)?.baseName !== undefined ? { baseName: name } : { name }
@@ -283,8 +303,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.changed({ ...current, documents })
     return true
   }
-  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
-    return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
+  /** Where a new tab on `connectionId` starts when nothing names a database: SQL Server's in master, BigQuery's with no
+   *  default dataset. */
+  defaultDatabase(connectionId: string | undefined): string { return connectionId && this.options.provider?.(connectionId) === 'bigquery' ? '' : 'master' }
+  newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database?: string, unsaved = false): QueryDocument {
+    return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database ?? (this.active?.database || this.defaultDatabase(connectionId)), connectionId, unsaved)
   }
   /** `eol` is an opened file's line ending: the model takes it, normalizing a file whose line endings were mixed. */
   create(name: string, sql: string, database: string, connectionId?: string, unsaved = false, file?: QueryDocument['file'], eol?: LineEnding): QueryDocument {
@@ -294,9 +317,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * Opens a query AutoRecover kept: its text, unsaved, with no connection, its line ending, and its original file when
    * main registered it again. A large value has no bracket matching or colours, as `openText` opens it.
    */
-  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file']): QueryDocument {
+  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId): QueryDocument {
     const value = kind === 'sql' ? undefined : kind
-    return this.add(name, text, value ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol)
+    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, provider ? { provider } : {})
   }
   /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
@@ -318,8 +341,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
-    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
-    const document = this.add(o.name, o.text, kind ? '' : o.database ?? 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
+    const document = this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
     // A file whose text was all deleted is still a change to save.
     if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
     return this.get(document.id) ?? document
@@ -327,10 +350,15 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice' | 'provider'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
-    const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
+    // A query opened on a connection takes its engine; one without keeps the engine it was given. SQL Server is the
+    // absence of one, so only a value or a SQL Server query carries none.
+    const { provider: given, ...rest } = extra
+    const provider = kind ? undefined : (connectionId ? this.options.provider?.(connectionId) : undefined) ?? given
+    extra = provider && provider !== 'sqlserver' ? { ...rest, provider } : rest
+    const model = this.createModel(text, documentUri(id), documentInfo({ kind, provider: extra.provider }).language)
     if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
     if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
     // Before the saved version is read: setting the line ending is a change, though not one Undo reverts.

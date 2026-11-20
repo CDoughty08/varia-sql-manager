@@ -5,6 +5,7 @@ import type { ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
+import { agentPreviewFromArgv } from '../shared/agent/gate'
 import type { ThemeState } from '../shared/theme/types'
 import type { ActionProgress } from '../shared/actions/schema'
 import type { ObjectIndexProgress } from '../shared/explorer/search'
@@ -17,6 +18,8 @@ const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']
 // The connect methods only: main refuses a context with any other method.
 const connectRequest = <M extends 'connections.connect' | 'connections.databases'>(method: M, params: RpcMethods[M]['params'], context?: ConnectContext): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params, context)
 
+// Counted here, where every write from the page passes, so a copy still formatting can tell another text was written.
+let clipboardWrites = 0
 const api: VariaApi = {
   languageStatus: () => request('language.status', {}),
   languageComplete: params => request('language.complete', params),
@@ -68,7 +71,11 @@ const api: VariaApi = {
   saveConnectionProfile: profile => ipcRenderer.invoke('varia:connections-save', profile),
   removeConnectionProfile: id => ipcRenderer.invoke('varia:connections-remove', id),
   setConnectionEnvironment: input => ipcRenderer.invoke('varia:connections-environment', input),
+  pickKeyFile: authentication => ipcRenderer.invoke('varia:connections-pick-key-file', { authentication }),
+  confirmFederationSource: (keyFile, source) => ipcRenderer.invoke('varia:connections-confirm-source', { keyFile, source }),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
+  bigQueryAccount: params => request('bigquery.account', params),
+  bigQueryProjects: params => request('bigquery.projects', params),
   databases: connectionId => request('databases.list', { connectionId }),
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   explorerChildren: params => request('explorer.children', params),
@@ -100,6 +107,7 @@ const api: VariaApi = {
   describeSsis: params => request('ssis.describe', params),
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
+  agentProfile: params => request('agent.profile', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),
   activityKill: params => request('activity.kill', params),
@@ -137,6 +145,7 @@ const api: VariaApi = {
   openResultsPort: () => ipcRenderer.invoke('varia:results-port-open'),
   copyResults: request => ipcRenderer.invoke('varia:results-copy', request),
   saveResults: request => ipcRenderer.invoke('varia:results-save', request),
+  saveLocalResults: request => ipcRenderer.invoke('varia:results-save-local', request),
   cancelResultsJob: jobId => ipcRenderer.invoke('varia:results-job-cancel', jobId),
   onResultsJob: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ResultsJobProgress) => callback(progress)
@@ -145,6 +154,7 @@ const api: VariaApi = {
   },
   testMode: process.argv.includes('--varia-test-mode'),
   followSystemMotion: process.argv.includes('--varia-follow-system-motion'),
+  agentPreview: agentPreviewFromArgv(process.argv),
   openSqlFiles: () => ipcRenderer.invoke('varia:files-open'),
   saveSqlFile: options => ipcRenderer.invoke('varia:files-save', options),
   releaseSqlFile: fileId => ipcRenderer.invoke('varia:files-release', fileId),
@@ -173,7 +183,8 @@ const api: VariaApi = {
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
-  writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
+  writeClipboardText: text => { clipboardWrites++; return ipcRenderer.invoke('varia:clipboard-write', text) },
+  clipboardWrites: () => clipboardWrites,
   raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),

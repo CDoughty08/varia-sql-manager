@@ -1,0 +1,21 @@
+{
+  "note": "Each SQL Server type name and the sortKind ColumnTypes.SortKindOf (C#) and sqlServerSortKind (TS) give it. Read by SortKindChecks.cs and tests/sort-kind.test.ts.",
+  "types": [
+    ["tinyint", "integer"], ["smallint", "integer"], ["int", "integer"], ["bigint", "integer"],
+    ["decimal", "decimal"], ["numeric", "decimal"], ["money", "decimal"], ["smallmoney", "decimal"],
+    ["real", "float"], ["float", "float"],
+    ["bit", "boolean"],
+    ["date", "date"],
+    ["time", "time"],
+    ["datetime", "datetime"], ["datetime2", "datetime"], ["smalldatetime", "datetime"],
+    ["datetimeoffset", "timestamp"],
+    ["binary", "binary"], ["varbinary", "binary"], ["image", "binary"], ["timestamp", "binary"], ["rowversion", "binary"],
+    ["char", "text"], ["varchar", "text"], ["nchar", "text"], ["nvarchar", "text"], ["text", "text"], ["ntext", "text"], ["sysname", "text"],
+    ["xml", "json"], ["json", "json"],
+    ["uniqueidentifier", "other"], ["sql_variant", "other"], ["hierarchyid", "other"], ["geometry", "other"], ["geography", "other"],
+    ["vector", "other"], ["MyClrType", "other"], ["", "other"],
+    ["decimal(18,2)", "decimal"], ["decimal(38,6)", "decimal"], ["datetime2(7)", "datetime"], ["time(3)", "time"], ["datetimeoffset(7)", "timestamp"],
+    ["nvarchar(50)", "text"], ["nvarchar(max)", "text"], ["varbinary(10)", "binary"], ["float(53)", "float"], ["vector(3)", "other"],
+    ["INT", "integer"], [" Bit ", "boolean"], ["DateTime2 (3)", "datetime"], ["UNIQUEIDENTIFIER", "other"]
+  ]
+}

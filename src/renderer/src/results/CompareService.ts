@@ -18,6 +18,8 @@ export interface CompareInfo {
   /** What the compared results were called when they were compared ("Open orders", "Result 3"), frozen as the title is. */
   readonly leftName?: string
   readonly rightName?: string
+  /** The larger input's stored rows when compared, which sizes the gutter's row numbers after an input is closed. */
+  readonly inputRows?: number
   /** The column whose values matched rows; undefined when whole rows did. */
   readonly key: string | undefined
   readonly exact: boolean
@@ -338,12 +340,15 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const label = comparisonName(fromName, toName)
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released, and the strip
       // says nothing was compared.
-      const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])
+      // The tab's sides take the title's names, which a result closed meanwhile would otherwise change ("Totals (Result 1)").
+      const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)], { names: [fromName, toName] })
       if (key === undefined) return undefined
       done = true
       const info: CompareInfo = {
         left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, leftName: fromName, rightName: toName, key: result.key, exact: o.exact, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
-        soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
+        soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate,
+        // The handles' counts: an entry keeps the descriptor it opened with, before any row was stored.
+        inputRows: Math.max(from.handle.getSnapshot().rowsStored, to.handle.getSnapshot().rowsStored)
       }
       // Only diffs some run still shows are kept; this one is kept until its run publishes it.
       this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })

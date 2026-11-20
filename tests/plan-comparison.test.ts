@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import { planDocumentSchema, planNodeSchema, type PlanNode, type PlanStatement } from '../src/shared/plans'
 import { comparePlans, metricDelta, pairOperators, propertyDifferences } from '../src/renderer/src/plans/comparison'
 import { comparisonChoices, documentInput, snapshotInput } from '../src/renderer/src/plans/comparison-inputs'
-import ComparisonDetails from '../src/renderer/src/plans/ComparisonDetails'
+import { operatorDifferences, statementDifferences } from '../src/renderer/src/plans/comparison-tables'
+import type { LocalTableData } from '../src/shared/results/local-table'
 import { RetainedPlansService } from '../src/renderer/src/plans/RetainedPlansService'
 
 const node = (id: string, op = 'Seek', object = 'dbo.T', parentId: string | null = null): PlanNode => planNodeSchema.parse({ id, nodeId: id, physicalOp: op, logicalOp: 'Get', object, parentId, warnings: [], properties: [] })
@@ -99,23 +98,23 @@ describe('shortened fields are never complete evidence', () => {
     const diagnostics = (compiledValue: string, runtimeValue: string) => ({ degreeOfParallelism: null, memoryGrant: [{ name: 'Future', value: compiledValue }], warnings: [], missingIndexes: [],
       parameters: [{ name: '@p', dataType: 'nvarchar(max)', compiledValue, runtimeValue }] })
     const cut = 'N\'' + 'x'.repeat(4093) + '…', whole = 'y'.repeat(5000)
-    const render = (left: PlanStatement, right: PlanStatement) => renderToStaticMarkup(createElement(ComparisonDetails, { leftStatement: left, rightStatement: right }))
-    const row = (html: string, name: string) => html.slice(html.indexOf(name), html.indexOf('</tr>', html.indexOf(name)))
+    const render = (left: PlanStatement, right: PlanStatement) => statementDifferences(left, right)
+    const row = (table: LocalTableData, name: string) => table.rows.find(cells => cells[0] === name)!.join(' | ')
     const shortenedSide = (id: string): PlanStatement => ({ ...statement(id, long), textShortened: true, detailsShortened: true, diagnostics: diagnostics(cut, whole) })
     const html = render(shortenedSide('l'), shortenedSide('r'))
     for (const name of ['Statement text', 'Parameter @p · compiled', 'Memory grant · Future']) {
-      expect(row(html, name)).toContain('equality unverified'); expect(row(html, name)).not.toContain('>Same<')
+      expect(row(html, name)).toContain('equality unverified'); expect(row(html, name).endsWith(' | Same')).toBe(false)
     }
     // Complete retained values in the same statement are exact, even where only the comparison view shortens their display.
     expect(row(html, 'Parameter @p · runtime')).toContain('shortened in comparison; inspect frozen XML')
-    expect(row(html, 'Parameter @p · runtime')).toContain('>Same<')
-    expect(row(html, 'Parameter @p · type')).toContain('>Same<')
+    expect(row(html, 'Parameter @p · runtime').endsWith(' | Same')).toBe(true)
+    expect(row(html, 'Parameter @p · type').endsWith(' | Same')).toBe(true)
     // A list in a shortened owner may have lost entries.
     expect(row(html, 'Warning attributes')).toContain('equality unverified')
     expect(row(html, 'Parameter availability')).toContain('equality unverified')
     const complete = render({ ...statement('l', whole), diagnostics: diagnostics(whole, whole) }, { ...statement('r', whole), diagnostics: diagnostics(whole, whole) })
-    for (const name of ['Statement text', 'Parameter @p · compiled', 'Warning attributes']) expect(row(complete, name)).toContain('>Same<')
-    expect(complete).not.toContain('equality unverified')
+    for (const name of ['Statement text', 'Parameter @p · compiled', 'Warning attributes']) expect(row(complete, name).endsWith(' | Same')).toBe(true)
+    expect(complete.rows.flat().join(' ')).not.toContain('equality unverified')
     expect(row(render(shortenedSide('l'), { ...shortenedSide('r'), diagnostics: diagnostics(cut + 'B', whole) }), 'Parameter @p · compiled')).toContain('Changed / availability differs')
   })
 })
@@ -141,25 +140,30 @@ describe('delta and diagnostic availability', () => {
     const left = { ...node('l'), actualRows: 20, executions: 8, cpuMs: 0, estimatedRows: 2, diagnostics: {
       estimatedExecutions: 5, parallel: true, estimatedExecutionMode: 'Row', predicates: [], outputColumns: [], warnings: [], spills: [], threads: [], runtimeDetailsAvailable: true
     } }
-    const html = renderToStaticMarkup(createElement(ComparisonDetails, { left, right: node('r'), leftStatement: model.statements[0], rightStatement: statement('r') }))
-    expect(html).toContain('Estimated total rows</th><td>10</td>')
-    expect(html).toContain('CPU (ms, summed threads)</th><td>0</td><td>Unavailable</td>')
-    expect(html).toContain('GrantedMemory (KiB)'); expect(html).toContain('GrantWaitTime (ms)')
-    expect(html).toContain('Parameter @p · runtime</th><td>(empty value)</td><td>Unavailable')
-    expect(html).toContain('not wall time'); expect(html).toContain('no per-execution or per-worker normalization')
+    const operators = operatorDifferences(left, node('r')), statements = statementDifferences(model.statements[0], statement('r'))
+    const row = (table: LocalTableData, name: string) => table.rows.find(cells => cells[0] === name)
+    expect(operators.columns.map(column => column.name)).toEqual(['Operator metric / property', 'Left', 'Right', 'Delta / change'])
+    expect(statements.columns[0].name).toBe('Statement metric / property')
+    expect(row(operators, 'Estimated total rows')?.[1]).toBe('10')
+    expect(row(operators, 'CPU (ms, summed threads)')?.slice(1)).toEqual(['0', 'Unavailable', 'Unavailable'])
+    expect(row(operators, 'Actual rows (total across threads)')?.[3]).toBe('Unavailable')
+    expect(row(statements, 'Memory grant · GrantedMemory (KiB)')).toBeDefined(); expect(row(statements, 'Memory grant · GrantWaitTime (ms)')).toBeDefined()
+    expect(row(statements, 'Parameter @p · runtime')?.slice(1, 3)).toEqual(['(empty value)', 'Unavailable'])
+    // Two measured values give the signed delta and its percentage; a zero baseline says so.
+    expect(row(operatorDifferences({ ...node('l'), actualRows: 10 }, { ...node('r'), actualRows: 15 }), 'Actual rows (total across threads)')?.[3]).toBe('+5 (+50%)')
+    expect(row(operatorDifferences({ ...node('l'), actualRows: 0 }, { ...node('r'), actualRows: 4 }), 'Actual rows (total across threads)')?.[3]).toBe('+4 (zero baseline)')
   })
-  it('escapes saved XML diagnostic text', () => {
-    const html = renderToStaticMarkup(createElement(ComparisonDetails, { left: { ...node('l'), object: '<img src=x onerror=alert(1)>' } }))
-    expect(html).toContain('&lt;img'); expect(html).not.toContain('<img')
+  it('keeps saved XML diagnostic text as text, which the grid draws only through nodeValue', () => {
+    expect(operatorDifferences({ ...node('l'), object: '<img src=x onerror=alert(1)>' }).rows.find(cells => cells[0] === 'Object')?.[1]).toBe('<img src=x onerror=alert(1)>')
   })
   it('bounds displayed diagnostic text while comparing complete retained property values', () => {
     const text = 'x'.repeat(100_000)
-    const html = renderToStaticMarkup(createElement(ComparisonDetails, {
-      left: { ...node('l'), properties: [{ name: 'Long property', value: text }] }, right: { ...node('r'), properties: [{ name: 'Long property', value: text + 'changed' }] }
-    }))
-    expect(html).toContain('shortened in comparison; inspect frozen XML')
-    expect(html).toContain('Changed / availability differs')
-    expect(html.length).toBeLessThan(20_000)
+    const table = operatorDifferences({ ...node('l'), properties: [{ name: 'Long property', value: text }] }, { ...node('r'), properties: [{ name: 'Long property', value: text + 'changed' }] })
+    const long = table.rows.find(cells => cells[0] === 'Property · Long property')!
+    expect(long[1]).toContain('shortened in comparison; inspect frozen XML')
+    expect(long[3]).toBe('Changed / availability differs')
+    // The note survives the grid's cell bound (local-table.ts): no value is cut past it.
+    for (const cell of long) expect(cell!.length).toBeLessThanOrEqual(4_000)
   })
 })
 

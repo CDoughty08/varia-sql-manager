@@ -1,12 +1,12 @@
 import { connectionKey, type ConnectionEnvironmentInput, type ConnectionLibraryView, type ConnectionProfile } from '../../../shared/connections'
-import type { ApiResult, ConnectionOptions } from '../../../shared/contracts'
+import type { ApiResult, ConnectionOptions, ProviderConnectionOptions } from '../../../shared/contracts'
 import { environmentPreset, environmentSchema } from '../../../shared/environments'
 import type { ConnectionService } from './connections'
 
 export interface EnvironmentDeps {
   readonly connections: Pick<ConnectionService, 'get' | 'relabel'>
   /** `window.varia.setConnectionEnvironment`: main validates the input again, changes only the entry's label and writes
-   *  connections.json atomically. */
+   *  mssql-connections.json atomically. */
   setEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
 }
 export type EnvironmentOutcome = { readonly ok: true; readonly environment?: string } | { readonly ok: false; readonly error: string }
@@ -20,7 +20,7 @@ export function parseEnvironment(value: string | undefined): EnvironmentOutcome 
 }
 
 /** The key of the entry a form or connection names; undefined while the options are incomplete or invalid. */
-export function entryKey(options: ConnectionOptions): string | undefined { try { return connectionKey(options) } catch { return undefined } }
+export function entryKey(options: ProviderConnectionOptions): string | undefined { try { return connectionKey(options) } catch { return undefined } }
 
 /**
  * The saved entry the Connect dialog's options name (the same server in any case, database, login and settings), whose
@@ -43,7 +43,7 @@ const notSaved = 'The environment could not be saved with this connection.'
 
 /**
  * Set Environment for a connected server, as Object Explorer's server menu offers it. Main changes the label of the
- * connection's entry in connections.json (found by its server, database, login and settings, as a connect finds it)
+ * connection's entry in mssql-connections.json (found by its server, database, login and settings, as a connect finds it)
  * and nothing else; only when the library it wrote holds that label does every connection to the entry show it, so a
  * failure, or a write that lost the entry, changes nothing on screen.
  */
@@ -53,6 +53,8 @@ export async function applyEnvironment(deps: EnvironmentDeps, connectionId: stri
   const parsed = parseEnvironment(value)
   if (!parsed.ok) return parsed
   if (connection.lifecycle) { deps.connections.relabel(connectionId, parsed.environment); return parsed }
+  // Only SQL Server's legacy connections (opened before main's receipts) lack a lifecycle.
+  if (connection.options.provider === 'bigquery') return { ok: false, error: 'This server is no longer connected.' }
   const { environment: _previous, ...options } = connection.options
   try {
     const result = await deps.setEnvironment({ options, ...parsed.environment ? { environment: parsed.environment } : {} })

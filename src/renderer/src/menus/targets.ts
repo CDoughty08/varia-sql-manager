@@ -6,6 +6,7 @@ import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { PaneId } from '../../../shared/layouts'
+import { explorerNodeProvider } from '../../../shared/providers'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { gridAnchor, gridTarget } from '../grid/anchor'
@@ -45,6 +46,11 @@ export interface InputTarget {
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
+/**
+ * Peek's Properties pane when its menu opened: the facts to copy as `Name<TAB>Value` lines, those whose text was selected in the
+ * pane or else every shown fact, read then so Copy writes what the menu was opened on.
+ */
+export interface PeekPropertiesTarget { readonly kind: 'peekProperties'; readonly text: string }
 export type OutputView = 'grid' | 'messages' | 'live'
 /**
  * A Query Output view: the query's results grid for one result set (its cell selection lives in the grid's view state,
@@ -74,7 +80,8 @@ export interface OutputTarget {
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
   readonly live?: LiveOutput
 }
-/** What Query Output's commands do in a live grid (LiveGridPane): its selection, sort, funnels, widths and copy. */
+/** What Query Output's commands do in a grid with its own source, a live grid (LiveGridPane) or a local grid (LocalGrid):
+ *  its selection, sort, funnels, widths, copy and save. */
 export interface LiveOutput {
   /** Its table sorts (a snapshot table, not a log that keeps arrival order). */
   readonly sortable: boolean
@@ -100,6 +107,8 @@ export interface LiveOutput {
   filterColumn(column: number): void
   clearFilters(): void
   save(): void
+  /** Whether Save Results As applies (a card's local grid has none); it does without this. */
+  canSave?(): boolean
   /** Find in Results: the owner's filter box, when it has one. */
   canFind(): boolean
   find(): void
@@ -115,7 +124,7 @@ export interface LiveRowActions {
   run(action: LiveRowAction): void
 }
 const liveOutputs = new WeakMap<Element, LiveOutput>()
-/** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
+/** A live or local grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
 export function registerLiveOutput(element: Element, live: LiveOutput): () => void {
   liveOutputs.set(element, live)
   return () => { if (liveOutputs.get(element) === live) liveOutputs.delete(element) }
@@ -138,16 +147,18 @@ export type MenuTarget =
   | InputTarget
   /** The results toolbar's ⋯ button (More results tools): its items act on the toolbar's query, as its buttons do. */
   | { readonly kind: 'resultsTools'; readonly tabId: string }
+  /** Peek's Properties pane: Copy writes `text`, the facts read when the menu opened (`PeekPropertiesTarget`). */
+  | PeekPropertiesTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools'
+  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
-  'search.hit.context': 'Search result', 'output.tools': 'More results tools'
+  'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -166,6 +177,9 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
+    explorerProvider: target?.kind === 'explorer' ? explorerNodeProvider(target.node) : '',
+    // No Agent node is served before AG-1 (docs/agent-plan.md › Object Explorer).
+    agentRole: '',
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,
@@ -192,6 +206,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
+export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined

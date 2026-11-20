@@ -35,7 +35,7 @@ function opened(model = databaseModel(), canonical = false) {
   if (canonical) {
     fixture.api.push(readyBackend())
     const attempt = fixture.connections.beginConnect(connectionOptions, 1, targetId)!
-    fixture.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt)
+    fixture.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:reader' } }, attempt)
   } else fixture.connect(connectionInfo(connectionId))
   fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'databaseProperties' ? { databaseProperties: { ...model, general: { ...model.general, name: params.target.name ?? '' } }, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
   fixture.api.scriptObjectAction.mockImplementation(async params => ({ ok: true, value: { text: `ALTER DATABASE -- ${JSON.stringify(params.action === 'properties' ? params.changes : {})}`, database: 'master', warnings: [] } as ActionScriptResult }))
@@ -82,7 +82,7 @@ describe('Database Properties as a document', () => {
     expect(f.properties.canRefresh(f.id)).toBe(false)
     expect(f.properties.canApply(f.id)).toBe(false)
     const next = crypto.randomUUID(), attempt = f.connections.beginConnect(connectionOptions, 1, f.targetId)!
-    expect(f.connections.accept(connectionInfo(next), connectionOptions, f.targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt).status).toBe('accepted')
+    expect(f.connections.accept(connectionInfo(next), connectionOptions, f.targetId, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'sid:reader' } }, attempt).status).toBe('accepted')
     f.targets.attachTarget(f.targetId, next, true)
     expect(f.documents.get(f.id)).toMatchObject({ connectionId: next, targetId: f.targetId, dirty: true })
     expect(f.draft()).toBe(draft)
