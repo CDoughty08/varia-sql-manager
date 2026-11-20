@@ -16,7 +16,8 @@ namespace Varia.Backend;
 /// A script's children are listed between polls and read in statement order as result sets 1…n, so early results show
 /// before the script ends; DML and DDL children become Messages lines. Rows are read through REST into the result store as
 /// SQL Server's are (BigQueryColumnPlan into ResultSetBuffer), truncated by the row limit and the budget, then the job's
-/// statistics and cost go in Messages and the summary. Stop ends the read at once and calls jobs.cancel; the session's
+/// statistics and cost go in Messages and the summary. A large result that did not arrive whole is read through Storage
+/// Read instead (SqlService.BigQueryStorageRead.cs). Stop ends the read at once and calls jobs.cancel; the session's
 /// next job waits for the stopped one to reach DONE. The session's transaction is tracked from the statement types of its
 /// jobs, top-level and child.
 /// </summary>
@@ -355,10 +356,17 @@ internal sealed partial class SqlService
                         {
                             sets.Add(currentSet);
                             events.Opened(currentSet);
+                            // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                            var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
                             // The reader owns the page from here.
                             var reading = page;
                             page = null;
-                            await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                            if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                            else
+                            {
+                                reading.Dispose();
+                                await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                            }
                             currentSet.Complete();
                             events.Closed(currentSet);
                             currentSet = null;

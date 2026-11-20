@@ -68,25 +68,43 @@ internal sealed class MetadataResponseCap : DelegatingHandler
 /// <summary>
 /// Where BigQuery requests go and how: Google's endpoint, or the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (emulator mode:
 /// anonymous credentials, no connect probe and no sessions, faked estimates); the HTTP client factory every request and
-/// credential uses (the offline checks put their fake here); and the federation subject token rules.
+/// credential uses (the offline checks put their fake here); and the federation subject token rules. Storage Read goes
+/// to Google's gRPC endpoint through <see cref="Proxy"/> (the system proxy when null), or in emulator mode to the
+/// emulator's plaintext gRPC port when VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT names it (off otherwise); the offline checks
+/// replace the client with <see cref="Storage"/>.
 /// </summary>
-internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Http, SubjectTokens Subjects)
+internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Http, SubjectTokens Subjects, Uri? StorageEndpoint = null,
+    System.Net.IWebProxy? Proxy = null, Func<BigQueryConnection, IBigQueryStorageRead>? Storage = null)
 {
     public bool Emulator => Endpoint is not null;
+
+    /// <summary>Whether results may be read through Storage Read: always against Google, in emulator mode only with its
+    /// gRPC port named (or a fake).</summary>
+    public bool StorageRead => Storage is not null || !Emulator || StorageEndpoint is not null;
+
+    /// <summary>A new Storage Read client for a connection, signed with its pinned credential.</summary>
+    public IBigQueryStorageRead StorageClient(BigQueryConnection connection) => Storage?.Invoke(connection)
+        ?? new GrpcStorageRead(StorageEndpoint ?? GrpcStorageRead.GoogleEndpoint, Emulator ? null : connection.Credential, Proxy);
 
     /// <summary>Google's endpoint with the system proxy and certificate store (decision 19).</summary>
     public static BigQueryEnvironment Production() => new(null, new MetadataSafeHttpClientFactory(), SubjectTokens.FromEnvironment());
 
     /// <summary>The backend process's environment. Main passes VARIA_TEST_BIGQUERY_ENDPOINT only to unpackaged builds
     /// (spawn-spec.ts), and only a loopback http address is honoured, so no build can be pointed at another host.</summary>
-    public static BigQueryEnvironment FromEnvironment() => Production() with { Endpoint = EmulatorEndpoint(Environment.GetEnvironmentVariable("VARIA_TEST_BIGQUERY_ENDPOINT")) };
+    public static BigQueryEnvironment FromEnvironment()
+    {
+        var endpoint = EmulatorEndpoint(Environment.GetEnvironmentVariable("VARIA_TEST_BIGQUERY_ENDPOINT"));
+        // The emulator's gRPC port only beside its REST endpoint, so no build sends Storage Read anywhere but Google or loopback.
+        var storage = endpoint is null ? null : EmulatorEndpoint(Environment.GetEnvironmentVariable("VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT"), "VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT", 9060);
+        return Production() with { Endpoint = endpoint, StorageEndpoint = storage };
+    }
 
-    public static Uri? EmulatorEndpoint(string? value)
+    public static Uri? EmulatorEndpoint(string? value, string variable = "VARIA_TEST_BIGQUERY_ENDPOINT", int port = 9050)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp || !uri.IsLoopback || !string.IsNullOrEmpty(uri.UserInfo)
             || uri.Query.Length > 0 || uri.Fragment.Length > 0 || uri.AbsolutePath != "/")
-            throw new InvalidOperationException("VARIA_TEST_BIGQUERY_ENDPOINT must be a loopback http address such as http://localhost:9050.");
+            throw new InvalidOperationException(variable + " must be a loopback http address such as http://localhost:" + port + ".");
         return uri;
     }
 
@@ -94,22 +112,43 @@ internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Htt
     public string? BaseUri => Endpoint is null ? null : new Uri(Endpoint, "bigquery/v2/").ToString();
 }
 
-/// <summary>One BigQuery connection handle: its options (without credential material), client, pinned principal and the
-/// default location (the options', or the default dataset's). Work that must outlive a Disconnect (a pending session
-/// abort, a Stop's jobs.cancel) leases the client; it is disposed once the handle is closed and no lease is left.</summary>
-internal sealed class BigQueryConnection(string id, BigQueryConnectOptions options, BigQueryClient client, BigQueryPrincipal principal, string? location) : IDisposable
+/// <summary>One BigQuery connection handle: its options (without credential material), client, pinned credential and
+/// principal, the default location (the options', or the default dataset's), and its Storage Read client, made on first
+/// use. Work that must outlive a Disconnect (a pending session abort, a Stop's jobs.cancel) leases the client; the client
+/// and Storage Read client are disposed once the handle is closed and no lease is left.</summary>
+internal sealed class BigQueryConnection(string id, BigQueryConnectOptions options, BigQueryClient client, BigQueryPrincipal principal, string? location,
+    Google.Apis.Auth.OAuth2.ICredential? credential = null) : IDisposable
 {
     private readonly Lock gate = new();
+    private IBigQueryStorageRead? storage;
     private int leases;
     private bool closed, disposed;
+
     public string Id { get; } = id;
     public BigQueryConnectOptions Options { get; } = options;
     public BigQueryClient Client { get; } = client;
     public BigQueryPrincipal Principal { get; } = principal;
     public string? Location { get; } = location;
+    public Google.Apis.Auth.OAuth2.ICredential? Credential { get; } = credential;
     /// <summary>Datasets' locations read for tabs whose dataset is not the connection's (datasets.get, free); null when
     /// BigQuery named none or the read failed.</summary>
     public System.Collections.Concurrent.ConcurrentDictionary<string, string?> DatasetLocations { get; } = new(StringComparer.Ordinal);
+    /// <summary>Why Storage Read cannot be used on this handle (the API is off, or the principal may not create read
+    /// sessions); results are then read through REST without asking again.</summary>
+    public volatile string? StorageRefused;
+    /// <summary>Until when (Environment.TickCount64) results are read through REST because the Storage API could not be reached.</summary>
+    public long StoragePausedUntil;
+    /// <summary>The Storage Read fallback reasons Messages has named on this handle, so each is said once.</summary>
+    public readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> StorageNotices = new();
+
+    public IBigQueryStorageRead Storage(Func<BigQueryConnection, IBigQueryStorageRead> create)
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(closed || disposed, this);
+            return storage ??= create(this);
+        }
+    }
 
     /// <summary>Keeps the client open past a Disconnect until the lease is disposed; null once the client is disposed.</summary>
     public IDisposable? Lease()
@@ -136,10 +175,10 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
             if (!closed || leases > 0 || disposed) return;
             disposed = true;
         }
-        Client.Dispose();
+        DisposeClients();
     }
 
-    /// <summary>Closes the handle: the client is disposed now, or when the last lease ends.</summary>
+    /// <summary>Closes the handle: the clients are disposed now, or when the last lease ends.</summary>
     public void Dispose()
     {
         lock (gate)
@@ -148,6 +187,12 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
             if (leases > 0 || disposed) return;
             disposed = true;
         }
+        DisposeClients();
+    }
+
+    void DisposeClients()
+    {
+        storage?.Dispose();
         Client.Dispose();
     }
 }
@@ -205,7 +250,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
             if (location is null && options.Dataset is { } dataset)
                 location = await DatasetLocationAsync(client, options.Project, dataset, bounded);
             var id = Guid.NewGuid().ToString();
-            connections[id] = new BigQueryConnection(id, stored, client, principal, location);
+            connections[id] = new BigQueryConnection(id, stored, client, principal, location, credential);
             client = null;
             if (context is not null)
             {

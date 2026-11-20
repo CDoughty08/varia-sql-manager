@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -124,6 +125,7 @@ internal static class BigQueryEmulatorLiveChecks
             check(counted.Select(row => row["n"]?.ToString()).SingleOrDefault() == "4", "emulator: named query parameters of each type bind as values");
 
             await ExecuteAsync(check, service, connection.Id, table);
+            await StorageReadAsync(check, environment);
 
             // The emulator finishes jobs synchronously, so cancel meets a finished job; it must still answer (Job History's Cancel).
             var cancelled = await api.Jobs.Cancel(Project, jobId).ExecuteAsync();
@@ -209,6 +211,69 @@ internal static class BigQueryEmulatorLiveChecks
         check(code == "ok" && result is { Status: "failed", Error: not null, ResultSets.Count: 0 } && result.Job is { JobId.Length: > 0 }
             && result.Messages.Any(entry => entry.Kind == "error"),
             $"emulator: a failing query is the summary's error, with its job: {code} {message} {result?.Error} {Messages(result)}");
+    }
+
+    /// <summary>Storage Read against the emulator's plaintext gRPC port (VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT, emulator mode
+    /// only): the same queries read through REST and through Arrow give identical cells, in order for a top-level ORDER BY.
+    /// Scalar columns only: the emulator fails to write DATETIME and TIME to Arrow, writes BYTES base64-encoded twice and
+    /// panics on ARRAY columns (the offline golden check covers every type).</summary>
+    static async Task StorageReadAsync(Action<bool, string> check, BigQueryEnvironment environment)
+    {
+        if (environment.StorageEndpoint is null)
+        {
+            Console.WriteLine("emulator: Storage Read checks skipped: VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT is not set.");
+            return;
+        }
+        using var rest = new SqlService(bigQuery: environment with { StorageEndpoint = null });
+        using var arrow = new SqlService(bigQuery: environment);
+        arrow.BigQuery.StorageReadMinBytes = 0;
+        async Task<string> Connect(SqlService service)
+        {
+            using var document = JsonDocument.Parse(new JsonObject
+            {
+                ["provider"] = "bigquery", ["project"] = Project, ["dataset"] = Dataset, ["authentication"] = "gcloud", ["credential"] = new JsonObject { ["source"] = "anonymous" }
+            }.ToJsonString());
+            return ((ConnectionInfo)await service.DispatchAsync("connections.connect", document.RootElement.Clone(), Wire)).Id;
+        }
+        var restId = await Connect(rest);
+        var arrowId = await Connect(arrow);
+        async Task<(QueryResult? Result, List<PageCell[]> Rows)> Run(SqlService service, string connectionId, string sql)
+        {
+            var args = new JsonObject { ["connectionId"] = connectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = sql, ["maxRows"] = 0, ["timeoutSeconds"] = 0 };
+            using var document = JsonDocument.Parse(args.ToJsonString());
+            var result = await service.DispatchAsync("query.execute", document.RootElement.Clone(), Wire) as QueryResult;
+            var set = result?.ResultSets.SingleOrDefault() is { } descriptor ? service.Results.Find(descriptor.ResultId) : null;
+            return (result, set is null ? [] : [.. set.SealedSnapshot().SelectMany(page => PageReader.Read(PinnedPage.Body(page), set.Wires).Rows)]);
+        }
+        string[] queries =
+        [
+            "SELECT n, CAST(n AS STRING) AS s, n * 1.5 AS f, CAST(n AS NUMERIC) / 8 AS num, MOD(n, 2) = 0 AS b, DATE_ADD(DATE '2026-01-01', INTERVAL n DAY) AS d, "
+                + "TIMESTAMP_ADD(TIMESTAMP '2026-11-15 09:30:00.123456 UTC', INTERVAL n SECOND) AS ts, "
+                + "IF(MOD(n, 7) = 0, NULL, n) AS maybe "
+                + "FROM UNNEST(GENERATE_ARRAY(1, 1500)) AS n ORDER BY n",
+            // Unordered: up to four streams, appended as they come, so the rows are compared in any order.
+            "SELECT n, REPEAT('x', MOD(n, 40)) AS pad FROM UNNEST(GENERATE_ARRAY(1, 2500)) AS n"
+        ];
+        foreach (var sql in queries)
+        {
+            var before = arrow.BigQuery.StorageSessions;
+            var (restResult, restRows) = await Run(rest, restId, sql);
+            var (arrowResult, arrowRows) = await Run(arrow, arrowId, sql);
+            if (!sql.Contains("ORDER BY", StringComparison.Ordinal))
+            {
+                restRows = [.. restRows.OrderBy(row => long.Parse(row[0].Text ?? "0", CultureInfo.InvariantCulture))];
+                arrowRows = [.. arrowRows.OrderBy(row => long.Parse(row[0].Text ?? "0", CultureInfo.InvariantCulture))];
+            }
+            var differences = new List<string>();
+            for (var r = 0; r < Math.Min(restRows.Count, arrowRows.Count) && differences.Count < 8; r++)
+                for (var c = 0; c < restRows[r].Length; c++)
+                    if (restRows[r][c].Text != arrowRows[r][c].Text || restRows[r][c].Flags != arrowRows[r][c].Flags)
+                        differences.Add(r + "," + c + ": REST ‘" + restRows[r][c].Text + "’ Arrow ‘" + arrowRows[r][c].Text + "’");
+            var messages = string.Join(" | ", arrowResult?.Messages.Select(message => message.Text) ?? []);
+            check(restResult?.Status == "completed" && arrowResult?.Status == "completed" && arrow.BigQuery.StorageSessions == before + 1 && restRows.Count > 0
+                && restRows.Count == arrowRows.Count && differences.Count == 0,
+                $"emulator: Storage Read reads the result the REST reader reads, cell for cell and in order: {restRows.Count} {arrowRows.Count} {arrow.BigQuery.StorageSessions - before} {string.Join("; ", differences)} {messages}");
+        }
     }
 
     static async Task<string> Outcome(Func<Task> call)

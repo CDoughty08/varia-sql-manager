@@ -371,6 +371,13 @@ export type ViewFilter =
   | { op: 'groups'; column: number; snapshotId: number }
   | { op: 'keepRows'; rows: number[] }
   | { op: 'keepRows'; cells: ViewCells }
+  | KindFilter
+/** A comparison row's kind as a `kind` filter names it; a changed entry's halves are `changed`. */
+export type DiffKindName = 'same' | 'changed' | 'added' | 'removed'
+/** `kind` keeps a comparison's (kind `diff`) rows of 1 to `limits.diff.maxKinds` distinct kinds, read from its change index;
+ *  it names no column, and is refused on any other result. Its resolved form lists the kinds in the order same, changed,
+ *  added, removed. */
+export interface KindFilter { op: 'kind'; kinds: DiffKindName[] }
 /** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), the
  *  one value's representative `row` when it names exactly one besides NULL, and `digest`, 32 hex digits naming what it
  *  keeps: two value lists over the same rows that tick the same values have the same digest whatever their snapshots. */
@@ -382,6 +389,7 @@ export type ResolvedViewFilter =
   | { op: 'duplicates'; columns: number[] }
   | ResolvedGroupsFilter
   | { op: 'keepRows'; rows: number[] }
+  | KindFilter
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
@@ -429,7 +437,21 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; match: DiffMatchUsed; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]; repeated: number; possible: number; possibleSkipped: boolean; nothingPaired: boolean
   columnChanges: { changed: number; soft: number }[]; trailingHidden: number
+  /** Up to `limits.diff.overviewBuckets` even buckets of the stored rows, each the bits of the kinds in it: 1 changed, 2
+   *  added, 4 removed (0: unchanged rows only). */
+  overview: number[]
+  /** The change units over every stored row: each changed cell a tone lists (a cut tone one more) and each added or removed row. */
+  units: number
 }
+/** results.diffSeek on a comparison: the next or previous change unit from `from` (-1: before the first), wrapping round,
+ *  or the position of a look-alike row's partner (`partnerOf`). Positions are `viewId`'s when given, else stored rows. */
+export type ResultsDiffSeekParams =
+  | { resultId: number; viewId?: number; from: number; direction: 'next' | 'previous' }
+  | { resultId: number; viewId?: number; partnerOf: number }
+/** The position landed on, the pair index (data column) of its cell (0 for an added, removed or cut unit), the unit's number
+ *  (`index`, 1 to `total`), the change units in the view and the rows it shows (`rows`, above `row`); or `none` (nothing
+ *  found), or `hidden` (the partner exists but the view hides it; `partnerOf` only). */
+export type ResultsDiffSeekResult = { row: number; column: number; index: number; total: number; rows: number } | { none: true } | { hidden: true }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
  *  SUM, AVG, MIN or MAX. */
 export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'
@@ -672,6 +694,8 @@ export interface PortMethods {
   'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
   'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
+  /** A comparison's next or previous change unit, or a look-alike row's partner, from its change index. */
+  'results.diffSeek': { params: ResultsDiffSeekParams; result: ResultsDiffSeekResult }
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }

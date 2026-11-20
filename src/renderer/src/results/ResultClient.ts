@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -100,6 +100,10 @@ export interface ResultHandle extends Disposable {
   rowIds(first: number, count: number, signal?: AbortSignal): Promise<ResultsRowIdsResult>
   /** Every row (view position on a view) whose identity is one of `ids` (1 to 10,000). */
   findRows(ids: readonly number[], signal?: AbortSignal): Promise<ResultsFindRowsResult>
+  /** On a comparison (kind `diff`): the next or previous change unit from `from` (a view position on a view; -1 before the
+   *  first), wrapping round, or the position of a look-alike row's partner (`partnerOf`), from the backend's change index
+   *  (results.diffSeek). */
+  diffSeek(seek: { from: number; direction: 'next' | 'previous' } | { partnerOf: number }, signal?: AbortSignal): Promise<ResultsDiffSeekResult>
   /** Compares this result (the earlier) with `right` (the later), both complete results of the same query, in the backend
    *  (results.diff), and stores their unified diff as a new result, whose descriptor the answer carries: open it with
    *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
@@ -434,6 +438,15 @@ export class ResultClient implements Disposable {
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsFindRowsResult
       },
+      diffSeek: async (seek, signal) => {
+        this.usable(state)
+        const request = 'partnerOf' in seek ? { method: 'diffSeek' as const, partnerOf: seek.partnerOf } : { method: 'diffSeek' as const, from: seek.from, direction: seek.direction }
+        if ('partnerOf' in seek ? !Number.isSafeInteger(seek.partnerOf) || seek.partnerOf < 0 : !Number.isSafeInteger(seek.from) || seek.from < -1 || (seek.direction !== 'next' && seek.direction !== 'previous'))
+          throw new ResultError('INVALID_PARAMS', 'A seek needs a position and a direction, or the position whose possible match it finds.')
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsDiffSeekResult
+      },
       diff: async (right, o = {}) => {
         this.usable(state)
         const context = o.context ?? 1
@@ -554,7 +567,9 @@ export class ResultClient implements Disposable {
     // A groups filter goes as it was asked, without what the view said of it.
     const filters = o.filters?.length ? o.filters.map((item): ViewFilter => item.op === 'groups' ? { op: 'groups', column: item.column, snapshotId: item.snapshotId } : { ...item }) : undefined
     if (keys.length + (filters?.length ?? 0) === 0 || (filters?.length ?? 0) > wire.views.maxFilters
-      || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf) : item.op !== 'keepRows' && !columnOf(item.column)))
+      || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf)
+        : item.op === 'kind' ? item.kinds.length < 1 || item.kinds.length > wire.diff.maxKinds || new Set(item.kinds).size !== item.kinds.length
+          : item.op !== 'keepRows' && !columnOf(item.column)))
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))

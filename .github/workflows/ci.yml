@@ -189,14 +189,15 @@ jobs:
           dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live
       - name: BigQuery against its emulator
         # BigQuery in emulator mode against goccy/bigquery-emulator 0.8.1, pinned by digest (docs/bigquery.md, Testing):
-        # anonymous credentials, so no Google project or credential is ever involved. The checks wait for it to answer.
-        # Runs after other checks fail too, provided their Release build exists.
+        # anonymous credentials, so no Google project or credential is ever involved. Its gRPC port (9060) serves the Storage
+        # Read checks. The checks wait for it to answer. Runs after other checks fail too, provided their Release build exists.
         if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
         timeout-minutes: 5
         env:
           VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050
+          VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060
         run: |
-          docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
+          docker run -d --name varia-bigquery -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
           dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --bigquery-emulator-live
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
@@ -279,7 +280,7 @@ jobs:
         # in every shard, since the shard that runs the connections suite follows measured times.
         id: bigquery
         timeout-minutes: 2
-        run: docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
+        run: docker run -d --name varia-bigquery -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
       - name: Electron smoke tests
         timeout-minutes: 25
         env:

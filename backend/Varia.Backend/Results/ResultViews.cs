@@ -12,9 +12,9 @@ internal enum SortMode { Value, Chars, Bytes }
 internal sealed record ViewKey(int Column, bool Descending, SortMode Mode);
 
 /// <summary>How a view filter keeps rows: a column's value among some values (In) or not (NotIn), between two values,
-/// rows whose values in some columns repeat (Duplicates), or the rows it names themselves (KeepRows), which compares no
-/// column.</summary>
-internal enum FilterOp { In, NotIn, Between, Duplicates, KeepRows }
+/// rows whose values in some columns repeat (Duplicates), the rows it names themselves (KeepRows), or a diff's rows of
+/// some kinds (Kind, read from its change index); the last two compare no column.</summary>
+internal enum FilterOp { In, NotIn, Between, Duplicates, KeepRows, Kind }
 
 /// <summary>Cells a filter takes its values from: positions in a view's order (or the result's own when Order is null).</summary>
 internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges);
@@ -26,8 +26,10 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
 /// value order, one a value, however many. KeepRows keeps exactly the base rows it names (Rows, ascending once resolved),
 /// or those at the positions a selection named (Cells): at most <see cref="ViewSorter.MaxKeepRows"/>, and no column.
-/// A checklist's filter carries its snapshot's <see cref="DistinctSnapshot.Digest"/>, which its resolved form answers.</summary>
-internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null, string? Digest = null);
+/// A checklist's filter carries its snapshot's <see cref="DistinctSnapshot.Digest"/>, which its resolved form answers.
+/// Kind keeps a diff's rows whose kind is among <see cref="Kinds"/> (<see cref="DiffIndex"/>; a changed entry's halves are
+/// changed), and no column.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null, string? Digest = null, DiffKindSet Kinds = DiffKindSet.None);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
@@ -49,6 +51,9 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
     public long BaseRows { get; } = baseRows;
     internal long Charged { get; } = charged;
     public long Rows => Order.Length;
+    /// <summary>A diff's view: the change units before each <see cref="DiffIndex.BlockRows"/> positions, and the total last
+    /// (<see cref="DiffIndex.ViewBlocks"/>), charged with the view; null for other results.</summary>
+    public long[]? UnitBlocks { get; init; }
 }
 
 /// <summary>Builds a view's order: a stable sort of the result's sealed rows by up to <see cref="MaxKeys"/> keys, as SQL
@@ -324,14 +329,14 @@ internal static partial class ViewSorter
     }
 
     /// <summary>Keys a view holds while it is built: one per column its filters compare and one per sort key, except that a
-    /// Value sort key on a filtered column is that filter's key. KeepRows compares no column, so it has no key.</summary>
+    /// Value sort key on a filtered column is that filter's key. KeepRows and Kind compare no column, so they have no key.</summary>
     public static int KeyCount(IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters)
     {
         var columns = new HashSet<int>();
         foreach (var filter in filters)
         {
             if (filter.Op == FilterOp.Duplicates) columns.UnionWith(filter.Columns);
-            else if (filter.Op != FilterOp.KeepRows) columns.Add(filter.Column);
+            else if (filter.Op is not (FilterOp.KeepRows or FilterOp.Kind)) columns.Add(filter.Column);
         }
         var count = columns.Count;
         foreach (var key in keys)
@@ -380,6 +385,15 @@ internal static partial class ViewSorter
                 var columns = new Key[filter.Columns.Length];
                 for (var c = 0; c < columns.Length; c++) columns[c] = ValueKey(filter.Columns[c]);
                 order = Duplicates(order, columns, token);
+                resolved[f] = filter;
+                continue;
+            }
+            if (filter.Op == FilterOp.Kind)
+            {
+                // A diff's rows of the kinds asked, read from its change index. SqlService.ViewFilters checked it has one, so none
+                // now means the diff was freed mid-build: cancelled, which SqlService.UntilReleased answers as RESULT_RELEASED.
+                var index = set.DiffIndex ?? throw new OperationCanceledException("The comparison was released.");
+                order = KeepKinds(order, index, filter.Kinds, token);
                 resolved[f] = filter;
                 continue;
             }
@@ -489,6 +503,20 @@ internal static partial class ViewSorter
         Array.Resize(ref picked, count);
         Array.Sort(picked);
         return picked;
+    }
+
+    /// <summary>The rows of <paramref name="order"/> whose diff kind is among <paramref name="kinds"/>, in the order they have.</summary>
+    private static int[] KeepKinds(int[] order, DiffIndex index, DiffKindSet kinds, CancellationToken token)
+    {
+        var kept = new int[order.Length];
+        var count = 0;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (index.Keeps(order[i], kinds)) kept[count++] = order[i];
+        }
+        Array.Resize(ref kept, count);
+        return kept;
     }
 
     /// <summary>Rows a KeepRows filter named, checked, ascending and each once.</summary>

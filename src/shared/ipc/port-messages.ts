@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema, truncationSchema } from './descriptors'
@@ -35,13 +35,16 @@ export const diffMatchSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('rows') }).strict(),
   z.object({ mode: z.literal('columns'), columns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).min(1).max(limits.diff.maxKeyColumns).refine(columns => new Set(columns).size === columns.length, 'Key columns must be distinct.') }).strict()
 ])
+/** A kind filter's kinds: 1 to maxKinds distinct (results.view on a comparison). */
+const diffKinds = z.array(z.enum(['same', 'changed', 'added', 'removed'])).min(1).max(limits.diff.maxKinds).refine(kinds => new Set(kinds).size === kinds.length, 'Kinds must be distinct.')
 export const viewFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean().optional() }).strict(),
   z.object({ op: filterOp, column, cells: filterCells }).strict(),
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
   z.object({ op: z.literal('groups'), column, snapshotId: u32 }).strict(),
   z.object({ op: z.literal('keepRows'), rows: keptRows }).strict(),
-  z.object({ op: z.literal('keepRows'), cells: filterCells }).strict()
+  z.object({ op: z.literal('keepRows'), cells: filterCells }).strict(),
+  z.object({ op: z.literal('kind'), kinds: diffKinds }).strict()
 ])
 /** A group: a value's place in a snapshot's value order (below 2^31, as rows are). */
 const group = filterRow
@@ -50,7 +53,8 @@ const resolvedFilterSchema = z.union([
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
   z.object({ op: z.literal('groups'), column, snapshotId: u32, keep: z.boolean(), values: group, nulls: z.boolean(), row: filterRow.optional(), digest: z.string().regex(/^[0-9a-f]{32}$/) }).strict()
     .refine(filter => filter.row === undefined || filter.values === 1, 'A row names the one value.'),
-  z.object({ op: z.literal('keepRows'), rows: keptRows }).strict()
+  z.object({ op: z.literal('keepRows'), rows: keptRows }).strict(),
+  z.object({ op: z.literal('kind'), kinds: diffKinds }).strict()
 ])
 
 /** One pivot value: an aggregate of a column; only count may leave the column out (it then counts rows). */
@@ -78,6 +82,12 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   // A unified diff of two results of one query (results.diff), stored as a new result the port then owns.
   z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext), match: diffMatchSchema.optional() }).strict()
     .refine(request => request.resultId !== request.right, 'A result is not compared with itself.'),
+  // A comparison's next or previous change unit from a position, or a look-alike row's partner (results.diffSeek).
+  z.object({
+    t: z.literal('diffSeek'), rid: u31, generation, resultId: u32, viewId: u32.optional(), from: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER).optional(),
+    direction: z.enum(['next', 'previous']).optional(), partnerOf: count.optional()
+  }).strict().refine(request => request.partnerOf === undefined ? request.from !== undefined && request.direction !== undefined : request.from === undefined && request.direction === undefined,
+    'A seek names a position and a direction, or the position whose partner it finds.'),
   // Search (results.search): the cells containing a text, through a view when one is named; `cancel` stops it.
   z.object({
     t: z.literal('search'), rid: u31, generation, resultId: u32, text: z.string().min(1).max(limits.search.maxText), fromRow: count,
@@ -152,8 +162,17 @@ export const diffResultSchema = z.object({
   match: z.object({ mode: z.enum(['auto', 'position', 'rows', 'columns']), columns: z.array(z.string().max(512)).max(limits.diff.maxKeyColumns) }).strict(),
   same: count, changed: count, added: count, removed: count, soft: count, approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames,
   repeated: count, possible: count, possibleSkipped: z.boolean(), nothingPaired: z.boolean(),
-  columnChanges: z.array(z.object({ changed: count, soft: count }).strict()).max(limits.page.maxColumns), trailingHidden: count
+  columnChanges: z.array(z.object({ changed: count, soft: count }).strict()).max(limits.page.maxColumns), trailingHidden: count,
+  overview: z.array(z.number().int().min(0).max(7)).max(limits.diff.overviewBuckets), units: count
 }).strict()
+/** A results.diffSeek answer as the backend sends it (its unit within the total, its row below the rows shown); main also
+ *  checks that only a partner request is answered `hidden`, and that a partner lands on the first column. */
+export const diffSeekResultSchema = z.union([
+  z.object({ row: count, column: z.number().int().min(0).max(limits.page.maxColumns - 1), index: count.min(1), total: count.min(1), rows: count }).strict()
+    .refine(result => result.index <= result.total && result.row < result.rows, 'The unit is one of the total, at one of the rows shown.'),
+  z.object({ none: z.literal(true) }).strict(),
+  z.object({ hidden: z.literal(true) }).strict()
+])
 /** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks
  *  its matches are in order and inside the rows searched before forwarding it. */
 const maxRun = limits.search.maxMatches + limits.page.maxColumns
@@ -189,7 +208,7 @@ export const distinctReadResultSchema = z.object({
 }).strict().refine(result => result.offset + result.values.length <= Math.max(result.total, result.offset), 'The window lies in the values.')
 export const distinctTickResultSchema = z.object({ checked: count, nullsChecked: z.boolean() }).strict()
 export const distinctCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.distinct.maxClose) }).strict()
-export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
+export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult | ResultsDiffSeekResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
