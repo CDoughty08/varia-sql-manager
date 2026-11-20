@@ -1,5 +1,15 @@
 [
   {
+    "id": "Apache.Arrow",
+    "version": "23.0.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Apache.Arrow.Scalars",
+    "version": "23.0.0",
+    "license": "Apache-2.0"
+  },
+  {
     "id": "Azure.Core",
     "version": "1.53.0",
     "license": "MIT"
@@ -10,7 +20,17 @@
     "license": "MIT"
   },
   {
+    "id": "Google.Api.CommonProtos",
+    "version": "2.17.0",
+    "license": "BSD-3-Clause"
+  },
+  {
     "id": "Google.Api.Gax",
+    "version": "4.13.1",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "id": "Google.Api.Gax.Grpc",
     "version": "4.13.1",
     "license": "BSD-3-Clause"
   },
@@ -40,8 +60,38 @@
     "license": "Apache-2.0"
   },
   {
+    "id": "Google.Cloud.BigQuery.Storage.V1",
+    "version": "3.20.0",
+    "license": "Apache-2.0"
+  },
+  {
     "id": "Google.Cloud.BigQuery.V2",
     "version": "3.12.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Google.Protobuf",
+    "version": "3.31.1",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "id": "Grpc.Auth",
+    "version": "2.71.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Grpc.Core.Api",
+    "version": "2.71.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Grpc.Net.Client",
+    "version": "2.71.0",
+    "license": "Apache-2.0"
+  },
+  {
+    "id": "Grpc.Net.Common",
+    "version": "2.71.0",
     "license": "Apache-2.0"
   },
   {

@@ -59,7 +59,7 @@ replace it with a fake.
   Google's libraries are Apache-2.0 and BSD-3-Clause.
 - **Size.** The win-x64 self-contained ReadyToRun backend grows by 4.6 MB (1.9 MB compressed) with the REST client.
   Adding the Storage Read API and Arrow (`Google.Cloud.BigQuery.Storage.V1` 3.20.0 with gRPC, `Apache.Arrow` 23.0.0, for
-  windowed results) adds 5.4 MB more (2.2 MB compressed).
+  Storage Read) adds 5.4 MB more (2.2 MB compressed).
 
 ## Authentication
 
@@ -179,7 +179,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
   is NULL with the read-error flag and one message for its column. Discard results reads no rows.
 - **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
-  (binary), DATE, TIME, DATETIME and INTERVAL as BigQuery writes them, TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
+  (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
+  INTERVAL in canonical form (`1-2 3 4:05:06.5`), TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
   (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
@@ -188,6 +189,30 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   Results status shows the bytes processed beside the row count ("1.24 GiB processed · < $0.01").
 - **Stop and the timeout.** Stop ends the request with status `cancelled` and, when the job had not finished, says it keeps
   running in BigQuery (Stop's `jobs.cancel` comes with scripts and sessions). A tab runs one query at a time (`SESSION_BUSY`).
+
+### Storage Read
+
+A large result is read through the BigQuery Storage Read API (Arrow over gRPC) into the same result set, budget and
+limits as REST's (`SqlService.BigQueryStorageRead.cs`, `ArrowColumnPlan`). REST and Arrow write identical text for every
+type.
+
+- **When.** After the first page: the rest of the rows remain, the job is a single SELECT (a script's rows come through
+  REST) and the rows the row limit keeps are estimated at 20 MB or more (the destination table's bytes per row, else the
+  first page's). The first page is then dropped and every row read from the job's temporary destination table. Reads
+  of temporary tables are free (Google's pricing page), so there is no setting for it.
+- **Streams.** The backend's own GoogleSQL scanner (`GoogleSqlScanner`, which skips comments, strings and nested
+  queries) decides the order: a top-level `ORDER BY` reads one stream in order; anything else asks for up to four,
+  appended as their batches come. Each stream is read on its own task; each batch is charged to the query's budget
+  (twice its size) before it is queued, and one reader appends rows, so the store keeps one writer. A stream that fails
+  transiently is read again from its offset.
+- **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
+  connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
+  be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2), or Google refused the session
+  or sent columns that are not the result's (asked again on the next query). A stream that fails after reading has begun
+  fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
+- **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
+  settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
 ### Cost
 
@@ -229,6 +254,11 @@ in one page whatever `maxResults` asks, finishes jobs synchronously, and reports
 It also refuses `jobTimeoutMs` sent as a JSON number, answers a repeated job id with 400 rather than 409, reports query
 errors (syntax errors included) as `jobInternalError`, and reports no bytes statistics.
 
+Storage Read against the emulator needs its gRPC port: `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (a loopback http address,
+honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main does not forward it, so the app reads the emulator through REST).
+The emulator serves one stream per session, sends each batch as a whole Arrow stream (schema first), fails on DATETIME
+and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; the offline golden check covers those.
+
 ## Testing
 
 - **Offline.** `BigQueryChecks` and `BigQueryCredentialChecks` (in the offline .NET run; alone with
@@ -238,22 +268,31 @@ errors (syntax errors included) as `jobInternalError`, and reports no bytes stat
   request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
   credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
   scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
-  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text.
+  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text. Its Storage
+  Read part runs `BigQueryStorageFake` (Arrow batches through an in-process `IBigQueryStorageRead`): a golden of every
+  type read through REST and Arrow to identical cells, the scanner, the session's request and thresholds, each fallback,
+  the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
+  CONNECT.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
   `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
-  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure). CI
-  runs it in live group 1 (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
+  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).
+  With `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (the emulator's port 9060) it also reads results through Storage Read and
+  compares them with REST's. CI runs it in live group 1 with both ports (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
   against it when the variable is set (CI's Linux smoke shards set it; elsewhere that phase skips). Locally, start the emulator with Docker or Podman:
 
   ```bash
   docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
   ```
 
-  On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+  Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+- **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
+  REST and through Storage Read (four streams and one) against the offline fakes, so it measures decoding and storing,
+  not the network. It is run by hand, prints medians and has no floors. On a 2026 desktop, 500,000 rows of INT64 and
+  STRING: REST about 0.6 million rows a second (including the fake's JSON), Arrow 6 to 9 million.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
   cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.

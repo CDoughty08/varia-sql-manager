@@ -16,7 +16,7 @@ namespace Varia.Backend.Tests;
 /// and the cell caps, read errors, each error row, the lookup after a network failure and the 409 path, statistics and
 /// cost text. No request leaves the process.
 /// </summary>
-internal static class BigQueryExecutionChecks
+internal static partial class BigQueryExecutionChecks
 {
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -48,6 +48,9 @@ internal static class BigQueryExecutionChecks
         /// <summary>Replaces the next page's token (one Varia cannot send back).</summary>
         public string? Token;
         public string? Location;
+        /// <summary>The job's destination table (configuration.query.destinationTable), and what tables.get says of it.</summary>
+        public JsonObject? Destination;
+        public long? TableBytes;
         public readonly ConcurrentQueue<string> InsertedIds = new();
         public readonly ConcurrentQueue<JsonNode> InsertBodies = new();
         public readonly ConcurrentQueue<Uri> Reads = new();
@@ -70,6 +73,7 @@ internal static class BigQueryExecutionChecks
             fake.On("POST", Base + "/jobs", Insert);
             fake.On("GET", Base + "/queries/[^/]+", Results);
             fake.On("GET", Base + "/jobs/[^/]+", Get);
+            fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+", Table);
             return fake;
         }
 
@@ -89,6 +93,13 @@ internal static class BigQueryExecutionChecks
             return new(200, Job(id, FailsAtInsert ? "DONE" : "RUNNING", FailsAtInsert ? Failure : null, null).ToJsonString());
         }
 
+        BigQueryFake.Reply Table(BigQueryFake.Request request)
+        {
+            var table = new JsonObject { ["kind"] = "bigquery#table", ["tableReference"] = Destination?.DeepClone(), ["numRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            if (TableBytes is { } bytes) table["numBytes"] = bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return Destination is null ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
+        }
+
         JsonObject Job(string id, string state, JsonNode? error, JsonNode? statistics)
         {
             var status = new JsonObject { ["state"] = state };
@@ -99,6 +110,7 @@ internal static class BigQueryExecutionChecks
                 ["jobReference"] = Reference(id), ["status"] = status,
                 ["configuration"] = new JsonObject { ["jobType"] = "QUERY", ["query"] = new JsonObject { ["useLegacySql"] = false } }
             };
+            if (Destination is not null) job["configuration"]!["query"]!["destinationTable"] = Destination.DeepClone();
             if (statistics is not null) job["statistics"] = statistics.DeepClone();
             return job;
         }
@@ -167,11 +179,12 @@ internal static class BigQueryExecutionChecks
         public SqlService Service { get; }
         public string ConnectionId { get; private set; } = "";
 
-        public Harness(Jobs jobs, ResultStore? store = null)
+        public Harness(Jobs jobs, ResultStore? store = null, IBigQueryStorageRead? storage = null)
         {
             Jobs = jobs;
             Fake = jobs.Fake();
-            Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]),
+                Storage: storage is null ? null : _ => storage));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
             Service.BigQuery.PollMs = 50;
         }
@@ -262,6 +275,7 @@ internal static class BigQueryExecutionChecks
         await EdgesAsync(check);
         Trace("CancelAsync");
         await CancelAsync(check);
+        await StorageReadAsync(check);
     }
 
     /// <summary>VARIA_TRACE_CHECKS=1 names each section on stderr, to find a section that hangs.</summary>

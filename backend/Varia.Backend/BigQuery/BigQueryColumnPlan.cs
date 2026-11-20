@@ -189,10 +189,12 @@ internal sealed class BigQueryField
 internal sealed class BigQueryColumnPlan
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
-    private static readonly JsonWriterOptions Compact = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, Indented = false, SkipValidation = false };
+    internal static readonly JsonWriterOptions Compact = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, Indented = false, SkipValidation = false };
     private readonly BigQueryField[] fields;
     private readonly int[] caps;
     private readonly bool[] warned;
+    internal IReadOnlyList<BigQueryField> Fields => fields;
+    internal int CapOfColumn(int column) => caps[column];
     private readonly ArrayBufferWriter<byte> json = new(1024);
     private byte[] scratch = new byte[1024];
 
@@ -230,7 +232,7 @@ internal sealed class BigQueryColumnPlan
     static ResultColumn Describe(BigQueryField field) => new(CellFormat.Prefix(field.Name, 512, out _).ToString(), field.TypeText(), WireOf(field) == WireKind.Binary ? "binary" : "text",
         IsDocument(field) ? "json" : null, Nullable: !field.Required && !field.Repeated) { SortKind = field.SortKind };
 
-    static bool IsDocument(BigQueryField field) => field.Repeated || field.Kind is BigQueryKind.Json or BigQueryKind.Struct;
+    internal static bool IsDocument(BigQueryField field) => field.Repeated || field.Kind is BigQueryKind.Json or BigQueryKind.Struct;
     static WireKind WireOf(BigQueryField field) => field.Kind == BigQueryKind.Bytes && !field.Repeated ? WireKind.Binary : WireKind.Text;
 
     /// <summary>Each column's bytes for the row size bar: BigQuery's logical size for its fixed-size types, the text's UTF-8
@@ -268,16 +270,20 @@ internal sealed class BigQueryColumnPlan
             }
             catch (Exception error) when (error is FormatException or InvalidDataException or OverflowException or JsonException)
             {
-                builder.AppendNull(error: true);
-                builder.Measure(0, 0, exact: false);
-                if (!warned[i])
-                {
-                    warned[i] = true;
-                    warn("Column ‘" + Columns[i].Name + "’ (" + Columns[i].DataType + "): some values could not be read and are shown as NULL.");
-                }
+                ReadError(i, builder, warn);
             }
         }
         return truncated;
+    }
+
+    /// <summary>A value that could not be read: NULL with the read-error flag, and one message for its column.</summary>
+    internal void ReadError(int column, PageBuilder builder, Action<string> warn)
+    {
+        builder.AppendNull(error: true);
+        builder.Measure(0, 0, exact: false);
+        if (warned[column]) return;
+        warned[column] = true;
+        warn("Column ‘" + Columns[column].Name + "’ (" + Columns[column].DataType + "): some values could not be read and are shown as NULL.");
     }
 
     /// <summary>One cell; true when it was stored as a truncated prefix.</summary>
@@ -286,51 +292,91 @@ internal sealed class BigQueryColumnPlan
         if (field.Repeated || field.Kind == BigQueryKind.Struct) return Document(field, cap, value, builder);
         switch (field.Kind)
         {
-            case BigQueryKind.Int64: return Fixed(builder, Integer(Scalar(value)), 8);
-            case BigQueryKind.Bool: return Fixed(builder, Boolean(Scalar(value)), 1);
+            case BigQueryKind.String or BigQueryKind.Geography or BigQueryKind.Json:
+                return StringValue(value, cap, builder);
+            case BigQueryKind.Range:
+                if (value.ValueKind != JsonValueKind.String) throw new FormatException("The value is not text.");
+                return Text(RangeText(value.GetString()!, field.RangeElement), cap, builder);
+            case BigQueryKind.Unknown when value.ValueKind != JsonValueKind.String:
+                // A type this build does not know, sent as JSON: its JSON text.
+                return Text(value.GetRawText(), cap, builder);
+            default:
+                return ReadScalar(field, cap, Scalar(value), builder);
+        }
+    }
+
+    /// <summary>One non-document cell from its text as BigQuery writes it in REST (also the Arrow reader's path for a
+    /// column it receives as text); true when it was stored as a truncated prefix.</summary>
+    internal bool ReadScalar(BigQueryField field, int cap, ReadOnlySpan<byte> text, PageBuilder builder)
+    {
+        switch (field.Kind)
+        {
+            case BigQueryKind.Int64: return Fixed(builder, Integer(text), 8);
+            case BigQueryKind.Bool: return Fixed(builder, Boolean(text), 1);
             case BigQueryKind.Float64:
             {
-                var written = WriteFloat(Scalar(value), Room(32));
+                var written = WriteFloat(text, Room(32));
                 return Fixed(builder, scratch.AsSpan(0, written), 8);
             }
             case BigQueryKind.Numeric:
             case BigQueryKind.BigNumeric:
             {
-                var written = CanonicalDecimal(Scalar(value), Room(256));
-                var text = scratch.AsSpan(0, written);
-                builder.AppendUtf8(text);
-                builder.Measure(written, field.Kind == BigQueryKind.Numeric ? 16 : written);
-                return false;
+                var written = CanonicalDecimal(text, Room(256));
+                return Decimal(builder, scratch.AsSpan(0, written), field.Kind);
             }
             case BigQueryKind.Timestamp:
             {
-                var written = WriteTimestamp(Scalar(value), Room(40));
+                var written = WriteTimestamp(text, Room(40));
                 return Fixed(builder, scratch.AsSpan(0, written), 8);
             }
             case BigQueryKind.Range:
-            {
-                if (value.ValueKind != JsonValueKind.String) throw new FormatException("The value is not text.");
-                var text = value.GetString()!;
-                return Text(field.RangeElement == BigQueryKind.Timestamp ? RangeOfTimestamps(text) : text, cap, builder);
-            }
+                return Text(RangeText(Encoding.UTF8.GetString(text), field.RangeElement), cap, builder);
             case BigQueryKind.Bytes:
             {
-                var raw = Scalar(value);
-                var bytes = Room(Base64.GetMaxDecodedFromUtf8Length(raw.Length));
-                if (Base64.DecodeFromUtf8(raw, bytes, out _, out var length) != OperationStatus.Done) throw new FormatException("The value is not base64.");
-                var cut = length > cap;
-                builder.AppendBinary(bytes[..Math.Min(length, cap)], cut);
-                builder.Measure(length, length);
-                return cut;
+                var bytes = Room(Base64.GetMaxDecodedFromUtf8Length(text.Length));
+                if (Base64.DecodeFromUtf8(text, bytes, out _, out var length) != OperationStatus.Done) throw new FormatException("The value is not base64.");
+                return Binary(builder, bytes[..length], cap);
             }
             case BigQueryKind.Date or BigQueryKind.Time or BigQueryKind.DateTime or BigQueryKind.Interval:
-                return Fixed(builder, Scalar(value), field.Kind == BigQueryKind.Interval ? 16 : 8);
-            case BigQueryKind.String or BigQueryKind.Geography or BigQueryKind.Json:
-                return StringValue(value, cap, builder);
+            {
+                var written = Temporal(field.Kind, text, Room(text.Length + 64));
+                return Fixed(builder, scratch.AsSpan(0, written), field.Kind == BigQueryKind.Interval ? 16 : 8);
+            }
             default:
-                // A type this build does not know: its text as BigQuery sent it, or its JSON.
-                return value.ValueKind == JsonValueKind.String ? StringValue(value, cap, builder) : Text(value.GetRawText(), cap, builder);
+                // STRING, GEOGRAPHY, JSON, and a type this build does not know: the text as BigQuery sent it.
+                return Utf8Text(text, cap, builder);
         }
+    }
+
+    /// <summary>NUMERIC (16 bytes for the row size bar) or BIGNUMERIC (its text's length).</summary>
+    internal static bool Decimal(PageBuilder builder, ReadOnlySpan<byte> text, BigQueryKind kind)
+    {
+        builder.AppendUtf8(text);
+        builder.Measure(text.Length, kind == BigQueryKind.Numeric ? 16 : text.Length);
+        return false;
+    }
+
+    /// <summary>BYTES, cut at the column's cap.</summary>
+    internal static bool Binary(PageBuilder builder, ReadOnlySpan<byte> bytes, int cap)
+    {
+        var cut = bytes.Length > cap;
+        builder.AppendBinary(bytes[..Math.Min(bytes.Length, cap)], cut);
+        builder.Measure(bytes.Length, bytes.Length);
+        return cut;
+    }
+
+    /// <summary>UTF-8 text as is, cut at the column's cap. A UTF-16 unit takes at least one UTF-8 byte, so text of at most
+    /// <paramref name="cap"/> bytes has at most that many characters.</summary>
+    internal static bool Utf8Text(ReadOnlySpan<byte> text, int cap, PageBuilder builder)
+    {
+        if (text.Length <= cap)
+        {
+            builder.AppendUtf8(text);
+            // Characters as well as bytes: a cell the row limit cuts keeps both beside the page.
+            builder.Measure(Encoding.UTF8.GetCharCount(text), text.Length);
+            return false;
+        }
+        return Text(Encoding.UTF8.GetString(text), cap, builder);
     }
 
     Span<byte> Room(int bytes)
@@ -350,7 +396,7 @@ internal sealed class BigQueryColumnPlan
         return inner.Contains((byte)'\\') ? Encoding.UTF8.GetBytes(value.GetString()!) : inner;
     }
 
-    static bool Fixed(PageBuilder builder, ReadOnlySpan<byte> text, int bytes)
+    internal static bool Fixed(PageBuilder builder, ReadOnlySpan<byte> text, int bytes)
     {
         builder.AppendUtf8(text);
         builder.Measure(text.Length, bytes);
@@ -442,26 +488,45 @@ internal sealed class BigQueryColumnPlan
             if (!decimal.TryParse(text, NumberStyles.Float, Invariant, out var seconds) || Math.Abs(seconds) > 300_000_000_000m) throw new FormatException("The value is not a TIMESTAMP.");
             micros = (long)decimal.Round(seconds * 1_000_000m, MidpointRounding.AwayFromZero);
         }
-        const long min = -62_135_596_800_000_000, max = 253_402_300_799_999_999;
-        if (micros is < min or > max) throw new FormatException("The TIMESTAMP is out of range.");
-        var instant = DateTime.UnixEpoch.AddTicks(micros * 10);
-        return instant.TryFormat(destination, out var written, "yyyy-MM-dd HH:mm:ss.ffffff' UTC'", Invariant) ? written : throw new FormatException();
+        return BigQueryText.Timestamp(micros, destination);
     }
 
-    /// <summary>A RANGE&lt;TIMESTAMP&gt;'s bounds in TIMESTAMP's display, when REST sends them as epoch microseconds; text
-    /// it does not recognise stays as BigQuery wrote it.</summary>
-    static string RangeOfTimestamps(string text)
+    /// <summary>DATE, TIME, DATETIME and INTERVAL text as Varia writes it (<see cref="BigQueryText"/>), rebuilt from BigQuery's
+    /// text so the REST and Arrow readers agree; text it does not recognise is copied as BigQuery wrote it.</summary>
+    internal static int Temporal(BigQueryKind kind, ReadOnlySpan<byte> text, Span<byte> destination)
+    {
+        switch (kind)
+        {
+            case BigQueryKind.Date when BigQueryText.TryParseDate(text, out var days): return BigQueryText.Date(days, destination);
+            case BigQueryKind.Time when BigQueryText.TryParseTime(text, out var time): return BigQueryText.Time(time, destination);
+            case BigQueryKind.DateTime when BigQueryText.TryParseDateTime(text, out var micros): return BigQueryText.DateTime(micros, destination);
+            case BigQueryKind.Interval when BigQueryText.TryParseInterval(text, out var months, out var intervalDays, out var intervalMicros):
+                return BigQueryText.Interval(months, intervalDays, intervalMicros, destination);
+        }
+        if (text.Length > destination.Length) throw new FormatException("The value is too long.");
+        text.CopyTo(destination);
+        return text.Length;
+    }
+
+    /// <summary>One RANGE bound's text: <c>UNBOUNDED</c>, or the element's value as Varia writes it. REST sends a TIMESTAMP
+    /// bound as epoch microseconds.</summary>
+    internal static string Bound(BigQueryKind element, string bound)
+    {
+        if (bound == "UNBOUNDED") return bound;
+        Span<byte> buffer = stackalloc byte[64];
+        var utf8 = Encoding.UTF8.GetBytes(bound);
+        if (element == BigQueryKind.Timestamp)
+            return long.TryParse(bound, NumberStyles.AllowLeadingSign, Invariant, out _) ? Encoding.ASCII.GetString(buffer[..WriteTimestamp(utf8, buffer)]) : bound;
+        return element is BigQueryKind.Date or BigQueryKind.DateTime && utf8.Length <= 48 ? Encoding.UTF8.GetString(buffer[..Temporal(element, utf8, buffer)]) : bound;
+    }
+
+    /// <summary>RANGE text (<c>[2026-01-01, 2026-12-31)</c>) with each bound as <see cref="Bound"/> writes it; text it does
+    /// not recognise stays as BigQuery wrote it.</summary>
+    internal static string RangeText(string text, BigQueryKind element)
     {
         var comma = text.IndexOf(", ", StringComparison.Ordinal);
         if (text.Length < 4 || text[0] != '[' || text[^1] != ')' || comma < 0) return text;
-        static string Bound(string bound)
-        {
-            if (bound == "UNBOUNDED" || !long.TryParse(bound, NumberStyles.AllowLeadingSign, Invariant, out _)) return bound;
-            Span<byte> buffer = stackalloc byte[40];
-            var written = WriteTimestamp(Encoding.ASCII.GetBytes(bound), buffer);
-            return Encoding.ASCII.GetString(buffer[..written]);
-        }
-        return "[" + Bound(text[1..comma]) + ", " + Bound(text[(comma + 2)..^1]) + ")";
+        return "[" + Bound(element, text[1..comma]) + ", " + Bound(element, text[(comma + 2)..^1]) + ")";
     }
 
     /// <summary>STRING, GEOGRAPHY and JSON: the text as is, cut at the column's cap. A value with no escapes goes to the page
@@ -482,7 +547,7 @@ internal sealed class BigQueryColumnPlan
         return Text(value.GetString()!, cap, builder);
     }
 
-    static bool Text(string text, int cap, PageBuilder builder)
+    internal static bool Text(string text, int cap, PageBuilder builder)
     {
         var prefix = CellFormat.Prefix(text, cap, out var cut);
         builder.AppendText(prefix, cut);
@@ -534,45 +599,68 @@ internal sealed class BigQueryColumnPlan
                 writer.WriteEndObject();
                 break;
             }
-            case BigQueryKind.Bool: writer.WriteBooleanValue(Boolean(Scalar(value))[0] == 't'); break;
-            case BigQueryKind.Int64: writer.WriteStringValue(Integer(Scalar(value))); break;
-            case BigQueryKind.Numeric or BigQueryKind.BigNumeric:
-            {
-                Span<byte> digits = stackalloc byte[256];
-                writer.WriteStringValue(digits[..CanonicalDecimal(Scalar(value), digits)]);
-                break;
-            }
-            case BigQueryKind.Float64:
-            {
-                var text = Scalar(value);
-                if (!double.TryParse(text, NumberStyles.Float, Invariant, out var number)) throw new FormatException("The value is not a FLOAT64.");
-                if (double.IsFinite(number)) writer.WriteNumberValue(number);
-                else writer.WriteStringValue(number.ToString("R", Invariant));
-                break;
-            }
-            case BigQueryKind.Timestamp:
-            {
-                Span<byte> text = stackalloc byte[40];
-                writer.WriteStringValue(text[..WriteTimestamp(Scalar(value), text)]);
-                break;
-            }
-            case BigQueryKind.Json:
-            {
-                if (value.ValueKind != JsonValueKind.String) throw new FormatException("The JSON value is not text.");
-                var text = value.GetString()!;
-                // A JSON member is embedded as JSON when it parses, else kept as its text.
-                if (IsJson(text)) writer.WriteRawValue(text, skipInputValidation: true);
-                else writer.WriteStringValue(text);
-                break;
-            }
             default:
-                if (value.ValueKind == JsonValueKind.String) writer.WriteStringValue(field.Kind == BigQueryKind.Range && field.RangeElement == BigQueryKind.Timestamp ? RangeOfTimestamps(value.GetString()!) : value.GetString());
-                else value.WriteTo(writer);
+                // Kinds that are not read from their text keep a JSON value BigQuery sent as one.
+                if (value.ValueKind is not (JsonValueKind.String or JsonValueKind.Number) && field.Kind is BigQueryKind.String or BigQueryKind.Bytes or BigQueryKind.Geography or BigQueryKind.Range or BigQueryKind.Unknown)
+                {
+                    value.WriteTo(writer);
+                    break;
+                }
+                WriteScalarText(writer, field, Scalar(value));
                 break;
         }
     }
 
-    static bool IsJson(string text)
+    /// <summary>A document member that is not a STRUCT or ARRAY, from its text as BigQuery writes it in REST (also the Arrow
+    /// reader's path for a member it receives as text).</summary>
+    internal void WriteScalarText(Utf8JsonWriter writer, BigQueryField field, ReadOnlySpan<byte> text)
+    {
+        switch (field.Kind)
+        {
+            case BigQueryKind.Bool: writer.WriteBooleanValue(Boolean(text)[0] == 't'); break;
+            case BigQueryKind.Int64: writer.WriteStringValue(Integer(text)); break;
+            case BigQueryKind.Numeric or BigQueryKind.BigNumeric:
+            {
+                Span<byte> digits = stackalloc byte[256];
+                writer.WriteStringValue(digits[..CanonicalDecimal(text, digits)]);
+                break;
+            }
+            case BigQueryKind.Float64:
+            {
+                if (!double.TryParse(text, NumberStyles.Float, Invariant, out var number)) throw new FormatException("The value is not a FLOAT64.");
+                WriteFloatMember(writer, number);
+                break;
+            }
+            case BigQueryKind.Timestamp:
+            {
+                Span<byte> buffer = stackalloc byte[40];
+                writer.WriteStringValue(buffer[..WriteTimestamp(text, buffer)]);
+                break;
+            }
+            case BigQueryKind.Json: WriteJsonMember(writer, Encoding.UTF8.GetString(text)); break;
+            case BigQueryKind.Date or BigQueryKind.Time or BigQueryKind.DateTime or BigQueryKind.Interval:
+                writer.WriteStringValue(scratch.AsSpan(0, Temporal(field.Kind, text, Room(text.Length + 64))));
+                break;
+            case BigQueryKind.Range: writer.WriteStringValue(RangeText(Encoding.UTF8.GetString(text), field.RangeElement)); break;
+            default: writer.WriteStringValue(text); break;
+        }
+    }
+
+    /// <summary>A FLOAT64 member: a JSON number, or its text for NaN and the infinities, which JSON cannot hold.</summary>
+    internal static void WriteFloatMember(Utf8JsonWriter writer, double number)
+    {
+        if (double.IsFinite(number)) writer.WriteNumberValue(number);
+        else writer.WriteStringValue(number.ToString("R", Invariant));
+    }
+
+    /// <summary>A JSON member is embedded as JSON when it parses, else kept as its text.</summary>
+    internal static void WriteJsonMember(Utf8JsonWriter writer, string text)
+    {
+        if (IsJson(text)) writer.WriteRawValue(text, skipInputValidation: true);
+        else writer.WriteStringValue(text);
+    }
+
+    internal static bool IsJson(string text)
     {
         try
         {

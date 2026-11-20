@@ -1,0 +1,140 @@
+using Google.Api.Gax.Grpc;
+using Google.Apis.Bigquery.v2.Data;
+using Google.Cloud.BigQuery.Storage.V1;
+using Grpc.Core;
+
+namespace Varia.Backend.BigQuery;
+
+/// <summary>An open read session over a query's destination table: its streams, and the plan that decodes their batches.</summary>
+internal sealed record BigQueryReadSession(IBigQueryStorageRead Client, IReadOnlyList<string> Streams, ArrowColumnPlan Plan, bool Ordered);
+
+/// <summary>Why a result is read through REST rather than Storage Read, with the sentence Messages gives once per connection.
+/// <see cref="Lasting"/> reasons hold for the connection, which then stops asking.</summary>
+internal sealed record BigQueryStorageFallback(string Reason, string Sentence, bool Lasting);
+
+/// <summary>
+/// Storage Read (docs/bigquery.md, Storage Read): a read session over a finished query's destination table, in Arrow,
+/// with one stream when the statement orders its rows at the top level (GoogleSqlScanner) and up to
+/// <see cref="MaxStreams"/> otherwise. Reads of a query's temporary result table are free (Google's pricing page), so no
+/// setting keeps reads on REST. REST (tabledata through jobs.getQueryResults) reads a result instead when it arrived
+/// whole in the first answer, when it is smaller than <see cref="StorageReadMinBytes"/> (a session costs more than it
+/// saves), or when the project has the API off, the principal may not create read sessions, or the endpoint cannot be
+/// reached.
+/// </summary>
+internal sealed partial class BigQueryService
+{
+    /// <summary>Results under about 20 MB are read through REST: a read session costs more than it saves. The checks lower it.</summary>
+    internal long StorageReadMinBytes { get; set; } = 20_000_000;
+    /// <summary>The most streams one result is read with, appended as they come.</summary>
+    internal const int MaxStreams = 4;
+    /// <summary>Read sessions opened, for the checks to tell which reader read a result.</summary>
+    internal int StorageSessions;
+    /// <summary>How many times creating a session is tried before reading through REST.</summary>
+    internal int SessionAttempts { get; set; } = 2;
+
+    /// <summary>tables.get (free): a destination table's size and row count.</summary>
+    internal Task<Table> TableAsync(BigQueryConnection connection, TableReference table, CancellationToken token) =>
+        ReadAsync(t => connection.Client.Service.Tables.Get(table.ProjectId, table.DatasetId, table.TableId).ExecuteAsync(t), token);
+
+    /// <summary>
+    /// Opens a read session on <paramref name="table"/> for <paramref name="plan"/>'s columns (the first 4,096 when the
+    /// schema has more), billed to the connection's project. Answers the fallback instead when Storage Read cannot read it.
+    /// </summary>
+    internal async Task<(BigQueryReadSession? Session, BigQueryStorageFallback? Fallback)> OpenReadSessionAsync(BigQueryConnection connection, TableReference table,
+        BigQueryColumnPlan plan, bool ordered, CancellationToken token)
+    {
+        var project = connection.Options.Project;
+        var request = new CreateReadSessionRequest
+        {
+            Parent = "projects/" + project,
+            ReadSession = new ReadSession
+            {
+                Table = "projects/" + table.ProjectId + "/datasets/" + table.DatasetId + "/tables/" + table.TableId,
+                DataFormat = DataFormat.Arrow
+            },
+            MaxStreamCount = StreamCount(environment, ordered)
+        };
+        if (plan.TruncatedColumns)
+        {
+            request.ReadSession.ReadOptions = new ReadSession.Types.TableReadOptions();
+            request.ReadSession.ReadOptions.SelectedFields.AddRange(plan.Fields.Select(field => field.Name));
+        }
+        var client = connection.Storage(environment.StorageClient);
+        ReadSession session;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                session = await CallAsync(t => client.CreateReadSessionAsync(request, t), token);
+                break;
+            }
+            catch (Exception error) when (!token.IsCancellationRequested && Fallback(error, project) is { } fallback)
+            {
+                if (fallback.Reason != "unreachable" || attempt >= SessionAttempts) return (null, fallback);
+                await Task.Delay(Backoff(attempt), token);
+            }
+        }
+        var arrow = ArrowColumnPlan.From(plan, session.ArrowSchema?.SerializedSchema.Memory ?? ReadOnlyMemory<byte>.Empty);
+        if (arrow is null) return (null, Refused(project));
+        Interlocked.Increment(ref StorageSessions);
+        return (new BigQueryReadSession(client, [.. session.Streams.Select(stream => stream.Name)], arrow, ordered), null);
+    }
+
+    /// <summary>The streams a session asks for: one keeps a top-level ORDER BY's order; the emulator serves only one.</summary>
+    internal static int StreamCount(BigQueryEnvironment environment, bool ordered) =>
+        ordered || (environment.Emulator && environment.Storage is null) ? 1 : MaxStreams;
+
+    const string Slower = "Large results are read through the BigQuery API, which is slower: ";
+
+    /// <summary>The fallback for a failed CreateReadSession; null for a failure that is not about Storage Read.</summary>
+    internal static BigQueryStorageFallback? Fallback(Exception error, string project)
+    {
+        if (error is TimeoutException) return Unreachable();
+        if (error is not RpcException rpc) return error is HttpRequestException or IOException ? Unreachable() : null;
+        var detail = rpc.Status.Detail ?? "";
+        return rpc.StatusCode switch
+        {
+            StatusCode.PermissionDenied when detail.Contains("SERVICE_DISABLED", StringComparison.Ordinal) || detail.Contains("has not been used", StringComparison.Ordinal)
+                || detail.Contains("is disabled", StringComparison.Ordinal) || Disabled(rpc)
+                => new("disabled", Slower + "the BigQuery Storage API is not enabled in project " + project + ". Enabling it there lets Varia read them faster.", true),
+            StatusCode.PermissionDenied
+                => new("permission", Slower + "the account may not create read sessions in project " + project
+                    + " (bigquery.readsessions.create, which the BigQuery Read Session User role grants).", true),
+            StatusCode.Unavailable or StatusCode.DeadlineExceeded or StatusCode.Internal or StatusCode.Unknown => Unreachable(),
+            StatusCode.Cancelled => null,
+            _ => Refused(project)
+        };
+    }
+
+    /// <summary>Google's ErrorInfo reason in the status details, when the trailers carry it.</summary>
+    static bool Disabled(RpcException rpc)
+    {
+        try
+        {
+            var status = rpc.GetRpcStatus();
+            return status?.Details.Any(detail => detail.TryUnpack<Google.Rpc.ErrorInfo>(out var info) && info.Reason == "SERVICE_DISABLED") == true;
+        }
+        catch (Exception error) when (error is Google.Protobuf.InvalidProtocolBufferException or InvalidOperationException) { return false; }
+    }
+
+    static BigQueryStorageFallback Unreachable() =>
+        new("unreachable", Slower + "Varia could not reach the BigQuery Storage API (bigquerystorage.googleapis.com, over HTTP/2). A proxy or firewall may block it.", false);
+
+    static BigQueryStorageFallback Refused(string project) =>
+        new("refused", Slower + "the BigQuery Storage API could not read this result in project " + project + ".", false);
+
+    /// <summary>A ReadRows failure after which the stream is read again from its offset.</summary>
+    internal static bool TransientRead(Exception error, CancellationToken token) => !token.IsCancellationRequested && error switch
+    {
+        RpcException rpc => rpc.StatusCode is StatusCode.Unavailable or StatusCode.Internal or StatusCode.Unknown or StatusCode.ResourceExhausted or StatusCode.DeadlineExceeded,
+        _ => error is TimeoutException or HttpRequestException or IOException
+    };
+
+    /// <summary>The error value for a stream that failed past its retries: the network, or Google's refusal in its words.</summary>
+    internal static RequestException ReadFailure(RpcException error) => error.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded
+        ? new RequestException("CONNECTION_LOST", BigQueryErrors.Unreachable)
+        : new RequestException("BACKEND_ERROR", "Reading the result through the BigQuery Storage API failed: " + BigQueryErrors.Sanitize(error.Status.Detail is { Length: > 0 } detail ? detail : error.StatusCode.ToString()));
+
+    /// <summary>The backoff before reading a stream again.</summary>
+    internal TimeSpan ReadBackoff(int attempt) => Backoff(attempt);
+}

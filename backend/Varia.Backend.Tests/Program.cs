@@ -51,6 +51,13 @@ if (args is [PageCompressionBench.Argument, _, _, ..])
     return;
 }
 
+// Offline BigQuery read throughput, REST against Storage Read, run by hand (docs/bigquery.md): measures only, no checks.
+if (args is [BigQueryExecutionChecks.ReadBenchArgument, ..])
+{
+    await BigQueryExecutionChecks.ReadBenchAsync(args);
+    return;
+}
+
 // How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
 if (args is [FairnessBench.Argument, ..])
 {
