@@ -34,12 +34,15 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in
   [docs/scripting.md](scripting.md)). SMO writes the script through `ScriptPipeline` as for every other kind (headers
   guarded, nothing executed): the msdb procedures SSMS writes (`sp_add_job` with its steps, schedules and target server in
-  one transaction, `sp_add_alert`, `sp_add_operator`, `sp_add_proxy` with its subsystems), after `USE [msdb]`. A proxy's
+  one transaction, `sp_add_alert`, `sp_add_operator`, `sp_add_proxy` with its subsystems, which SMO leaves out for a Linux server), after `USE [msdb]`. A proxy's
   script names its credential, never a secret; an alert's leaves out its notifications, as SSMS's does. The preflight
   (`agentObject`) reads the object by name from msdb's tables in msdb through the scope wrapper, a job from
   `sysjobs_view` with its category, since SMO finds a job below `JobServer` by name and category. A login in
   `SQLAgentUserRole` alone scripts its own jobs (`sysjobs_view` shows it only those); msdb refuses it the alert,
-  operator and proxy tables, which Object Explorer does not list for it either. A cloud database has no Agent to script.
+  operator and proxy tables, which Object Explorer does not list for it either. Below `sysadmin` and
+  `SQLAgentOperatorRole`, SMO names a step's proxy only if msdb shows that proxy to the login, so a job with a step of
+  another subsystem than T-SQL is scripted with a warning to check its steps. A job name that two jobs share (a
+  multi-server job from a master server and a local job) is refused as ambiguous. A cloud database has no Agent to script.
   As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
   script.
 
@@ -111,7 +114,8 @@ instance or under a domain account (AG-2's Windows workflow), and how history re
 never does. Scratch Agent objects use the run prefix with a kind tag (`_job`, `_sch`, `_op`, `_al`, `_px`, `_cr`) and are
 swept by `ScratchDatabase.SweepAsync` once their prefix is more than 6 hours old. Its Script As checks
 (`AgentScriptingLiveChecks`) script this run's job, operator, alert (Windows) and proxy, compare the job's script with
-SMO's own `Job.Script`, run the job's DROP And CREATE script, and script a `SQLAgentUserRole` login's own job.
+SMO's own `Job.Script`, run the job's DROP And CREATE script, and script a `SQLAgentUserRole` login's own job (on Windows,
+its step that runs as a proxy comes without the proxy and with the warning).
 
 <!-- Generated below from src/shared/agent/catalog.ts. Regenerate with: npx vitest run tests/agent-catalog.test.ts -u -->
 

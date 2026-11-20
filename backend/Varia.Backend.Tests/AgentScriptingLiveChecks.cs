@@ -33,8 +33,8 @@ internal static class AgentScriptingLiveChecks
         var proxy = scratch.AgentObject("px");
         var credential = scratch.AgentObject("cr");
         var alerts = !profile.Linux;
-        // The step's name would end SMO's step header early and break it over lines, were it written into the header as is.
-        var made = await sql("DECLARE @id uniqueidentifier, @step sysname = N'Step ''1'' */ --' + NCHAR(10) + N'x /*';\n"
+        // SMO writes the step's name into its step header as is, so the line break breaks that header over lines.
+        var made = await sql("DECLARE @id uniqueidentifier, @step sysname = N'Step ''1'' --' + NCHAR(10) + N'x';\n"
             + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @description = " + Quote(ScratchDatabase.JobMarker) + ", @job_id = @id OUTPUT;\n"
             + "EXEC msdb.dbo.sp_add_jobstep @job_id = @id, @step_name = @step, @subsystem = N'TSQL', @command = N'SELECT 1;', @database_name = N'master';\n"
             + "EXEC msdb.dbo.sp_add_jobschedule @job_id = @id, @name = " + Quote(schedule) + ", @freq_type = 4, @freq_interval = 1, @active_start_time = 30000;\n"
@@ -50,8 +50,11 @@ internal static class AgentScriptingLiveChecks
                 // sp_add_proxy refuses a credential whose identity is not a Windows account (14529).
                 + "CREATE CREDENTIAL " + Bracket(credential) + " WITH IDENTITY = N'NT AUTHORITY\\SYSTEM', SECRET = " + Quote(ScratchDatabase.Throwaway()) + ";\n"
                 + "EXEC msdb.dbo.sp_add_proxy @proxy_name = " + Quote(proxy) + ", @credential_name = " + Quote(credential) + ", @enabled = 0;\n"
-                + "EXEC msdb.dbo.sp_grant_proxy_to_subsystem @proxy_name = " + Quote(proxy) + ", @subsystem_id = 3;", "msdb");
-            check(others.Status == "completed", "this run's scratch " + (alerts ? "alert (a performance condition notifying the operator), " : "") + "credential and proxy can be created: " + others.Error);
+                + "EXEC msdb.dbo.sp_grant_proxy_to_subsystem @proxy_name = " + Quote(proxy) + ", @subsystem_id = 3;"
+                // A CmdExec step that runs as the proxy (Windows: Linux's Agent runs no CmdExec steps).
+                + (alerts ? "\nEXEC msdb.dbo.sp_add_jobstep @job_name = " + Quote(job) + ", @step_name = N'Run as proxy', @subsystem = N'CmdExec', @command = N'cmd /c exit 0', @proxy_name = " + Quote(proxy) + ";" : ""), "msdb");
+            check(others.Status == "completed", "this run's scratch " + (alerts ? "alert (a performance condition notifying the operator), " : "") + "credential and proxy "
+                + (alerts ? "(a job step running as it) " : "") + "can be created: " + others.Error);
 
             // CREATE, DROP and DROP And CREATE of each kind: SMO's msdb procedures, named for this object, in msdb, headed and framed.
             var kinds = new List<(string Kind, string Name, string Noun, string Add, string Delete)>
@@ -70,7 +73,8 @@ internal static class AgentScriptingLiveChecks
                 var named = "N'" + name + "'";
                 if (!(create.Error is null && drop.Error is null && both.Error is null && create.Database == "msdb"
                     && Has(create, "USE [msdb]") && Has(create, "msdb.dbo." + add + " ") && Has(create, named) && !Has(create, delete)
-                    && Has(create, "/****** Object:  " + noun + " [" + name + "]")
+                    // The job's step name breaks its step header, so its script comes without headers (checked below).
+                    && (kind == "agentJob" || Has(create, "/****** Object:  " + noun + " [" + name + "]"))
                     && Has(drop, "msdb.dbo." + delete + " ") && !Has(drop, add + " ")
                     && both.Text!.IndexOf(delete + " ", StringComparison.Ordinal) is var at and >= 0 && both.Text.IndexOf(add + " ", StringComparison.Ordinal) > at))
                     failures.Add(kind + ": " + (create.Error ?? drop.Error ?? both.Error)?.Message + " " + Excerpt(create.Text));
@@ -81,27 +85,26 @@ internal static class AgentScriptingLiveChecks
             var jobCreate = await Script("agentJob", job, "create");
             var alertCreate = alerts ? await Script("agentAlert", alert, "create") : null;
             var proxyCreate = await Script("agentProxy", proxy, "create");
-            // The subsystems msdb lists for the proxy: SMO grants those it finds in syssubsystems (Linux lists fewer, so the grant
-            // above may not be one of them there).
-            var granted = await sql("SELECT COUNT(*) FROM msdb.dbo.sysproxysubsystem AS ps JOIN msdb.dbo.syssubsystems AS ss ON ss.subsystem_id = ps.subsystem_id "
-                + "JOIN msdb.dbo.sysproxies AS p ON p.proxy_id = ps.proxy_id WHERE p.name = " + Quote(proxy) + ";", "msdb");
             var jobText = jobCreate.Text ?? "";
             var parts = new (string Name, bool Ok)[]
             {
-                ("job step quoted", jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'' */ --", StringComparison.Ordinal)),
-                ("job headers whole", HeaderGuard.Safe(jobText)),
+                ("job step quoted", jobText.Contains("msdb.dbo.sp_add_jobstep ", StringComparison.Ordinal) && jobText.Contains("@step_name=N'Step ''1'' --", StringComparison.Ordinal)),
+                ("job headers left out, with a warning", !jobText.Contains(HeaderGuard.Opening, StringComparison.Ordinal) && jobCreate.Warnings.Contains(HeaderGuard.Warning)),
+                ("job step's proxy named", !alerts || jobText.Contains("@proxy_name=N'" + proxy + "'", StringComparison.Ordinal)),
+                ("no proxy warning for sysadmin", !jobCreate.Warnings.Contains(SmoScriptRunner.ProxyWarning)),
                 ("job schedule", jobText.Contains("msdb.dbo.sp_add_jobschedule ", StringComparison.Ordinal) && jobText.Contains("N'" + schedule + "'", StringComparison.Ordinal)),
                 ("job server in a transaction", jobText.Contains("msdb.dbo.sp_add_jobserver ", StringComparison.Ordinal) && jobText.Contains("BEGIN TRANSACTION", StringComparison.Ordinal)),
                 // SMO scripts an alert's condition and response job, not its notifications (AgentNotify stays off, as in SSMS's Script As).
                 ("alert condition without notifications", alertCreate is null || alertCreate.Text?.Contains("@performance_condition=N'SQLServer:General Statistics|User Connections||>|1000000'", StringComparison.Ordinal) == true
                     && !alertCreate.Text.Contains("sp_add_notification", StringComparison.Ordinal)),
                 ("proxy credential", proxyCreate.Text?.Contains("N'" + credential + "'", StringComparison.Ordinal) == true),
-                ("proxy subsystems as msdb lists them", (proxyCreate.Text?.Contains("sp_grant_proxy_to_subsystem", StringComparison.Ordinal) == true) == (granted.Scalar is not (null or "0"))),
+                // SMO scripts a proxy's subsystem grants on Windows only: against Linux it writes none, though msdb lists the grant.
+                ("proxy subsystem granted (Windows)", !alerts || proxyCreate.Text?.Contains("sp_grant_proxy_to_subsystem @proxy_name=N'" + proxy + "', @subsystem_id=3", StringComparison.Ordinal) == true),
                 ("no secret", proxyCreate.Text?.Contains("SECRET", StringComparison.OrdinalIgnoreCase) == false)
             };
             check(jobCreate.Error is null && proxyCreate.Error is null && parts.All(part => part.Ok),
-                "a job's script holds its step (quotes doubled; a name with */ and a line break leaves every header whole), schedule and target server in SMO's transaction; an alert's its condition without notifications; a proxy's its "
-                + "credential by name and the subsystems msdb lists for it, never a secret. Failed: " + string.Join(", ", parts.Where(part => !part.Ok).Select(part => part.Name)) + " "
+                "a job's script holds its steps (quotes doubled; a name with a line break leaves the headers out, with a warning; a step's proxy by name), schedule and target server in SMO's transaction; an alert's its condition without notifications; a proxy's its "
+                + "credential by name and (on Windows) its subsystem, never a secret. Failed: " + string.Join(", ", parts.Where(part => !part.Ok).Select(part => part.Name)) + " "
                 + Excerpt(jobCreate.Text) + " " + Excerpt(alertCreate?.Text) + " " + Excerpt(proxyCreate.Text) + " " + jobCreate.Error?.Message + " " + proxyCreate.Error?.Message);
 
             await SmoAsync(check, host, info, defaults, Script, job);
@@ -113,8 +116,8 @@ internal static class AgentScriptingLiveChecks
                 + Quote(job) + "), (SELECT COUNT(*) FROM msdb.dbo.sysjobschedules AS js JOIN msdb.dbo.sysjobs AS k ON k.job_id = js.job_id WHERE k.name = " + Quote(job)
                 + ") FROM msdb.dbo.sysjobs AS j WHERE j.name = " + Quote(job) + ";", "msdb");
             check(ran?.Status == "completed" && after.Sets is [[[var count, var description, var steps, var schedules], ..], ..] && count == "1" && description == ScratchDatabase.JobMarker
-                && steps == "1" && schedules == "1",
-                "the job's DROP And CREATE script runs and leaves one job of that name with its description, step and schedule: " + ran?.Error + " " + replace.Error?.Message);
+                && steps == (alerts ? "2" : "1") && schedules == "1",
+                "the job's DROP And CREATE script runs and leaves one job of that name with its description, steps and schedule: " + ran?.Error + " " + replace.Error?.Message);
 
             await RoleAsync(check, service, host, info, profile, scratch, sql, defaults, job, alert, alerts);
         }
@@ -160,6 +163,8 @@ internal static class AgentScriptingLiveChecks
             var catalog = service.Scripting.Catalog;
             var served = profile.Explorer(ExplorerCatalog.Current);
             string? text = null, refused = null, failure = null;
+            var warnings = new List<string>();
+            bool? sees = null;
             await using var connection = host.Connection(info.Id);
             await host.OpenAsync(connection, CancellationToken.None);
             await Run(connection, ScriptPreflight.Prologue + "\nEXECUTE AS LOGIN = " + Quote(login) + ";");
@@ -169,8 +174,8 @@ internal static class AgentScriptingLiveChecks
                 var preflight = await ScriptPreflight.RunAsync(connection, catalog, new ObjectRefDto("agentJob", Name: job), verb, served.Band, false, null, CancellationToken.None);
                 if (preflight.Target is { } target)
                 {
+                    sees = target.SeesProxies;
                     var runner = new SmoScriptRunner(new ScriptSession(connection, profile, false), CancellationToken.None);
-                    var warnings = new List<string>();
                     try { text = await Task.Run(() => runner.Script(target, ScriptVerb.Create, defaults, 4_000_000, warnings)); }
                     catch (Exception error) { failure = error.GetType().Name + ": " + error.Message; }
                 }
@@ -187,9 +192,11 @@ internal static class AgentScriptingLiveChecks
             }
             finally { await Run(connection, "REVERT;"); }
             check(made.Status == "completed" && mapped.Status == "completed" && text?.Contains("msdb.dbo.sp_add_job ", StringComparison.Ordinal) == true
-                && text.Contains("N'" + job + "'", StringComparison.Ordinal) && text.Contains("sp_add_jobstep", StringComparison.Ordinal) && (!alerts || refused == "SqlException 229"),
-                "a SQLAgentUserRole login scripts its own job's CREATE (preflight through sysjobs_view, then SMO), and msdb refuses it an alert's preflight (229): "
-                + made.Error + " " + mapped.Error + " " + failure + " " + refused + " " + Excerpt(text));
+                && text.Contains("N'" + job + "'", StringComparison.Ordinal) && text.Contains("sp_add_jobstep", StringComparison.Ordinal) && sees == false
+                // Its step that runs as a proxy it was not granted is scripted without the proxy, and the script says so.
+                && (!alerts || refused == "SqlException 229" && !text.Contains("@proxy_name=", StringComparison.Ordinal) && warnings.Contains(SmoScriptRunner.ProxyWarning)),
+                "a SQLAgentUserRole login scripts its own job's CREATE (preflight through sysjobs_view, then SMO), a step's proxy it cannot see left out with a warning, and msdb refuses it an alert's preflight (229): "
+                + made.Error + " " + mapped.Error + " " + failure + " " + refused + " " + sees + " " + string.Join(" | ", warnings) + " " + Excerpt(text));
         }
         finally
         {

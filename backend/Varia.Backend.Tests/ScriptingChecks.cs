@@ -226,9 +226,38 @@ internal static class ScriptingChecks
             // C#'s Agent kinds are exactly the catalogue's agentObject rows, so a new Agent kind cannot run its preflight outside msdb.
             && Catalog.Targets.Where(row => row.Scriptable).All(row => ScriptPreflight.Agent(row.Kind) == (row.Preflight == "agentObject"))
             && ScriptPreflight.Home("login", null) == "master" && ScriptPreflight.Home("table", "Sales") == "Sales" && !ScriptPreflight.Agent("login")
-            && ScriptPreflight.Statement("agentJob", 16, Catalog).Contains("j.category_id AS category_id FROM dbo.sysjobs_view AS j WHERE j.name = @name", StringComparison.Ordinal)
+            && ScriptPreflight.Statement("agentJob", 16, Catalog).Contains("SELECT j.category_id AS category_id, COUNT(*) OVER () AS matches", StringComparison.Ordinal)
+            && ScriptPreflight.Statement("agentJob", 16, Catalog).Contains("FROM dbo.sysjobs_view AS j WHERE j.name = @name", StringComparison.Ordinal)
             && ScriptPreflight.Statement("agentProxy", 16, Catalog).Contains("FROM dbo.sysproxies AS p", StringComparison.Ordinal),
             "Agent's four kinds script CREATE, DROP and DROP And CREATE through the agentObject preflight, which runs in msdb (jobs through the role-filtered sysjobs_view, with their category)");
+
+        // Two jobs of one name (a multi-server job sharing a local job's name): Script As cannot tell them apart, so it refuses.
+        var subject = new ScriptSubject("Nightly", "Job", "CREATE", "msdb");
+        var create = Catalog.Verb("create")!;
+        ScriptPreflight.Row JobRow(int matches, bool sees) => new(new Dictionary<string, object?> { ["category_id"] = 0, ["matches"] = matches, ["sees_proxies"] = sees });
+        var ambiguous = ScriptPreflight.Decide(Catalog, new ObjectRefDto("agentJob", Name: "Nightly"), create, subject, "msdb", JobRow(2, true));
+        var single = ScriptPreflight.Decide(Catalog, new ObjectRefDto("agentJob", Name: "Nightly"), create, subject, "msdb", JobRow(1, false));
+        check(ambiguous.Target is null && ambiguous.Error is { Code: "NOT_SUPPORTED" } error && error.Message.Contains("shares its name with another job", StringComparison.Ordinal)
+                && single.Target is { Category: 0, SeesProxies: false } && single.Error is null,
+            "a job name two jobs share is refused as ambiguous; one job resolves with its category and whether the login sees every proxy: " + ambiguous.Error?.Message);
+
+        // The proxy warning's scan: only text outside literals and comments counts, so a step's name or command cannot pose
+        // as a proxy or a subsystem.
+        const string Head = "EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'";
+        var scans = new (string Batch, bool Expected)[]
+        {
+            (Head + "a', @subsystem=N'CmdExec', @command=N'dir', @flags=0", true),
+            (Head + "a', @subsystem=N'CmdExec', @command=N'dir', @flags=0, \r\n\t\t@proxy_name=N'Run as'", false),
+            (Head + "a', @subsystem=N'TSQL', @command=N'SELECT 1', @flags=0", false),
+            (Head + "a @proxy_name=N''x''', @subsystem=N'PowerShell', @command=N'@proxy_name=N''y''', @flags=0", true),
+            (Head + "@subsystem=N''TSQL''', @subsystem=N'CmdExec', @command=N'dir'", true),
+            ("/****** Object:  Step [it's]    ******/\r\n" + Head + "it''s', @subsystem=N'CmdExec', @command=N'dir', @proxy_name=N'p'", false),
+            (Head + "a', @subsystem=N'TSQL', @command=N'msdb.dbo.sp_add_jobstep @subsystem=N''CmdExec'''\r\n" + Head + "b', @subsystem=N'TSQL', @command=N'x'", false),
+            (Head + "a', @subsystem=N'TSQL', @command=N'x'\r\n" + Head + "b', @subsystem=N'SSIS', @command=N'x'", true),
+            ("EXEC @ReturnCode = msdb.dbo.sp_add_job @job_name=N'x'", false)
+        };
+        var misread = scans.Select((scan, index) => (scan, index)).Where(item => SmoScriptRunner.StepWithoutProxy(item.scan.Batch) != item.scan.Expected).Select(item => item.index).ToList();
+        check(misread.Count == 0, "a job step of a subsystem that can run as a proxy, naming none, is found outside literals and comments only: cases " + string.Join(", ", misread));
     }
 
     private static readonly ServerProfile Box2022 = new(16, "16.0.4135.4", 3, "sa", false, true, false, 16);

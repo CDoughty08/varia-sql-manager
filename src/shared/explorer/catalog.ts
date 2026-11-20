@@ -477,7 +477,8 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     scriptable: false, insert: 'none'
   },
   ssisEnvironment: { title: 'Environment', scope: 'ssisFolderObject', icon: 'symbol-variable', scriptable: false, insert: 'none' },
-  // SQL Server Agent: server-level objects named by name alone (unique per server), an error log by its archive number (0 is
+  // SQL Server Agent: server-level objects named by name alone (unique per server, except a multi-server job that shares a
+  // local job's name, which Script As refuses as ambiguous), an error log by its archive number (0 is
   // Current), a proxy subsystem by its subsystem name. Jobs, alerts, operators and proxies are scriptable (AG-4).
   agent: {
     title: 'SQL Server Agent', scope: 'server', icon: 'agent', folders: ['agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentErrorLogs'],

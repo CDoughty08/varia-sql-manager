@@ -78,12 +78,16 @@ internal static class ScriptingErrors
     /// server or database trigger whose hidden definition may be encrypted; TOO_LARGE: "definition" for the module
     /// pre-check; DATABASE_UNAVAILABLE: the state or server text; PERMISSION_DENIED, SMO_ERROR and SQL_ERROR: the
     /// server's or SMO's text, or why Varia refused the script.</param>
+    /// <summary>NOT_SUPPORTED's detail for a job name msdb holds more than once.</summary>
+    public const string AmbiguousJob = "ambiguousJob";
+
     public static ScriptError Create(ScriptingCatalog catalog, string code, ScriptSubject subject, string? detail = null, int number = 0)
     {
         var o = subject.Display;
         var message = code switch
         {
             "NOT_FOUND" => o + " no longer exists, or you do not have permission to see it. Refresh Object Explorer and try again.",
+            "NOT_SUPPORTED" when detail == AmbiguousJob => o + " shares its name with another job (a multi-server job from a master server), so Varia cannot tell which one to script.",
             "NOT_SUPPORTED" when detail is not null => o + " cannot be scripted for " + Detail(detail, MaxServerText + 40),
             "NOT_SUPPORTED" => subject.Verb + " scripts are not available for " + subject.Title + " " + o + ". Refresh Object Explorer and try again.",
             // SqlService.DispatchAsync answers it before scripting runs (Providers); listed so every catalogue code has a message.
