@@ -100,6 +100,10 @@ try {
     await operatorTree.focus()
     await page.keyboard.press(`${mod}+c`)
     await expect.poll(clipboardText).toMatch(operatorRow)
+    // Edit › Copy reaches the focused outline as a copy event, and copies the operator as Ctrl+C does.
+    await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+    await operatorTree.dispatchEvent('copy')
+    await expect.poll(clipboardText).toMatch(operatorRow)
     expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.copyColumnHeaders': true }))).ok).toBe(true)
     await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
     // A right-click on another operator selects it and copies that one.
