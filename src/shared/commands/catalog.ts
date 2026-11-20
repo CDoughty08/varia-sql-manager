@@ -282,7 +282,7 @@ export const commandCatalog = {
     menus: [{ menu: 'view', group: '1_layout', order: 3, mnemonic: 'r' }, { menu: 'window', group: '3_layout', order: 3, title: 'Reset Window Layout', mnemonic: 'r' }]
   },
   'query.execute': {
-    title: 'Execute', category: 'Query', icon: 'play', keywords: ['run', 'go'], methods: ['query.execute'],
+    title: 'Execute', category: 'Query', icon: 'play', keywords: ['run', 'go'], methods: ['query.execute'], providers: both,
     // A remembered offline query opens the explicit Connect dialog first; its handler rechecks the exact target lifecycle.
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected || backendReady)',
     unavailableHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.',

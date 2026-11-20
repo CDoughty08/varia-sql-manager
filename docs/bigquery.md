@@ -157,6 +157,44 @@ dialog; `databases.list` does the same for a connected handle (the query tab's D
 `datasets.list` (a free REST call, no job) up to 10,000 datasets, sorted by name, each with its location; names
 BigQuery's rule refuses are dropped, and a location that is not a location id is left out.
 
+## Execution
+
+`query.execute` on a BigQuery handle runs the editor's text as one query job (`SqlService.BigQueryExecution.cs`). It
+takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
+Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
+main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
+and leaves out SQL Server's options whatever the tab and Tools › Options hold.
+
+- **One job, never two.** The backend sends `jobs.insert` with a client job id (`varia_` and 32 hex digits), GoogleSQL
+  (`useLegacySql: false`), the default dataset, the connection's maximum bytes billed, the execution timeout as
+  `jobTimeoutMs` (BigQuery stops the job itself) and the `varia_client` label. After a network failure or a 5xx it asks
+  `jobs.get` for that id and sends the insert again, under the same id, only when no such job exists; a 409 means the
+  job exists and is read instead.
+- **Polling and paging.** `jobs.getQueryResults` long-polls until the job is complete; that answer carries the first
+  page (500 rows), and later pages ask for about 250,000 cells (500 to 10,000 rows). Times come as epoch microseconds.
+  Reads retry transport failures, 429 and 5xx with backoff. A page larger than 64 MiB is refused rather than buffered.
+- **Rows in memory.** `BigQueryColumnPlan` decodes each REST row straight into the result store's pages, as SQL
+  Server's reader does: the same row limit, result budget (each page is charged while its rows are decoded), cell caps
+  (text 65,535 characters, documents 2 MiB, bytes 32,766) and truncation notes. Rows past a limit stay in BigQuery and
+  are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
+  is NULL with the read-error flag and one message for its column. Discard results reads no rows.
+- **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
+  (binary), DATE, TIME, DATETIME and INTERVAL as BigQuery writes them, TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
+  RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
+  (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
+- **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
+  a DDL statement's completion, that a script returns its last statement's rows only, and the job's statistics: bytes
+  processed and billed with their price, slot time and cache hit. The summary's `job` carries the same figures, and the
+  Results status shows the bytes processed beside the row count ("1.24 GiB processed · < $0.01").
+- **Stop and the timeout.** Stop ends the request with status `cancelled` and, when the job had not finished, says it keeps
+  running in BigQuery (Stop's `jobs.cancel` comes with scripts and sessions). A tab runs one query at a time (`SESSION_BUSY`).
+
+### Cost
+
+Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
+beside them, "< $0.01" below a cent. The price is an estimate: projects with capacity reservations do not pay per byte.
+`BigQueryCost` (C#) and `src/shared/bigquery/cost.ts` write the same text, pinned by `tests/fixtures/bigquery/cost.json`.
+
 ## Errors
 
 | Code | When | Text and recovery |
@@ -172,7 +210,12 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 | `NOT_FOUND` | `notFound`, HTTP 404 | Google's text, and to check the project id |
 | `BACKEND_ERROR` | HTTP 5xx, `backendError`, `internalError` | Try again |
 | `CONNECTION_LOST` | Google cannot be reached | Check the network connection and proxy settings |
-| `TIMEOUT` | Connect's or a pre-connect method's budget passed | Try again |
+| `TIMEOUT` | Connect's or a pre-connect method's budget passed, or a job BigQuery stopped at its timeout | Try again |
+| `SQL_ERROR` | `invalidQuery`, or a job error with no other row | BigQuery's text, with its line and column |
+| `LOCATION_MISMATCH` | A query's dataset is in another location (`notFound`, then `datasets.get` says where) | Names both locations |
+| `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
+| `COST_CAP` | `bytesBilledLimitExceeded` | Names the connection's maximum bytes billed and Google's figure; raise the cap or read less |
+| `CANCELLED` | `stopped` | The job was cancelled |
 
 ## Emulator mode
 
@@ -183,6 +226,8 @@ mode main sends only anonymous material, the backend signs nothing, skips the co
 The emulator (`ghcr.io/goccy/bigquery-emulator` 0.8.1) differs from BigQuery in ways the checks rely on: it answers dry
 runs with HTTP 500, names projects in `projects.list` only by `id`, gives datasets no location, answers `tabledata.list`
 in one page whatever `maxResults` asks, finishes jobs synchronously, and reports `INT64` where BigQuery says `INTEGER`.
+It also refuses `jobTimeoutMs` sent as a JSON number, answers a repeated job id with 400 rather than 409, reports query
+errors (syntax errors included) as `jobInternalError`, and reports no bytes statistics.
 
 ## Testing
 
@@ -191,12 +236,16 @@ in one page whatever `maxResults` asks, finishes jobs synchronously, and reports
   against `BigQueryFake`, an HTTP handler injected through `BigQueryEnvironment.Http` that answers Google's endpoints
   from `backend/Varia.Backend.Tests/Fixtures/BigQuery` (hand-written from Google's documented shapes) and fails any
   request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
-  credential shapes, emulator mode and the dataset lists. `tests/bigquery-credentials.test.ts`,
-  `tests/bigquery-connection-store.test.ts` and `tests/bigquery-connection-open.test.ts` cover main's side;
-  `tests/bigquery-connect-form.test.ts`, `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the
-  dialog and the workbench.
+  credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
+  scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
+  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text.
+  `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
+  `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
+  `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
+  `tests/bigquery-execute.test.ts` and `tests/bigquery-cost.test.ts` execution's contracts and cost text.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
-  REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata). CI
+  REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
+  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure). CI
   runs it in live group 1 (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
   against it when the variable is set (CI's Linux smoke shards set it; elsewhere that phase skips). Locally, start the emulator with Docker or Podman:
 
@@ -206,4 +255,5 @@ in one page whatever `maxResults` asks, finishes jobs synchronously, and reports
 
   On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
-  answers, Google's exact error bodies) stays on the hand-written fixtures until the owner runs a check against one.
+  answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
+  cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.

@@ -39,7 +39,8 @@ export function jobText(job: ResultJob): { readonly what: string; readonly done:
 function RunSummaryView({ tab, now }: { tab: TabResults; now: number }) {
   const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? Math.max(0, (tab.endedAt ?? tab.startedAt) - tab.startedAt)
   const summary = runSummary({
-    status: tab.status, closedFrom: tab.closedFrom, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt
+    status: tab.status, closedFrom: tab.closedFrom, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt,
+    bytesProcessed: tab.summary?.job?.bytesProcessed
   })
   return <span className="output-status" data-status={tab.status} data-tone={summary.tone} title={summary.sentence}>
     <Icon name={summary.icon} spin={summary.icon === 'loading'} /><strong>{summary.outcome}</strong>{summary.facts.map((fact, index) => <span key={index}> · {fact}</span>)}

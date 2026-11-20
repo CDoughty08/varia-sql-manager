@@ -167,7 +167,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
             return new(id, options.Project, options.Dataset ?? "", "BigQuery", options.DisplayName, options.Color, Login: principal.Account,
                 PrincipalId: principal.PrincipalId, ProviderId: Providers.BigQuery);
         }
-        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, ProbePermission, KindOf(options.Authentication), token); }
+        catch (Exception error) { throw BigQueryErrors.Map(error, options.Project, ProbePermission, KindOf(options.Authentication), token: token); }
         finally { client?.Dispose(); }
     }
 

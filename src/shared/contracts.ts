@@ -167,7 +167,10 @@ export interface BackendHealth {
 export interface QueryOptions {
   connectionId: string
   sessionId: string
-  database: string
+  /** SQL Server's database, required there; a BigQuery query ignores it and uses `dataset`. */
+  database?: string
+  /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
+  dataset?: string
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
@@ -282,6 +285,21 @@ export interface QueryResult {
   login?: string
   /** Per-script provider counters. Absent unless requested; separate from elapsedMs and rendering. */
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
+  /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
+  job?: BigQueryJobSummary
+}
+/** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
+ *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
+export interface BigQueryJobSummary {
+  project: string
+  jobId: string
+  location?: string
+  /** BigQuery's statement type, such as SELECT, INSERT, CREATE_TABLE or SCRIPT. */
+  statementType?: string
+  bytesProcessed?: number
+  bytesBilled?: number
+  cacheHit?: boolean
+  slotMs?: number
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */

@@ -167,6 +167,10 @@ internal sealed class ResultSetBuffer
     /// <summary>Counts a row read from the server, whether or not it is stored.</summary>
     public void CountRow() => Interlocked.Increment(ref rowsRead);
 
+    /// <summary>Counts rows read past without reading them: those a BigQuery result holds beyond the rows Varia read (its
+    /// totalRows), so the set reports every row its query returned, as a SQL Server set counts the rows it reads past.</summary>
+    public void CountRows(long rows) { if (rows > 0) Interlocked.Add(ref rowsRead, rows); }
+
     /// <summary>Records why a row was not stored; the first reason sticks.</summary>
     public void Skip(TruncationReason reason) => Interlocked.CompareExchange(ref truncated, (int)reason, 0);
 

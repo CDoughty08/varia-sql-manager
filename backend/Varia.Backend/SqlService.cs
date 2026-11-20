@@ -810,7 +810,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
         // A BigQuery handle has none of the SQL Server state below.
-        if (bigQuery.Owns(args.ConnectionId)) return new { Disconnected = bigQuery.Disconnect(args.ConnectionId) };
+        if (bigQuery.Owns(args.ConnectionId))
+        {
+            // Its running queries end as cancelled before the client they read through is disposed.
+            foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
+            return new { Disconnected = bigQuery.Disconnect(args.ConnectionId) };
+        }
         bool removed;
         string? connectionString;
         lock (bindingGate)
@@ -1171,6 +1176,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
+        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -1236,7 +1243,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long recordsAffected = -1;
         QueryFailure? failure = null;
         var status = "completed";
-        var database = args.Database;
+        var database = args.Database!;
         // Only the first errors are reported in the summary; a looping statement can raise millions while its batch keeps
         // running. Messages keep them all, in order, up to their own caps.
         var errors = new List<string>();
@@ -1327,7 +1334,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
-                await connection.ChangeDatabaseAsync(args.Database, token);
+                await connection.ChangeDatabaseAsync(args.Database!, token);
             database = connection.Database;
             if ((args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
             {
