@@ -70,8 +70,10 @@ const serviceDefinition = (dialog: AgentServiceAction, label: string): ObjectDia
   noScript: true,
   keepOpen: true,
   longRun: dialog,
-  // The Agent node's state (which greys its verbs) is sampled again at once rather than at the next interval; nothing reloads.
-  afterSuccess: effects => effects.refreshStatus?.()
+  // The Agent node's state (which greys its verbs) is sampled again at once rather than at the next interval, after a run that
+  // finished or stopped part way (a Restart whose Start was refused leaves the service stopped); nothing reloads.
+  afterSuccess: effects => effects.refreshStatus?.(),
+  afterPartial: effects => effects.refreshStatus?.()
 })
 export const startAgentDefinition = serviceDefinition('startAgent', 'Start')
 export const stopAgentDefinition = serviceDefinition('stopAgent', 'Stop')

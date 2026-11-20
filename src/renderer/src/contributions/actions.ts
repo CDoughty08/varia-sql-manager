@@ -106,7 +106,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     }),
     commands.register('explorer.delete', {
       when: args => actions.canRun('delete', nodeOf(args)) && !dialogs.current,
-      run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node) }
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node, isJob(node) && node.created ? { listed: node.created } : undefined) }
     }),
     commands.register('explorer.properties', {
       when: args => actions.canRun('properties', nodeOf(args)) && !dialogs.current,

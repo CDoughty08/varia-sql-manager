@@ -132,7 +132,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
 export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
 
 /** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
-export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
+export interface DeleteDraft {
+  readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean
+  /** A SQL Server Agent job's creation time as the tree listed it, so a job created since under the name is refused. */
+  readonly listed?: string
+}
 /** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
 export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
 /**
@@ -185,7 +189,11 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
     const database = target.kind === 'database'
     const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
     // A SQL Server Agent job (AG-2): sp_delete_job deletes its history and the schedules only it used, as SSMS's Delete does.
-    if (target.kind === 'agentJob') return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(model.agentIdentity ? { agentIdentity: model.agentIdentity } : {}) }
+    // The identity is the row's the user chose (the dialog's read takes the name only), so a job created since is refused NOT_FOUND.
+    if (target.kind === 'agentJob') {
+      const created = draft.listed ?? model.agentIdentity?.created
+      return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(created ? { agentIdentity: { created } } : {}) }
+    }
     // The login or database the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
     if (target.kind === 'login' && model.login)
       return { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }

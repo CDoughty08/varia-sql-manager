@@ -222,6 +222,9 @@ internal static class AgentActionChecks
         var stopping = await Run("startAgent", control => { control.States.Enqueue(AgentServiceStatus.StopPending); });
         check(stopping.Result.Error?.Code == "BLOCKED" && Statuses(stopping.Result) == "done failed" && stopping.Result.Error.Message.Contains("still stopping", StringComparison.Ordinal),
             "a Start sent while the service is still stopping says so (BLOCKED), not that it stopped again while starting: " + Statuses(stopping.Result));
+        var fellOver = await Run("startAgent", control => { foreach (var state in new[] { AgentServiceStatus.StartPending, AgentServiceStatus.StopPending, AgentServiceStatus.Stopped }) control.States.Enqueue(state); });
+        check(fellOver.Result.Error?.Code == "SQL_ERROR" && fellOver.Result.Error.Message.Contains("stopped again while it was starting", StringComparison.Ordinal),
+            "a service that took the Start and then fell over (Start Pending, Stop Pending, Stopped) says it stopped again, not that it was still stopping: " + Statuses(fellOver.Result));
         var unreadable = await Run("startAgent", control => control.OnQuery = new ServiceControlException(ServiceFailure.Denied, 5));
         check(unreadable.Result.Error?.Code == "PERMISSION_DENIED" && Statuses(unreadable.Result) == "done failed" && unreadable.Result.AgentService == "unreadable",
             "a state the login may not read fails the wait as denied, and the reply's state is unreadable");

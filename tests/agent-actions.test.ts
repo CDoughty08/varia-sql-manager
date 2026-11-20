@@ -6,6 +6,7 @@ import type { ActionExecuteResult } from '../src/shared/actions/schema'
 import { jobActionMessages } from '../src/renderer/src/actions/ObjectActionService'
 import { agentDialogText, restartAgentDefinition, startJobAtStepDefinition, startJobBlocked, stopAgentDefinition } from '../src/renderer/src/dialogs/agent-dialogs'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
+import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { actionsContribution } from '../src/renderer/src/contributions/actions'
 import { CommandService } from '../src/renderer/src/core/commands'
@@ -99,6 +100,14 @@ describe('Start Job at Step and the service dialogs', () => {
     const effects = { refreshStatus: vi.fn() }
     stopAgentDefinition.afterSuccess(effects as never, undefined as never, undefined as never, undefined as never, {})
     expect(effects.refreshStatus).toHaveBeenCalledTimes(1)
+    restartAgentDefinition.afterPartial?.(effects as never, undefined as never)
+    expect(effects.refreshStatus).toHaveBeenCalledTimes(2)
+  })
+  it('deletes the job the tree listed, so one created since under the name is refused', () => {
+    const job = { kind: 'agentJob', name: 'Nightly' } as const, model = { agentIdentity: { created: '2026-01-02T00:00:00' } } as never
+    const draft = { deleteHistory: true, closeConnections: false, dropMappedUsers: false }
+    expect(deleteObjectDefinition.request(job, model, { ...draft, listed: '2026-01-01T00:00:00' }, undefined as never)).toMatchObject({ agentIdentity: { created: '2026-01-01T00:00:00' } })
+    expect(deleteObjectDefinition.request(job, model, draft, undefined as never)).toMatchObject({ agentIdentity: { created: '2026-01-02T00:00:00' } })
   })
   it('keeps the service dialogs open on their steps, with no Script button, and asks as SSMS does', () => {
     expect([stopAgentDefinition.noScript, stopAgentDefinition.keepOpen, stopAgentDefinition.longRun]).toEqual([true, true, 'stopAgent'])

@@ -149,12 +149,15 @@ internal sealed partial class AgentServiceControl(IServiceControl control, Agent
         var deadline = DateTime.UtcNow + Limit("serviceWaitMs");
         var poll = Limit("servicePollMs");
         var pending = started;
+        // Whether the SCM took the Start: once it reports Start Pending, a later Stop Pending is the service falling over.
+        var accepted = false;
         while (true)
         {
             var state = await QueryAsync(machine, service, token).ConfigureAwait(false);
             if (state == wanted) return;
             // The SCM refuses a Start while the service is still stopping (1056, read as already running), so nothing was started.
-            if (wanted == AgentServiceStatus.Running && started && state == AgentServiceStatus.StopPending) throw new ServiceStillStoppingException();
+            if (wanted == AgentServiceStatus.Running && started && !accepted && state == AgentServiceStatus.StopPending) throw new ServiceStillStoppingException();
+            accepted |= state == AgentServiceStatus.StartPending;
             if (wanted == AgentServiceStatus.Running && state == AgentServiceStatus.Stopped && pending) throw new ServiceStoppedException();
             pending |= state == AgentServiceStatus.StartPending;
             if (DateTime.UtcNow >= deadline)
