@@ -37,33 +37,63 @@ internal static partial class PageCodec
     /// starved thread must not hold: the room is rented, the result copied and the room returned outside the window, and
     /// the compression itself runs on this thread's reused encoder (the one-shot TryCompress creates and frees a native
     /// context per call), streamed so its working memory does not change with the page's size (<see cref="Stream"/>).</param>
-    public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null)
+    /// <param name="typed">False keeps every column's lengths and text (the checks and benchmarks compare both).</param>
+    public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null, bool typed = true)
     {
-        var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length) + MaxPrefix;
+        var bound = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
         // A page's worst case is above the large object heap's threshold, so the rooms are pooled (bounded per core by the
-        // shared pool) rather than allocated per page or kept on every thread that ever packs.
-        var room = ArrayPool<byte>.Shared.Rent(need);
+        // shared pool) rather than allocated per page or kept on every thread that ever packs. The room holds the values'
+        // frame and the form's frame (each at most the page's bound) after a prefix written last.
+        var room = ArrayPool<byte>.Shared.Rent(MaxPrefix + 2 * bound);
         var form = ArrayPool<byte>.Shared.Rent(Math.Max(1, page.Length));
+        var values = typed ? ArrayPool<byte>.Shared.Rent(Math.Max(1, page.Length)) : null;
         try
         {
-            var formLength = ToLengths(page, form);
+            var formLength = ToLengths(page, form, values, out var valuesLength);
             var source = formLength < 0 ? page : form.AsSpan(0, formLength);
-            // Made (and warmed in the room) before the prefix is written there.
+            var marker = formLength < 0 ? AsSealed : valuesLength > 0 ? AsTyped : AsLengths;
+            // Made (and warmed in the room) before anything is written there.
             var encoder = quiet is null ? null : QuietEncoder(room);
-            var prefix = 0;
-            room[prefix++] = formLength < 0 ? AsSealed : AsLengths;
-            WriteLeb(room, ref prefix, (uint)source.Length);
+            var frames = room.AsSpan(MaxPrefix);
+            int valuesFrame = 0, formFrame;
             if (encoder is null)
-                return ZstandardEncoder.TryCompress(source, room.AsSpan(prefix), out var once, Quality, Window) ? room.AsSpan(0, prefix + once).ToArray() : null;
-            encoder.Reset();
-            int written;
-            quiet!(true);
-            try { written = Stream(encoder, source, room.AsSpan(prefix)); }
-            finally { quiet(false); }
-            return written < 0 ? null : room.AsSpan(0, prefix + written).ToArray();
+            {
+                if (marker == AsTyped && !ZstandardEncoder.TryCompress(values.AsSpan(0, valuesLength), frames, out valuesFrame, Quality, Window)) return null;
+                if (!ZstandardEncoder.TryCompress(source, frames[valuesFrame..], out formFrame, Quality, Window)) return null;
+            }
+            else
+            {
+                quiet!(true);
+                try
+                {
+                    if (marker == AsTyped)
+                    {
+                        encoder.Reset();
+                        valuesFrame = Stream(encoder, values.AsSpan(0, valuesLength), frames);
+                    }
+                    encoder.Reset();
+                    formFrame = valuesFrame < 0 ? -1 : Stream(encoder, source, frames[valuesFrame..]);
+                }
+                finally { quiet(false); }
+                if (formFrame < 0) return null;
+            }
+            Span<byte> prefix = stackalloc byte[MaxPrefix];
+            var prefixLength = 0;
+            prefix[prefixLength++] = marker;
+            WriteLeb(prefix, ref prefixLength, (uint)source.Length);
+            if (marker == AsTyped)
+            {
+                WriteLeb(prefix, ref prefixLength, (uint)valuesLength);
+                WriteLeb(prefix, ref prefixLength, (uint)valuesFrame);
+            }
+            var packed = new byte[prefixLength + valuesFrame + formFrame];
+            prefix[..prefixLength].CopyTo(packed);
+            frames[..(valuesFrame + formFrame)].CopyTo(packed.AsSpan(prefixLength));
+            return packed;
         }
         finally
         {
+            if (values is not null) ArrayPool<byte>.Shared.Return(values);
             ArrayPool<byte>.Shared.Return(form);
             ArrayPool<byte>.Shared.Return(room);
         }
@@ -110,12 +140,29 @@ internal static partial class PageCodec
     /// length as sealed: a fused read's own room, reused page after page (ViewSorter.PageRooms).</summary>
     public static void UnpackInto(byte[] packed, Span<byte> room)
     {
-        if (packed.Length < 2 || packed[0] is not (AsSealed or AsLengths)) throw Unreadable();
+        if (packed.Length < 2 || packed[0] is not (AsSealed or AsLengths or AsTyped)) throw Unreadable();
         var prefix = 1;
         var formLength = ReadLeb(packed, ref prefix);
         if (formLength > room.Length || (packed[0] == AsSealed && formLength != room.Length)) throw Unreadable();
         var at = room.Length - (int)formLength;
-        if (!ZstandardDecoder.TryDecompress(packed.AsSpan(prefix), room[at..], out var written) || written != formLength) throw Unreadable();
-        if (packed[0] == AsLengths) FromLengths(room, at);
+        if (packed[0] != AsTyped)
+        {
+            if (!ZstandardDecoder.TryDecompress(packed.AsSpan(prefix), room[at..], out var written) || written != formLength) throw Unreadable();
+            if (packed[0] == AsLengths) FromLengths(room, at);
+            return;
+        }
+        // A typed page's values are unpacked first into a room of their own: the form is expanded in place, over bytes the
+        // values' frame would otherwise share.
+        var valuesLength = ReadLeb(packed, ref prefix);
+        var valuesFrame = ReadLeb(packed, ref prefix);
+        if (valuesLength is 0 || valuesLength > room.Length || valuesFrame > packed.Length - prefix) throw Unreadable();
+        var values = ArrayPool<byte>.Shared.Rent((int)valuesLength);
+        try
+        {
+            if (!ZstandardDecoder.TryDecompress(packed.AsSpan(prefix, (int)valuesFrame), values.AsSpan(0, (int)valuesLength), out var valuesWritten) || valuesWritten != valuesLength) throw Unreadable();
+            if (!ZstandardDecoder.TryDecompress(packed.AsSpan(prefix + (int)valuesFrame), room[at..], out var written) || written != formLength) throw Unreadable();
+            FromLengths(room, at, values.AsSpan(0, (int)valuesLength));
+        }
+        finally { ArrayPool<byte>.Shared.Return(values); }
     }
 }

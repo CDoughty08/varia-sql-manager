@@ -22,14 +22,16 @@ internal static partial class PageCodec
     /// errors within the blob (PageBuilder.Seal; PageView reads the same).</summary>
     private const int Stride = 11;
     private const int Regions = 5;
-    /// <summary>The prefix before the frame: the marker and a LEB128 length.</summary>
-    private const int MaxPrefix = 6;
+    /// <summary>The prefix before the frames: the marker and a LEB128 length, and for a typed page two more (its values'
+    /// length and the length of their frame).</summary>
+    private const int MaxPrefix = 16;
 
     /// <summary>Writes the lengths form of <paramref name="page"/> into <paramref name="form"/> (at least the page's
     /// length) and returns its length, or -1 when the bytes are not a page this reads exactly back (anything PageBuilder
     /// did not seal: those are packed as they are).</summary>
-    private static int ToLengths(ReadOnlySpan<byte> page, Span<byte> form)
+    private static int ToLengths(ReadOnlySpan<byte> page, Span<byte> form, Span<byte> values, out int valuesLength)
     {
+        valuesLength = 0;
         if (!ReadLayout(page, out var layout, out var blobStart, out var rows, out var columns)) return -1;
         try
         {
@@ -38,22 +40,32 @@ internal static partial class PageCodec
             page[..blobStart].CopyTo(form);
             var at = blobStart;
             for (var c = 0; c < columns; c++)
+            {
+                var typedColumn = false;
                 for (var r = 0; r < Regions; r++)
                 {
                     var (offset, length) = (layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
                     if (r == 1)
                     {
                         var validity = layout[c * Stride + 2] == 0 ? default : blob.Slice(layout[c * Stride + 1], layout[c * Stride + 2]);
-                        var written = WriteLengths(blob.Slice(offset, length), validity, layout[c * Stride + 6], rows, form[at..]);
+                        var columnValues = 0;
+                        var written = !values.IsEmpty && layout[c * Stride] == (int)WireKind.Text
+                            ? WriteTyped(blob.Slice(offset, length), blob.Slice(layout[c * Stride + 5], layout[c * Stride + 6]), validity, rows, form[at..], values[valuesLength..], out columnValues)
+                            : -1;
+                        typedColumn = written >= 0;
+                        if (typedColumn) valuesLength += columnValues;
+                        if (!typedColumn) written = WriteLengths(blob.Slice(offset, length), validity, layout[c * Stride + 6], rows, form[at..]);
                         if (written < 0) return -1;
                         at += written;
                     }
+                    else if (r == 2 && typedColumn) { }
                     else if (length > 0)
                     {
                         blob.Slice(offset, length).CopyTo(form[at..]);
                         at += length;
                     }
                 }
+            }
             return at;
         }
         finally { ArrayPool<int>.Shared.Return(layout); }
@@ -99,7 +111,7 @@ internal static partial class PageCodec
 
     /// <summary>Rebuilds the page as sealed in <paramref name="room"/> from its lengths form, which fills the room's tail
     /// from <paramref name="at"/>.</summary>
-    private static void FromLengths(Span<byte> room, int at)
+    private static void FromLengths(Span<byte> room, int at, ReadOnlySpan<byte> values = default)
     {
         if (!ReadLayout(room[at..], out var layout, out var blobStart, out var rows, out var columns, room.Length)) throw Unreadable();
         var lengthsRoom = ArrayPool<uint>.Shared.Rent(rows);
@@ -108,17 +120,33 @@ internal static partial class PageCodec
             room.Slice(at, blobStart).CopyTo(room);
             var read = at + blobStart;
             var written = blobStart;
+            var valuesAt = 0;
             var lengths = lengthsRoom.AsSpan(0, rows);
             var bitmap = (rows + 7) / 8;
             for (var c = 0; c < columns; c++)
+            {
+                var typedColumn = false;
                 for (var r = 0; r < Regions; r++)
                 {
                     var (offset, length) = (blobStart + (long)layout[c * Stride + 1 + 2 * r], layout[c * Stride + 2 + 2 * r]);
                     if (r == 1 ? length != 4 * (rows + 1) : r != 2 && length != 0 && length != bitmap) throw Unreadable();
                     if (Skipped(r, length)) continue;
-                    if (offset < written || offset > read || offset + length > room.Length) throw Unreadable();
+                    if (offset < written || (offset > read && !(r == 2 && typedColumn)) || offset + length > room.Length) throw Unreadable();
                     room[written..(int)offset].Clear();
-                    if (r == 1)
+                    if (r == 1 && !values.IsEmpty && read < room.Length && room[read] >= TypedInteger)
+                    {
+                        // A typed column writes its offsets and its text at once, after reading its whole form.
+                        var validity = layout[c * Stride + 2] == 0 ? default : room.Slice(blobStart + layout[c * Stride + 1], layout[c * Stride + 2]);
+                        var data = blobStart + (long)layout[c * Stride + 5];
+                        var dataLength = layout[c * Stride + 6];
+                        if (data < offset + length || data + dataLength > room.Length) throw Unreadable();
+                        read += ReadTyped(room[read..], values, ref valuesAt, validity, rows, room.Slice((int)offset, length), room.Slice((int)data, dataLength));
+                        if (data + dataLength > read) throw Unreadable();
+                        room[(int)(offset + length)..(int)data].Clear();
+                        typedColumn = true;
+                    }
+                    else if (r == 2 && typedColumn) { }
+                    else if (r == 1)
                     {
                         // The whole column's form is read before its offsets are written over it. Its validity bitmap
                         // precedes its offsets, so it is already in place.
@@ -141,7 +169,8 @@ internal static partial class PageCodec
                     }
                     written = (int)offset + length;
                 }
-            if (read != room.Length || written != room.Length) throw Unreadable();
+            }
+            if (read != room.Length || written != room.Length || valuesAt != values.Length) throw Unreadable();
         }
         finally
         {
