@@ -61,6 +61,11 @@ internal static class SearchLiveChecks
         check(who is [{ Object: { Kind: "procedure", Schema: "sys", Name: "sp_who", Database: "master" }, Folder: "systemStoredProcedures" }],
             "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
         check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
+        // The Memory panel's index detail: a real build and search record their times, and the server's long modules show as packed.
+        var memoryDetail = service.Search.MemoryDetail();
+        check(memoryDetail is { Connections: >= 1, LastBuildMs: not null, LastSearchMs: not null, PackedTexts: > 0 } && memoryDetail.Objects >= built.Status.Objects
+            && memoryDetail.DefinitionTexts >= memoryDetail.PackedTexts && memoryDetail.PackedTextBytes > memoryDetail.PackedBytes,
+            "the index detail carries the last build's and search's times and the server's packed definitions: " + memoryDetail);
         var memoryBefore = service.Search.MemoryUsed;
 
         var byName = await Find("search ]'");

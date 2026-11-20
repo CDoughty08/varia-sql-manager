@@ -149,7 +149,7 @@ describe('Memory panel Nerd metrics', () => {
     expect([model.bar.label, model.bar.total / MB, model.bar.segments.map(part => [part.part, part.bytes / MB])]).toEqual(['Budget used', 16, [['records', 3], ['names', 4], ['definitions', 9]]])
     expect(model.bar.segments.reduce((sum, part) => sum + part.share, 0)).toBeCloseTo(1)
     expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toEqual({
-      'Pooled texts': '31,000', 'Refs per text': '1.7', Definitions: '9,400', 'Left out': '12', 'Without children': '1 database', 'Being read': '—', 'Last build': '1.84 s', 'Last search': '23 ms'
+      'Pooled texts': '31,000', 'Refs per text': '1.7', 'Defined objects': '9,400', 'Left out': '12', 'Without children': '1 database', 'Being read': '—', 'Last build': '1.84 s', 'Last search': '23 ms'
     })
     const reading = indexNerdMetrics({ ...indexed, readingBytes: 2 * MB, childrenLeftOut: 3 })
     expect([reading.bar.segments.at(-1)?.part, reading.bar.total / MB, reading.counters.find(counter => counter.label === 'Being read')?.value,

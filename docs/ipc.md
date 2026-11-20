@@ -912,18 +912,18 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 
 `explorer.index.memory`'s `detail` (`indexMemoryDetailSchema`, `IndexMemoryDetail`, worked out by `IndexMemoryReport`) is what
 every connection's Search Objects index holds, for the same panel. It is read only when an event goes out, never by a search:
-one walk of the held tables, each counted once (a shared resource set once, however many connections show it). Main forwards
+one walk of the held tables, each counted once (a shared resource set once, however many connections show it). A refused event's detail is kept for its retry, and the timer skips a check while another report is still walking. Main forwards
 it to the page as the report's `index`.
 
 | Field | Meaning |
 | --- | --- |
-| `connections`, `objects` | Connections with an index, and the objects their held tables list |
+| `connections`, `objects` | Connections whose index holds something, and the objects their held tables list |
 | `texts`, `references` | The shared pool's distinct names and definitions, and the references reads and resource sets hold to them |
 | `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
-| `definitionTexts`, `packedTexts` | The distinct definitions behind them, and how many are zstd frames (`PackedText`) |
+| `definitionTexts`, `packedTexts` | The distinct definitions the held tables hold (texts no object names as a name or schema, including one pooled for a row a read then left out), and how many are zstd frames (`PackedText`) |
 | `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
 | `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and records of reads still running. They add up to `usedBytes` while no build runs |
-| `cut`, `childrenLeftOut` | Definitions left out or cut short; databases indexed without their children (`CHILDREN_LEFT_OUT`) |
+| `cut`, `childrenLeftOut` | Definitions left out or cut short; held databases read without their children (`CHILDREN_LEFT_OUT`), whatever later builds reported |
 | `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 
 ## Result pages

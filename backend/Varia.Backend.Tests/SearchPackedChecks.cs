@@ -355,7 +355,10 @@ internal static class SearchPackedChecks
         var set = await catalog.AcquireAsync(key, _ => Task.FromResult(System()));
         first.PutResource(set);
         second.PutResource(await catalog.AcquireAsync(key, _ => Task.FromResult(System())));
-        var detail = IndexMemoryReport.Detail(budget, pool, [(first, 0), (second, 1)], catalog.Held, 12, 3);
+        archive.ChildrenLeftOut = true;
+        // A connection whose build read nothing holds no index, and is not counted.
+        var none = new ConnectionIndex(budget, catalog, pool);
+        var detail = IndexMemoryReport.Detail(budget, pool, [first, second, none], catalog.Held, 12, 3);
         var tables = new[] { sales.Table, archive.Table, set.Table };
         var held = tables.SelectMany(table => Enumerable.Range(0, table.Count).Select(table.StoredDefinition)).OfType<object>().Distinct(ReferenceEqualityComparer.Instance).ToList();
         var packed = held.OfType<PackedText>().ToList();
@@ -370,10 +373,27 @@ internal static class SearchPackedChecks
         check(detail.Texts == pool.Count && detail.References == sales.Pooled.Length + archive.Pooled.Length + set.Table.Texts.Count(text => text is not null),
             "the pool's distinct texts and references are reported, a shared set's once");
         var late = Read("Late", ("usp_Late", Module("usp_Late")));
-        var reading = IndexMemoryReport.Detail(budget, pool, [(first, 0), (second, 0)], catalog.Held);
+        var reading = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held);
         check(reading.ReadingBytes == late.Bytes && reading.RecordBytes + reading.NameBytes + reading.DefinitionBytes + reading.ReadingBytes == budget.Used
             && reading.LastBuildMs is null && reading.LastSearchMs is null, "a read's records not yet held show as reading, and the parts still add up");
         first.Put(late);
+        // A definition a read pooled for a row it then left out (a child whose parent the login cannot see) is still charged as a
+        // definition: no entry names it, but the table holds it.
+        var orphan = Module("usp_Orphan");
+        var orphanText = pool.TryAcquire(PackedText.TryPack(orphan)!)!;
+        var orphanName = pool.TryAcquire("usp_Kept")!;
+        var builder = new ObjectTable.Builder();
+        builder.Text(orphanName);
+        builder.Text(orphanText);
+        builder.Add("procedure", "storedProcedures", null, null, orphanName, null, false);
+        var kept = new DatabaseIndex("Orphans", builder.Build(), IndexMemory.RecordBytes + 2 * IndexMemory.SlotBytes, 0, 0, pooled: true);
+        budget.Force(kept.Bytes);
+        second.Put(kept);
+        var orphaned = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held);
+        check(orphaned.DefinitionTexts == reading.DefinitionTexts + 2 && orphaned.PackedTexts == reading.PackedTexts + 2 && orphaned.Definitions == reading.Definitions + 2
+            && orphaned.DefinitionBytes - reading.DefinitionBytes == StringPool.Cost(orphanText) + StringPool.Cost(late.Table.StoredDefinition(0)!)
+            && orphaned.RecordBytes + orphaned.NameBytes + orphaned.DefinitionBytes == budget.Used,
+            "a definition no row names is still counted as a definition, as the pool charges it");
         first.Dispose();
         second.Dispose();
         var empty = IndexMemoryReport.Detail(budget, pool, [], catalog.Held);

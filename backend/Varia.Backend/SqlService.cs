@@ -117,6 +117,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long reportedIndexBytes = -1;
     private long indexMemorySeq;
     private long reportedIndexFinished = -1;
+    /// <summary>The detail worked out for an index report the control lane refused, with the figures it was for: the retry at the
+    /// next check reuses it while they are unchanged, rather than walking the index again.</summary>
+    private (long Used, long Finished, IndexMemoryDetail Detail)? refusedIndexDetail;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -238,7 +241,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); }, null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(wait: false); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
@@ -2825,19 +2828,29 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index; also after a build or
     /// search finished, whose time the detail shows. The detail (the Memory panel's Nerd metrics) walks the held indexes, so it is
-    /// read only when an event goes out: at most once a check, never by a search.</summary>
-    internal void ReportIndexMemory()
+    /// read only when an event goes out, never by a search; a refused event's detail is kept for its retry. The timer's check
+    /// (<paramref name="wait"/> false) skips a tick while another report is still walking, so slow walks never pile up threads.</summary>
+    internal void ReportIndexMemory(bool wait = true)
     {
-        lock (indexMemoryGate)
+        if (!wait && !Monitor.TryEnter(indexMemoryGate)) return;
+        if (wait) Monitor.Enter(indexMemoryGate);
+        try
         {
             var used = search.MemoryUsed;
             var finished = search.Finished;
             if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
-            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, search.MemoryDetail()))) return;
+            var detail = refusedIndexDetail is { } kept && kept.Used == used && kept.Finished == finished ? kept.Detail : search.MemoryDetail();
+            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail)))
+            {
+                refusedIndexDetail = (used, finished, detail);
+                return;
+            }
+            refusedIndexDetail = null;
             indexMemorySeq++;
             reportedIndexBytes = used;
             reportedIndexFinished = finished;
         }
+        finally { Monitor.Exit(indexMemoryGate); }
     }
 
     /// <summary>A summary's budget counts as reported, so a subsequent close reports any fall from the summary. The

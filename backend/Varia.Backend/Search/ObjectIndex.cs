@@ -41,6 +41,9 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
+    /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
+    /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
+    public bool ChildrenLeftOut { get; set; }
 }
 
 /// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its

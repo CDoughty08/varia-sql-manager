@@ -619,10 +619,18 @@ internal static class StoreChecks
     {
         var reports = new List<(long Used, long Limit, long Seq)>();
         var details = new List<(int Texts, long NameBytes, long RecordBytes)>();
+        var sent = new List<IndexMemoryDetail>();
         var store = new ResultStore(1L << 30, 1L << 29);
         long resultsUsed = -1;
-        using var service = new SqlService(store, publish: value =>
+        Func<bool>? during = null;
+        SqlService? self = null;
+        using var service = self = new SqlService(store, publish: value =>
         {
+            if (value is IndexMemoryEvent indexEvent)
+            {
+                lock (reports) sent.Add(indexEvent.Detail);
+                if (during is { } inside) { during = null; if (!inside()) return false; }
+            }
             var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
             var used = report.GetProperty("usedBytes").GetInt64();
             if (report.GetProperty("type").GetString() == "results.memory")
@@ -655,6 +663,29 @@ internal static class StoreChecks
         lock (reports)
             check(details.SequenceEqual([(0, 0L, 0L), (0, 0L, 0L), (1, StringPool.Cost("dbo.Orders"), 0L), (0, 0L, 0L)]),
                 "explorer.index.memory carries what the index holds, read as each event goes out");
+        lock (reports)
+            check(ReferenceEquals(sent[0], sent[1]) && !ReferenceEquals(sent[1], sent[2]),
+                "a refused index report's detail is kept for its retry rather than walking the index again");
+        // A finished search (or build) changes no byte, yet its time goes out with the next check.
+        service.Search.Finish(build: false, 7);
+        service.ReportIndexMemory();
+        service.ReportIndexMemory(); // Nothing more to report.
+        lock (reports)
+            check(reports.Count == 5 && reports[^1] == (0L, limit, 4L) && details.Count == 5 && sent[^1] is { LastSearchMs: 7, LastBuildMs: null },
+                "a finished search sends an index report with its time though the budget is unchanged");
+        // While one report is walking (here, inside its publish), the timer's check skips its tick instead of queueing behind it.
+        service.Search.Finish(build: true, 30);
+        var skipped = false;
+        during = () =>
+        {
+            var tick = Task.Run(() => self!.ReportIndexMemory(wait: false));
+            skipped = tick.Wait(TimeSpan.FromSeconds(30));
+            return true;
+        };
+        service.ReportIndexMemory();
+        lock (reports)
+            check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 },
+                "the timer's index report skips a tick while another report holds the walk, and never queues behind it");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

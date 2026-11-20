@@ -164,7 +164,7 @@ export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
   const counters: Counter[] = [
     { label: 'Pooled texts', value: formatCount(texts) },
     { label: 'Refs per text', value: texts > 0 ? (references / texts).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : dash },
-    { label: 'Definitions', value: formatCount(detail.definitions) },
+    { label: 'Defined objects', value: formatCount(detail.definitions) },
     { label: 'Left out', value: formatCount(detail.cut) },
     { label: 'Without children', value: plural(detail.childrenLeftOut, 'database', 'databases') },
     { label: 'Being read', value: detail.readingBytes > 0 ? bytes(detail.readingBytes) : dash },

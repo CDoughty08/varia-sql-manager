@@ -111,8 +111,8 @@ internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long S
 /// Definitions and PackedDefinitions are objects, DefinitionTexts and PackedTexts the distinct texts behind them. PackedBytes is
 /// what the packed texts cost and PackedTextBytes what they would as strings. Texts and References are the pool's distinct texts
 /// and the references to them. RecordBytes (records and their slots), NameBytes, DefinitionBytes and ReadingBytes (records of
-/// reads still running) add up to the budget's use. Cut is definitions left out or cut short, ChildrenLeftOut the databases
-/// indexed without their children (at most the skip list's cap per connection). LastBuildMs and LastSearchMs are left out
+/// reads still running) add up to the budget's use. Cut is definitions left out or cut short, ChildrenLeftOut the held databases
+/// read without their children. Connections counts those whose index holds something. LastBuildMs and LastSearchMs are left out
 /// before the first.</summary>
 internal sealed record IndexMemoryDetail(int Connections, long Objects, int Texts, long References, long Definitions, long PackedDefinitions, long DefinitionTexts,
     long PackedTexts, long PackedBytes, long PackedTextBytes, long Cut, int ChildrenLeftOut, long RecordBytes, long NameBytes, long DefinitionBytes, long ReadingBytes,

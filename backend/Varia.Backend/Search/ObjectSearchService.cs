@@ -99,21 +99,15 @@ internal sealed class ObjectSearchService : IDisposable
     /// only when an explorer.index.memory event goes out.</summary>
     internal IndexMemoryDetail MemoryDetail()
     {
-        var connections = new List<(ConnectionIndex, int)>();
-        foreach (var state in states.Values)
-        {
-            int leftOut;
-            lock (state.Gate) leftOut = state.Skipped.ToList().Count(skip => skip.Code == ChildrenLeftOut);
-            connections.Add((state.Index, leftOut));
-        }
         var build = Interlocked.Read(ref lastBuildMs);
         var search = Interlocked.Read(ref lastSearchMs);
-        return IndexMemoryReport.Detail(budget, pool, connections, resources.Held, build < 0 ? null : build, search < 0 ? null : search);
+        return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build < 0 ? null : build, search < 0 ? null : search);
     }
 
-    private void Finish(ref long last, long ms)
+    /// <summary>Records a finished build's (<paramref name="build"/>) or search's time, which the next memory report carries.</summary>
+    internal void Finish(bool build, long ms)
     {
-        Interlocked.Exchange(ref last, ms);
+        Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
         Interlocked.Increment(ref finished);
     }
 
@@ -163,7 +157,7 @@ internal sealed class ObjectSearchService : IDisposable
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
             }
-            Finish(ref lastBuildMs, watch.ElapsedMilliseconds);
+            Finish(build: true, watch.ElapsedMilliseconds);
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
@@ -200,7 +194,7 @@ internal sealed class ObjectSearchService : IDisposable
         try
         {
             var result = IndexSearch.Run(state.Index, query, matcher, Limits, status, token);
-            Finish(ref lastSearchMs, result.ElapsedMs);
+            Finish(build: false, result.ElapsedMs);
             return result;
         }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
@@ -354,6 +348,12 @@ internal sealed class ObjectSearchService : IDisposable
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        // A read without children is the fallback for a database too large with them (WithFallbackAsync): the index it holds says so.
+        void Put(DatabaseIndex index)
+        {
+            index.ChildrenLeftOut = !children;
+            state.Index.Put(index);
+        }
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
@@ -369,7 +369,7 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             var index = await ReadBatchAsync(command,
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), state.Index.Put, budgetSource.Token);
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), Put, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -382,7 +382,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             // A statement that fails part way (a catalog view this edition lacks) keeps what came before it, unless an earlier build
             // read the database whole.
-            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), state.Index.Put);
+            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), Put);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, database, database);
             return new(database, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
         }
