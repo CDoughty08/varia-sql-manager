@@ -39,10 +39,13 @@ describe('editable grid rows read from the page', () => {
       <tr aria-selected="true" tabindex="0"><td data-copy="Copy">Copy<span>edit.copy</span></td><td data-copy="Ctrl+C"><kbd>Ctrl</kbd><kbd>C</kbd></td></tr></tbody></table>`).querySelector('table')!
     expect(domCopyRows(shortcuts, shortcuts.querySelector('[colspan]'))).toBeUndefined()
     expect(domCopyRows(shortcuts, shortcuts.querySelector('[tabindex]'))?.rows).toEqual([['Copy', 'Ctrl+C']])
-    // Every platform shown: a gesture's one key spans the platform columns, and copies in each of them.
+    // Every platform shown: a gesture's key spans the platform columns but is this platform's alone (⌘ is macOS's), so the
+    // cell says what each column copies; a spanning cell without that copies its text in each.
     const platforms = html(`<table role="grid"><thead><tr><th scope="col">Command</th><th scope="col">Windows</th><th scope="col">Linux</th><th scope="col">macOS</th><th scope="col">Source</th></tr></thead>
-      <tbody><tr><th colspan="5" scope="colgroup">Mouse</th></tr><tr tabindex="0"><td>Peek Definition</td><td colspan="3">Alt+Click</td><td>Default</td></tr></tbody></table>`).querySelector('table')!
-    expect(domCopyRows(platforms, platforms.querySelector('[tabindex]'))?.rows).toEqual([['Peek Definition', 'Alt+Click', 'Alt+Click', 'Alt+Click', 'Default']])
+      <tbody><tr><th colspan="5" scope="colgroup">Mouse</th></tr><tr tabindex="0"><td>Go to Definition</td><td colspan="3" data-copy-cells='["","","⌘ Click"]'>⌘ Click</td><td>Default</td></tr>
+      <tr id="plain"><td>Peek</td><td colspan="3">Alt+Click</td><td>Default</td></tr></tbody></table>`).querySelector('table')!
+    expect(domCopyRows(platforms, platforms.querySelector('[tabindex]'))?.rows).toEqual([['Go to Definition', '', '', '⌘ Click', 'Default']])
+    expect(domCopyRows(platforms, platforms.querySelector('#plain'))?.rows).toEqual([['Peek', 'Alt+Click', 'Alt+Click', 'Alt+Click', 'Default']])
     expect(domCopyRows(platforms, platforms.querySelector('[colspan="5"]'))).toBeUndefined()
     expect(cellText(html('<span>a<button>x</button>  b<datalist><option>z</option></datalist></span>').firstElementChild!)).toBe('a b')
   })
@@ -149,6 +152,9 @@ describe('editable grid Copy wiring', () => {
     const shortcuts = readFileSync('src/renderer/src/settings/shortcuts/ShortcutTable.tsx', 'utf8')
     expect(shortcuts).toContain("data-copy={binding?.label.text ?? ''}")
     expect(shortcuts).toContain("data-copy={binding ? binding.scopeTitle : ''}")
+    // With every platform shown, a gesture copies under this platform only, and a built-in key in each platform's own words.
+    expect(shortcuts).toContain('data-copy-cells={thisPlatformOnly(gesture.label)}')
+    expect(shortcuts).toContain('keybindingLabel(parseKeySpec(entry.key, item), item).text')
     expect(readFileSync('src/renderer/src/designer/DesignerGrid.tsx', 'utf8')).toMatch(/useRowCopy\(\(\) => designerCopyRows\(state, live\.current\)\)[\s\S]*onCopy=\{copy\}/)
   })
 })

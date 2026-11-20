@@ -91,12 +91,22 @@ export function domCopyRows(grid: Element, from: EventTarget | null): CopyRows |
   const head = [...grid.querySelectorAll(rowSelector)].find(isHeaderRow)
   if (!row || !head) return undefined
   const titles = cellsOf(head).map(cellText), shown = cellsOf(row)
-  // A cell spanning columns (a gesture's one key for every platform) fills each of them; a lone cell is a group heading.
+  // A lone cell is a group heading. A cell spanning columns copies each of them: what its `data-copy-cells` (a JSON list, one
+  // entry a column) says, else its text in each.
   if (shown.length < 2 && titles.length > 1) return undefined
-  const cells = shown.flatMap(cell => Array<Element>(Math.max(1, Number(cell.getAttribute('colspan')) || 1)).fill(cell))
-  if (cells.length !== titles.length) return undefined
+  const values = shown.flatMap(cell => {
+    const span = Math.max(1, Number(cell.getAttribute('colspan')) || 1)
+    if (span > 1) {
+      try {
+        const list: unknown = JSON.parse(cell.getAttribute('data-copy-cells') ?? 'null')
+        if (Array.isArray(list) && list.length === span) return list.map(item => typeof item === 'string' ? item : '')
+      } catch { /* its text, below */ }
+    }
+    return Array<string>(span).fill(cellText(cell))
+  })
+  if (values.length !== titles.length) return undefined
   const kept = titles.flatMap((title, index) => title ? [index] : [])
-  return { columns: kept.map(index => titles[index]), rows: [kept.map(index => cellText(cells[index]))] }
+  return { columns: kept.map(index => titles[index]), rows: [kept.map(index => values[index])] }
 }
 
 /** `useRowCopy` for a grid whose copy is the row it is on, read from the page (`domCopyRows`). */

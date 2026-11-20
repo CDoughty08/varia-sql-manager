@@ -47,6 +47,8 @@ function SourceChip({ source, lock }: { readonly source: BindingSource | 'builti
  * A changed row has a dot and its own Reset.
  */
 export default function ShortcutTable({ groups, platform, selected, onSelect, onActivate, onReset, gestures, onShowMouse, builtIn, byPlatform, empty }: Props) {
+  // A gesture row knows only this platform's gesture: Copy writes it under this platform's column and leaves the others empty.
+  const thisPlatformOnly = (text: string) => JSON.stringify(allPlatforms.map(item => item === platform ? text : ''))
   const copyRow = useDomRowCopy()
   const body = useRef<HTMLTableElement>(null)
   const focusNext = useRef(false)
@@ -110,7 +112,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
     // With no command row to hold the grid's one tab stop (a search that matches only gestures), the first gesture row takes it.
     for (const [index, gesture] of gestures.entries()) rows.push(<tr key={gestureKey + gesture.id} data-row={gestureKey + gesture.id} tabIndex={!current && index === 0 ? 0 : -1} className="shortcuts-gesture" onClick={onShowMouse} title="Choose to open the Mouse view">
       <td className="shortcuts-command">{gesture.changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" /> : <span className="shortcuts-nodot" />}<span className="shortcuts-command-title">{gesture.title}</span></td>
-      {byPlatform ? <td colSpan={allPlatforms.length}>{gesture.label}</td> : <><td>{gesture.label}</td><td>{gesture.scopeTitle}</td></>}
+      {byPlatform ? <td colSpan={allPlatforms.length} data-copy-cells={thisPlatformOnly(gesture.label)}>{gesture.label}</td> : <><td>{gesture.label}</td><td>{gesture.scopeTitle}</td></>}
       <td className="shortcuts-source-cell"><SourceChip source={gesture.locked ? 'builtin' : gesture.changed ? 'user' : 'default'} lock={gesture.locked} /></td>
     </tr>)
   }
@@ -122,7 +124,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
       const keys = entry.key === undefined ? <kbd>{entry.label}</kbd> : <KeyCaps label={keybindingLabel(parseKeySpec(entry.key, platform), platform)} source="builtin" />
       rows.push(<tr key={'builtin:' + index} className="shortcuts-builtin">
         <td className="shortcuts-command"><span className="shortcuts-nodot" /><span className="shortcuts-muted">{entry.title}</span></td>
-        {byPlatform ? <td colSpan={allPlatforms.length}>{keys}</td> : <><td>{keys}</td><td>{shortcutScope(entry.scope).title}</td></>}
+        {byPlatform ? <td colSpan={allPlatforms.length} data-copy-cells={JSON.stringify(allPlatforms.map(item => entry.key === undefined ? entry.label : keybindingLabel(parseKeySpec(entry.key, item), item).text))}>{keys}</td> : <><td>{keys}</td><td>{shortcutScope(entry.scope).title}</td></>}
         <td className="shortcuts-source-cell" title="Fixed by the grid, the tree or the designer. Shown so you can see what a new shortcut would shadow."><SourceChip source="builtin" /></td>
       </tr>)
     })
