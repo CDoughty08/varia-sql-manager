@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (366)
+## Commands (369)
 
 ### File
 
@@ -427,6 +427,9 @@ keys it uses are listed below.
 | Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
 | Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
+| Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
+| Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 
 ### Preferences
 
@@ -720,6 +723,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
+| `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -1099,7 +1103,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (178)
+## Context keys (179)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1142,6 +1146,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
+| `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
 | `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |

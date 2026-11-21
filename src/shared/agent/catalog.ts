@@ -421,8 +421,9 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_stop_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id'] },
   { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
-  // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date; Delete History (AG-5a) adds @job_id with its own template.
-  { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date'] },
+  // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date (its lint refuses @job_id); Delete History (AG-5a) passes @job_id,
+  // and @oldest_date for "older than", with its own template and lint (AgentSql.LintHistoryDelete).
+  { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date', '@job_id'] },
   { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb' },
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb' },
   { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb' },

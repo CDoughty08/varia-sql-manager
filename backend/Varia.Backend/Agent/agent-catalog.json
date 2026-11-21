@@ -84,7 +84,7 @@
     {"arguments":["@job_id"],"database":"msdb","lane":"AG-2","name":"sp_stop_job"},
     {"arguments":["@job_id","@enabled","@new_name"],"database":"msdb","lane":"AG-2","name":"sp_update_job"},
     {"arguments":["@job_id","@delete_history","@delete_unused_schedule"],"database":"msdb","lane":"AG-2","name":"sp_delete_job"},
-    {"arguments":["@oldest_date"],"database":"msdb","lane":"AG-8a","name":"sp_purge_jobhistory"},
+    {"arguments":["@oldest_date","@job_id"],"database":"msdb","lane":"AG-8a","name":"sp_purge_jobhistory"},
     {"database":"msdb","lane":"AG-6a","name":"sp_add_job"},
     {"database":"msdb","lane":"AG-6a","name":"sp_add_jobserver"},
     {"database":"msdb","lane":"AG-6a","name":"sp_update_alert"},

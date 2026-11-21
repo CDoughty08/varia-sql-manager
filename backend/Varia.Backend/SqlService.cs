@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage",
         "results.diffSeek"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -585,6 +585,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),
         "activity.kill" => await sessionActions.KillAsync(Read<ActivityKillArgs>(parameters, json), Token(context)),
         "agent.profile" => await explorer.AgentProfileAsync(Read<AgentProfileArgs>(parameters, json), Token(context)),
+        "agent.historyMessage" => await actions.HistoryMessageAsync(Read<AgentHistoryMessageArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
