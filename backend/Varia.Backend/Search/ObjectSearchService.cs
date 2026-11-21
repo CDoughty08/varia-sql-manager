@@ -117,6 +117,19 @@ internal sealed class ObjectSearchService : IDisposable
         return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used);
     }
 
+    /// <summary>A memory detail from an earlier walk brought up to <paramref name="used"/> without walking: the pool's counts and the
+    /// times are read afresh, and what the budget gained since the walk shows as reading (a build's reads, not yet walked).</summary>
+    internal IndexMemoryDetail Refresh(IndexMemoryDetail walked, long used)
+    {
+        var (texts, references, _) = pool.Stats;
+        var (build, search) = Times();
+        return walked with
+        {
+            Texts = texts, References = references, LastBuildMs = build, LastSearchMs = search,
+            ReadingBytes = Math.Max(0, used - walked.RecordBytes - walked.NameBytes - walked.DefinitionBytes),
+        };
+    }
+
     /// <summary>Records a finished build's (<paramref name="build"/>) or search's time, which the next memory report carries.</summary>
     internal void Finish(bool build, long ms)
     {

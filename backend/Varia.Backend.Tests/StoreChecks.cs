@@ -646,6 +646,8 @@ internal static class StoreChecks
                 return reports.Count != 1;
             }
         });
+        long clock = 0;
+        service.IndexDetailClock = () => Volatile.Read(ref clock);
         service.ReportMemory();
         check(Interlocked.Read(ref resultsUsed) == 0, "results.memory reports the initial empty store");
         var pool = service.Search.Pool;
@@ -690,6 +692,25 @@ internal static class StoreChecks
         lock (reports)
             check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 } && service.Search.DetailWalks == walks + 1,
                 "the timer's index report skips a tick while another report holds the walk, and never queues behind it; a finished build walks again");
+        // While a build adds to the budget, the walk runs at most every few seconds: between walks a report brings the last walk up to
+        // date, the pool's counts afresh and the growth as reading, and a fall walks at once.
+        var grown = service.Search.DetailWalks;
+        var read = pool.TryAcquire("dbo.Customers");
+        service.ReportIndexMemory();
+        var more = pool.TryAcquire("dbo.Invoices");
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown && details[^1] == (2, StringPool.Cost("dbo.Customers") + StringPool.Cost("dbo.Invoices"), 0L)
+                && sent[^1] is { LastBuildMs: 30, LastSearchMs: 7 },
+                "a build's growth within the walk interval is reported without walking, the pool's counts afresh and the growth as reading");
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        var last = pool.TryAcquire("dbo.Payments");
+        service.ReportIndexMemory();
+        check(service.Search.DetailWalks == grown + 1, "once the interval has passed, a growing budget walks the index again");
+        pool.Release([read, more, last]);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 2 && details[^1] == (0, 0L, 0L), "a fall in the budget walks the index at once");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>
