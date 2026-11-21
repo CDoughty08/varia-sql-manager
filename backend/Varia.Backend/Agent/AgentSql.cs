@@ -94,7 +94,40 @@ internal static partial class AgentSql
     public static readonly AgentStatement AgentProperties = new("agentProperties", "EXEC msdb.dbo.sp_get_sqlagent_properties;",
         ["auto_start", "startup_account", "sqlserver_restart", "monitor_autostart", "jobhistory_max_rows", "jobhistory_max_rows_per_job", "errorlog_file", "errorlogging_level"], [], "listRows");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory];
+    // --- The job document's describe (AG-6a; its save is in AgentSql.JobDocument.cs) ----------------------------------------
+
+    private static readonly string[] JobDocumentColumns = ["job_id", "name", "enabled", "description", "start_step_id", "category", "owner", "notify_level_eventlog", "notify_level_email",
+        "notify_level_netsend", "notify_level_page", "notify_email_operator", "notify_netsend_operator", "notify_page_operator", "delete_level", "date_created", "date_modified", "version_number",
+        "last_run_date", "last_run_time", "last_run_outcome"];
+
+    /// <summary>The job the document edits (one result set with the JOB aspect).</summary>
+    public static readonly AgentStatement JobDocument = new("jobDocument", "EXEC msdb.dbo.sp_help_job @job_id = @job_id, @job_aspect = N'JOB';", JobDocumentColumns,
+        [new("@job_id", SqlDbType.UniqueIdentifier)], "listRows");
+    /// <summary>The job's steps, for the Start menu and the Start step (every Agent role may read them).</summary>
+    public static readonly AgentStatement JobDocumentSteps = new("jobDocumentSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name", "subsystem"],
+        [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
+    /// <summary>The job categories the Category picker offers.</summary>
+    public static readonly AgentStatement JobCategories = new("jobCategories", "EXEC msdb.dbo.sp_help_category @class = N'JOB';", ["name"], [], "listRows");
+    /// <summary>The operators Notifications offers, with their addresses and pager duty (msdb grants SQLAgentUserRole EXECUTE).</summary>
+    public static readonly AgentStatement Operators = new("operators", "EXEC msdb.dbo.sp_help_operator;",
+        ["name", "enabled", "email_address", "pager_address", "netsend_address", "weekday_pager_start_time", "weekday_pager_end_time", "saturday_pager_start_time", "saturday_pager_end_time",
+            "sunday_pager_start_time", "sunday_pager_end_time", "pager_days"], [], "listRows");
+    /// <summary>Every alert (SQLAgentOperatorRole and sysadmin); the describe keeps those that run the job.</summary>
+    public static readonly AgentStatement Alerts = new("alerts", "EXEC msdb.dbo.sp_help_alert;", ["id", "name", "enabled", "message_id", "severity", "job_id"], [], "listRows");
+    /// <summary>SQL Server Agent's own mail settings (sysadmin: the Notifications section's Database Mail readiness).</summary>
+    public static readonly AgentStatement AgentMail = new("agentMail", "EXEC msdb.dbo.sp_get_sqlagent_properties;", ["use_databasemail", "databasemail_profile"], [], "listRows");
+    /// <summary>The Database Mail profiles (sysadmin and DatabaseMailUserRole; others are refused, and then nothing is said about mail).</summary>
+    public static readonly AgentStatement MailProfiles = new("mailProfiles", "EXEC msdb.dbo.sysmail_help_profile_sp;", ["profile_id", "name"], [], "listRows");
+    /// <summary>The login the document runs as, whether it is sysadmin, and Database Mail XPs (16386) as installed.</summary>
+    public static readonly AgentStatement JobDocumentFacts = new("jobDocumentFacts",
+        "SELECT SYSTEM_USER AS login_name, CONVERT(int, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS is_sysadmin,\n"
+        + "(SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.configuration_id = 16386) AS mail_xps;", ["login_name", "is_sysadmin", "mail_xps"], [], "listRows");
+    /// <summary>The logins the owner picker lists (sysadmin): SQL, Windows and Entra logins and groups, not certificate-mapped ones.</summary>
+    public static readonly AgentStatement OwnerLogins = new("ownerLogins",
+        "SELECT p.name FROM sys.server_principals AS p WHERE p.type IN (N'S', N'U', N'G', N'E', N'X') AND p.name NOT LIKE N'##%' ORDER BY p.name;", ["name"], [], "ownerLogins");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory,
+        JobDocument, JobDocumentSteps, JobCategories, Operators, Alerts, AgentMail, MailProfiles, JobDocumentFacts, OwnerLogins];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

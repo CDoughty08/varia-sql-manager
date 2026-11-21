@@ -90,6 +90,7 @@ import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
+import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
@@ -441,6 +442,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -573,6 +575,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     operations,
     jobActivity,
     agentJobs,
+    jobDocuments,
     objectSearch
   }
   const contributions = [
@@ -624,6 +627,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connectionPruning.dispose()
     disconnectPrompts.dispose()
     actionProgress.dispose()
+    jobDocuments.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -717,6 +721,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     liveViews,
     operations,
     jobActivity,
+    jobDocuments,
     agentJobs,
     objectSearch,
     live,

@@ -394,8 +394,13 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
   `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
   refused a password), `AGENT_STOPPED` (SQL Server Agent is not running), `JOB_STATE` (a job not running when stopped, or
-  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached);
-  the last three are not retryable (docs/object-actions.md, docs/sql-server-agent.md).
+  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached),
+  `STALE` (a job document save whose job changed since its describe: the guard's 50011); these last four are not retryable
+  (docs/object-actions.md, docs/sql-server-agent.md). A job document refusal may carry `field` (`agentJobFields`), the field the
+  failing call changed.
+- `agentJob` (the job document): `dialog: 'agentJob'` describes a job (`target: { kind: 'agentJob', name }`) or New Job
+  (`target: { kind: 'agent' }`, with `jobs`); execute and script take `agentJob` (`AgentJobSave`, bounded in zod and C#) and,
+  for an existing job, `agentIdentity`.
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The

@@ -209,8 +209,12 @@ internal static class AgentLiveChecks
             await AgentJobsChecks.LiveAsync(check, service, info, json, job, id);
             // SQL Server Agent Properties (AG-8a) purges only rows it plants on this job, so it runs while the job exists.
             await AgentPropertiesLiveChecks.RunAsync(check, service, info, json, scratch, id, connection, sql);
+            // The job document (AG-6a): save, STALE, rollback, hostile name, script and alert detach, while the job exists.
+            await AgentJobDocumentLiveChecks.RunAsync(check, service, info, json, scratch, job, id, sql);
             // AG-2's job verbs end with Delete, so the finally below finds nothing left to drop.
             await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
+            // New Job's save reuses the deleted job's name, so a dead run's job is still swept as stale.
+            await AgentJobDocumentLiveChecks.CreateAsync(check, service, info, json, job, sql);
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }

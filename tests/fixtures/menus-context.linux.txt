@@ -362,8 +362,10 @@ explorer.context, for the SQL Server Agent node
   ---
   &Properties  -+++
 explorer.context, for a SQL Server Agent job
+  &New Job…  -+++
+  ---
   S&tart Job at Step…  -+++
-  Sto&p Job  -+++
+  Stop &Job  -+++
   ---
   &Script Job as >
     &CREATE To >
@@ -387,6 +389,8 @@ explorer.context, for a SQL Server Agent job
   D&elete  Delete  -+++
   ---
   Re&fresh  F5  -+++
+  ---
+  &Properties  -+++
 explorer.context, for a SQL Server Agent error log
   Re&fresh  F5  -+++
 explorer.context, for an SSIS Catalog folder
