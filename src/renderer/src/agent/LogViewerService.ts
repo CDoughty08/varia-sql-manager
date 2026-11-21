@@ -369,12 +369,19 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     const columns = historySpec.tables![1].columns.length
     if (!table || row === undefined || row < 0 || row >= table.descriptor.rowsAvailable || snapshot.activeKey === undefined) {
       if (this.get(id)?.selectedStep) { this.patch(id, { selectedStep: undefined }); void this.readMessage(id) }
-      // Row 0 is the row whose message shows with no step selected (the run's key row): its name heads the details pane.
-      if (table && table.descriptor.rowsAvailable > 0) void (async () => {
-        const window = await table.handle.getWindow(0, 1, { colStart: 0, colEnd: columns, display: false })
-        if (this.stepGrids.get(id) !== entry || entry.read !== read || !window.count) return
-        const head = this.stepOf(window.text)
-        if (head && JSON.stringify(this.get(id)?.headStep) !== JSON.stringify(head)) this.patch(id, { headStep: head })
+      // With no step selected the details pane shows the run's key row (its job outcome row, or its first step): find that row, wherever
+      // the grid's sort put it, to head the pane.
+      const instance = this.get(id)?.run?.instance
+      if (table && instance !== undefined && table.descriptor.rowsAvailable > 0) void (async () => {
+        const count = Math.min(table.descriptor.rowsAvailable, historySpec.tables![1].rowCap ?? table.descriptor.rowsAvailable)
+        const window = await table.handle.getWindow(0, count, { colStart: 0, colEnd: columns, display: false })
+        if (this.stepGrids.get(id) !== entry || entry.read !== read) return
+        for (let at = 0; at < window.count; at++) {
+          const head = this.stepOf(window.text.slice(at * columns, (at + 1) * columns))
+          if (head?.instance !== instance) continue
+          if (JSON.stringify(this.get(id)?.headStep) !== JSON.stringify(head)) this.patch(id, { headStep: head })
+          return
+        }
       })().catch(onUnexpectedError)
       return
     }

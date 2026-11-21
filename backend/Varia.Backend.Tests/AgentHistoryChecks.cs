@@ -53,30 +53,30 @@ internal static class AgentHistoryChecks
             Row(Backup, 10, 1, 1, 1), Row(Backup, 11, 1, 1, 2), Row(Backup, 12, 0, 1, 2), Row(Backup, 13, 1, 0, 5)
         ];
         var states = new Dictionary<Guid, AgentHistoryJobState> { [Nightly] = new(true, Day.AddHours(4)), [Backup] = new(false, null) };
-        var runs = AgentHistoryReader.Group(rows, states, AgentOrphanLabel.Unknown, bounded: false);
+        var runs = AgentHistoryReader.Group(rows, states, AgentOrphanLabel.Unknown);
         string Describe(AgentHistoryRun run) => run.Job == Nightly ? "N" : "B";
         var shape = runs.Select(run => Describe(run) + run.Key + ":" + run.OutcomeId + ":" + string.Join(",", run.Rows.Select(row => row.Instance))).ToList();
         check(shape.SequenceEqual(["N2:succeeded:2,1", "N5:failed:5,3,4", "N6:inProgress:6", "B12:succeeded:12,11", "B10:unknown:10", "B13:unknown:13"]),
             "a run is its job outcome row (listed first, keyed by its instance) with the step rows after the job's previous outcome row that started at or after it; a step of a running job after its last outcome row is In progress; one between outcome rows, or after the last of a job not running, is Unknown: "
             + string.Join(" | ", shape));
-        var off = AgentHistoryReader.Group(rows, new Dictionary<Guid, AgentHistoryJobState>(), AgentOrphanLabel.XpsOff, bounded: false);
+        var off = AgentHistoryReader.Group(rows, new Dictionary<Guid, AgentHistoryJobState>(), AgentOrphanLabel.XpsOff);
         check(off.Single(run => run.Job == Backup && run.Key == 13).OutcomeId == "xpsOff" && off.Single(run => run.Job == Nightly && run.Key == 6).OutcomeId == "xpsOff"
             && off.Single(run => run.Job == Backup && run.Key == 10).OutcomeId == "unknown",
             "with Agent XPs off and the service not read as stopped, steps after a job's last outcome row read In progress or unknown; steps between outcome rows stay Unknown");
         var earlier = new Dictionary<Guid, AgentHistoryJobState> { [Nightly] = new(true, Day.AddHours(5)) };
-        var stale = AgentHistoryReader.Group(rows.Where(row => row.Job == Nightly), earlier, AgentOrphanLabel.Unknown, bounded: false);
-        var unread = AgentHistoryReader.Group(rows.Where(row => row.Job == Nightly), new Dictionary<Guid, AgentHistoryJobState> { [Nightly] = new(true, null) }, AgentOrphanLabel.Unknown, bounded: false);
+        var stale = AgentHistoryReader.Group(rows.Where(row => row.Job == Nightly), earlier, AgentOrphanLabel.Unknown);
+        var unread = AgentHistoryReader.Group(rows.Where(row => row.Job == Nightly), new Dictionary<Guid, AgentHistoryJobState> { [Nightly] = new(true, null) }, AgentOrphanLabel.Unknown);
         check(stale.Single(run => run.Key == 6).OutcomeId == "unknown" && unread.Single(run => run.Key == 6).OutcomeId == "inProgress",
             "a running job's steps that started before its current start are an unfinished older run (Unknown); with the start unreadable they all read In progress");
-        var bounded = AgentHistoryReader.Group([Row(Backup, 20, 2, 1, 0), Row(Backup, 21, 0, 1, 1), Row(Backup, 22, 1, 1, 6), Row(Backup, 23, 0, 1, 6)], states, AgentOrphanLabel.Unknown, bounded: true);
-        var windowIdle = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], states, AgentOrphanLabel.Unknown, bounded: true);
-        var windowRunning = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day) }, AgentOrphanLabel.Unknown, bounded: true);
-        check(windowIdle.Count == 0 && windowRunning is [{ OutcomeId: "inProgress" }],
-            "in a date window an idle job's steps with no outcome row are a run whose outcome row is older than the window (left out); a running job's are In progress");
-        check(bounded.Select(run => run.Key).SequenceEqual([21, 23]),
-            "a date-window read drops step rows older than the job's first outcome row read: their outcome row may be before the window");
+        var bounded = AgentHistoryReader.Group([Row(Backup, 20, 2, 1, 0), Row(Backup, 21, 0, 1, 1), Row(Backup, 22, 1, 1, 6), Row(Backup, 23, 0, 1, 6)], states, AgentOrphanLabel.Unknown);
+        var windowIdle = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], states, AgentOrphanLabel.Unknown);
+        var windowRunning = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day) }, AgentOrphanLabel.Unknown);
+        check(windowIdle is [{ OutcomeId: "unknown", Key: 40 }] && windowRunning is [{ OutcomeId: "inProgress" }],
+            "an idle job's steps with no outcome row are a run Agent never finished (Unknown), in a date window too; a running job's are In progress");
+        check(bounded.Select(run => run.OutcomeId + run.Key).SequenceEqual(["succeeded21", "unknown20", "succeeded23"]),
+            "a step row before an outcome row that started earlier than its run is a crashed run of its own (Unknown), whichever window was read; the window filter keeps or drops it by its start");
         var running = AgentHistoryReader.Group([Row(Backup, 30, 0, 1, 1), Row(Backup, 31, 1, 1, 2), Row(Backup, 32, 2, 1, 3)],
-            new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day.AddHours(2)) }, AgentOrphanLabel.Unknown, bounded: false);
+            new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day.AddHours(2)) }, AgentOrphanLabel.Unknown);
         check(running.Single(run => run.OutcomeId == "inProgress").Key == 31,
             "an In progress run is keyed by its first step row, so it keeps its key (and the grid its selection) as the running job writes more steps");
         var xpsOff = off.Single(run => run.Job == Backup && run.Key == 13);

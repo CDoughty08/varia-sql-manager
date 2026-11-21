@@ -277,7 +277,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             if (read.HistoryError is { } failed) errors.Add(Error(failed) with { Tables = [0, 1] });
             return new(null, [new(0, []), new(1, []), jobsTable], errors, Status: Status(read));
         }
-        var runs = Group(rows, read.States, read.Label, bounded: now.Days is not null);
+        var runs = Group(rows, read.States, read.Label);
         var since = now.Days is { } days && read.ServerNow is { } clock ? clock.AddDays(-days) : (DateTime?)null;
         var kept = runs.Where(run => Passes(run, now, since)).OrderByDescending(run => run.Started ?? DateTime.MinValue).ThenByDescending(run => run.Key).ToList();
         var maxChars = (int)catalog.Limit("gridMessageChars");
@@ -350,36 +350,31 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
     /// run_date and run_time. So a run is a job outcome row with the step rows after the job's previous outcome row that started at or after it.
     /// Step rows that match none group by the outcome rows around them: those after the job's last outcome row are In progress while the job runs
     /// (only those that started at or after its current start, where that is readable), the rest Unknown (Agent stopped or crashed mid-run) or, with
-    /// <see cref="AgentOrphanLabel.XpsOff"/>, In progress or unknown. With <paramref name="bounded"/> (a date-window read, which may hold the steps of
-    /// a run whose outcome row is older than the window) step rows before the job's first outcome row that it does not claim are left out. One pass
-    /// over each job's rows, so a full read (historyRows) groups in linear time.
+    /// <see cref="AgentOrphanLabel.XpsOff"/>, In progress or unknown. A date-window read starts a day before the window, and the window
+    /// (<see cref="Passes"/>) keeps runs by their start, so a crashed run inside the window stays Unknown. One pass over each job's rows, so a full
+    /// read (historyRows) groups in linear time.
     /// </summary>
-    internal static List<AgentHistoryRun> Group(IEnumerable<AgentHistoryRow> rows, IReadOnlyDictionary<Guid, AgentHistoryJobState> states, AgentOrphanLabel label, bool bounded)
+    internal static List<AgentHistoryRun> Group(IEnumerable<AgentHistoryRow> rows, IReadOnlyDictionary<Guid, AgentHistoryJobState> states, AgentOrphanLabel label)
     {
         var runs = new List<AgentHistoryRun>();
         foreach (var job in rows.GroupBy(row => row.Job))
         {
             // One pass in instance order: the step rows since the job's previous outcome row wait in `pending` until the next one.
             var pending = new List<AgentHistoryRow>();
-            var seenOutcome = false;
             foreach (var row in job.OrderBy(row => row.Instance))
             {
                 if (row.Step > 0) { pending.Add(row); continue; }
                 var steps = pending.Where(step => row.Started is null || step.Started is null || step.Started >= row.Started).ToList();
                 runs.Add(new(job.Key, row, steps, OutcomeOf(row.Status)));
-                // Step rows between two outcome rows that the later one does not claim: one Unknown run per gap (before the first outcome row
-                // of a date-window read they may belong to a run older than the window, so they are left out).
+                // Step rows between two outcome rows that the later one does not claim: one Unknown run per gap (a run Agent never finished).
                 var gap = steps.Count == pending.Count ? [] : pending.Except(steps).ToList();
-                if (gap.Count > 0 && !(bounded && !seenOutcome)) runs.Add(new(job.Key, null, gap, "unknown"));
+                if (gap.Count > 0) runs.Add(new(job.Key, null, gap, "unknown"));
                 pending.Clear();
-                seenOutcome = true;
             }
             if (pending.Count == 0) continue;
             var state = states.TryGetValue(job.Key, out var known) ? known : new AgentHistoryJobState(false, null);
             var unknown = label == AgentOrphanLabel.XpsOff ? "xpsOff" : "unknown";
-            // After the job's last outcome row: the running job's current run, the rest left by a run that never wrote one. In a date-window
-            // read with no outcome row of an idle job, they are the later steps of a run whose outcome row is before the window: left out.
-            if (bounded && !seenOutcome && !state.Running) continue;
+            // After the job's last outcome row: the running job's current run, the rest left by a run that never wrote one.
             var tail = pending;
             var current = state.Running ? tail.Where(row => state.Start is not { } start || row.Started is null || row.Started >= start).ToList() : [];
             var before = tail.Except(current).ToList();
