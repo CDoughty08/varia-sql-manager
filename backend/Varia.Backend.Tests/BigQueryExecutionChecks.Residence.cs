@@ -184,8 +184,8 @@ internal static partial class BigQueryExecutionChecks
     {
         check(RemoteResult.BlockRowsFor(16_384) == 256 && RemoteResult.BlockRowsFor(1) == RemoteResult.MaxBlockRows && RemoteResult.BlockRowsFor(1 << 20, 4096L << 20) == RemoteResult.MinBlockRows
             && RemoteResult.BlockRowsFor(1024) == 4096, "a block is about 4 MiB of measured rows, clamped to 256..16,384 rows");
-        check(RemoteResult.BlockRowsFor(1 << 20) == 32 && RemoteResult.BlockRowsFor(1 << 20, 16L << 20) == 8 && RemoteResult.BlockRowsFor(64L << 20, 16L << 20) == 1,
-            "a block of very wide rows holds no more than half its cache (one row at least)");
+        check(RemoteResult.BlockRowsFor(1 << 20) == 25 && RemoteResult.BlockRowsFor(1 << 20, 16L << 20) == 6 && RemoteResult.BlockRowsFor(64L << 20, 16L << 20) == 1,
+            "a block of very wide rows holds no more than half its cache with the estimate's margin (one row at least)");
 
         // The first page is seeded and read without a fetch; rowBytes answers from the cache only.
         {
@@ -876,6 +876,26 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // Rows a little wider than measured, read with a block read ahead beside: the two still fit the cache, so the read's
+        // own block is never refused TOO_LARGE while the budget is nearly empty.
+        {
+            var refused = new List<string>();
+            for (var run = 0; run < 20; run++)
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 206_000 };
+                using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+                try
+                {
+                    var (_, rows) = await ReadRemote(remote, 0, 10, viewer: 1);
+                    if (!Consecutive(rows, 0, 10)) refused.Add("short");
+                }
+                catch (RequestException error) { refused.Add(error.Code); }
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            }
+            check(refused.Count == 0, "rows wider than measured still read with a block ahead: " + string.Join(",", refused));
+        }
+
         // Rows of about 200 KB: a block holds what half of a 16 MiB cache holds, so the cache never passes its limit.
         {
             var store = new ResultStore(1L << 30, 1L << 29);

@@ -162,16 +162,20 @@ internal sealed class RemoteResult : IDisposable
 
     /// <summary>A block's rows for a row's measured bytes: about <see cref="TargetBlockBytes"/>, clamped to
     /// <see cref="MinBlockRows"/>..<see cref="MaxBlockRows"/>, but never more than half of <paramref name="cacheLimit"/> holds
-    /// (one row at least), so a block of very wide rows still fits its cache.</summary>
+    /// with the estimate's margin (one row at least), so two blocks of very wide rows, read and read ahead, fit the cache
+    /// even when their rows come out a little wider than measured.</summary>
     public static int BlockRowsFor(double rowBytes, long cacheLimit = DefaultCacheBytes)
     {
         var bytes = Math.Max(1, rowBytes);
-        var floor = (int)Math.Clamp(cacheLimit / 2 / bytes, 1, MinBlockRows);
+        var floor = (int)Math.Clamp(cacheLimit / 2 / (bytes * EstimateMargin), 1, MinBlockRows);
         return (int)Math.Clamp(TargetBlockBytes / bytes, floor, MaxBlockRows);
     }
 
     /// <summary>What a fetch of <paramref name="rows"/> rows is expected to cost in the cache.</summary>
-    private long EstimateOf(int rows) => (long)Math.Ceiling(rows * rowBytes * 1.25) + ResultStore.PageOverhead;
+    private long EstimateOf(int rows) => (long)Math.Ceiling(rows * rowBytes * EstimateMargin) + ResultStore.PageOverhead;
+
+    /// <summary>The headroom a block's estimate allows over its measured rows.</summary>
+    private const double EstimateMargin = 1.25;
 
     /// <summary>A whole block's expected cost, as its fetch reserves it.</summary>
     private long BlockEstimate => Math.Max(1, Math.Min(EstimateOf(BlockRows), CacheLimit / 2));
