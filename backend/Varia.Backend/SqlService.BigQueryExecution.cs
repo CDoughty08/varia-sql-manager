@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Google;
 using Google.Apis.Bigquery.v2.Data;
 using Varia.Backend.BigQuery;
@@ -10,12 +11,15 @@ using Varia.Backend.Results;
 namespace Varia.Backend;
 
 /// <summary>
-/// query.execute for a BigQuery handle (docs/bigquery.md, Execution): one query job with a client job id, polled with
-/// jobs.getQueryResults, its rows read through REST into the result store as SQL Server's are (BigQueryColumnPlan into
-/// ResultSetBuffer), truncated by the row limit and the budget as SQL Server's are, then the job's statistics and cost in
-/// Messages and the summary. A large result that did not arrive whole is read through Storage Read instead
-/// (SqlService.BigQueryStorageRead.cs). Results stay in memory: windowed results, scripts' child jobs, sessions and
-/// Stop's jobs.cancel are later lanes (docs/bigquery-plan.md).
+/// query.execute for a BigQuery handle (docs/bigquery.md, Execution, Scripts, Sessions): one query job with a client job id
+/// in the tab's BigQuery session (created by its first job; emulator mode has none), polled with jobs.getQueryResults.
+/// A script's children are listed between polls and read in statement order as result sets 1…n, so early results show
+/// before the script ends; DML and DDL children become Messages lines. Rows are read through REST into the result store as
+/// SQL Server's are (BigQueryColumnPlan into ResultSetBuffer), truncated by the row limit and the budget, then the job's
+/// statistics and cost go in Messages and the summary. A large result that did not arrive whole is read through Storage
+/// Read instead (SqlService.BigQueryStorageRead.cs). Stop ends the read at once and calls jobs.cancel; the session's
+/// next job waits for the stopped one to reach DONE. The session's transaction is tracked from the statement types of its
+/// jobs, top-level and child.
 /// </summary>
 internal sealed partial class SqlService
 {
@@ -30,10 +34,39 @@ internal sealed partial class SqlService
 
     internal int BigQueryPageRows(int columns) => Math.Clamp(BigQueryPageCells / Math.Max(1, columns), BigQueryFirstPageRows, bigQuery.PageRows);
 
+    /// <summary>BigQuery's error positions, [line:column] in the submitted text.</summary>
+    [GeneratedRegex(@"\[(?<line>\d{1,7}):(?<column>\d{1,7})\]")]
+    private static partial Regex ErrorPosition();
+
+    /// <summary>Rewrites BigQuery's [line:column] positions into the editor's, adding the selection's offset (its first line,
+    /// and its first column on that line); <paramref name="firstLine"/> is the first position's editor line.</summary>
+    internal static string EditorPositions(string text, int startLine, int startColumn, out int? firstLine)
+    {
+        int? first = null;
+        var mapped = ErrorPosition().Replace(text, match =>
+        {
+            var line = long.Parse(match.Groups["line"].Value, CultureInfo.InvariantCulture);
+            var column = long.Parse(match.Groups["column"].Value, CultureInfo.InvariantCulture);
+            if (line < 1 || column < 1) return match.Value;
+            var editorLine = startLine + line - 1;
+            var editorColumn = line == 1 ? startColumn + column - 1 : column;
+            if (editorLine > int.MaxValue || editorColumn > int.MaxValue) return match.Value;
+            first ??= (int)editorLine;
+            return "[" + editorLine.ToString(CultureInfo.InvariantCulture) + ":" + editorColumn.ToString(CultureInfo.InvariantCulture) + "]";
+        });
+        firstLine = first;
+        return mapped;
+    }
+
+    /// <summary>A script child's rows failed to read: the query fails, where a failed listing only stops the early reads.</summary>
+    private sealed class ChildReadFailure(Exception inner) : Exception(inner.Message, inner);
+
+    private static string TransactionName(BigQueryTransaction state) => state switch { BigQueryTransaction.Open => "open", BigQueryTransaction.Unknown => "unknown", _ => "none" };
+
     private async Task<QueryResult> ExecuteBigQueryAsync(QueryArgs args, BigQueryConnection connection, RequestContext? context)
     {
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
-            || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
+            || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || args.StartColumn is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         // SQL Server's options have no BigQuery meaning; main refuses them first (methods.ts, providerOptionsAllow).
         if (args.StopOnError || args.IncludeActualPlan || args.IncludeLivePlan || args.IncludeClientStatistics)
@@ -61,6 +94,7 @@ internal sealed partial class SqlService
             queries.TryRemove(new(args.QueryId, running));
             throw new RequestException("NOT_CONNECTED", "The connection was closed.");
         }
+        var session = bigQuery.Session(args.SessionId, connection);
         using var cancelled = context?.Token.Register(() => { if (context.Reason == CancelReason.Deadline) TryCancel(cancellation); else running.Cancel(); });
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         var messages = new QueryMessages(events.Message);
@@ -84,103 +118,303 @@ internal sealed partial class SqlService
         var sent = false;
         var created = false;
         var complete = false;
+        var queued = false;
+        // The job ran in a session (it carried the id, or created the session), so its statements count for the transaction.
+        var sessionJob = false;
+        var startState = BigQueryTransaction.None;
+        // The finished job's statements were applied to the session's transaction.
+        var tracked = false;
         BigQueryJobSummary? summary = null;
+        // A script's children read so far (DONE, in statement order), how many succeeded, and the rows their DML changed.
+        var readChildren = new HashSet<string>(StringComparer.Ordinal);
+        var succeededChildren = 0;
+        long childRowsAffected = -1;
+        // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE. Asked
+        // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
+        // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
+        var stopAsked = 0;
+        void StopJob()
+        {
+            if (Interlocked.Exchange(ref stopAsked, 1) != 0) return;
+            session.ActiveCancelled = true;
+            if (sent && !complete) bigQuery.CancelJob(connection, project, jobId, location);
+        }
+        using var stopJob = token.Register(StopJob);
+
+        // One finished child of a script: a SELECT's rows as the next result set, a DML's row count, a DDL's sentence.
+        async Task ChildAsync(BigQueryChild child)
+        {
+            if (child.Error is not null) return;
+            succeededChildren++;
+            var statement = child.StatementType;
+            if (statement == "SELECT")
+            {
+                if (args.DiscardResults || sets.Count >= args.MaxResultSets) { discarded++; return; }
+                var first = await bigQuery.QueryResultsAsync(connection, project, child.Id, child.Location ?? location, null, BigQueryFirstPageRows, 0, token);
+                var childPlan = BigQueryColumnPlan.From(first.Schema);
+                var rows = first.TotalRows ?? 0;
+                if (childPlan is null) { first.Dispose(); return; }
+                if (childPlan.TruncatedColumns)
+                    messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
+                var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
+                if (set is null) { first.Dispose(); discarded++; return; }
+                sets.Add(set);
+                events.Opened(set);
+                currentSet = set;
+                await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token);
+                set.Complete();
+                events.Closed(set);
+                currentSet = null;
+                messages.Add(rows == 1 ? "(1 row affected)" : "(" + rows.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+            }
+            else if (child.DmlAffected is { } affected and >= 0)
+            {
+                childRowsAffected = Math.Max(0, childRowsAffected) + affected;
+                messages.Add(affected == 1 ? "(1 row affected)" : "(" + affected.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+            }
+            else if (statement is { Length: > 0 }) messages.Add(StatementSentence(statement, child.Ddl));
+        }
+
+        // Lists the children and reads those newly DONE, in order, up to the first still running. Full: every page (the
+        // final listing, whose children also decide the transaction); otherwise only the pages since the last read.
+        async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(bool full)
+        {
+            var listed = await bigQuery.ChildrenAsync(connection, project, jobId, full ? null : readChildren, token);
+            foreach (var child in listed.Children)
+            {
+                if (readChildren.Contains(child.Id)) continue;
+                if (!child.Done) break;
+                readChildren.Add(child.Id);
+                // A child's rows that fail to read fail the query, unlike a listing that fails: its set is cut short.
+                try { await ChildAsync(child); }
+                catch (Exception error) when (!token.IsCancellationRequested) { throw new ChildReadFailure(error); }
+            }
+            return listed;
+        }
+
         try
         {
+            // The session runs one job at a time: a close in progress goes first.
+            await session.Queue.WaitAsync(token);
+            queued = true;
+            session.ActiveCancelled = false;
+            session.StopActive = running.Cancel;
             // This query now owns the tab, so the tab's earlier results are released before any new row is stored.
             budget = store.BeginQuery(args.SessionId);
-            var job = new Job
+            if (session.Tail is { } tail)
             {
-                JobReference = new JobReference { ProjectId = project, JobId = jobId, Location = location },
-                Configuration = new JobConfiguration
+                // The session's last job (stopped, or cut off by the network) must reach DONE first; Stop cancels it.
+                messages.Add("Waiting for BigQuery job " + JobName(project, tail.Location, tail.JobId) + " to finish: this tab's BigQuery session runs one job at a time.");
+                // Every Stop asks again: an earlier jobs.cancel may have failed, or gone out before BigQuery created the job.
+                // Asked from the catch too, as StopJob is: the settle's own cancellation can unwind first.
+                var tailAsked = 0;
+                void StopTail()
                 {
-                    Labels = new Dictionary<string, string>(BigQueryService.Labels),
-                    // BigQuery stops the job itself at the execution timeout, so a query cut off here does not run on.
-                    JobTimeoutMs = args.TimeoutSeconds > 0 ? args.TimeoutSeconds * 1000L : null,
-                    Query = new JobConfigurationQuery
+                    if (Interlocked.Exchange(ref tailAsked, 1) != 0) return;
+                    tail.Cancelled = true;
+                    bigQuery.CancelJob(connection, project, tail.JobId, tail.Location);
+                }
+                BigQuerySettled settled;
+                using (token.Register(StopTail))
+                {
+                    try { settled = await bigQuery.SettleAsync(session, token); }
+                    catch (Exception) when (token.IsCancellationRequested) { StopTail(); throw; }
+                }
+                if (settled.Committed) messages.Add("The stopped job committed a transaction before it stopped; stopping does not undo work already committed.");
+            }
+            location = await TabLocationAsync(session, connection, dataset, token);
+            for (var attempt = 1; ; attempt++)
+            {
+                sessionJob = session.Id is not null;
+                startState = session.Transaction;
+                var job = new Job
+                {
+                    JobReference = new JobReference { ProjectId = project, JobId = jobId, Location = location },
+                    Configuration = new JobConfiguration
                     {
-                        Query = args.Sql, UseLegacySql = false,
-                        DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
-                        MaximumBytesBilled = cap
+                        Labels = new Dictionary<string, string>(BigQueryService.Labels),
+                        // BigQuery stops the job itself at the execution timeout, so a query cut off here does not run on.
+                        JobTimeoutMs = args.TimeoutSeconds > 0 ? args.TimeoutSeconds * 1000L : null,
+                        Query = new JobConfigurationQuery
+                        {
+                            Query = args.Sql, UseLegacySql = false,
+                            DefaultDataset = dataset is null ? null : new DatasetReference { ProjectId = project, DatasetId = dataset },
+                            MaximumBytesBilled = cap,
+                            // The tab's first job creates its session (emulator mode has none); later jobs carry its id.
+                            CreateSession = session.Id is null && !bigQuery.Environment.Emulator ? true : null,
+                            ConnectionProperties = session.Id is { } id ? [new ConnectionProperty { Key = "session_id", Value = id }] : null
+                        }
+                    }
+                };
+                sent = true;
+                try
+                {
+                    var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
+                    if (sessionJob && BigQueryJobException.Of(inserted) is { } gone && BigQueryService.SessionGone(gone, session.Id)) throw gone;
+                    created = true;
+                    location = KnownLocation(inserted.JobReference?.Location) ?? location;
+                    BigQueryService.CaptureSession(session, inserted, location);
+                    sessionJob |= session.Id is not null;
+                    messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
+                    events.Job(JobEvent(project, jobId, location, "running", startState));
+                    if (BigQueryJobException.Of(inserted) is { } refused) throw refused;
+                    break;
+                }
+                // The session expired (24 hours idle or 7 days): the refused job ran nothing, so the query runs once more in a
+                // new session, and Messages says what was lost.
+                catch (Exception error) when (attempt == 1 && sessionJob && !created && BigQueryService.SessionGone(error, session.Id) && !token.IsCancellationRequested)
+                {
+                    session.Id = null;
+                    session.Location = null;
+                    session.Transaction = BigQueryTransaction.None;
+                    messages.Add(BigQueryService.ExpiredNotice);
+                    jobId = BigQueryService.NewJobId();
+                    sent = false;
+                    location = await TabLocationAsync(session, connection, dataset, token);
+                }
+            }
+
+            // Poll the job, and its children between polls; the first complete answer carries the first page.
+            BigQueryPage? page = null;
+            BigQueryJobException? jobFailed = null;
+            // Listing between polls only shows early results: one that fails (jobs.list needs bigquery.jobs.list, which the
+            // Job User role lacks) stops it, and the final listing decides what the summary says.
+            var listing = true;
+            try
+            {
+                try
+                {
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, null, args.DiscardResults ? 0 : BigQueryFirstPageRows, bigQuery.ChildPollMs, token);
+                        if (page.JobComplete) break;
+                        page.Dispose();
+                        page = null;
+                        if (!listing) continue;
+                        try { await ChildrenAsync(full: false); }
+                        catch (Exception error) when (!token.IsCancellationRequested && error is not ChildReadFailure) { listing = false; }
                     }
                 }
-            };
-            sent = true;
-            var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
-            created = true;
-            location = KnownLocation(inserted.JobReference?.Location) ?? location;
-            messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
-            if (BigQueryJobException.Of(inserted) is { } refused) throw refused;
-
-            // The first complete answer carries the first page.
-            BigQueryPage page;
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, null, args.DiscardResults ? 0 : BigQueryFirstPageRows, bigQuery.PollMs, token);
-                if (page.JobComplete) break;
-                page.Dispose();
-            }
-            complete = true;
-            plan = BigQueryColumnPlan.From(page.Schema);
-            var totalRows = page.TotalRows ?? 0;
-            if (page.NumDmlAffectedRows is { } affected) recordsAffected = affected;
-            if (plan is not null && args.DiscardResults)
-            {
-                // Statistics only: nothing is read back; the rows are counted from BigQuery's total.
-                page.Dispose();
-                discarded = 1;
-            }
-            else if (plan is not null)
-            {
-                if (plan.TruncatedColumns)
-                    messages.Add("The result has " + plan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
-                currentSet = store.Open(budget, 0, 1, 1, "rows", plan.Columns, plan.Wires, lengths: plan.Lengths);
-                if (currentSet is null) { page.Dispose(); discarded = 1; }
+                catch (BigQueryJobException error) { jobFailed = error; }
+                complete = true;
+                var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
+                BigQueryService.CaptureSession(session, finished, location);
+                summary = JobSummary(project, location, jobId, finished);
+                var statement = summary.StatementType;
+                // A script's children: the rest are read now, and the full listing decides the transaction.
+                var script = statement == "SCRIPT" || readChildren.Count > 0 || finished.Statistics?.NumChildJobs > 0;
+                List<BigQueryChild>? children = null;
+                var listedAll = false;
+                if (script)
+                {
+                    try { (children, listedAll) = await ChildrenAsync(full: true); }
+                    // A listing that fails leaves the children unread: the parent's own rows are shown, and the summary says so.
+                    catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
+                }
+                if (sessionJob)
+                {
+                    if (!script) session.Transaction = BigQueryService.Apply(startState, statement, jobFailed is not null);
+                    else if (children is not null && listedAll)
+                        session.Transaction = children.Aggregate(startState, (state, child) => BigQueryService.Apply(state, child.StatementType, child.Error is not null || !child.Done));
+                    else session.Transaction = BigQueryTransaction.Unknown;
+                }
+                tracked = true;
+                events.Job(JobEvent(project, jobId, location, "done", startState));
+                if (jobFailed is not null)
+                {
+                    if (succeededChildren > 0)
+                        messages.Add(succeededChildren == 1 ? "1 statement before the failing one ran, and BigQuery billed it."
+                            : succeededChildren.ToString(CultureInfo.InvariantCulture) + " statements before the failing one ran, and BigQuery billed them.");
+                    throw jobFailed;
+                }
+                // BigQuery reports a script's statements as children; with none listed (the emulator) the parent's rows stand.
+                if (script && children is { Count: > 0 })
+                {
+                    // The children's rows are the script's results; the parent's page repeats the last statement's.
+                    if (childRowsAffected >= 0) recordsAffected = childRowsAffected;
+                    messages.Add("The script completed.");
+                }
                 else
                 {
-                    sets.Add(currentSet);
-                    events.Opened(currentSet);
-                    // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
-                    var session = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
-                    if (session is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, page, currentSet, budget, totalRows, roomWaited, events, warn, token);
-                    else
+                    if (script && children is null) messages.Add("Varia could not list the script's statements, so only the last statement's rows are shown.");
+                    plan = BigQueryColumnPlan.From(page!.Schema);
+                    var totalRows = page.TotalRows ?? 0;
+                    if (page.NumDmlAffectedRows is { } affected) recordsAffected = affected;
+                    if (plan is not null && args.DiscardResults)
                     {
-                        page.Dispose();
-                        await ReadBigQueryArrowAsync(args, session, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                        // Statistics only: nothing is read back; the rows are counted from BigQuery's total.
+                        discarded = 1;
                     }
-                    currentSet.Complete();
-                    events.Closed(currentSet);
-                    currentSet = null;
+                    else if (plan is not null)
+                    {
+                        if (plan.TruncatedColumns)
+                            messages.Add("The result has " + plan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
+                        currentSet = store.Open(budget, 0, 1, 1, "rows", plan.Columns, plan.Wires, lengths: plan.Lengths);
+                        if (currentSet is null) discarded = 1;
+                        else
+                        {
+                            sets.Add(currentSet);
+                            events.Opened(currentSet);
+                            // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                            var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
+                            // The reader owns the page from here.
+                            var reading = page;
+                            page = null;
+                            if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                            else
+                            {
+                                reading.Dispose();
+                                await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                            }
+                            currentSet.Complete();
+                            events.Closed(currentSet);
+                            currentSet = null;
+                        }
+                    }
+                    if (recordsAffected < 0 && finished.Statistics?.Query?.NumDmlAffectedRows is { } dml and >= 0) recordsAffected = dml;
+                    if (recordsAffected >= 0) messages.Add(recordsAffected == 1 ? "(1 row affected)" : "(" + recordsAffected.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+                    else if (plan is not null) messages.Add(totalRows == 1 ? "(1 row affected)" : "(" + totalRows.ToString(CultureInfo.InvariantCulture) + " rows affected)");
+                    else if (statement == "SCRIPT") messages.Add("The script completed.");
+                    else if (statement is { Length: > 0 } && statement != "SELECT") messages.Add(StatementSentence(statement, finished.Statistics?.Query?.DdlOperationPerformed));
+                    if (statement == "SCRIPT" && plan is not null) messages.Add("BigQuery returns the rows of a script's last statement only.");
                 }
             }
-            else page.Dispose();
-
-            var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
-            summary = JobSummary(project, location, jobId, finished);
-            var statement = summary.StatementType;
-            if (recordsAffected < 0 && finished.Statistics?.Query?.NumDmlAffectedRows is { } dml and >= 0) recordsAffected = dml;
-            if (recordsAffected >= 0) messages.Add(recordsAffected == 1 ? "(1 row affected)" : "(" + recordsAffected.ToString(CultureInfo.InvariantCulture) + " rows affected)");
-            else if (plan is not null) messages.Add(totalRows == 1 ? "(1 row affected)" : "(" + totalRows.ToString(CultureInfo.InvariantCulture) + " rows affected)");
-            else if (statement == "SCRIPT") messages.Add("The script completed.");
-            else if (statement is { Length: > 0 } && statement != "SELECT") messages.Add(StatementSentence(statement, finished.Statistics?.Query?.DdlOperationPerformed));
-            if (statement == "SCRIPT" && plan is not null) messages.Add("BigQuery returns the rows of a script's last statement only.");
+            finally { page?.Dispose(); }
         }
         catch (Exception error)
         {
+            // A script failed by a child's rows still runs in BigQuery: it is cancelled, as Stop does, and held until DONE.
+            var childFailed = error is ChildReadFailure;
+            if (error is ChildReadFailure read) error = read.InnerException!;
+            if (childFailed && sent && !complete)
+            {
+                bigQuery.CancelJob(connection, project, jobId, location);
+                messages.Add("Varia asked BigQuery to cancel job " + JobName(project, location, jobId) + ", whose results could not be read. Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
+            }
             if (currentSet is not null) currentSet.Incomplete = true;
             // A disconnect that closed the handle under the run (its client disposed) stopped it, as one that cancelled it does.
             if (!token.IsCancellationRequested && bigQuery.Find(args.ConnectionId) != connection) running.Cancel();
+            // A job the session started and Varia stopped, or lost track of, holds the session until it is DONE.
+            // An insert BigQuery refused, or one that never left, created nothing to wait for.
+            // A job BigQuery refused at insert is already DONE with its error, and holds nothing either.
+            if (sent && !complete && session.Id is not null && !(created && error is BigQueryJobException) && (created || !BigQueryService.NeverCreated(error)))
+                session.Tail = new BigQueryTail(jobId, location, cancelled: token.IsCancellationRequested || childFailed, created || error is BigQueryJobMayExist { Exists: true });
+            else if (sessionJob && created && !complete && error is BigQueryJobException)
+                session.Transaction = BigQueryService.Apply(startState, null, failed: true);
+            // The job finished, but a Stop or a failed read came before its statements were applied: what it left is unknown.
+            else if (sessionJob && complete && !tracked)
+                session.Transaction = BigQueryTransaction.Unknown;
             // Whatever a cancelled call threw, the run was stopped.
             if (token.IsCancellationRequested)
             {
+                StopJob();
                 status = running.UserCancelled ? "cancelled" : "timedOut";
                 var sentence = running.UserCancelled ? CancelledSentence : TimedOutSentence;
                 messages.Add(sentence, MessageKind.Error);
-                // jobs.cancel comes with Stop (docs/bigquery-plan.md, BQ-3a-2); BigQuery ends a timed-out job itself (jobTimeoutMs).
                 if (running.UserCancelled && !complete && sent)
-                    messages.Add((created ? "The BigQuery job keeps running in BigQuery until it finishes; its id is " : "If BigQuery received the job, it keeps running there until it finishes; its id is ")
-                        + JobName(project, location, jobId) + ".");
+                    messages.Add((created ? "Varia asked BigQuery to cancel job " : "If BigQuery received job ") + JobName(project, location, jobId)
+                        + (created ? "" : ", Varia asked it to cancel the job") + ". Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
                 failure = new(running.UserCancelled ? "CANCELLED" : "TIMEOUT", sentence, 1, 1);
             }
             else
@@ -188,10 +422,11 @@ internal sealed partial class SqlService
                 var mapped = await BigQueryFailureAsync(error, connection, created, cap, args.Prices != false, CancellationToken.None);
                 // A job BigQuery stopped (its timeout, or a cancel from elsewhere) ended as one Varia stopped would.
                 status = error is BigQueryJobException && mapped.Code is "TIMEOUT" or "CANCELLED" ? (mapped.Code == "TIMEOUT" ? "timedOut" : "cancelled") : "failed";
-                messages.Add(mapped.Message, MessageKind.Error);
-                if (sent && !mapped.Message.Contains(jobId, StringComparison.Ordinal) && error is not BigQueryJobException)
+                var text = EditorPositions(mapped.Message, args.StartLine, args.StartColumn, out var line);
+                messages.Add(text, MessageKind.Error, line);
+                if (sent && !text.Contains(jobId, StringComparison.Ordinal) && error is not BigQueryJobException)
                     messages.Add((created ? "The BigQuery job's id is " : "If BigQuery received the job, its id is ") + JobName(project, location, jobId) + ".");
-                failure = new(mapped.Code, mapped.Message.Length > 16384 ? mapped.Message[..16384] + "…" : mapped.Message, 1, 1);
+                failure = new(mapped.Code, text.Length > 16384 ? text[..16384] + "…" : text, 1, 1);
             }
         }
         finally
@@ -202,6 +437,12 @@ internal sealed partial class SqlService
             {
                 set.Complete();
                 events.Closed(set);
+            }
+            if (queued)
+            {
+                session.StopActive = null;
+                session.ActiveCancelled = false;
+                session.Queue.Release();
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
         }
@@ -221,6 +462,43 @@ internal sealed partial class SqlService
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, discarded, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1,
             dataset ?? "", messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, Job: summary ?? (created ? new BigQueryJobSummary(project, jobId, location) : null));
+    }
+
+    /// <summary>The query.job event body (docs/ipc.md, Query events): the request's top-level job, never its session id.</summary>
+    private static object JobEvent(string project, string jobId, string? location, string state, BigQueryTransaction transaction) =>
+        new { Type = "query.job", JobId = jobId, Project = project, Location = location, State = state, Auxiliary = false, Transaction = TransactionName(transaction) };
+
+    /// <summary>
+    /// Where the tab's job runs: its session's location once it has one; otherwise, when the connection's location is
+    /// Automatic, its dataset's (datasets.get, free, kept per connection), else the connection's. A dataset in another
+    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first
+    /// (decision 18), which the tab's Dataset box asks about.
+    /// </summary>
+    private async Task<string?> TabLocationAsync(BigQueryTabSession session, BigQueryConnection connection, string? dataset, CancellationToken token)
+    {
+        string? datasetLocation = null;
+        if (connection.Options.Location is null && dataset is not null && dataset != connection.Options.Dataset && !bigQuery.Environment.Emulator
+            && !connection.DatasetLocations.TryGetValue(dataset, out datasetLocation))
+        {
+            try
+            {
+                using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+                limit.CancelAfter(TimeSpan.FromSeconds(10));
+                var found = await connection.Client.Service.Datasets.Get(connection.Options.Project, dataset).ExecuteAsync(limit.Token);
+                datasetLocation = KnownLocation(found.Location);
+                connection.DatasetLocations[dataset] = datasetLocation;
+            }
+            // The query's own failure says more than this lookup's (a missing dataset, a refused permission).
+            catch (Exception) when (!token.IsCancellationRequested) { datasetLocation = null; }
+        }
+        if (session.Id is not null && session.Location is { } sessionLocation)
+        {
+            if (datasetLocation is not null && !string.Equals(datasetLocation, sessionLocation, StringComparison.OrdinalIgnoreCase))
+                throw new RequestException("LOCATION_MISMATCH", "Dataset " + dataset + " is in location " + datasetLocation + ", but this tab's BigQuery session is in " + sessionLocation
+                    + ". Choose the dataset again with Query › Change Database… to switch the tab to " + datasetLocation + ", which ends its session.");
+            return sessionLocation;
+        }
+        return datasetLocation ?? connection.Location;
     }
 
     /// <summary>Reads the result's rows into its set, page by page, until BigQuery has no more or the set stores no more (the

@@ -1,7 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
 import { cleanTabName } from '../../../shared/files/session'
-import type { SessionEnd } from '../../../shared/sessions'
+import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ProviderId } from '../../../shared/providers'
 import { afterClose, documentInfo, isCustomKind, isQueryDocument, queryLanguages, type CustomDocumentKind, type QueryDocument } from '../documents'
@@ -514,7 +514,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     // Any non-empty selection wins, even whitespace: an accidental one-character selection must not run the whole document.
     return selection && !selection.isEmpty() ? { sql: model.getValueInRange(selection), startLine: selection.startLineNumber, startColumn: selection.startColumn } : { sql: model.getValue(), startLine: 1, startColumn: 1 }
   }
-  async runTask(action: () => Promise<void>): Promise<void> {
+  async runTask(action: () => Promise<unknown>): Promise<void> {
     if (this.disposed || this.getSnapshot().busy) return
     this.changed({ ...this.getSnapshot(), busy: true })
     try { await action() }
@@ -566,26 +566,43 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     return true
   }
   /**
-   * Ends a query's SQL session, committing or rolling back its open transaction first (`transaction`). A commit that fails
+   * Ends a query's session, committing or rolling back its open transaction first (`transaction`). A commit that fails
    * throws and leaves the session open with its transaction. A session found lost has ended all the same: SQL Server
-   * rolled its transaction back.
+   * rolled its transaction back. Resolves to a BigQuery close's note (docs/bigquery.md, Sessions), which the caller shows.
+   * A BigQuery close refused with JOB_RUNNING also leaves a Messages line in the query, saying the answer was not carried
+   * out; a BigQuery commit cut off by main's deadline says its outcome is unknown.
    */
-  async endSession(id: string, transaction?: SessionEnd): Promise<void> {
-    const result = transaction ? await this.api.closeQuerySession(id, transaction) : await this.api.closeQuerySession(id)
+  async endSession(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
+    const params = { ...transaction ? { transaction } : {}, ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
+    const result = Object.keys(params).length ? await this.api.closeQuerySession(id, params) : await this.api.closeQuerySession(id)
     if (result.ok || result.code === 'SESSION_LOST') this.events.emit({ type: 'session.ended', tabId: id })
-    if (!result.ok) throw new Error(result.error)
+    if (!result.ok) {
+      if (result.code === 'JOB_RUNNING') this.sessionHooks?.message(id, result.error, 'error')
+      if (result.code === 'TIMEOUT' && transaction === 'commit' && this.sessionHooks?.bigQuery(id)) throw new Error(bigQueryCommitTimeout)
+      throw new Error(result.error)
+    }
+    return result.value.note
   }
+  /** What ending a BigQuery session needs from the rest of the workbench: a Messages line for a query that stays, and
+   *  whether a query is on BigQuery. Set once the workbench is built. */
+  sessionHooks?: { readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void }
   // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
-  async close(id: string, transaction?: SessionEnd): Promise<void> {
+  /** Resolves to the BigQuery close's note, for the caller to show once the query has closed. */
+  async close(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
     if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return
     const version = entry.model.getVersionId()
-    // Only a query has a SQL session to end.
-    if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
-    if (this.disposed || this.entries.get(id) !== entry) return
-    if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    // Only a query has a session to end.
+    const note = isQueryDocument(this.get(id)) ? await this.endSession(id, transaction, options) : undefined
+    if (this.disposed || this.entries.get(id) !== entry) return note
+    if (version !== entry.model.getVersionId()) {
+      // The session has ended all the same, so what became of it shows in the query that stays.
+      if (note) this.sessionHooks?.note?.(id, note)
+      throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    }
     this.closeText(id, entry)
+    return note
   }
   /** Sessions and the transport have ended. Validate the complete reviewed query set before the first local close. */
   closeDisconnectedQueries(approved: readonly { readonly id: string; readonly revision: number }[]): void {

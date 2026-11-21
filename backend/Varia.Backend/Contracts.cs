@@ -44,10 +44,19 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
-/// since SQL Server rolls back what a closed session left open.</summary>
-internal sealed record SessionArgs(string SessionId, string? Transaction = null);
+/// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
+/// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
+/// since its failed commit keeps the session either way.</summary>
+internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null);
+/// <summary>query.session.close's answer: Closed says a session was ended; Note, a BigQuery close's fixed code (with
+/// BigQuery's message or the job id it names), tells what became of a commit or of the session's end.</summary>
+internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null);
+/// <summary>commitNotApplied, committedBeforeCancel, outcomeUnknown, abortFailed or sessionExpired (src/shared/sessions.ts
+/// turns each into text).</summary>
+internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JobId = null);
 internal sealed record CancelArgs(string QueryId);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);

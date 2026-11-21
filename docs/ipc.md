@@ -250,7 +250,7 @@ noted where it matters.
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
-| `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for an ended generation or with no backend |
+| `query.session.close` | invoke | unary | control | 30 s, 60 s with `transaction: 'commit'` (a BigQuery close waits for a stopped job and ends the session within them); answered locally `{ closed: false }` for an ended generation or with no backend |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend |
 | `results.visibility` | invoke (`ResultVisibilityService`) | unary | control | 10 s (note 1 below) |
 | `results.read` | port | stream | results | 60 s |
@@ -755,10 +755,11 @@ demand, within the strict CSP; a virtualized DOM outline serves keyboard, screen
 ## Query execution
 
 `query.execute` takes `{ connectionId, sessionId, database?, dataset?, sql, queryId, maxRows, timeoutSeconds, startLine?,
-maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices? }`. `database` is
-required for SQL Server; `dataset` (≤ 1,024 characters) is a BigQuery query's default dataset, `maximumBytesBilled` (1 to
-2^53 − 1) Tools › Options' cap, which the job carries when its connection sets none, and `prices: false` leaves the dollars
-out of the job's Messages line; SQL Server refuses all three. A BigQuery query runs as one job
+startColumn?, maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices? }`.
+`startColumn` (1 to 1,000,000) is a selection's first column, which BigQuery's `[line:column]` error positions add on the
+selection's first line. `database` is required for SQL Server; `dataset` (≤ 1,024 characters) is a BigQuery query's
+default dataset, `maximumBytesBilled` (1 to 2^53 − 1) Tools › Options' cap, which the job carries when its connection
+sets none, and `prices: false` leaves the dollars out of the job's Messages line; SQL Server refuses all three. A BigQuery query runs as one job
 whose rows are read into the same result store, and its summary adds `job` (`{ project, jobId, location?, statementType?,
 bytesProcessed?, bytesBilled?, cacheHit?, slotMs? }`); SQL Server's options are refused for it ([BigQuery's
 Execution](bigquery.md#execution)). `sessionId` is the query tab's UUID: its SQL session
@@ -821,7 +822,13 @@ it then asks about: a kept session then sees `@@ROWCOUNT` 1, `@@ERROR` 0, and ot
 its most recent SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`). A cancel does not roll
 back; an `XACT_ABORT`-doomed transaction ends by the batch's end (3998).
 
-**Ending a session.** `query.session.close { sessionId, transaction? }`. Without `transaction`, or with `'rollback'`, it
+**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit? }` answers
+`{ closed, note? }`. `abortOnRefusedCommit` (default true) and `note` are BigQuery's ([BigQuery's
+Sessions](bigquery.md#sessions)): a commit refused on an unchecked session ends the session with a note unless quitting
+sent false; `note` is `{ code, message? (≤ 2,000 characters), jobId? }`, `code` one of `commitNotApplied`,
+`committedBeforeCancel`, `outcomeUnknown`, `abortFailed` and `sessionExpired`. A BigQuery commit or rollback close on a
+session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. Main checks the
+answer (`sessionCloseResultSchema`). For SQL Server: Without `transaction`, or with `'rollback'`, it
 cancels any running script and closes the session; SQL Server rolls back, unwaited. `'commit'` reads `@@TRANCOUNT`
 (if no row, or a plan, came back, it turns SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off, then reads again), then,
 only with a transaction open,
@@ -849,11 +856,15 @@ Connection > Disconnect), then execute again." Idle sessions are never reclaimed
 **Prompts.** Before sessions end, the renderer reads each idle query's state (8 at a time, 5 s in all). A count above 0
 is an open transaction; `checked: false`, a read not done in time, or a failure other than a gone session
 (`SESSION_CLOSED`, `SESSION_LOST`, `NOT_CONNECTED`, `CONNECTION_LOST`, `BACKEND_LOST`), e.g. `SESSION_BUSY`, `TIMEOUT`,
-`TOO_MANY_REQUESTS`, is `unchecked`. After a `SESSION_LOST` read the query's next run first says it runs in a new SQL session
+`TOO_MANY_REQUESTS`, is `unchecked`. A BigQuery tab's state is the backend's tracked transaction, read with no request to
+BigQuery. After a `SESSION_LOST` read the query's next run first says it runs in a new SQL session
 and that its previous transaction was rolled back, unless the query moves to another connection or disconnects first. It sends main `varia:confirm-sessions { action, tabs }` (`action`: `close`, `closeAll`,
-`changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll` or `exit`; ≤ 1,024 tabs `{ name ≤ 512,
-transactions, running, unchecked? }`, only those with an open or unchecked transaction or a running script). Main
-composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page gets Cancel.
+`changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll`, `exit` or `switchLocation`; ≤ 1,024 tabs `{ name ≤
+512, transactions, running, unchecked?, provider? }`, only those with an open or unchecked transaction or a running
+script). `provider` (`sqlserver` or `bigquery`) picks the "not checked" note's causes. A BigQuery tab switching to a
+dataset in another location first sends `location: { dataset, from, to }` with that one tab, which asks "Switch this tab
+to …?" (Switch or Don't Switch). Main composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page
+gets Cancel.
 
 - Open transactions ask SSMS's "There are uncommitted transactions. Do you wish to commit these transactions before
   closing the window?" (or before changing the connection, disconnecting, disconnecting the server, closing Varia SQL
@@ -881,9 +892,10 @@ it when no port is open).
 | `progress` | At most 10 a second per query, latest wins; up to 64 sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set stopped storing. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once |
 | `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept set, with its final descriptor |
+| `query.job` | A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): `{ jobId, project, location?, state, auxiliary, transaction }`, `transaction` (`none`, `open`, `unknown`) being the session's as the job started; never the session id |
 
 Progress and messages are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
-256 KiB. `session.opened`, `resultSet.opened` and `resultSet.closed` are essential: never refused, up to 4 MiB (a
+256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed` and `query.job` are essential: never refused, up to 4 MiB (a
 4,096-column descriptor with 128-character names). RESPONSE, PONG and GOAWAY are never dropped. The summary is
 authoritative; a query's events after it are ignored.
 
@@ -2349,7 +2361,7 @@ configuration or ADC file Varia cannot use, naming the field and never the conte
 another account), `NOT_FOUND`, `BACKEND_ERROR` (Google's 5xx), `TIMEOUT`, and `CONNECTION_LOST` when Google cannot be
 reached. A query adds `LOCATION_MISMATCH` (its dataset is in another location; the text names both), `RESULT_TOO_LARGE`
 (over BigQuery's 10 GB result limit), `COST_CAP` (over the connection's maximum bytes billed, naming the cap) and
-`SQL_ERROR` (BigQuery's own text); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
+`SQL_ERROR` (BigQuery's own text); a session close adds `JOB_RUNNING` (a job still runs in the session, which is kept); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
 
 **Microsoft Entra** failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before
 opening). Connect and Load databases `details` are number 0, class 11, state 0 and the server, except AADSTS50126
@@ -2369,7 +2381,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `JOB_RUNNING` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

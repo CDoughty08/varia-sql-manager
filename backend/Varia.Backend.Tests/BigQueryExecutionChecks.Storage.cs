@@ -755,12 +755,12 @@ internal static partial class BigQueryExecutionChecks
             var (jobs, storage) = Numbers(1500, 500);
             using var harness = StorageHarness(jobs, storage);
             await harness.ConnectAsync();
-            // Only the decision's jobs.get fails; the summary's after the read answers.
+            // Only the decision's jobs.get fails: the summary's, read before the rows, answers first.
             var failed = 0;
             var denied = new BigQueryFake.Reply(403, "{\"error\":{\"code\":403,\"message\":\"Access Denied\",\"errors\":[{\"reason\":\"accessDenied\",\"message\":\"Access Denied\"}]}}");
-            harness.Fake.On("GET", Base + "/jobs/[^/]+", request => Interlocked.Increment(ref failed) == 1 ? denied : jobs.Get(request));
+            harness.Fake.On("GET", Base + "/jobs/[^/]+", request => Interlocked.Increment(ref failed) == 2 ? denied : jobs.Get(request));
             var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
-            check(code == "ok" && result is { Status: "completed" } && result.ResultSets.Single().RowsStored == 1500 && storage.Sessions.IsEmpty && failed >= 2,
+            check(code == "ok" && result is { Status: "completed" } && result.ResultSets.Single().RowsStored == 1500 && storage.Sessions.IsEmpty && failed == 2,
                 $"a jobs.get that fails while deciding on Storage Read leaves the result to REST: {code} {message}");
         }
 

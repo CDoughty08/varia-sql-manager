@@ -178,8 +178,10 @@ describe('BackendConnection lifetime', () => {
     const connection = new BackendConnection({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, 1, { spawn, clock })
     connections.push(connection)
     const params = { sessionId: crypto.randomUUID() }
-    const closing = failure(connection.send('query.session.close', params, deadlineFor('query.session.close', params)).done)
-    await advance(15_001)
+    // A control request whose backstop comes before the HELLO wait gives up (a session close's 35 s would not).
+    const deadline = deadlineFor('query.session.state', params)
+    const closing = failure(connection.send('query.session.state', params, deadline).done)
+    await advance(deadline.backstopMs + 1)
     expect(await closing).toMatchObject({ code: 'TIMEOUT' })
     last().sayHello()
     await connection.ready

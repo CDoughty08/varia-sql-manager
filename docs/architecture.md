@@ -661,7 +661,10 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
     what the request made, waiting at most 30 s per lock.
 - **BigQuery** (`BigQueryService`, docs/bigquery.md) runs GoogleSQL through its REST client, never legacy SQL
   (`useLegacySql` false; `#legacySQL` is refused before a job exists). The connect probe dry-runs the constant
-  `BigQueryService.ProbeSql`; every job carries `BigQueryService.Labels`.
+  `BigQueryService.ProbeSql`; every job carries `BigQueryService.Labels`. Its own session statements are the constants in
+  `BigQuerySql` (`COMMIT TRANSACTION` in the tab's session; `CALL BQ.ABORT_SESSION(@session_id)` outside it, the id a
+  STRING parameter), held to constant text by `BigQuerySessionChecks`; a session id is kept only when `BigQuerySql.SessionId`
+  accepts it, and never leaves the backend.
 - **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
   the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
   beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes

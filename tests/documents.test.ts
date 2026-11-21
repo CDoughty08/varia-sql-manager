@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { closedQueryLimits } from '../src/renderer/src/services/documents'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
+import { bigQueryCommitTimeout } from '../src/shared/sessions'
 
 describe('query documents', () => {
   it('reveals a captured line once a previously hidden group binds its editor, and rejects changed or invalid source', () => {
@@ -51,7 +52,7 @@ describe('query documents', () => {
     const state = { cursorState: [{ position: { lineNumber: 2, column: 5 } }, { position: { lineNumber: 1, column: 1 } }], viewState: { scrollTop: 40 }, contributionsState: { folding: 'discard this' } } as unknown as editor.ICodeEditorViewState
     editor.viewState = state
     await documents.close(original.id, 'rollback')
-    expect(api.closeQuerySession).toHaveBeenCalledWith(original.id, 'rollback')
+    expect(api.closeQuerySession).toHaveBeenCalledWith(original.id, { transaction: 'rollback' })
     expect(model(original.id).disposed).toBe(true)
     expect(documents.canReopenClosed()).toBe(true)
     const reopened = documents.reopenClosed()!
@@ -383,6 +384,20 @@ describe('query documents', () => {
     expect(instance.model).toBeNull()
     expect(documents.getSnapshot().activeId).toBe('')
   })
+  it("passes a close's options, returns a BigQuery note, and leaves a Messages line when BigQuery refuses", async () => {
+    const { documents, api } = documentFixture()
+    const message = vi.fn(), tab = documents.create('query.sql', 'SELECT 1', 'sales')
+    documents.sessionHooks = { message, bigQuery: () => true }
+    api.closeQuerySession.mockResolvedValueOnce({ ok: true, value: { closed: true, note: { code: 'sessionExpired' } } })
+    expect(await documents.endSession(tab.id, 'rollback', { abortOnRefusedCommit: false })).toEqual({ code: 'sessionExpired' })
+    expect(api.closeQuerySession).toHaveBeenLastCalledWith(tab.id, { transaction: 'rollback', abortOnRefusedCommit: false })
+    api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'A job is still running.', code: 'JOB_RUNNING' })
+    await expect(documents.endSession(tab.id, 'commit')).rejects.toThrow('A job is still running.')
+    expect(message).toHaveBeenCalledExactlyOnceWith(tab.id, 'A job is still running.', 'error')
+    // Main's commit deadline won: the COMMIT may still run, so its outcome is unknown.
+    api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'The request timed out.', code: 'TIMEOUT' })
+    await expect(documents.endSession(tab.id, 'commit')).rejects.toThrow(bigQueryCommitTimeout)
+  })
   it('does not discard changes made while session close is pending', async () => {
     const { documents, api, model } = documentFixture()
     const tab = documents.create('query.sql', 'SELECT 1', 'master')
@@ -395,6 +410,18 @@ describe('query documents', () => {
     await expect(closing).rejects.toThrow('query changed while closing')
     expect(documents.getSnapshot().busy).toBe(false)
     expect(model(tab.id).disposed).toBe(false)
+  })
+  it('shows the close note in the query that stays when it changed while its session ended', async () => {
+    const { documents, api, model } = documentFixture()
+    const note = vi.fn(), tab = documents.create('query.sql', 'SELECT 1', 'sales')
+    documents.sessionHooks = { message: vi.fn(), bigQuery: () => true, note }
+    const pending = deferred<Awaited<ReturnType<typeof api.closeQuerySession>>>()
+    api.closeQuerySession.mockReturnValueOnce(pending.promise)
+    const closing = documents.runTask(() => documents.close(tab.id, 'commit'))
+    model(tab.id).edit('SELECT 2')
+    pending.resolve({ ok: true, value: { closed: true, note: { code: 'commitNotApplied', message: 'No transaction is active.' } } })
+    await expect(closing).rejects.toThrow('query changed while closing')
+    expect(note).toHaveBeenCalledExactlyOnceWith(tab.id, { code: 'commitNotApplied', message: 'No transaction is active.' })
   })
   it('executes any nonempty selection with its source line and otherwise uses the whole model', () => {
     const { documents } = documentFixture()

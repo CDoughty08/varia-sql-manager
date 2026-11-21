@@ -50,13 +50,13 @@ export const requestSchemas = {
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
     connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
-    startLine: z.number().int().min(1).max(1_000_000).optional(),
+    startLine: z.number().int().min(1).max(1_000_000).optional(), startColumn: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
     maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
-  'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
+  'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.
   'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),

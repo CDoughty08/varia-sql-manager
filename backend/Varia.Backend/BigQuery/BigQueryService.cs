@@ -114,13 +114,15 @@ internal sealed record BigQueryEnvironment(Uri? Endpoint, IHttpClientFactory Htt
 
 /// <summary>One BigQuery connection handle: its options (without credential material), client, pinned credential and
 /// principal, the default location (the options', or the default dataset's), and its Storage Read client, made on first
-/// use and disposed with the handle.</summary>
+/// use. Work that must outlive a Disconnect (a pending session abort, a Stop's jobs.cancel) leases the client; the client
+/// and Storage Read client are disposed once the handle is closed and no lease is left.</summary>
 internal sealed class BigQueryConnection(string id, BigQueryConnectOptions options, BigQueryClient client, BigQueryPrincipal principal, string? location,
     Google.Apis.Auth.OAuth2.ICredential? credential = null) : IDisposable
 {
     private readonly Lock gate = new();
     private IBigQueryStorageRead? storage;
-    private bool disposed;
+    private int leases;
+    private bool closed, disposed;
 
     public string Id { get; } = id;
     public BigQueryConnectOptions Options { get; } = options;
@@ -128,6 +130,9 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
     public BigQueryPrincipal Principal { get; } = principal;
     public string? Location { get; } = location;
     public Google.Apis.Auth.OAuth2.ICredential? Credential { get; } = credential;
+    /// <summary>Datasets' locations read for tabs whose dataset is not the connection's (datasets.get, free); null when
+    /// BigQuery named none or the read failed.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, string?> DatasetLocations { get; } = new(StringComparer.Ordinal);
     /// <summary>Why Storage Read cannot be used on this handle (the API is off, or the principal may not create read
     /// sessions); results are then read through REST without asking again.</summary>
     public volatile string? StorageRefused;
@@ -140,18 +145,54 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
     {
         lock (gate)
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
+            ObjectDisposedException.ThrowIf(closed || disposed, this);
             return storage ??= create(this);
         }
     }
 
+    /// <summary>Keeps the client open past a Disconnect until the lease is disposed; null once the client is disposed.</summary>
+    public IDisposable? Lease()
+    {
+        lock (gate)
+        {
+            if (disposed) return null;
+            leases++;
+            return new Release(this);
+        }
+    }
+
+    sealed class Release(BigQueryConnection connection) : IDisposable
+    {
+        private int done;
+        public void Dispose() { if (Interlocked.Exchange(ref done, 1) == 0) connection.Return(); }
+    }
+
+    void Return()
+    {
+        lock (gate)
+        {
+            leases--;
+            if (!closed || leases > 0 || disposed) return;
+            disposed = true;
+        }
+        DisposeClients();
+    }
+
+    /// <summary>Closes the handle: the clients are disposed now, or when the last lease ends.</summary>
     public void Dispose()
     {
         lock (gate)
         {
+            closed = true;
+            if (leases > 0 || disposed) return;
             disposed = true;
-            storage?.Dispose();
         }
+        DisposeClients();
+    }
+
+    void DisposeClients()
+    {
+        storage?.Dispose();
         Client.Dispose();
     }
 }
@@ -230,6 +271,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
     public bool Disconnect(string connectionId)
     {
         if (!connections.TryRemove(connectionId, out var connection)) return false;
+        ForgetSessions(connection);
         connection.Dispose();
         return true;
     }
@@ -429,6 +471,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
 
     public void Dispose()
     {
+        // A pending abort ends with the backend: its session is left to expire (docs/bigquery.md, Sessions).
+        stopping.Cancel();
         foreach (var id in connections.Keys) Disconnect(id);
     }
 }
