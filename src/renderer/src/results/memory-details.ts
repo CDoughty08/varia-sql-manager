@@ -51,6 +51,8 @@ export interface NerdMetricsModel {
   readonly bars: readonly Bar[]
   readonly legend: readonly Segment[]
   readonly biggest: readonly BiggestRow[]
+  /** What the Biggest results list says when it lists none: windowed results hold blocks, not rows in pages. */
+  readonly biggestEmpty: string
   readonly counters: readonly Counter[]
   readonly heap: string
   /** The unit the section's byte figures share. */
@@ -114,6 +116,7 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
     compressed: isCompressed, codecOn, logicalBytes: logical, memoryBytes: memory, givenBack, tiles,
     bars: [{ label: 'Rows as read', total: logical, segments: asRead }, { label: 'In memory now', total: memory, segments: now }],
     legend, biggest, counters, bytes, cozy,
+    biggestEmpty: window > 0 ? 'Only windowed results are open: their rows stay in BigQuery, and their blocks are the Window cache above.' : 'No results held.',
     // The runtime reports nothing before its first collection: a new backend's heap is unmeasured, not empty.
     heap: heap.committedBytes > 0 ? `Heap ${bytes(heap.committedBytes)} · ${bytes(heap.freeBytes)} free for reuse` : 'Heap not measured yet'
   }

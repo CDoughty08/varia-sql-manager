@@ -1123,7 +1123,7 @@ describe('results service sorting', () => {
     const key = keyAt(service, 't1', 0)
     service.registerGrid('t1', key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn: () => {} })
     const list = await handle.distinct(1)
-    const view = fakeView(handle, 1, [], true, [{ op: 'groups', column: 1, snapshotId: list.snapshotId }])
+    const view = fakeView(handle, 1, [], true, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: true, values: 1, nulls: false, digest: 'a'.repeat(32) }])
     handle.sort.mockResolvedValueOnce(view)
     expect(service.applyColumnFilter('t1', key, 1, { kind: 'list', list })).toBe(true)
     await settle()

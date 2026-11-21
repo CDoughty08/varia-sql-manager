@@ -98,6 +98,10 @@ describe('BigQuery remote results', () => {
     // Only windowed results open: no rows in pages, but the window cache holds blocks, and the Saved tile says so.
     const windowedOnly = nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0 }, () => ({ result: 'Result 1' }))
     expect(windowedOnly.tiles[2].note).toBe('Only windowed results\' blocks held')
+    // Biggest results lists no windowed result (it holds no rows in pages): it says why, rather than that nothing is held.
+    expect(windowedOnly.biggest).toEqual([])
+    expect(windowedOnly.biggestEmpty).toBe('Only windowed results are open: their rows stay in BigQuery, and their blocks are the Window cache above.')
+    expect(nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0, windowCacheBytes: 0 }, () => ({ result: 'Result 1' })).biggestEmpty).toBe('No results held.')
     expect(nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0, windowCacheBytes: 0 }, () => ({ result: 'Result 1' })).tiles[2].note).toBe('No rows held')
   })
 })
