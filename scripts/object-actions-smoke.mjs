@@ -2186,6 +2186,34 @@ try {
   }
   console.log('Object action checks: a job\'s Start Job at Step…, Stop Job and Disable, and the Agent node\'s Restart (on Windows; greyed elsewhere).')
 
+  // SQL Server Agent Properties (AG-8a): the Agent node's Properties opens General with the service account and SSMS's two restart
+  // boxes. History lists what the limits keep for each job; Delete old history asks inline with Cancel focused, runs apart from OK and
+  // reads the history again, keeping the unsaved restart box, which OK then sends alone.
+  const agentPropertiesDialog = () => page.getByRole('dialog', { name: /^SQL Server Agent Properties/ })
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Properties')
+  await expect(agentPropertiesDialog().getByText('NT Service\\SQLSERVERAGENT', { exact: true })).toBeVisible()
+  const agentRestart = agentPropertiesDialog().getByRole('checkbox', { name: 'Auto restart SQL Server Agent if it stops unexpectedly', exact: true })
+  await expect(agentRestart).toBeChecked()
+  await agentRestart.uncheck()
+  await agentPropertiesDialog().getByRole('button', { name: 'History', exact: true }).click()
+  const retention = agentPropertiesDialog().getByRole('table', { name: /^What this keeps/ })
+  await expect(retention.getByRole('row')).toHaveCount(3)
+  await expect(retention.getByRole('row', { name: /Nightly/ })).toContainText('4 a day')
+  await agentPropertiesDialog().getByRole('button', { name: 'Delete history…', exact: true }).click()
+  const purgeConfirm = agentPropertiesDialog().getByRole('group', { name: 'Confirm Delete old history now', exact: true })
+  await expect(purgeConfirm.getByText(/^Delete the history of every job on .+ from before 2026-03-03 10:00:00/)).toBeVisible()
+  await expect(purgeConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-agent-properties-dark.png') })
+  await purgeConfirm.getByRole('button', { name: 'Delete history', exact: true }).click()
+  await expect(agentPropertiesDialog().getByRole('status').filter({ hasText: 'Deleted the history.' })).toContainText('500 history entries purged.')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'agentProperties', target: { kind: 'agent' }, agentPurge: { count: 4, unit: 2 } })
+  await expect(agentPropertiesDialog().getByText('now 400 rows', { exact: true })).toBeVisible()
+  await expect(agentRestart).not.toBeChecked()
+  await agentPropertiesDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(agentPropertiesDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual(expect.objectContaining({ action: 'agentProperties', agentProperties: { monitorAutostart: false } }))
+  console.log('Object action checks: SQL Server Agent Properties\' General and History, Delete old history\'s inline confirmation apart from OK, and OK sending only the changed box.')
+
   // Tasks › Detach… (D3b). Detach Database lists AppData with Drop Connections and Update Statistics (both unchecked, as SSMS
   // opens it) and the files that stay on the server; OK waits for Drop Connections while sessions are connected. Script Action
   // shows SINGLE_USER and sp_detach_db's @skipchecks; Success stays open on its steps, AppData leaves Databases, and a toast says

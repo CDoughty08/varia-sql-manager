@@ -132,6 +132,9 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
     // SQL Server Agent (AG-2): one job with two steps, and the service's state as the Service Control Manager reports it.
     jobs: [{ name: 'Nightly', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
+    // SQL Server Agent Properties (AG-8a): msdb's settings and two jobs' history.
+    agentSettings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\SQLSERVERAGENT', errorLogFile: 'C:\Logs\SQLAGENT.OUT', errorLoggingLevel: 3 },
+    agentHistory: 900,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
     logins: [
       { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true },
@@ -604,8 +607,27 @@ GO
     stub.agentState = action === 'stopAgent' ? 'stopped' : 'running'
     return ok({ steps: action === 'startAgent' ? start : action === 'stopAgent' ? stop : [...stop, ...start], messages: [], elapsedMs: 1, agentService: stub.agentState })
   }
+  /** SQL Server Agent Properties: the settings, the server's clock and every job's history; OK stores what changed, a purge empties the old rows. */
+  function agentProperties() {
+    const total = stub.agentHistory
+    return ok({ elapsedMs: 1, agentProperties: {
+      settings: { ...stub.agentSettings }, serverNow: '2026-03-31T10:00:00', serverOffsetMinutes: -new Date().getTimezoneOffset(),
+      history: { total, recent: Math.min(total, 700), jobsTruncated: false, jobs: [{ name: 'Log backup', rows: Math.min(total, 600), recent: Math.min(total, 672) }, { name: 'Nightly', rows: Math.max(0, total - 600), recent: 28 }],
+        ages: total === 900 ? [{ days: 0, rows: 100 }, { days: 3, rows: 300 }, { days: 30, rows: 400 }, { days: 60, rows: 100 }] : [{ days: 0, rows: 100 }, { days: 3, rows: 300 }] }
+    } })
+  }
+  function agentPropertiesRun({ agentProperties: changes, agentPurge }) {
+    if (agentPurge) {
+      const purged = stub.agentHistory === 900 ? 500 : 0
+      stub.agentHistory -= purged
+      return ok({ steps: [{ status: 'done', title: 'Delete old job history' }], messages: [`${purged} history entries purged.`], elapsedMs: 1 })
+    }
+    for (const [key, value] of Object.entries(changes)) stub.agentSettings[key] = value
+    return ok({ steps: [{ status: 'done', title: 'Save SQL Server Agent properties' }], messages: [], elapsedMs: 1 })
+  }
   function execute(params, sender) {
     const { target } = params
+    if (params.action === 'agentProperties') return agentPropertiesRun(params)
     if (target.kind === 'agentJob') return jobVerb(params)
     if (target.kind === 'agent') return agentService(params)
     if (params.action === 'createDatabase') return createDatabase(params)
@@ -718,6 +740,7 @@ GO
           case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           case 'renameDatabase': return renameFacts(params)
           case 'startJobAtStep': return describeJob(params)
+          case 'agentProperties': return agentProperties()
           case 'startAgent': case 'stopAgent': case 'restartAgent': return ok({ elapsedMs: 1, agentService: { machine: 'DB01', service: 'SQLSERVERAGENT', state: stub.agentState } })
           default: return params.target.kind === 'login' ? describeLogin(params) : describe(params)
         }
@@ -727,6 +750,7 @@ GO
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'loginProperties': return ok({ text: loginPropertiesScript(params.target.name, params.loginChanges.defaultLanguage ?? 'us_english'), database: 'master', warnings: [] })
           case 'tableProperties': return ok({ text: tablePropertiesScript(params.target.name, params.tableChanges.lockEscalation ?? 'TABLE'), database: params.target.database, warnings: [] })
+          case 'agentProperties': return ok({ text: ['USE [msdb]', 'GO', 'EXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart=0', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'msdb', warnings: [] })
           case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })

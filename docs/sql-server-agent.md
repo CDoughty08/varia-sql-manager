@@ -2,7 +2,7 @@
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
-Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop and Restart; Search Objects finds jobs, alerts
+Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, and Script As scripts jobs, alerts, operators and proxies. Job Activity Monitor and the job documents arrive
 in later lanes, behind the same gate until 0.11.0.
 
@@ -57,6 +57,27 @@ in later lanes, behind the same gate until 0.11.0.
   Linux server, Managed Instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
+- **SQL Server Agent Properties** (the Agent node's Properties, a modal dialog; object actions, docs/object-actions.md). General
+  shows the service account and whether it starts automatically, SSMS's "Auto restart SQL Server if it stops unexpectedly"
+  and "Auto restart SQL Server Agent if it stops unexpectedly", and the error log, read-only for now; Advanced, Alert System,
+  Job System and Connection come later. History has SSMS's "Limit size of job history log", "Maximum job history log size"
+  (2 to `historyMaxRows`, or no limit) and "Maximum job history rows per job" (1 to the log's size). Below them, **What this
+  keeps** lists the jobs with the most history, each with the rows it wrote over the last `retentionDays` days and how long
+  its history lasts under the limits now, and under the ones being typed when they differ: rows per job over the job's rate,
+  or the log's size over every job's rate where that is less, which a note points out, since Agent then removes the oldest
+  rows of any job. Reading every job's history needs sysadmin; below it the table says why it is missing.
+  OK sends only what changed, through `sp_set_sqlagent_properties` with NULL for the rest, which msdb leaves as it is (the two
+  sizes go together, since msdb checks one against the other). **Delete old history now** is not a setting: older than a
+  number of days, weeks or months (up to `purgeCount`), with the cut-off and about how many rows it deletes. Delete history…
+  asks inline, Cancel focused, naming the server, the cut-off and, when the server's clock is in another time zone,
+  "(server time)"; Delete history then runs at once, apart from OK, and the dialog reads the history again and keeps any
+  unsaved change. The server computes the cut-off from its own clock (`DATEADD` back from `GETDATE()`, the local time msdb
+  stores), and the batch THROWs before `sp_purge_jobhistory` if it is NULL, which msdb would read as all history; msdb's
+  info message says how many rows went. Both writes name no job, so they have their own exact-shape lint,
+  `AgentSql.LintServerExecutable`. msdb grants `sp_set_sqlagent_properties` to no role and Managed Instance refuses it, so
+  below sysadmin and on Managed Instance the dialog opens read-only with the reason and only Close; the action and its Script
+  are refused `NOT_SUPPORTED` on Managed Instance before any connection opens. A purge msdb refuses (14392) is
+  `PERMISSION_DENIED`, and Agent XPs off is `AGENT_STOPPED`.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in
   [docs/scripting.md](scripting.md)). SMO writes the script through `ScriptPipeline` as for every other kind (headers
@@ -370,7 +391,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_stop_job` | `@job_id` | AG-2 |
 | `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name` | AG-2 |
 | `msdb.dbo.sp_delete_job` | `@job_id`, `@delete_history`, `@delete_unused_schedule` | AG-2 |
-| `msdb.dbo.sp_purge_jobhistory` | later lanes | AG-6a |
+| `msdb.dbo.sp_purge_jobhistory` | `@oldest_date` | AG-8a |
 | `msdb.dbo.sp_add_job` | later lanes | AG-6a |
 | `msdb.dbo.sp_add_jobserver` | later lanes | AG-6a |
 | `msdb.dbo.sp_update_alert` | later lanes | AG-6a |
@@ -391,7 +412,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_add_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_update_notification` | later lanes | AG-7 |
 | `msdb.dbo.sp_delete_notification` | later lanes | AG-7 |
-| `msdb.dbo.sp_set_sqlagent_properties` | later lanes | AG-8a |
+| `msdb.dbo.sp_set_sqlagent_properties` | `@sqlserver_restart`, `@monitor_autostart`, `@jobhistory_max_rows`, `@jobhistory_max_rows_per_job` | AG-8a |
 | `msdb.dbo.sp_add_proxy` | later lanes | AG-8b |
 | `msdb.dbo.sp_update_proxy` | later lanes | AG-8b |
 | `msdb.dbo.sp_delete_proxy` | later lanes | AG-8b |
@@ -410,6 +431,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `14234` | `SQL_ERROR` | An argument is not valid (such as an owner login that does not exist). |
 | `14266` | `SQL_ERROR` | An argument is not one of its valid values (such as a schedule's frequency type). |
 | `14372` | `IN_USE` | A schedule is still used by a job. |
+| `14392` | `PERMISSION_DENIED` | Only sysadmin and SQLAgentOperatorRole may purge the history of every job, or of a job the login does not own. |
 | `15281` | `AGENT_STOPPED` | Agent XPs is off (SQL Server Agent is stopped or disabled). |
 | `22022` | `JOB_STATE` | SQL Server Agent refused a start or stop; decided by a re-read, never by number. |
 | `22003` | `SQL_ERROR` | Every `xp_servicecontrol` failure (only its `QueryState` read is used); the Windows code is in its text. |
@@ -437,5 +459,10 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `servicePollMs` | 500 | How often a Start or Stop's wait polls the service's state, in ms |
 | `agentUpWaitMs` | 120,000 | How long the live checks wait for Agent after the server is up, in ms |
 | `profileMs` | 10,000 | The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role) |
+| `historyMaxRows` | 999,999 | The largest Maximum job history log size SQL Server Agent Properties sends, in rows (rows per job are 1 to it) |
+| `retentionDays` | 7 | The days of history "What this keeps" measures each job's rate over |
+| `retentionJobs` | 200 | Jobs "What this keeps" lists, those with the most rows first; more set `truncated` |
+| `historyAgeDays` | 400 | Whole days of age the purge's row estimate counts separately (older rows count together) |
+| `purgeCount` | 999 | The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`) |
 
 A job save makes at most 140 calls at these caps, below the 255 a THROW state can number.

@@ -27,7 +27,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `startJob` | Start Job at Step… | `explorer.startJob` | dialog (`startJobAtStep`) | `explorer.context` | `2_job` 1 | t | — | — | SQL Server, Managed Instance | `explorerActionStartJob` |
 | `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
 | `startAgent` | Start | `explorer.startAgent` | dialog (`startAgent`) | `explorer.context` | `2_service` 1 | s | — | — | SQL Server, Managed Instance | `explorerActionStartAgent` |
-| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
+| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | t | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
 | `restartAgent` | Restart | `explorer.restartAgent` | dialog (`restartAgent`) | `explorer.context` | `2_service` 3 | e | — | — | SQL Server, Managed Instance | `explorerActionRestartAgent` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
@@ -74,7 +74,7 @@ is reserved on Windows and Linux.
 | `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
-| `agent` | none | – | – | – | – | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
+| `agent` | none | – | – | – | ✓ | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
 | `agentJob` | none | – | ✓ | ✓ | – | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
 
 ## Folder actions
@@ -139,6 +139,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `startAgent` | Start SQL Server Agent | Modal dialog | `startAgent` | General (`settings-gear`) | Yes |
 | `stopAgent` | Stop SQL Server Agent | Modal dialog | `stopAgent` | General (`settings-gear`) | Yes |
 | `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
+| `agentProperties` | SQL Server Agent Properties - <name> | Modal dialog | `agentProperties` | General (`settings-gear`), History (`history`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.

@@ -71,7 +71,11 @@ export interface OpenObjectDialog {
   /** Counts the times the secret slot was emptied while the dialog stayed open (`spentSecrets`): the password fields, which keep their
    *  text themselves, remount on it and come back empty. */
   readonly secretEpoch?: number
+  /** How the last of a page's own runs apart from OK went (`runInline`: SQL Server Agent Properties' Delete old history now). */
+  readonly inline?: InlineRun
 }
+/** A page's own run apart from OK, once it answered: its informational messages, or why it failed. */
+export type InlineRun = { readonly state: 'done'; readonly messages: readonly string[] } | { readonly state: 'failed'; readonly error: ActionError }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
 /** Check Names' answer for one typed name: checking, what xp_logininfo said, or why it could not say. */
@@ -402,6 +406,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    // A read-only dialog (definition.readOnly) has only Close.
+    if (definition.readOnly?.(open.model)) { this.close(); return }
     // A hand-off (Unlock's Set a new password…) runs nothing here: unless OK is blocked, this dialog closes and the next one opens.
     const handOff = definition.handOff?.(open.model, open.draft)
     if (handOff) { if (!this.blockedReason(open)) this.handOver(handOff); return }
@@ -475,6 +481,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
     if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+  }
+
+  /**
+   * A page's own action apart from OK (SQL Server Agent Properties' Delete old history now, which runs once and is never stored): it runs as OK
+   * runs, in the executing phase with Stop, and the dialog stays open on `ready` with how it went in `inline`; a success reads the object
+   * again, so the page shows what is there now. Never while another request runs or in a read-only dialog.
+   */
+  async runInline(request: BuiltRequest): Promise<void> {
+    const open = this.current
+    if (!open?.model || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped') || definitionOf(open.dialog).readOnly?.(open.model)) return
+    const requestId = this.begin(open)
+    this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined, inline: undefined })
+    const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId: open.connectionId, requestId } as ActionRequest))
+    if (!this.end(open, requestId)) return
+    const value = result.ok ? result.value : undefined
+    if (value && !value.error) { this.update(open, { phase: 'ready', inline: { state: 'done', messages: value.messages } }); this.reload(); return }
+    const failure = value?.error ?? (!result.ok && result.code === 'CANCELLED' ? error('CANCELLED', dialogMessages.stopped)
+      : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
+    this.update(open, { phase: 'ready', inline: { state: 'failed', error: failure } })
   }
 
   /** Main's box for a confirmation: Open Connections' Yes, or any action prompt answer but its cancel one. A failure counts as No. */

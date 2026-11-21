@@ -296,6 +296,8 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         // SQL Server Agent's job verbs and service control (AG-2) validate themselves.
         if (ValidateAgent(args, script) is { } agentTarget) return agentTarget;
+        // SQL Server Agent Properties (AG-8a) validates itself too.
+        if (ValidateAgentProperties(args) is { } propertiesTarget) return propertiesTarget;
         if (args.LoginChanges is not null && args.Action != "loginProperties") throw Invalid(args.Action + " takes no loginChanges.");
         if (args.TableChanges is not null && args.Action != "tableProperties") throw Invalid(args.Action + " takes no tableChanges.");
         // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
@@ -469,6 +471,7 @@ internal sealed partial class ActionService : IDisposable
                 _ when args.Dialog == catalog.Logins.Securables.EffectiveDescribe => DescribeEffectiveJobAsync(connection, target, args.Securable!, job),
                 "startJobAtStep" => DescribeStartJobAsync(connection, target, job),
                 "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
+                "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -479,6 +482,7 @@ internal sealed partial class ActionService : IDisposable
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
+        if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
         if (catalog.Restore.Requests.Contains(args.Action))
         {
@@ -515,6 +519,8 @@ internal sealed partial class ActionService : IDisposable
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
+        // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
+        if (args.Action == "agentProperties" && AgentPropertiesRefusal(args.ConnectionId) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
@@ -531,6 +537,7 @@ internal sealed partial class ActionService : IDisposable
                 "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 "tableProperties" => ExecuteTableJobAsync(connection, args, target, band, job),
                 _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
+                "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

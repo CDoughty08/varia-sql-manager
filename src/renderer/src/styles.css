@@ -3107,3 +3107,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @keyframes server-drop-stripe { from { transform: scaleX(0); opacity: 0.4; } to { transform: scaleX(1); opacity: 1; } }
 @keyframes server-drop-wash { 0% { opacity: 0; background-position: -60% 0; } 20%, 70% { opacity: 0.18; } 100% { opacity: 0; background-position: 160% 0; } }
 @keyframes server-drop-details { 0% { opacity: 1; } 35% { opacity: 0; filter: blur(2px); } 100% { opacity: 1; } }
+
+/* SQL Server Agent Properties (AG-8a). */
+.agent-properties { display: flex; flex-direction: column; gap: 12px; }
+.agent-service-facts { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 4px 12px; margin: 0 0 8px; font-size: var(--varia-size-xs); }
+.agent-service-facts dt { color: var(--varia-dialog-labelForeground); }
+.agent-service-facts dd { margin: 0; overflow-wrap: anywhere; }
+.agent-history-input { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-history-input > input { flex: 0 1 140px; min-width: 0; height: 28px; }
+.agent-retention td.agent-retention-server { font-style: italic; }
+.agent-purge-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-purge-count { width: 64px; height: 28px; }
+.agent-purge-row select { height: 28px; }
+.agent-purge-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.agent-purge-actions { display: flex; gap: 8px; margin-left: auto; }
