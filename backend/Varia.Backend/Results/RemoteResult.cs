@@ -38,7 +38,7 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
     }
 
     internal static RequestException BlockTooLarge() =>
-        new("TOO_LARGE", "These rows are too wide for the window cache. Raise Block cache per windowed result in Options > Query Results > BigQuery > Results, or select fewer columns.");
+        new("TOO_LARGE", "These rows are too wide for the window cache. Raise Block cache per windowed result in Tools › Options › Query Results › BigQuery › Results, or select fewer columns.");
 
     public void AbortRow()
     {

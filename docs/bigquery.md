@@ -316,7 +316,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Load into memory.** `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, and a second load of a result already loading is refused. Reads under way when it starts
-  answer with the rows they have, and the grid reads again from memory. The button that runs it comes in a later update.
+  answer with the rows they have, and the grid reads again from memory.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
   of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
   filters are removed when its result switches (the screen reader hears so). A destination table lasts

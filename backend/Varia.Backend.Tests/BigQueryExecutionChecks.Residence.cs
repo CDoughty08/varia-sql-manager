@@ -42,6 +42,8 @@ internal static partial class BigQueryExecutionChecks
         await TwoLoadsAsync(check);
         Trace("LoadAfterDisconnect");
         await LoadAfterDisconnectAsync(check);
+        Trace("LoadReleased");
+        await LoadReleasedAsync(check);
         Trace("LoadWhileRunning");
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
@@ -781,6 +783,28 @@ internal static partial class BigQueryExecutionChecks
         var set = harness.Service.Results.Find(id);
         check(code == "NOT_CONNECTED" && result is null && !OfType(events, "resultSet.residence").Any() && set is { IsRemote: true, Revision: 0 },
             $"a load that a disconnect overtakes before it registers is refused, the set still windowed: {code} {message} {result?.Status} {set?.IsRemote} {set?.Revision}");
+    }
+
+    /// <summary>A result closed while it loads into memory: the load stops at once and says the result was closed, never
+    /// that it was loaded.</summary>
+    static async Task LoadReleasedAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var queryId = Guid.NewGuid().ToString();
+        var loading = Run(harness, "results.remoteQuery", Load(id, queryId));
+        await Task.WhenAny(harness.Jobs.Polling.Task, loading).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("results.close", new JsonObject { ["resultIds"] = new JsonArray(id) });
+        var ended = await Task.WhenAny(loading, Task.Delay(TimeSpan.FromSeconds(15))) == loading;
+        if (!ended) await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+        var (code, result, _, message) = await loading;
+        harness.Jobs.HangPages = false;
+        check(ended && code == "ok" && result is { Status: "failed", Error.Code: "RESULT_RELEASED" } && !Says(result, "loaded into memory"),
+            $"a load whose result is closed stops at once and says so: {ended} {code} {message} {result?.Status} {result?.Error?.Code}");
     }
 
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>

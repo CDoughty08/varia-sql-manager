@@ -307,6 +307,8 @@ internal sealed partial class SqlService
             throw set.IsReleased ? Unavailable(args.ResultId) : new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");
         }
         using var cancelled = context?.Token.Register(running.Cancel);
+        // Released meanwhile (Close Results, the tab closed or ran again): the load stops at once, for no one holds the result.
+        using var gone = set.Released.Register(running.Cancel);
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         var messages = new QueryMessages(events.Message);
         var token = cancellation.Token;
@@ -336,13 +338,21 @@ internal sealed partial class SqlService
             }
             // Only the revision this load opened: one a later load promoted is that load's to finish.
             if (set.IsOpen && set.Revision == loaded) set.Complete();
+            if (set.IsReleased) throw Unavailable(args.ResultId);
             messages.Add(set.IsRemote ? "The result did not fit in memory, so it stays windowed in BigQuery." : "The result was loaded into memory.");
         }
         catch (Exception error)
         {
             // Stopped or failed part way: the result goes back to windowed, whole, rather than staying a partial copy.
             if (set.IsOpen && !set.IsReleased && set.Revision == loaded) SwitchBack();
-            if (token.IsCancellationRequested)
+            if (set.IsReleased)
+            {
+                var closed = Unavailable(args.ResultId);
+                status = "failed";
+                failure = new(closed.Code, closed.Message, 1, 1);
+                messages.Add(closed.Message, MessageKind.Error);
+            }
+            else if (token.IsCancellationRequested)
             {
                 status = "cancelled";
                 failure = new("CANCELLED", "Loading into memory was cancelled. The result stays windowed in BigQuery.", 1, 1);

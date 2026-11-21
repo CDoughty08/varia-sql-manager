@@ -143,7 +143,10 @@ describe('the backend comments that point into docs/bigquery.md', () => {
     const named = new Set([...docs.matchAll(/^#+ (.+)$/gm), ...docs.matchAll(/\*\*([^*]+?)\.\*\*/g)].map(match => match[1].trim()))
     const root = join(__dirname, '..', 'backend')
     const files = (readdirSync(root, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
-    const missing = files.flatMap(name => [...readFileSync(join(root, name), 'utf8').matchAll(/docs\/bigquery\.md, ([^);\n]*)/g)]
+    // A pointer may wrap onto the comment's next line: continuations are joined first.
+    const joined = (text: string) => text.replace(/\r?\n\s*\/\/\/?\s*/g, ' ')
+    expect(joined('(docs/bigquery.md,\n    /// Nonexistent)').match(/docs\/bigquery\.md, ([^);\n]*)/)?.[1]).toBe('Nonexistent')
+    const missing = files.flatMap(name => [...joined(readFileSync(join(root, name), 'utf8')).matchAll(/docs\/bigquery\.md, ([^);\n]*)/g)]
       .flatMap(match => match[1].split(/[,:]\s*/).map(part => part.trim()).filter(part => part && !/^decision \d+$/.test(part)).filter(part => !named.has(part))
         .map(part => `${name.replaceAll('\\', '/')}: ${part}`)))
     expect(named.has('Residence') && named.has('Deciding') && named.has('Throughput')).toBe(true)
@@ -153,5 +156,17 @@ describe('the backend comments that point into docs/bigquery.md', () => {
     const jobs = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'BigQuery', 'BigQueryService.Jobs.cs'), 'utf8')
     expect(jobs).not.toMatch(/429 and 5xx are retried/)
     expect(jobs).toMatch(/return PageAsync\(service, request\.CreateRequest\(\), t\);\n\s*\}, token, rateLimits: false\);/)
+  })
+})
+
+describe('the user-facing text about windowed results', () => {
+  it('names Options by its menu path, and the Results guide tells of windowed results beside the memory limits', () => {
+    const remote = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'RemoteResult.cs'), 'utf8')
+    expect(remote).not.toMatch(/"[^"\n]*Options > /)
+    expect(remote).toMatch(/Tools › Options › Query Results › BigQuery › Results/)
+    const guide = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'help', 'guides', 'results.tsx'), 'utf8')
+    const limits = guide.slice(guide.indexOf('limits:'))
+    expect(limits).toMatch(/<SettingRef id="queryResults\.bigQuery\.residence" \/>/)
+    expect(limits).not.toMatch(/<p>Results stay in memory\./)
   })
 })
