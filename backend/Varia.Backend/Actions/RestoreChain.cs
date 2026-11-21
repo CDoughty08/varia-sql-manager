@@ -30,9 +30,29 @@ internal static class RestoreChain
             }
         }
         catch (SqlException error) when (!token.IsCancellationRequested && RestoreDescribe.MediaError(catalog, error, connection) is { } value) { return (null, value); }
+        token.ThrowIfCancellationRequested();
         if (Problem(catalog.Restore, planned, headers, files) is { } problem) return (null, ActionErrors.Create(catalog, problem.Code, problem.Message));
         return (new(headers[0].Database, headers[0].FamilyGuid, headers), null);
     }
+
+    /// <summary>A set's step checks its header again right before its RESTORE: a run's sets restore over minutes or hours, and a backup
+    /// file overwritten meanwhile (a nightly differential WITH INIT, say) would otherwise restore a set the plan never named. Null when
+    /// the set at the position is still the reviewed one (same BackupSetGUID and kind), else the error the step fails with.</summary>
+    public static async Task<ActionError?> RecheckAsync(SqlConnection connection, ActionsCatalog catalog, RestorePlanSetDto set, CancellationToken token)
+    {
+        List<BackupSetDto> listed;
+        try { listed = await RestoreDescribe.HeadersAsync(connection, set.Devices, "1", null, token); }
+        catch (SqlException error) when (!token.IsCancellationRequested && RestoreDescribe.MediaError(catalog, error, connection) is { } value) { return value; }
+        // SqlClient can end a cancelled reader without an error: a Stop must read as one, not as headers that changed.
+        token.ThrowIfCancellationRequested();
+        return Changed(catalog.Restore, set, listed) is { } changed ? ActionErrors.Create(catalog, "MEDIA", changed) : null;
+    }
+
+    /// <summary>RecheckAsync's verdict on the headers it read: why the set at the planned position is no longer the reviewed one (gone,
+    /// another BackupSetGUID, another kind), or null.</summary>
+    internal static string? Changed(RestoreCatalogJson restore, RestorePlanSetDto set, IReadOnlyList<BackupSetDto> listed) =>
+        listed.FirstOrDefault(item => item.Position == set.File) is { } header && SameSet(set, header) && header.Type == set.Type ? null
+            : restore.Message("changedSet") + " (" + Where(set) + ")";
 
     /// <summary>Why the headers the media hold do not restore as planned, or null: another backup set than the one reviewed (the file
     /// was overwritten after it was read), a set of another kind than planned, a damaged set,

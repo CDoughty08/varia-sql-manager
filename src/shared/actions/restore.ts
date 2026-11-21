@@ -78,7 +78,8 @@ export const restoreMessages = {
   /** Why Manual Selection cannot check a set the planner never uses (the row's title and its checkbox's description). */
   damaged: 'This backup set is marked damaged.',
   copyOnlyLog: 'A copy-only log backup is not part of the log chain.',
-  /** The run's preflight: the set at a planned position has another BackupSetGUID than the one reviewed (the file was overwritten). */
+  /** The run's preflight, and each set's step right before its RESTORE: the set at a planned position is not the one reviewed (another
+   *  BackupSetGUID, or gone), as when the file was overwritten. */
   changedSet: 'This backup set is not the one the plan was made from: the backup file changed after it was read. Read the backups again and review the plan.',
   /** Stop reached SQL Server only as it finished the last RESTORE WITH RECOVERY: the run's reply says so ({database} shown through displayText). */
   finishedAtStop: 'Stop came as SQL Server finished the restore: {database} is restored and online.',

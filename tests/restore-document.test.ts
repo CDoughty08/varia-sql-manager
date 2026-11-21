@@ -142,6 +142,11 @@ describe('Restore Database as a document', () => {
     const pointed = restoreRequest(state().draft!, state().facts, ids) as RestoreRequest
     expect(pointed.restore.sets.map(set => set.id)).toEqual([uuid(1), uuid(2), uuid(3)])
     expect(pointed.restore.stopAt).toBe('2026-10-29T21:05:43')
+    expect(pointed.restore.sets.map(set => set.guid)).toEqual([uuid(1), uuid(2), uuid(3)])
+    // A header without a BackupSetGUID sends no guid (not an undefined one), so the backend expects none at the position either.
+    const unpinned = restoreRequest(state().draft!, { ...state().facts, sets: state().facts.sets.map(({ backupSetGuid: _, ...set }) => set) }, ids) as RestoreRequest
+    expect(unpinned.restore.sets.every(set => !('guid' in set))).toBe(true)
+    expect(validateRequest('actions.execute', unpinned)).toEqual(unpinned)
     restore.updateDraft(id, { stopAt: undefined })
     expect(state().draft!.stopAt).toBeUndefined()
     // The grid's checkboxes wait for Manual Selection, which starts from the plan the grid shows.

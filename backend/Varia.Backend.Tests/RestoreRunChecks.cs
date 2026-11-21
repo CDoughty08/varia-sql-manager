@@ -224,5 +224,22 @@ internal static partial class RestoreRunChecks
         check(guidWrong.Count == 0 && RestoreChain.Problem(Restore, pinned, one(newer)) is { Message: var message } && message.StartsWith(Restore.Message("changedSet"), StringComparison.Ordinal),
             "RestoreChain passes only the set whose BackupSetGUID is the reviewed one (case aside), treats a GUID on one side only as a change, and asks for the backups to be read again: "
             + string.Join(", ", guidWrong));
+
+        // The step's own recheck (RestoreChain.RecheckAsync) on the headers it reads right before the set's RESTORE.
+        var atTwo = full with { Position = 2, BackupSetGuid = reviewed };
+        var recheck = new (string Name, bool Refused, RestorePlanSetDto Set, List<BackupSetDto> Listed)[]
+        {
+            ("the reviewed set at its position", false, pinned[0], one(reviewed)),
+            ("the reviewed set beside others", false, pinned[0] with { File = 2 }, [full with { BackupSetGuid = newer }, atTwo]),
+            ("no GUID on either side", false, planned[0], one(null)),
+            ("nothing at the position any more", true, pinned[0] with { File = 3 }, [full with { BackupSetGuid = reviewed }, atTwo]),
+            ("another set at the position", true, pinned[0], one(newer)),
+            ("a header without a GUID where the plan has one", true, pinned[0], one(null)),
+            ("the reviewed GUID as another kind", true, pinned[0] with { Type = "differential" }, one(reviewed)),
+            ("no headers at all", true, pinned[0], [])
+        };
+        var recheckWrong = recheck.Where(item => (RestoreChain.Changed(Restore, item.Set, item.Listed) is not null) != item.Refused).Select(item => item.Name).ToList();
+        check(recheckWrong.Count == 0 && RestoreChain.Changed(Restore, pinned[0], one(newer)) == Restore.Message("changedSet") + " (f.bak)",
+            "a set's step refuses its RESTORE when the set at its position is gone, has another BackupSetGUID or is another kind, naming the file: " + string.Join(", ", recheckWrong));
     }
 }
