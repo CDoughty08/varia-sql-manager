@@ -1390,8 +1390,11 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   either is released. It must be a comparison of the same query and the same two inputs, in either order
   (`INVALID_PARAMS`; released: `RESULT_RELEASED`). Main forwards it only for a comparison its port owns whose recorded
   inputs are the request's, either way round (`RESULT_UNAVAILABLE` for a result that is not a comparison it owns, `INVALID_REQUEST` for other
-  inputs). The caller releases the old comparison once the new one is shown.
-- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
+  inputs); the record belongs to the page that made the comparison, so the next page load cannot replace it, while a
+  port reopened within the page (popped-out panes use the window's port) still can. The caller releases the old
+  comparison once the new one is shown.
+- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"); a change of it
+  (Layout, Exact text, swapped sides) replaces it in place under the same entry (`replaceComparison`). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
   colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): its kind is the row's tone (the

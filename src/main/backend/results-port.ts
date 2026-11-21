@@ -153,10 +153,11 @@ export class ResultsPortHost {
   }
 
   /** A new page load (reload, crash or window close): the port closes and earlier opens stop counting, so the rate
-   *  limit applies to reopens within one load. */
+   *  limit applies to reopens within one load. The new page cannot replace a comparison the old one made (`replaces`). */
   reset(): void {
     this.close()
     this.opens = []
+    this.diffInputs.clear()
   }
 
   /** The port and its streams end. Ownership of query results stays with the generation; live streams' results go. */
