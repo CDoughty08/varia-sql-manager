@@ -52,7 +52,7 @@
 
 ### Fixes
 
-- **Execute To with an @RC parameter:** Script As › EXECUTE To on a procedure or function with a parameter named `@RC`, or one a collation compares equal to it (such as a fullwidth `＠ＲＣ`), now names the return code `@RC1` (or the next free number), instead of declaring `@RC` twice so the script failed with error 134.
+- **Execute To with an @RC parameter:** Script As › EXECUTE To on a procedure or function with a parameter named `@RC`, or one a collation compares equal to it (such as a fullwidth `@ＲＣ`), now names the return code `@RC1` (or the next free number), instead of declaring `@RC` twice so the script failed with error 134.
 - **Empty text is not zero in a comparison:** Comparing a number column with a text column of the same name no longer treats empty text, a lone `-` or `.`, or other text that is not a number as 0 when the number is in the old result; the result is the same whichever way round you compare\. Trailing spaces after a number are underlined, or changed with Exact text, as in text\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.

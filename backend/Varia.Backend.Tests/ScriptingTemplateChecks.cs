@@ -149,7 +149,7 @@ internal static class ScriptingTemplateChecks
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, "@RC")], false, true).StartsWith("DECLARE @RC1 int" + NL + "DECLARE @RC int" + NL, StringComparison.Ordinal),
             "EXECUTE To names the return code after any parameter called @RC, @RC1 and so on, compared case-insensitively, so the batch declares no variable twice");
         check(DmlTemplates.Execute(obj, [P(1, "@\uFF32\uFF23"), P(2, "@RC\uFF11"), P(3, "@R\u00C72"), P(4, "@RC\u02193"), P(5, "@R\u3400C4")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal),
-            "a parameter that some collation could read as the return code counts too: a fullwidth @RC, a fullwidth digit in @RC1 (which also stands for any one character, so @RC5 to @RC9), an accented @RC2, and @RC3 and @RC4 with a character a collation weighs zero move the return code to @RC10");
+            "a parameter that some collation could read as the return code counts too: a fullwidth @RC, a fullwidth digit in @RC1 (which also stands for any one digit, so @RC5 to @RC9), an accented @RC2, and @RC3 and @RC4 with a character a collation weighs zero move the return code to @RC10");
         check(DmlTemplates.Execute(obj, [P(1, "@\u0280C")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal)
             && DmlTemplates.Execute(obj, [P(1, "@\u5BA2\u6237")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal)
             && DmlTemplates.Execute(obj, [P(1, "@\u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435"), P(2, "@\u039A\u03C9\u03B4\u03B9\u03BA\u03CC\u03C2")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
