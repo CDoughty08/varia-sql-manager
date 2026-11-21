@@ -1345,6 +1345,20 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task LoadIntoMemoryAsync(Action<bool, string> check)
     {
+        // The backend's own bounds on results.remoteQuery (main's are the first): a malformed query id or result id 0 is refused
+        // before any work.
+        using (var probe = new Harness(Lines(3000)))
+        {
+            await probe.ConnectAsync();
+            var (_, executed, _) = await probe.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            var (badId, badResult, badEvents, _) = await Run(probe, "results.remoteQuery", Load(id, queryId: "not-a-guid"));
+            var still = probe.Service.Results.Find(id);
+            check(badId == "INVALID_PARAMS" && badResult is null && !OfType(badEvents, "resultSet.residence").Any() && still is { IsRemote: true, Revision: 0 },
+                $"a remote query with a malformed query id is refused before any work: {badId} {badResult?.Status} {still?.IsRemote} {still?.Revision}");
+            var (zero, _, _, _) = await Run(probe, "results.remoteQuery", Load(0));
+            check(zero == "INVALID_PARAMS", $"a remote query naming result 0 is refused as invalid: {zero}");
+        }
         // A load refused for low memory switches back to windowed, whole, as any refusal does, and a later load still works.
         {
             var low = 0;
