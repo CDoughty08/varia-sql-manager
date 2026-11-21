@@ -34,6 +34,22 @@ internal static class SessionChecks
             && SqlService.LostMessage(session, committing: true, commit: true) == SqlService.LostWhileCommitting
             && !SqlService.LostAfterUnfinishedCommit.Contains("Nothing was committed", StringComparison.Ordinal),
             "after a commit that never answered, a session found lost never says that nothing was committed");
+
+        // Close() finds the gate held by an entrant that has not yet read the closed flag, so it leaves the connection to that
+        // entrant; the entrant then refuses, and must dispose the connection itself rather than strand it.
+        using var raced = new SqlConnection("Data Source=offline");
+        var racing = new QuerySession(Guid.NewGuid().ToString(), raced);
+        racing.GateTaken = racing.Close;
+        string? refused = null;
+        try { racing.TryEnter(); }
+        catch (RequestException error) { refused = error.Code; }
+        racing.GateTaken = null;
+        // With the gate freed a later entrant is refused as closed too, never told the session is busy.
+        string? again = null;
+        try { racing.TryEnter(); }
+        catch (RequestException error) { again = error.Code; }
+        check(refused == "SESSION_CLOSED" && again == "SESSION_CLOSED" && raced.ConnectionString.Length == 0,
+            "an entrant that takes the gate while the session closes refuses with SESSION_CLOSED, disposes the connection and frees the gate (" + refused + ")");
     }
 
     /// <summary>A tab's first execute stores its new session under sessionGate after checking the target; a disconnect landing
