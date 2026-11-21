@@ -153,7 +153,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             aria-label="Clear filters" title="Clear filters: the view, the filter box and the column filters"><Icon name="clear-all" /></button>
         </div>
         <div className="agent-bulk-bar" role="toolbar" aria-label="Selected jobs">
-          <span className="agent-bulk-count">{selected.length ? `${formatCount(selected.length)} ${plural(selected.length, 'job')} selected` : 'No job selected'}{state.overCap ? ` (at most the first ${selected.length})` : ''}</span>
+          <span className="agent-bulk-count">{state.overCap ? `More than ${formatCount(selected.length)} jobs selected: select at most ${formatCount(selected.length)}` : selected.length ? `${formatCount(selected.length)} ${plural(selected.length, 'job')} selected` : 'No job selected'}</span>
           {agentBulkVerbs.map(verb => <button key={verb} type="button" disabled={!!bulkWhy} title={bulkWhy ?? agentBulkTitles[verb].dialog}
             onClick={() => void workbench.commands.execute(agentBulkCommands[verb], { tabId: documentId }, 'toolbar')}>{agentBulkTitles[verb].button}</button>)}
           <button type="button" className="agent-chevron" aria-expanded={expandedHere} disabled={!one} title={one ? 'Show the last run of the selected job below the list' : 'Select one job to see its last run'}

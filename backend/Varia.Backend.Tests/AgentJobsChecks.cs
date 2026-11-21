@@ -88,7 +88,7 @@ internal static class AgentJobsChecks
                     JobRow(s, Retry, "Retry", 1, 3, "1 (Back up log)", 0, 20261115, 141500, 1, retry: 2)],
                 "activities" => [[Backup, new DateTime(2026, 11, 15, 14, 0, 0), null], [Nightly, new DateTime(2026, 11, 15, 2, 30, 0), new DateTime(2026, 11, 15, 2, 48, 42)]],
                 "clock" => [[new DateTime(2026, 11, 15, 14, 12, 4)]],
-                "history" => [
+                "lastRunHistory" => [
                     HistoryRow(s, 10, 1, "Truncate", 1, 20261114, 23000, 2, "ok"), HistoryRow(s, 11, 0, "(Job outcome)", 1, 20261114, 23000, 2, "The job succeeded."),
                     HistoryRow(s, 12, 1, "Truncate", 1, 20261115, 23000, 2, "ok"), HistoryRow(s, 13, 2, "Load", 1, 20261115, 23002, 1631, "ok"),
                     HistoryRow(s, 14, 3, "Merge", 0, 20261115, 24633, 209, "Violation of PRIMARY KEY constraint " + new string('x', 600)),
@@ -113,7 +113,7 @@ internal static class AgentJobsChecks
         var reader = new AgentJobsReader(new(Nightly.ToString())) { Reader = Fake(ran) };
         var sample = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe), null, CancellationToken.None);
         var rows = sample.Tables[0].Rows.ToDictionary(row => row.Cells[Col("name")].Text!, Texts);
-        check(sample.Sampled && sample.Errors.Count == 0 && ran.SequenceEqual(["jobActivity", "activities", "clock", "history"]),
+        check(sample.Sampled && sample.Errors.Count == 0 && ran.SequenceEqual(["jobActivity", "activities", "clock", "lastRunHistory"]),
             "the list reads sp_help_job, then the activity rows and the server's clock because a job runs, then the expanded job's history: " + string.Join(", ", ran));
         check(rows["Backup"][Col("status")] == "Executing" && rows["Backup"][Col("step")] == "Step 2 of 4 · Copy files" && rows["Backup"][Col("tone")] == "running"
             && rows["Backup"][Col("elapsed")] == "00:12:04" && rows["Nightly"][Col("elapsed")] == "NULL"
@@ -130,11 +130,13 @@ internal static class AgentJobsChecks
             && lastRun[1][5] == "00:16:31" && lastRun[2][6].Length == (int)AgentCatalog.Current.Limit("gridMessageChars") && lastRun[2][6].EndsWith('…') && lastRun[3][2] == "(Job outcome)",
             "the expanded job's last run is the step rows after the previous job outcome row, then its own outcome row; messages are cut to gridMessageChars: " + string.Join(" | ", lastRun.Select(row => string.Join(",", row))));
         var cap = LiveCatalog.Current.Probes[AgentJobsReader.ListProbe].Tables[1].RowCap;
-        var history = AgentSql.History;
+        var history = AgentSql.LastRunHistory;
         List<object?[]> many = [.. Enumerable.Range(1, cap + 10).Select(at => HistoryRow(history, at, 1 + at % 50, "Loop", 1, 20261115, 23000, 0, "ok")), HistoryRow(history, cap + 11, 0, "(Job outcome)", 1, 20261115, 23000, 5, "The job succeeded.")];
         var capped = reader.LastRun(new AgentResult(history.Columns, many, false)).Select(Texts).ToList();
         check(capped.Count == cap && capped[^1][2] == "(Job outcome)" && capped[0][0] == "12",
             "a run with more step rows than the last run table keeps keeps its newest steps and its outcome row: " + capped.Count + " rows, first " + capped[0][0] + ", last " + capped[^1][2]);
+        check(AgentSql.LastRunHistory.Cap == "lastRunRows" && AgentCatalog.Current.Limit("lastRunRows") == cap + 1 && AgentSql.LastRunHistory.Text == AgentSql.History.Text,
+            "the last run reads sp_help_jobhistory's newest rows only, as many as the table keeps plus the run's outcome row, and cancels the rest");
         bool Keeps(LiveReaderTable table, string name) => table.View?.Invoke(table.Rows.Single(row => row.Cells[Col("name")].Text == name)) ?? true;
         var running = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "running"), null, CancellationToken.None)).Tables[0];
         var failed = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "failed"), null, CancellationToken.None)).Tables[0];
@@ -145,7 +147,7 @@ internal static class AgentJobsChecks
         ran.Clear();
         var filtered = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "failed"), null, CancellationToken.None);
         check(!Keeps(filtered.Tables[0], "Nightly") && Keeps(filtered.Tables[0], "Retry") && filtered.Tables[0].FacetScope?.Invoke(filtered.Tables[0].Rows.Single(row => row.Cells[Col("name")].Text == "Nightly")) == true
-            && filtered.Tables[1].Rows.Count == 0 && !ran.Contains("history"),
+            && filtered.Tables[1].Rows.Count == 0 && !ran.Contains("lastRunHistory"),
             "a column value filter keeps rows on top of the view, the facets count the view's rows only (so a column's own filter never empties its list), and with no job expanded the last run is empty and unread");
     }
 
@@ -161,7 +163,7 @@ internal static class AgentJobsChecks
         check(!off.Sampled && off.Errors is [{ Code: "AGENT_DISABLED", Terminal: true }], "a list read that raises 15281 stops the probe with AGENT_DISABLED, which the service probe's next XPs-1 sample restarts");
         var partial = new AgentJobsReader(new(Nightly.ToString()))
         {
-            Reader = Fake(ran, (statement, _) => statement.Id is "history" or "activities" ? throw ConnectionFailureChecks.Sql(229, 5, 14, "server", "The EXECUTE permission was denied.") : null)
+            Reader = Fake(ran, (statement, _) => statement.Id is "lastRunHistory" or "activities" ? throw ConnectionFailureChecks.Sql(229, 5, 14, "server", "The EXECUTE permission was denied.") : null)
         };
         var some = await partial.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe), null, CancellationToken.None);
         check(some.Sampled && some.Tables[0].Rows.Count == 4 && some.Tables[1].Rows.Count == 0 && some.Errors.Count == 2 && some.Errors.All(error => error.Code == "PERMISSION_DENIED")

@@ -46,6 +46,10 @@ internal static partial class AgentSql
         ["instance_id", "job_id", "step_id", "step_name", "sql_message_id", "sql_severity", "message", "run_status", "run_date", "run_time", "run_duration", "retries_attempted"],
         [new("@job_id", SqlDbType.UniqueIdentifier)], "historyRows");
 
+    /// <summary>The newest history rows of a job, for Job Activity Monitor's last run (AG-3): the same read as <see cref="History"/>,
+    /// cancelled after lastRunRows rows (newest first), so a long history is not read every sample.</summary>
+    public static readonly AgentStatement LastRunHistory = History with { Id = "lastRunHistory", Cap = "lastRunRows" };
+
     /// <summary>The step types this server's Agent has.</summary>
     public static readonly AgentStatement Subsystems = new("subsystems", "EXEC msdb.dbo.sp_enum_sqlagent_subsystems;", ["subsystem", "subsystem_id"], [], "listRows");
 
@@ -86,7 +90,7 @@ internal static partial class AgentSql
     /// <summary>The server's clock in its local time, which msdb's dates use, for a running job's elapsed time.</summary>
     public static readonly AgentStatement Clock = new("clock", "SELECT CONVERT(datetime, SYSDATETIME()) AS server_now;", ["server_now"], [], "listRows");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, JobActivity, WatchedJob, Activities, Clock];
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, JobActivity, WatchedJob, Activities, Clock, LastRunHistory];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

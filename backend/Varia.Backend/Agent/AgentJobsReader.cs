@@ -137,8 +137,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
         var tables = new List<LiveReaderTable> { new(0, rows, jobs.Truncated ? 1 : 0, view is null && filters.Length == 0 ? null : kept, view is null ? null : viewed) };
         if (now.Expand is { } expand && Guid.TryParse(expand, out var expanded) && list.Any(job => job.Id == expanded))
         {
-            var (history, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.History], (_, _) => expanded, token).ConfigureAwait(false);
-            if (history.TryGetValue(AgentSql.History.Id, out var runs)) tables.Add(new(1, LastRun(runs)));
+            var (history, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.LastRunHistory], (_, _) => expanded, token).ConfigureAwait(false);
+            if (history.TryGetValue(AgentSql.LastRunHistory.Id, out var runs)) tables.Add(new(1, LastRun(runs)));
             else
             {
                 probeErrors.Add(Error(ListProbe, failed[0]) with { Tables = [1] });

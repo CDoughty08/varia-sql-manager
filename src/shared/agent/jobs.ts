@@ -108,7 +108,7 @@ export function agentBanner(availability: AgentAvailability, sample: AgentServic
     default: return undefined
   }
 }
-/** What every Status cell reads while Agent cannot run jobs (the list's own Status is stale then). */
+/** What the note below the list says Status is while Agent cannot run jobs (the Status cells keep msdb's last reading). */
 export function agentStatusOverride(availability: AgentAvailability): string | undefined {
   return availability === 'stopped' ? 'Agent stopped' : availability === 'xpsOff' ? 'Unknown (Agent XPs off)' : availability === 'unknown' ? 'Unknown' : undefined
 }
@@ -195,7 +195,9 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
   }
   const status = sample.status ?? 4
   if ((runningExecutionStatuses as readonly number[]).includes(status)) {
-    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0 } }
+    // While it runs, its last run is the one before this run: the true baseline, which the grid's (read up to a sample or more
+    // earlier) may predate, as when a scheduled run ended in between.
+    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0, before: Math.max(job.before, sample.lastRun ?? 0) } }
   }
   const lastRun = sample.lastRun ?? 0
   if (lastRun > job.before && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }

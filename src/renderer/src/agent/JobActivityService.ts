@@ -304,8 +304,10 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     this.patch(id, 'expanded' in patch && !patch.expanded ? { ...patch, expanded: undefined } : patch)
     if (JSON.stringify(jobActivityArgs(next)) === JSON.stringify(jobActivityArgs(before))) return
     const handle = this.handles.get(id)
-    if (!handle || !this.live(id)) return
+    if (!handle) return
+    // Set while disconnected too: the subscription after a reconnect takes the args set meanwhile.
     handle.setArgs(jobActivityArgs(next))
+    if (!this.live(id)) return
     // The backend applies new args at the next sample: read now so the last run shown is the job just picked, and a view that
     // failed subscribes again with them.
     if (before.expanded?.id !== next.expanded?.id || handle.getSnapshot().status === 'ended') handle.refresh()

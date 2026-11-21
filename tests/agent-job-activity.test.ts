@@ -127,6 +127,13 @@ describe("agent.jobs' shared rules", () => {
     expect(watchedPhase(ran.job, { ...idle, lastRun: 20261115140000 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140000 })
     for (let sample = 0; sample < 3; sample++) ran = watchedPhase(ran.job, idle, 'running')
     expect(ran.phase).toEqual({ phase: 'unknown', reason: 'gone' })
+    // The grid's last run was read before a scheduled run ended: seen running, the sample's last run (that scheduled run) is
+    // the baseline, so its outcome is never taken for the started run's.
+    let late = watchedPhase(start, { status: 1, step: 1, steps: 3, lastOutcome: 0, lastRun: 20261115100000 }, 'running')
+    expect(late.job.before).toBe(20261115100000)
+    late = watchedPhase(late.job, { status: 4, steps: 3, lastOutcome: 0, lastRun: 20261115100000 }, 'running')
+    expect(late.phase).toEqual({ phase: 'running', retrying: false })
+    expect(watchedPhase(late.job, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115140000 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140000 })
     expect(watchedPhase(start, idle, 'stopped').phase).toEqual({ phase: 'unknown', reason: 'agentStopped' })
     // A job msdb no longer has ends at once; a slot not read keeps the phase but counts, so Starting… never waits forever.
     expect(watchedPhase(ran.job, { status: watchedGoneStatus }, 'running').phase).toEqual({ phase: 'unknown', reason: 'gone' })
@@ -199,6 +206,15 @@ describe('Job Activity Monitor', () => {
     jobActivity.clearFilters(id)
     expect(jobActivity.get(id)).toMatchObject({ view: 'all', text: '', columnFilters: [] })
     expect(handle().args.at(-1)).toEqual({ expand: nightly })
+  })
+  it('sends args changed while the connection is lost, for the subscription after a reconnect, without a refresh', () => {
+    const { jobActivity, handle, connections } = monitor()
+    const id = jobActivity.open('c1')
+    connections.markLostBefore(2)
+    jobActivity.toggleExpanded(id, { id: backup, name: 'Backup' })
+    jobActivity.setColumnFilter(id, 'category', { values: ['ETL'] })
+    expect(handle().args).toEqual([{ expand: backup }, { expand: backup, filters: [{ column: 'category', values: ['ETL'] }] }])
+    expect(handle().refreshes).toBe(0)
   })
   it('keeps the tiles\' counts, the facets and Agent\'s state, and restarts a list that stopped on AGENT_DISABLED once Agent runs', () => {
     const { jobActivity, handle } = monitor()
