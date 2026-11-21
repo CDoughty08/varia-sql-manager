@@ -34,6 +34,7 @@ import NewDatabase from '../new-database/NewDatabase'
 import RestoreDatabase from '../restore/RestoreDatabase'
 import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
+import JobActivityMonitor from '../agent/JobActivityMonitor'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
 import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
@@ -145,6 +146,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'releaseNotes' && <ReleaseNotes documentId={id} />}
     {kind === 'help' && <HelpDocument documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}
+    {kind === 'agentJobActivity' && <JobActivityMonitor documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>
 }

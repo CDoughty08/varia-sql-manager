@@ -9,6 +9,7 @@ import {
 import { limits } from '../ipc/wire/protocol.ts'
 import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 import type { ProviderId } from '../providers.ts'
+import { agentLimits } from '../agent/catalog.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
@@ -125,13 +126,21 @@ export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
 /** The Operations window's settle window: its ids, like an append table's, are assigned before their rows commit. */
 const operationsSettle = defaultSettle
+/** Job Activity Monitor's view chips besides All (docs/sql-server-agent.md). */
+export const agentJobViews = ['running', 'failed', 'disabled'] as const
+/** What each watched job slot carries, in order (agent.jobs.watched): job0Status … job2LastRun. */
+export const agentWatchedFields = ['Status', 'Step', 'Steps', 'Started', 'LastOutcome', 'LastRun'] as const
+const agentWatchedSeries: readonly LiveSeriesSpec[] = [
+  ...Array.from({ length: agentLimits.watchedJobs }, (_, slot) => agentWatchedFields.map((field): LiveSeriesSpec => ({ id: `job${slot}${field}`, unit: 'count', label: `Watched job ${slot + 1}: ${field}`, counter: 'gauge' }))).flat(),
+  { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
+]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -159,6 +168,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'ssis.operations': {
     id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
     description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
+  },
+  'agent.jobs': {
+    id: 'agent.jobs', label: 'SQL Server Agent jobs', scope: 'server', testOnly: false, probes: ['agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched'], hidden: 'statusOnly',
+    description: 'SQL Server Agent\'s jobs as the login may see them (docs/sql-server-agent.md, Job Activity Monitor), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master, through msdb\'s own procedures (AgentReader, linted by AgentSql.LintRead), so every Agent role sees the jobs msdb shows it. Job Activity Monitor opens a view of the list and service probes; the status bar opens one of the watched and service probes with whileHidden statusOnly, so a job this window started is still followed while the window is hidden. Args: the job whose last run the list probe reads (expand), the jobs the watched probe follows (watch, at most agentLimits.watchedJobs), and column value filters on the list (filters).'
   }
 }
 
@@ -278,6 +291,47 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'explorer.agentService', source: 'explorer', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
     description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only where HAS_PERMS_BY_NAME says the login may (so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services (VIEW SERVER STATE before SQL Server 2022, VIEW SERVER SECURITY or PERFORMANCE STATE from it), or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected (VIEW SERVER STATE before 2022, VIEW SERVER PERFORMANCE STATE from it). Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows.',
     status: ['agentXps', 'serviceState', 'startupType']
+  },
+  'agent.jobs.list': {
+    id: 'agent.jobs.list', source: 'agent.jobs', label: 'Jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 500, max: 10_000 },
+    views: agentJobViews, filterMode: 'memory',
+    description: `Every job the login may see, one row each, from msdb.dbo.sp_help_job (msdb filters a SQLAgentUserRole login to its own jobs), at most ${agentLimits.listRows} (the rest cut, as rowLimit): SSMS's Job Activity Monitor columns, how long a running job has run (from msdb.dbo.sp_help_jobactivity for the Agent's current session and the server's clock, read only while a job runs; none where no start is readable) and a tone (last run failed error, running accent, between retries warning, disabled muted). Views running, failed and disabled keep those jobs; the filter box and column value filters (args.filters) apply in backend memory. Its series count jobs from the same read: running (execution statuses 1, 2, 3 and 7), last run failed, between retries and disabled. With args.expand, its second table is that job's last run (msdb.dbo.sp_help_jobhistory in FULL mode): the job outcome row and the step rows Agent wrote for that run, messages cut to ${agentLimits.gridMessageChars} characters.`,
+    series: [
+      { id: 'running', unit: 'count', label: 'Running', counter: 'gauge' },
+      { id: 'failed', unit: 'count', label: 'Last run failed', counter: 'gauge' },
+      { id: 'betweenRetries', unit: 'count', label: 'Between retries', counter: 'gauge' },
+      { id: 'disabled', unit: 'count', label: 'Disabled', counter: 'gauge' }
+    ],
+    tables: [
+      {
+        id: 'jobs', mode: 'snapshot', key: ['jobId'], rowCap: agentLimits.listRows, departed: true, facets: ['status', 'lastOutcome', 'category'],
+        columns: [
+          { id: 'name', name: 'Name', dataType: 'nvarchar' }, { id: 'enabled', name: 'Enabled', dataType: 'nvarchar' }, { id: 'status', name: 'Status', dataType: 'nvarchar' },
+          { id: 'step', name: 'Step', dataType: 'nvarchar' }, { id: 'lastOutcome', name: 'Last Run Outcome', dataType: 'nvarchar' }, { id: 'lastRun', name: 'Last Run', dataType: 'datetime2' }, { id: 'elapsed', name: 'Running For', dataType: 'nvarchar' },
+          { id: 'nextRun', name: 'Next Run', dataType: 'datetime2' }, { id: 'category', name: 'Category', dataType: 'nvarchar' }, { id: 'runnable', name: 'Runnable', dataType: 'nvarchar' },
+          { id: 'scheduled', name: 'Scheduled', dataType: 'nvarchar' }, { id: 'owner', name: 'Owner', dataType: 'nvarchar' }, { id: 'jobId', name: 'Job ID', dataType: 'uniqueidentifier' },
+          { id: 'created', name: 'Created', dataType: 'nvarchar' }, toneColumn
+        ]
+      },
+      {
+        id: 'lastRun', mode: 'snapshot', key: ['runInstance'], rowCap: agentLimits.stepsPerJob * 4,
+        columns: [
+          { id: 'runInstance', name: 'Instance', dataType: 'int' }, { id: 'runStep', name: 'Step ID', dataType: 'int' }, { id: 'runStepName', name: 'Step Name', dataType: 'nvarchar' },
+          { id: 'runOutcome', name: 'Outcome', dataType: 'nvarchar' }, { id: 'runStarted', name: 'Started', dataType: 'datetime2' }, { id: 'runDuration', name: 'Duration', dataType: 'nvarchar' },
+          { id: 'runMessage', name: 'Message', dataType: 'nvarchar' }, { ...toneColumn, id: 'runTone' }
+        ]
+      }
+    ]
+  },
+  'agent.jobs.service': {
+    id: 'agent.jobs.service', source: 'agent.jobs', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
+    description: 'SQL Server Agent\'s state for the views of its jobs, so they need no Object Explorer open: the same constant text as explorer.agentService (Agent XPs from sys.configurations, which needs no permission; the service\'s state and startup type only where HAS_PERMS_BY_NAME says the login may read them, else left out as unknown).',
+    status: ['agentXps', 'serviceState', 'startupType']
+  },
+  'agent.jobs.watched': {
+    id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
+    description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. The last series is the server's clock (yyyymmddhhmmss, server local time), by which the status bar dates a Start in server time. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
+    series: agentWatchedSeries
   },
   'explorer.availability': {
     id: 'explorer.availability', source: 'explorer', label: 'Availability group health', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [2, 3] }, permission: 'serverState',

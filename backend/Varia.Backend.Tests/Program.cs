@@ -530,6 +530,7 @@ if (liveGroup is null)
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
         ("Agent", () => AgentChecks.RunAsync(Check)),
         ("AgentActions", () => AgentActionChecks.RunAsync(Check)),
+        ("AgentJobs", () => AgentJobsChecks.RunAsync(Check)),
         ("AgentProperties", () => AgentPropertiesChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];

@@ -352,6 +352,8 @@ explorer.context, for a login
   ---
   Re&fresh  F5  -+++
 explorer.context, for the SQL Server Agent node
+  &Job Activity Monitor  -+++
+  ---
   &Start  -+++
   S&top  -+++
   R&estart  -+++

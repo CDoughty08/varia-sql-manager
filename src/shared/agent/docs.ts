@@ -30,6 +30,7 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   stepsPerJob: 'Steps one job save may hold',
   schedulesPerJob: 'Schedules one job save may hold',
   scheduleJobChanges: 'Jobs one schedule save may attach or detach',
+  lastRunRows: "History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest",
   startJobs: 'Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name',
   watchedJobs: 'Jobs the status bar follows with live progress',
   serviceStatementMs: 'One service Start or Stop statement, in ms',
