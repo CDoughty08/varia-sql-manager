@@ -138,7 +138,8 @@ Remember password and credential references, pins the verified principal to the 
 target is `identity-changed`, and an answer without a verifiable principal is refused), records the connect in BigQuery's
 history and registers the handle's provider so methods for the other engine are refused before they reach it.
 
-`connections.disconnect` releases the handle and its client. A SQL Server method for a BigQuery handle answers
+`connections.disconnect` releases the handle and its client. A windowed result stays open with the blocks it has cached
+(still charged until it is closed); reading a block it lacks answers `NOT_CONNECTED`. A SQL Server method for a BigQuery handle answers
 `UNSUPPORTED_PROVIDER` (docs/ipc.md#providers).
 
 ## Pre-connect methods
