@@ -161,13 +161,18 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   }
   // A query's rows through jobs.query, and a session's streams however their request is spelled, are read nowhere else.
   expect(codeUses(/\bJobs\s*\.\s*Query\b/g)).toEqual([])
+  // The bans on the jobs resource look only at BigQuery code: its folder, SqlService's BigQuery files and any file naming
+  // Google's BigQuery clients or a BigQuery connection (SQL Server Agent's AgentSql.Jobs or SMO's JobServer.Jobs is no jobs
+  // resource).
+  const bigQueryUses = (pattern: RegExp) => files.filter(({ file, code }) => file.startsWith('BigQuery/') || file.startsWith('SqlService.BigQuery') || /\b(?:Google\.Apis\.Bigquery|Google\.Cloud\.BigQuery|BigqueryService|BigQueryConnection)\b/.test(code))
+    .flatMap(({ file, code }) => Array.from(code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').matchAll(pattern), () => file))
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
   // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
   // ...nor by its resource or request classes built directly (a JobsResource of one's own, a QueryRequest however aliased):
   // only Jobs.cs's GetRequest and Sessions.cs's ListRequest name them.
-  expect(codeUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
-  expect(codeUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
-  expect(codeUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs', 'Ssis/SsisActionService.cs', 'Ssis/SsisCreate.cs'])
+  expect(bigQueryUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
+  expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
+  expect(bigQueryUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs'])
   expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
   expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
@@ -289,6 +294,9 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // type and of a block's pages is one of today's.
   expect(count(remote, /\bRemotePage\b/g)).toBe(8)
   expect(count(remote, /\bPages\b/g)).toBe(7)
+  // ...nor a page's body apart from it (bodies sent kept for scroll-back would grow uncounted): its record, its cost and the
+  // send.
+  expect(count(remote, /\bBody\b/g)).toBe(3)
   // A page costs the cache what a stored page costs the store: both charges are this one formula, so neither drifts alone.
   expect(remote).toMatch(/public long Cost => Body\.Length \+ ResultStore\.PageOverhead \+ Lengths\.MemoryBytes;/)
   const bufferCode = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'ResultSetBuffer.cs'), 'utf8'))
