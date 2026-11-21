@@ -20,13 +20,14 @@ export function visibleColumnCount(descriptor: Pick<ResultDescriptor, 'columns'>
   return first === 0 ? columns.length : first
 }
 
-/** A comparison's (kind `diff`) hidden suffix columns by role, -1 for a role it lacks. */
-export interface DiffSuffix { readonly mark: number; readonly leftRow: number; readonly rightRow: number; readonly tone: number }
+/** A comparison's (kind `diff`) hidden suffix columns by role, -1 for a role it lacks. `old` is the first previous-value
+ *  column (one row per entry: pair c's old value is at `old + c`), -1 in two rows. */
+export interface DiffSuffix { readonly old: number; readonly mark: number; readonly leftRow: number; readonly rightRow: number; readonly tone: number }
 
 /** The diff suffix of a result of kind `diff`, or undefined for any other result. */
 export function diffSuffixOf(descriptor: Pick<ResultDescriptor, 'columns' | 'kind'>): DiffSuffix | undefined {
   if (descriptor.kind !== 'diff') return undefined
   const at = (role: ResultColumn['role']): number => descriptor.columns.findIndex(column => column.role === role)
-  const suffix = { mark: at('mark'), leftRow: at('leftRow'), rightRow: at('rightRow'), tone: at('tone') }
+  const suffix = { old: at('old'), mark: at('mark'), leftRow: at('leftRow'), rightRow: at('rightRow'), tone: at('tone') }
   return suffix.mark >= 0 && suffix.leftRow >= 0 && suffix.rightRow >= 0 ? suffix : undefined
 }

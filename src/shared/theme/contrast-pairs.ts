@@ -192,6 +192,9 @@ export const contrastPairs: readonly ContrastPair[] = [
   // The one-row layout's changed value (old struck through, then new), likewise under the selection.
   ...text(['resultsGrid.foreground'], [...grid, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground']),
   ...text(['resultsGrid.foreground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.selectionOverlay']),
+  // Its struck previous value, and the unchanged values of a changed row, on the grid and the stripe, unselected or not.
+  ...text(['resultsGrid.diffOldForeground'], [...grid, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground'], [...striped, 'resultsGrid.diffChangedBackground', 'resultsGrid.inactiveSelectionOverlay']),
+  ...text(['resultsGrid.diffContextForeground'], grid, striped, [...grid, 'resultsGrid.inactiveSelectionOverlay'], [...striped, 'resultsGrid.inactiveSelectionOverlay']),
   // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
   ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
     ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
