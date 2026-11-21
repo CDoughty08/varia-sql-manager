@@ -208,7 +208,7 @@ describe('object action catalogue', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
       'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
     // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
-    expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'agentProperties',
+    expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })
     // Learn's Detach Database dialog, as a modal (wave 5 decisions): its title names the database.
     expect(dialogSpecs.detachDatabase).toEqual({ title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach',

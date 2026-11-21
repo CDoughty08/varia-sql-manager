@@ -917,7 +917,7 @@ const dialogSpecData = {
   restartAgent: { title: 'Restart SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'restartAgent', pages: [page('general', 'General')], steps: true },
   // SSMS's "SQL Server Agent Properties - server" (AG-8a): it stays a dialog (docs/agent-ui-rethink.md); General and History only, the
   // other pages are later. OK saves the changed settings; History's Delete old history now runs apart from OK, after its own confirmation.
-  agentProperties: { title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'agentProperties', pages: [page('general', 'General'), page('history', 'History', { icon: 'history' })] }
+  agentProperties: { title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties', pages: [page('general', 'General'), page('history', 'History', { icon: 'history' })] }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**

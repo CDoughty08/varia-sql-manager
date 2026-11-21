@@ -2189,7 +2189,7 @@ try {
   // SQL Server Agent Properties (AG-8a): the Agent node's Properties opens General with the service account and SSMS's two restart
   // boxes. History lists what the limits keep for each job; Delete old history asks inline with Cancel focused, runs apart from OK and
   // reads the history again, keeping the unsaved restart box, which OK then sends alone.
-  const agentPropertiesDialog = () => page.getByRole('dialog', { name: /^SQL Server Agent Properties/ })
+  const agentPropertiesDialog = () => page.getByRole('dialog', { name: 'SQL Server Agent Properties', exact: true })
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Properties')
   await expect(agentPropertiesDialog().getByText('NT Service\\SQLSERVERAGENT', { exact: true })).toBeVisible()
   const agentRestart = agentPropertiesDialog().getByRole('checkbox', { name: 'Auto restart SQL Server Agent if it stops unexpectedly', exact: true })
@@ -2208,6 +2208,7 @@ try {
   await expect(agentPropertiesDialog().getByRole('status').filter({ hasText: 'Deleted the history.' })).toContainText('500 history entries purged.')
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'agentProperties', target: { kind: 'agent' }, agentPurge: { count: 4, unit: 2 } })
   await expect(agentPropertiesDialog().getByText('now 400 rows', { exact: true })).toBeVisible()
+  await agentPropertiesDialog().getByRole('button', { name: 'General', exact: true }).click()
   await expect(agentRestart).not.toBeChecked()
   await agentPropertiesDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(agentPropertiesDialog()).toHaveCount(0)

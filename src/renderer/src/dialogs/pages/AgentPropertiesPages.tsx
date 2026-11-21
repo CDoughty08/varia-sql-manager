@@ -100,7 +100,7 @@ function PurgeSection({ open, model, draft, editable }: { readonly open: PagePro
     <p className="field-note" id="agent-purge-hint">{valid ? [cutoff && `Before ${cutoff}${serverTime ? ', server time' : ''}`, estimate !== undefined && `about ${count(estimate)} ${estimate === 1 ? 'row' : 'rows'}`].filter(Boolean).join(' · ') : purge.problem}</p>
     <p className="field-note">{agentPropertiesText.purgeNote}</p>
     {draft.purgeConfirming && valid && <div className="agent-purge-confirm" role="group" aria-label="Confirm Delete old history now">
-      <Icon name="warning" /><span>{agentPropertiesText.purgeConfirm(displayText(open.server), cutoff ?? '', serverTime)}</span>
+      <Icon name="warning" /><span className="agent-purge-question">{agentPropertiesText.purgeConfirm(displayText(open.server), cutoff ?? '', serverTime)}</span>
       <span className="agent-purge-actions">
         <button ref={cancel} type="button" onClick={() => dialogs.updateDraft({ purgeConfirming: false })}>Cancel</button>
         <button type="button" className="danger" onClick={run}>Delete history</button>
@@ -124,7 +124,7 @@ export function AgentHistoryPage({ open, editable }: PageProps) {
         <span className="agent-history-input"><input id="agent-history-max" type="text" inputMode="numeric" disabled={!draft.limit} value={draft.maxRows} onChange={event => dialogs.updateDraft({ maxRows: event.target.value })} />
           {model.history && <span className="field-note">now {count(model.history.total)} rows</span>}</span></div>
       <div className="property-row"><label htmlFor="agent-history-per-job">{agentPropertiesText.maxRowsPerJob}</label>
-        <input id="agent-history-per-job" type="text" inputMode="numeric" disabled={!draft.limit} value={draft.maxRowsPerJob} onChange={event => dialogs.updateDraft({ maxRowsPerJob: event.target.value })} /></div>
+        <span className="agent-history-input"><input id="agent-history-per-job" type="text" inputMode="numeric" disabled={!draft.limit} value={draft.maxRowsPerJob} onChange={event => dialogs.updateDraft({ maxRowsPerJob: event.target.value })} /></span></div>
     </fieldset>
     <RetentionTable model={model} draft={draft} />
     <PurgeSection open={open} model={model} draft={draft} editable={editable} />

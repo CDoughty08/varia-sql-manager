@@ -3125,3 +3125,4 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .agent-purge-row select { height: 28px; }
 .agent-purge-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .agent-purge-actions { display: flex; gap: 8px; margin-left: auto; }
+.agent-purge-question { flex: 1 1 320px; min-width: 0; }

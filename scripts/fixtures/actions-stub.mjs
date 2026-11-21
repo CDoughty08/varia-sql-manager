@@ -133,7 +133,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
     // SQL Server Agent (AG-2): one job with two steps, and the service's state as the Service Control Manager reports it.
     jobs: [{ name: 'Nightly', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
     // SQL Server Agent Properties (AG-8a): msdb's settings and two jobs' history.
-    agentSettings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\SQLSERVERAGENT', errorLogFile: 'C:\Logs\SQLAGENT.OUT', errorLoggingLevel: 3 },
+    agentSettings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'C:\\Logs\\SQLAGENT.OUT', errorLoggingLevel: 3 },
     agentHistory: 900,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
     logins: [
