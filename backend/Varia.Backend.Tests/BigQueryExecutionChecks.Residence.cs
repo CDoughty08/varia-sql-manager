@@ -802,6 +802,16 @@ internal static partial class BigQueryExecutionChecks
                 $"a load that does not fit goes back to windowed under another revision: {code} {message} {set?.Residence} {set?.Revision} {Texts(result?.Messages ?? [])}");
         }
         // Automatic decides by the rows the result will show: one too large for memory whole fits once Maximum rows caps it.
+        // A small cap on a small budget stays in memory with its rows: only the rows it stores are charged, not whole pages.
+        foreach (var (residence, budget, maxRows, rows) in new (string, long, int, int)[] { ("automatic", 512 * 1024, 20, 20), ("memory", 512 * 1024, 20, 20), ("automatic", 2L << 20, 600, 600) })
+        {
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(8L << 20, budget));
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => { args["maxRows"] = maxRows; args["residence"] = residence; });
+            var set = executed?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "memory" } && set.RowsStored == rows,
+                $"{residence} with Maximum rows {maxRows} on a {budget / 1024} KiB budget keeps its rows in memory: {code} {message} {set?.Residence} {set?.RowsStored} {Texts(executed?.Messages ?? [])}");
+        }
         foreach (var maxRows in new[] { 0, 500 })
         {
             using var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(64L << 20, 4L << 20));

@@ -548,6 +548,10 @@ internal sealed partial class SqlService
             while (true)
             {
                 var charge = page.Cost(plan.Columns.Count);
+                // Under Maximum rows only the rows the set will still store are decoded: the page's share for them is charged,
+                // so a small capped result is not refused (or switched to windowed) for a page mostly read past.
+                if (args.MaxRows > 0 && page.RowCount > 0 && args.MaxRows - storedRows < page.RowCount)
+                    charge = (long)Math.Ceiling((double)charge * Math.Max(0, args.MaxRows - storedRows) / page.RowCount);
                 if (!store.TryReserve(budget, charge, true, out var refusal))
                 {
                     // The page does not fit beside the rows already stored, so neither would its rows.
@@ -595,7 +599,10 @@ internal sealed partial class SqlService
                 // A limit reached on a page's last row stops here, not one page later.
                 if (storing && args.MaxRows > 0 && storedRows >= args.MaxRows && next is not null) { set.Skip(TruncationReason.RowLimit); storing = false; }
                 if (next is null || !storing) break;
-                page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, next, BigQueryPageRows(plan.Columns.Count), 0, token);
+                // No more rows than Maximum rows still lets the set store (the rows past it are counted from BigQuery's total).
+                var pageRows = BigQueryPageRows(plan.Columns.Count);
+                if (args.MaxRows > 0) pageRows = (int)Math.Max(1, Math.Min(pageRows, args.MaxRows - storedRows));
+                page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, next, pageRows, 0, token);
             }
         }
         finally { page.Dispose(); }
