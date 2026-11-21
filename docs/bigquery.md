@@ -295,7 +295,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Setting.** Tools › Options › Query Results › BigQuery › Results: **Keep results** (`queryResults.bigQuery.residence`):
   Automatically, by size (the default), Always in memory (the budget truncates) or Always windowed in
   BigQuery; and **Block cache per windowed result** (`queryResults.bigQuery.windowCacheMiB`, 16 – 4,096 MiB, default 64), the blocks each
-  windowed result keeps. Each query takes them as it starts.
+  windowed result keeps. Each query takes them as it starts; Preview Rows' 1,000 rows are always read into memory.
 - **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,
   under Always in memory, when its destination table cannot be read, or when its rows (the first page's measured cost
   per row, times the rows it will show within Maximum rows) fit half of what the query may still take from its budget and the global one. Otherwise it is windowed, and the

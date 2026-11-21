@@ -760,11 +760,13 @@ demand, within the strict CSP; a virtualized DOM outline serves keyboard, screen
 ## Query execution
 
 `query.execute` takes `{ connectionId, sessionId, database?, dataset?, sql, queryId, maxRows, timeoutSeconds, startLine?,
-startColumn?, maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices? }`.
+startColumn?, maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices?, preview?, residence?,
+windowCacheMiB? }`.
 `startColumn` (1 to 1,000,000) is a selection's first column, which BigQuery's `[line:column]` error positions add on the
 selection's first line. `database` is required for SQL Server; `dataset` (≤ 1,024 characters) is a BigQuery query's
 default dataset, `maximumBytesBilled` (1 to 2^53 − 1) Tools › Options' cap, which the job carries when its connection
-sets none, and `prices: false` leaves the dollars out of the job's Messages line; SQL Server refuses all three. A BigQuery query runs as one job
+sets none, and `prices: false` leaves the dollars out of the job's Messages line; `residence` and `windowCacheMiB` are described under
+[Remote results](#remote-results); SQL Server refuses all of these. A BigQuery query runs as one job
 whose rows are read into the same result store, and its summary adds `job` (`{ project, jobId, location?, statementType?,
 bytesProcessed?, bytesBilled?, cacheHit?, slotMs? }`); SQL Server's options are refused for it ([BigQuery's
 Execution](bigquery.md#execution)). `sessionId` is the query tab's UUID: its SQL session
@@ -1091,7 +1093,7 @@ instead.
 A BigQuery result is either in memory, as SQL Server's are, or **windowed**: its rows stay in the job's destination table
 and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residence). Its descriptor says which:
 
-- `residence`: `memory` or `remote` (absent for SQL Server); `rowsTotal`: BigQuery's own total, which may pass
+- `residence`: `memory` or `remote` (absent for SQL Server and for Preview Rows, which always reads into memory); `rowsTotal`: BigQuery's own total, which may pass
   `rowsAvailable` (at most 2,147,483,647 rows, the grid's 32-bit indexes; a Messages line says so);
   `revision`: 0, bumped by every switch.
 - **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
