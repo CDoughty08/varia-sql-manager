@@ -14,6 +14,7 @@ import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 import * as windowTools from '../src/renderer/src/core/windows'
 import { keyAt } from './fixtures/entries'
+import { stackReveals } from '../src/renderer/src/grid/result-picker'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -898,6 +899,8 @@ describe('Query Output commands', () => {
     for (const id of [...changes, 'output.compareGoToOld', 'output.compareGoToNew'] as const) expect([0, 1, 2, 3, 4].map(place => commands.isEnabled(id, on('grid', { place }))), id).toEqual([false, false, false, false, true])
     expect(await commands.execute('output.compareMatch', on('grid', { place: 4 }), 'menu')).toBe(true)
     expect(compare.getSnapshot().matchMenu).toMatchObject({ tabId: tab.id, from: 'more' })
+    // Its grid is drawn first (the menu is its toolbar's): a collapsed or scrolled-away stacked one is opened to.
+    expect(stackReveals.take(tab.id)).toBe(compare.getSnapshot().matchMenu?.key)
     compare.closeMatchMenu()
     results.removeEntry(tab.id, key(0))
     const at = results.getSnapshot()[tab.id].sets.findIndex(set => set.descriptor.kind === 'diff')

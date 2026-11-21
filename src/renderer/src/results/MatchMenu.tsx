@@ -5,6 +5,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { windows } from '../core/windows'
 import { sqlTypeLabel } from '../grid/measure'
+import { focusResultGrid } from '../grid/ResultGrid'
 import { trapFocus } from '../trap-focus'
 import { placePopover } from './ComparePopover'
 import type { ChangeBase } from './CompareService'
@@ -113,8 +114,14 @@ export default function MatchMenu({ tabId, entryKey, state, anchor, focusBack, o
   back.current = focusBack
   useLayoutEffect(() => {
     const form = card.current
-    return () => { if (form?.contains(form.ownerDocument.activeElement)) back.current()?.focus({ preventScroll: true }) }
-  }, [host])
+    return () => {
+      if (!form?.contains(form.ownerDocument.activeElement)) return
+      // Its toolbar drawn again (a change landed), what opened it is gone: its comparison's grid takes the focus.
+      const target = back.current()
+      if (target?.isConnected) target.focus({ preventScroll: true })
+      else focusResultGrid(form.ownerDocument, tabId, entryKey)
+    }
+  }, [host, tabId, entryKey])
   // The active row stays in view.
   useLayoutEffect(() => { list.current?.querySelector<HTMLElement>(`[data-index="${shown[at] ?? -1}"]`)?.scrollIntoView?.({ block: 'nearest' }) }, [at, shown])
 

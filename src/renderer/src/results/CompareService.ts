@@ -739,8 +739,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       return undefined
     } finally {
       ticket.end(done ? 'done' : item.cancelled ? 'cancelled' : 'dropped')
-      // A menu opened while it ran lists the pairs it would have made: cancelled or refused, those pairs are stale.
-      if (!done && this.getSnapshot().matchMenu?.key === key) this.closeMatchMenu()
+      // A menu opened while it ran lists the pairs it would have made: cancelled or refused, those pairs are stale, and
+      // landed, its grid and toolbar are drawn again, which would reset the menu's ticks under the user.
+      if (this.getSnapshot().matchMenu?.key === key) this.closeMatchMenu()
       if (items.get(item.id) === item) items.delete(item.id)
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()

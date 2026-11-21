@@ -2,6 +2,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { windows } from '../core/windows'
 import { focusResultGrid } from '../grid/ResultGrid'
+import { stackReveals } from '../grid/result-picker'
 import { outputOf } from '../menus/targets'
 import { compareSources, fallbackText, type CompareChange } from '../results/CompareService'
 import { slotOf } from '../results/ResultsService'
@@ -91,6 +92,9 @@ export function compareContribution({ commands, compare, results, documents, men
         const target = panes.getSnapshot().results ? changeable(args) : undefined
         if (!target) return
         results.setView(target.tabId, 'results')
+        // Its grid is drawn first (a collapsed or scrolled-away stacked one opened and scrolled to; Tabs shows it), since
+        // the menu is drawn by its toolbar and would otherwise wait unseen to show up later.
+        stackReveals.request(target.tabId, target.key)
         compare.openMatchMenu(target.tabId, target.key, 'more')
       }
     }),

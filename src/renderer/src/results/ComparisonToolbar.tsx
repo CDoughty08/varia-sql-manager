@@ -190,6 +190,9 @@ function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar, opener }:
     if (action === 'changesOnly') {
       if (strip.current?.contains(button.ownerDocument.activeElement)) dismissed.current = index
       change(compare.refusedChange(entryKey) ?? { context: 0 })
+      // A change that starts clears the notice at once; one that did not start (the pair shown elsewhere, or being
+      // compared already) leaves it, and the focus with it.
+      if (compare.getSnapshot().notices.has(entryKey)) dismissed.current = undefined
     }
     else if (action === 'byPosition') change({ match: { mode: 'position' } })
     else { opener.current = button; compare.openMatchMenu(tabId, entryKey, 'notice') }

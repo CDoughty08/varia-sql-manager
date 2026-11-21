@@ -355,4 +355,22 @@ describe('a comparison\'s toolbar', () => {
     expect(view.container.contains(document.activeElement)).toBe(true)
     await act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve() })
   })
+
+  it('leaves the focus on Show changes only when its change does not start and the notice stays', async () => {
+    const view = await fixture()
+    view.replace.mockRestore()
+    const key = view.slot().key
+    const diff = vi.mocked(view.results.getSnapshot().t1.sets[0].handle.diff)
+    diff.mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    await act(async () => { await view.compare.replace('t1', key, { exact: true }) })
+    // A change that does not start (the pair shown elsewhere, or being compared already) leaves the notice.
+    vi.spyOn(view.compare, 'replace').mockResolvedValue(undefined)
+    view.draw()
+    const show = view.container.querySelector<HTMLButtonElement>('button[data-action="changesOnly"]')!
+    act(() => { show.focus(); show.click() })
+    view.draw()
+    view.draw()
+    expect(view.container.querySelector('button[data-action="changesOnly"]')).toBe(show)
+    expect(document.activeElement).toBe(show)
+  })
 })

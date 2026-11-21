@@ -171,6 +171,19 @@ describe('a comparison\'s rows', () => {
     await swapping
     expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
   })
+
+  it('closes a match menu opened while a change ran when that change lands, since its grid is drawn again', async () => {
+    const view = fixture()
+    const keys = view.run(2)
+    await view.compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    const key = view.slot().key
+    const changing = view.compare.replace('t1', key, { exact: true })
+    view.compare.openMatchMenu('t1', key)
+    expect(view.compare.getSnapshot().matchMenu?.key).toBe(key)
+    await expect(changing).resolves.toEqual({ key })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+  })
 })
 
 describe('a comparison\'s remembered match', () => {
