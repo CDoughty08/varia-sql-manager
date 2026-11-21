@@ -104,6 +104,13 @@ describe("agent.jobs' shared rules", () => {
     let never = { phase: { phase: 'starting' } as ReturnType<typeof watchedPhase>['phase'], job: start }
     for (let sample = 0; sample < 4; sample++) never = watchedPhase(never.job, idle, 'running')
     expect(never.phase).toEqual({ phase: 'unknown', reason: 'gone' })
+    // Seen running, then idle before msdb writes the run: still running until the run shows, unknown only after watchStartSamples.
+    let ran = watchedPhase(start, { status: 1, step: 1, steps: 3, lastOutcome: 1, lastRun: 20261115023000 }, 'running')
+    ran = watchedPhase(ran.job, idle, 'running')
+    expect(ran.phase).toEqual({ phase: 'running', retrying: false })
+    expect(watchedPhase(ran.job, { ...idle, lastRun: 20261115140000 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140000 })
+    for (let sample = 0; sample < 3; sample++) ran = watchedPhase(ran.job, idle, 'running')
+    expect(ran.phase).toEqual({ phase: 'unknown', reason: 'gone' })
     expect(watchedPhase(start, idle, 'stopped').phase).toEqual({ phase: 'unknown', reason: 'agentStopped' })
     expect(watchedSlot([4, null, 3, null, 1, 20261115023000, null, null, null, null, null, null], 0)).toEqual({ status: 4, step: undefined, steps: 3, started: undefined, lastOutcome: 1, lastRun: 20261115023000 })
     expect(watchedSlot([4, null, 3, null, 1, 0, null, null, null, null, null, null], 1)).toBeUndefined()
@@ -150,6 +157,8 @@ describe('Job Activity Monitor', () => {
     jobActivity.setColumnFilter(id, 'category', { values: ['ETL'] })
     jobActivity.toggleExpanded(id, { id: nightly.toUpperCase(), name: 'Nightly' })
     expect(handle().args).toEqual([{ filters: [{ column: 'category', values: ['ETL'] }] }, { expand: nightly, filters: [{ column: 'category', values: ['ETL'] }] }])
+    // A new expanded job reads at once, so the panel never shows another job's run; a filter waits for the next sample.
+    expect(handle().refreshes).toBe(1)
     // Between retries is a Status filter; pressed again it comes off. Running is the view chip.
     jobActivity.applyTile(id, agentJobTiles[2].applies)
     expect(jobActivity.tilePressed(id, agentJobTiles[2].applies)).toBe(true)
@@ -180,6 +189,9 @@ describe('Job Activity Monitor', () => {
     const id = jobActivity.open('c1')
     handle().set({ status: 'ended', ended: { ended: 'failed', code: 'PERMISSION_DENIED', message: 'denied', ticks: 0, elapsedMs: 1 }, error: { code: 'PERMISSION_DENIED', message: 'denied' } } as never)
     expect(jobActivity.ended(id)).toEqual({ code: 'PERMISSION_DENIED', message: jobActivityText.denied, denied: true })
+    // New args on a view that ended subscribe again with them.
+    jobActivity.setColumnFilter(id, 'status', { values: ['Idle'] })
+    expect(handle().refreshes).toBe(1)
   })
   it('sends one verb per selected job, one after another, each its own line; a refusal fails only its line, and Start hands the job to the status bar', async () => {
     const { jobActivity, api, handle, agentJobs, commands } = monitor()

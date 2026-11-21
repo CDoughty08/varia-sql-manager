@@ -26,6 +26,11 @@ export default function AgentJobStatus() {
   const more = jobs.length - 1
   if (!newest && !down.size) return null
   const xpsOnly = [...down.values()].every(value => value === 'xpsOff')
+  // One server down: its monitor; several: the command's server picker.
+  const openDown = () => {
+    if (down.size !== 1) { void commands.execute('agent.jobActivity', undefined, 'toolbar'); return }
+    try { jobActivity.open([...down.keys()][0]) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job Activity Monitor could not open.') }
+  }
   return <>
     {newest && <span className="agent-job-status" role="status" data-phase={newest.phase.phase}>
       <Icon name={running(newest) ? 'agent-activity' : newest.phase.phase === 'ended' && newest.phase.outcome === 1 ? 'pass' : 'warning'} />
@@ -37,7 +42,7 @@ export default function AgentJobStatus() {
       <button type="button" onClick={() => agentJobs.dismiss(newest.key)} aria-label={`Dismiss ${newest.name}`}>Dismiss</button>
     </span>}
     {down.size > 0 && <span className="agent-stopped-status" role="status">
-      <button type="button" title="Open Job Activity Monitor on that server" onClick={() => void commands.execute('agent.jobActivity', undefined, 'toolbar')}>
+      <button type="button" title={down.size === 1 ? 'Open Job Activity Monitor on that server' : 'Open Job Activity Monitor'} onClick={openDown}>
         <Icon name="warning" /><span>{xpsOnly ? 'Agent XPs off' : 'SQL Server Agent stopped'}{servers.length === 1 && servers[0] ? ` on ${servers[0]}` : servers.length > 1 ? ` on ${servers.length} servers` : ''}</span>
       </button>
     </span>}

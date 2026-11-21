@@ -287,6 +287,9 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const handle = this.handles.get(id)
     if (!handle || !this.live(id)) return
     handle.setArgs(jobActivityArgs(next))
+    // The backend applies new args at the next sample: read now so the last run shown is the job just picked, and a view that
+    // failed subscribes again with them.
+    if (before.expanded?.id !== next.expanded?.id || handle.getSnapshot().status === 'ended') handle.refresh()
   }
 
   // --- The grid and its selection ----------------------------------------------------------------------------------------

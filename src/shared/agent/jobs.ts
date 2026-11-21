@@ -144,7 +144,8 @@ export function watchedSlot(metrics: readonly (number | null)[] | undefined, slo
   if (value(0) === undefined) return undefined
   return { status: value(0), step: value(1), steps: value(2), started: value(3), lastOutcome: value(4), lastRun: value(5) }
 }
-/** How many samples may read the job idle with an older last run before Starting… gives up (sp_start_job only posts the request). */
+/** How many samples in a row may read the job idle with an older last run before following gives up: before it runs (sp_start_job
+ *  only posts the request) and after (Agent may show it idle a sample before it writes the run's outcome). */
 export const watchStartSamples = 3
 
 export type WatchedPhase =
@@ -164,7 +165,8 @@ export interface WatchedJob {
 /**
  * The watched job's phase after a sample: Starting… until it is seen running or an idle sample carries a run newer than the
  * one before the start; running while its status is 1, 2, 3 or 7; ended with that run's outcome; and, after
- * watchStartSamples idle samples with no newer run (Agent stopped mid-run and left no outcome), outcome unknown. While Agent
+ * watchStartSamples idle samples in a row with no newer run (it never started, or Agent stopped mid-run and left no outcome),
+ * outcome unknown. While Agent
  * cannot be used it says why instead (agent.jobs.service): the service stopped means the job ended without an outcome.
  */
 export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined, availability: AgentAvailability): { readonly phase: WatchedPhase; readonly job: WatchedJob } {
@@ -174,13 +176,14 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
   if (!sample) return { phase: job.seenRunning || job.idleSamples > 0 ? { phase: 'unknown', reason: 'gone' } : { phase: 'starting' }, job }
   const status = sample.status ?? 4
   if ((runningExecutionStatuses as readonly number[]).includes(status)) {
-    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true } }
+    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0 } }
   }
   const lastRun = sample.lastRun ?? 0
   if (lastRun > job.before && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }
+  // An idle read without a newer run is not yet an end: msdb may show the job idle a sample before its last run is written.
   const next = { ...job, idleSamples: job.idleSamples + 1 }
-  if (job.seenRunning || next.idleSamples > watchStartSamples) return { phase: { phase: 'unknown', reason: 'gone' }, job: next }
-  return { phase: { phase: 'starting' }, job: next }
+  if (next.idleSamples > watchStartSamples) return { phase: { phase: 'unknown', reason: 'gone' }, job: next }
+  return { phase: job.seenRunning ? { phase: 'running', retrying: false } : { phase: 'starting' }, job: next }
 }
 
 /** yyyymmddhhmmss (server local time) as "hh:mm:ss", with the date when it is not `today` (yyyymmdd). */
