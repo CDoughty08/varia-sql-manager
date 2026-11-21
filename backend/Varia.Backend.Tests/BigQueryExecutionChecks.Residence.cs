@@ -1,0 +1,2141 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Apache.Arrow;
+using Apache.Arrow.Types;
+using Varia.Backend.BigQuery;
+using Varia.Backend.Protocol;
+using Varia.Backend.Results;
+
+namespace Varia.Backend.Tests;
+
+/// <summary>
+/// Result residence offline (docs/bigquery.md, Residence): the block cache on its own (byte-sized blocks, read-ahead per
+/// viewer and a jump's cancellation, the fetch lanes, the wait that answers short, eviction, expiry, rowBytes from the cache
+/// only), the residence decision through query.execute, results.read of a windowed result through tabledata.list, every
+/// page reader's REMOTE_RESULT, the switch to windowed when the size was misestimated (REST and Arrow), Load into memory
+/// (results.remoteQuery) and back, and Demote's budget accounting while pages are pinned. No request leaves the process.
+/// </summary>
+internal static partial class BigQueryExecutionChecks
+{
+    static void Memory(JsonObject args) => args["residence"] = "memory";
+    static void Windowed(JsonObject args) => args["residence"] = "windowed";
+    static readonly WireKind[] OneText = [WireKind.Text];
+
+    static async Task ResidenceAsync(Action<bool, string> check)
+    {
+        Trace("RemoteBlocks");
+        await RemoteBlocksAsync(check);
+        Trace("ResidenceDecision");
+        await ResidenceDecisionAsync(check);
+        Trace("RemoteReads");
+        await RemoteReadsAsync(check);
+        Trace("Misestimate");
+        await MisestimateAsync(check);
+        Trace("LoadIntoMemory");
+        await LoadIntoMemoryAsync(check);
+        Trace("DemoteAccounting");
+        DemoteAccounting(check);
+        FitsHalf(check);
+        // The figures docs/bigquery.md and docs/ipc.md state (the other checks refer to these by name, so would follow a change).
+        using (var figures = new Harness(Lines(1)))
+            check(RemoteResult.TargetBlockBytes == 4 << 20 && RemoteResult.MinBlockRows == 256 && RemoteResult.MaxBlockRows == 16_384
+                && RemoteResult.FetchesPerResult == 2 && RemoteResult.FetchesPerConnection == 4 && RemoteResult.DefaultCacheBytes == 64L << 20
+                && RemoteResult.MaxRows == 2_147_483_647 && figures.Service.RemoteReadWait == TimeSpan.FromSeconds(20),
+                "the windowed result figures are the documented 4 MiB blocks of 256-16,384 rows, 2 fetches per result and 4 per connection, a 64 MiB cache, 2,147,483,647 rows and a 20 s read wait");
+        var limit = TimeSpan.FromSeconds(20);
+        check(SqlService.ReadWait(limit, null) == limit && SqlService.ReadWait(limit, TimeSpan.FromSeconds(12)) == TimeSpan.FromSeconds(7)
+            && SqlService.ReadWait(limit, TimeSpan.FromSeconds(3)) == TimeSpan.Zero && SqlService.ReadWait(limit, TimeSpan.FromMinutes(5)) == limit,
+            "a windowed read waits within its deadline, less 5 s");
+        Trace("RemoteRaces");
+        await RemoteRacesAsync(check);
+        Trace("TwoLoads");
+        await TwoLoadsAsync(check);
+        Trace("LoadAfterDisconnect");
+        await LoadAfterDisconnectAsync(check);
+        Trace("LoadReleased");
+        await LoadReleasedAsync(check);
+        Trace("LoadDuplicateQueryId");
+        await LoadDuplicateQueryIdAsync(check);
+        Trace("LoadFailed");
+        await LoadFailedAsync(check);
+        Trace("LoadWhileRunning");
+        await LoadWhileRunningAsync(check);
+        Trace("ForkedPlans");
+        ForkedPlans(check);
+    }
+
+    /// <summary>Forks of one column plan decode side by side exactly as one plan decodes alone (block fetches run in parallel).</summary>
+    static void ForkedPlans(Action<bool, string> check)
+    {
+        var plan = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("t", "TIMESTAMP"), Field("j", "JSON"), Field("d", "NUMERIC"))))!;
+        var rows = Enumerable.Range(0, 400).Select(i => JsonSerializer.SerializeToElement(Row((1_700_000_000L + i * 7919).ToString(Inv) + ".123456", "{\"k\":" + i + ",\"s\":\"" + new string('x', i % 50) + "\"}", (i * 3.25).ToString(Inv)))).ToArray();
+        byte[] Decode(BigQueryColumnPlan reader)
+        {
+            var builder = new PageBuilder(1, reader.Wires);
+            foreach (var row in rows)
+            {
+                builder.BeginRow();
+                reader.ReadRow(row, builder, _ => { });
+                builder.CommitRow();
+            }
+            return builder.Seal();
+        }
+        var serial = Decode(plan.Fork());
+        var parallel = new byte[8][];
+        Parallel.For(0, parallel.Length, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => parallel[i] = Decode(plan.Fork()));
+        check(parallel.All(body => body.AsSpan().SequenceEqual(serial)) && Decode(plan).AsSpan().SequenceEqual(serial),
+            "forks of a column plan decode in parallel exactly as the plan decodes alone");
+    }
+
+    /// <summary>Load into memory waits for the result's own query to end; a first page's unreadable values are said whichever
+    /// residence the result takes.</summary>
+    static async Task LoadWhileRunningAsync(Action<bool, string> check)
+    {
+        // The cap note is for the grid's 32-bit cap only: a Maximum rows below it caps the result itself, with no note.
+        var limited = SqlService.CapNoteFor(new QueryArgs("c", "s", null, "q", "id", 1_000_000_000, 0), 3_000_000_000L);
+        var unlimited = SqlService.CapNoteFor(new QueryArgs("c", "s", null, "q", "id", 0, 0), 3_000_000_000L);
+        check(limited is null && unlimited is not null && unlimited.Contains("of 3,000,000,000 rows", StringComparison.Ordinal),
+            "the cap note names the rows the grid would show, and only when its own cap keeps some back: " + limited + " / " + unlimited);
+        // A read waiting for its block when the result is closed answers RESULT_RELEASED, not an empty success.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Jobs.HangTable = true;
+            var reading = ReadRows(harness, id, 2_000, 10);
+            await harness.Jobs.Polling.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            harness.Service.Results.Release([id]);
+            var (code, _, rows, message) = await reading.WaitAsync(TimeSpan.FromSeconds(15));
+            harness.Jobs.HangTable = false;
+            check(code == "RESULT_RELEASED" && rows.Count == 0, $"a read waiting when its windowed result is closed answers RESULT_RELEASED: {code} {rows.Count} {message}");
+        }
+        // The refusal offers nothing a windowed result cannot do yet (filtering it, or loading it, has no command so far).
+        var refusal = SqlService.RemoteRefused().Message;
+        check(!refusal.Contains("Filter", StringComparison.Ordinal) && !refusal.Contains("load it", StringComparison.Ordinal), "a windowed result's refusal suggests nothing it cannot do yet: " + refusal);
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var set = harness.Service.Results.Find(executed!.ResultSets.Single().ResultId)!;
+            var finished = !set.Budget.Executing;
+            set.Budget.Executing = true;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            check(finished && code == "BUSY" && result is null && set.IsRemote && set.Revision == 0,
+                $"a load while its query still runs is refused and leaves the result windowed: {finished} {code} {message} {set.IsRemote} {set.Revision}");
+            set.Budget.Executing = false;
+            // Another result of the same query loading (its sets share one budget, so both would be refused part way): BUSY.
+            var began = set.Budget.TryBeginLoad();
+            var (sibling, siblingResult, _, siblingMessage) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            set.Budget.EndLoad();
+            var (after, afterResult, _, _) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            check(began && sibling == "BUSY" && siblingResult is null && after == "ok" && afterResult?.Status == "completed" && !set.Budget.Loading,
+                $"a load while another result of its query loads is refused, and goes once that one ends: {began} {sibling} {siblingMessage} {after} {afterResult?.Status} {set.Budget.Loading}");
+        }
+        foreach (var (name, change) in new (string, Action<JsonObject>?)[] { ("windowed", Windowed), ("in memory", null) })
+        {
+            var jobs = Lines(3000);
+            jobs.Rows[0] = Row("12x", "bad");
+            using var harness = new Harness(jobs);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t", change);
+            check(code == "ok" && result!.Messages.Count(entry => entry.Text.Contains("could not be read", StringComparison.Ordinal)) == 1,
+                $"a first page's unreadable value is said once for a result kept {name}: {code} {string.Join(" / ", result?.Messages.Select(entry => entry.Text) ?? [])}");
+        }
+    }
+
+    /// <summary>A scripted remote table for <see cref="RemoteResult"/>: row n reads "r{n}", padded; it records each fetch,
+    /// how many ran at once, and can hold them or say the table is gone.</summary>
+    sealed class Blocks
+    {
+        public readonly ConcurrentQueue<(long First, int Rows)> Calls = new();
+        public TaskCompletionSource? Gate;
+        public int Pad;
+        /// <summary>A row's padding by row, when rows differ in width (else <see cref="Pad"/>).</summary>
+        public Func<long, int>? PadOf;
+        public volatile bool Expire;
+        int running;
+        public int MaxRunning;
+        public int Cancelled;
+        public int Written;
+        /// <summary>Fetches from this row on start this much later (another block settling first).</summary>
+        public long DelayFrom = long.MaxValue;
+        public int DelayMs;
+        /// <summary>Awaited as each fetch starts (after its reservation), by first row: orders fetches without timing.</summary>
+        public Func<long, Task>? Before;
+        /// <summary>Which fetches (by first row) wait on <see cref="Gate"/>: all when null.</summary>
+        public Func<long, bool>? Holds;
+        /// <summary>The table ends here, whatever BigQuery said: rows from it on are not written.</summary>
+        public long ShortAt = long.MaxValue;
+
+        public RemoteFetch Fetch => async (first, rows, writer, token) =>
+        {
+            Calls.Enqueue((first, rows));
+            if (Before is { } before) await before(first);
+            if (first >= DelayFrom) await Task.Delay(DelayMs, token);
+            var now = Interlocked.Increment(ref running);
+            lock (Calls) MaxRunning = Math.Max(MaxRunning, now);
+            try
+            {
+                if (Gate is { } gate && (Holds?.Invoke(first) ?? true))
+                {
+                    try { await gate.Task.WaitAsync(token); }
+                    catch (OperationCanceledException) { Interlocked.Increment(ref Cancelled); throw; }
+                }
+                if (Expire) throw new RemoteExpiredException();
+                for (var row = first; row < Math.Min(first + rows, ShortAt); row++)
+                {
+                    Write(writer, row, PadOf?.Invoke(row) ?? Pad);
+                    Interlocked.Increment(ref Written);
+                }
+            }
+            finally { Interlocked.Decrement(ref running); }
+        };
+
+        public static void Write(RemoteBlockWriter writer, long row, int pad)
+        {
+            var builder = writer.BeginRow();
+            var text = "r" + row.ToString(Inv) + new string('x', pad);
+            builder.AppendText(text);
+            builder.Measure(text.Length, text.Length);
+            writer.CommitRow();
+        }
+    }
+
+    /// <summary>What a row written with <paramref name="pad"/> costs in pages.</summary>
+    static double CostPerRow(int pad, int rows = 64)
+    {
+        var writer = new RemoteBlockWriter(1, OneText, 0);
+        for (var row = 0; row < rows; row++) Blocks.Write(writer, row, pad);
+        return (double)writer.Finish().Sum(page => page.Cost) / rows;
+    }
+
+    static RemoteResult Remote(ResultStore store, Blocks blocks, long rows = 100_000, double rowBytes = 16_384, long cache = 256L << 20, SemaphoreSlim? lane = null) =>
+        RemoteResult.Create(store, 1, OneText, rows, false, rowBytes, cache, lane ?? new SemaphoreSlim(RemoteResult.FetchesPerConnection), blocks.Fetch);
+
+    /// <summary>Reads through the cache as results.read does; each row's number (the text after "r", before the padding).</summary>
+    static async Task<(long Next, List<long> Rows)> ReadRemote(RemoteResult remote, long first, int max, uint viewer = 0, int waitMs = 15_000)
+    {
+        var rows = new List<long>();
+        var next = await remote.ReadAsync(first, max, viewer, body =>
+        {
+            foreach (var row in PageReader.Read(body, OneText).Rows) rows.Add(long.Parse(row[0].Text!.AsSpan(1).TrimEnd('x'), Inv));
+            return ValueTask.CompletedTask;
+        }, TimeSpan.FromMilliseconds(waitMs), CancellationToken.None);
+        return (next, rows);
+    }
+
+    /// <summary>The rows sent hold [first, first + count) in order (a read sends whole cached pages, so it may send more).</summary>
+    static bool Consecutive(List<long> rows, long first, int count)
+    {
+        var at = rows.IndexOf(first);
+        return at >= 0 && rows.Count - at >= count && rows.Skip(at).Take(count).Select((row, index) => row == first + index).All(same => same);
+    }
+
+    /// <summary>The rows sent hold [first, first + count) in order, by their first cell's number.</summary>
+    static bool Covers(List<string[]> rows, long first, int count) => Consecutive([.. rows.Select(row => long.Parse(row[0], Inv))], first, count);
+
+    static async Task RemoteBlocksAsync(Action<bool, string> check)
+    {
+        // A read refused for low memory keeps the blocks already cached: no eviction would make room, so none is flushed.
+        {
+            var low = false;
+            var store = new ResultStore(1L << 30, 1L << 29, () => (Volatile.Read(ref low) ? 100 : 10, 50));
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, cache: 64L << 20);
+            await ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks().ToList();
+            Volatile.Write(ref low, true);
+            string refused;
+            try { await ReadRemote(remote, 50_000, 10); refused = "read"; }
+            catch (RequestException error) { refused = error.Code == "TOO_LARGE" && error.Message == SqlService.LowMemory ? "low" : error.Message; }
+            var after = remote.CachedBlocks().ToList();
+            check(refused == "low" && before.Count > 0 && before.All(after.Contains),
+                $"a read refused for low memory flushes none of the cached blocks: {refused} before=[{string.Join(",", before)}] after=[{string.Join(",", after)}]");
+        }
+        // Nothing more is held while the OS reports high memory load (docs/ipc.md), the block cache included: a read is
+        // refused with the low-memory sentence rather than fill it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29, () => (100, 50));
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            string refused;
+            try { await ReadRemote(remote, 0, 100); refused = "read"; }
+            catch (RequestException error) { refused = error.Code == "TOO_LARGE" && error.Message == SqlService.LowMemory ? "low" : error.Message; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(store.IsSystemMemoryLow() && store.WindowCacheBytes == 0 && refused == "low",
+                $"no block is cached while the system is low on memory, and the read says so: {refused} cache={store.WindowCacheBytes} blocks=[{string.Join(",", remote.CachedBlocks())}]");
+        }
+        check(RemoteResult.BlockRowsFor(16_384) == 256 && RemoteResult.BlockRowsFor(1) == RemoteResult.MaxBlockRows && RemoteResult.BlockRowsFor(1 << 20, 4096L << 20) == RemoteResult.MinBlockRows
+            && RemoteResult.BlockRowsFor(1024) == 4096, "a block is about 4 MiB of measured rows, clamped to 256..16,384 rows");
+        check(RemoteResult.BlockRowsFor(1 << 20) == 25 && RemoteResult.BlockRowsFor(1 << 20, 16L << 20) == 6 && RemoteResult.BlockRowsFor(64L << 20, 16L << 20) == 1,
+            "a block of very wide rows holds no more than half its cache with the estimate's margin (one row at least)");
+
+        // The first page is seeded and read without a fetch; rowBytes answers from the cache only.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0; row < 100; row++) Blocks.Write(seed, row, 0);
+            remote.Seed(seed.Finish());
+            var cached = store.WindowCacheBytes;
+            var held = remote.CachedBytes;
+            var (next, rows) = await ReadRemote(remote, 0, 100, viewer: 0, waitMs: 15_000);
+            var bytes = remote.RowBytes(90, 20);
+            var uncached = remote.RowBytes(5000, 10);
+            check(next == 100 && Consecutive(rows, 0, 100) && cached > 0 && cached == held && store.UsedBytes >= cached,
+                $"seeded rows read from the cache, charged to the global budget as the window cache: {next} {rows.Count} {cached}");
+            check(bytes.Length == 10 && bytes.All(value => value > 0) && uncached.Length == 0, "rowBytes answers only as far as the cached rows go");
+            // Read-ahead from the seeded read may have started block 1's fetch; rowBytes itself never fetches.
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is var ahead && ahead.Contains(1) && ahead.Contains(2), 15_000);
+            var before = remote.Fetches;
+            var listed = remote.ListedBlocks();
+            remote.RowBytes(50_000, 100);
+            // A fetch starts after a yield, so the count alone could miss one rowBytes began: no block is even listed for it.
+            check(remote.Fetches == before && remote.ListedBlocks() == listed && remote.FetchingBlocks() == 0, "rowBytes never fetches a block");
+        }
+
+        // A read across two blocks fetches them (and its viewer's read-ahead), at most two at a time per result.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            var (next, rows) = await ReadRemote(remote, 1000, 100, viewer: 1);
+            check(next >= 1100 && Consecutive(rows, 1000, 100), $"a read across blocks 3 and 4 answers its rows in order: {next} {rows.Count}");
+            var ahead = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 2, 3, 4, 5, 6 }.All(cached.Contains), 15_000);
+            check(ahead, "the viewer's read-ahead fetches the blocks either side and one more in the direction of travel: " + string.Join(",", remote.CachedBlocks()));
+            check(blocks.MaxRunning <= RemoteResult.FetchesPerResult && blocks.Calls.All(call => call.First % 256 == 0 && call.Rows == 256),
+                $"fetches run at most {RemoteResult.FetchesPerResult} at a time per result, one whole block each: {blocks.MaxRunning}");
+            // Scrolling back reads ahead backwards.
+            await ReadRemote(remote, 300, 10, viewer: 1);
+            check(SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000), "a read moving up reads ahead towards the top");
+        }
+
+        // The connection's lane bounds fetches across its results.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var lane = new SemaphoreSlim(1);
+            var shared = new Blocks();
+            using var first = Remote(store, shared, lane: lane);
+            using var second = Remote(store, shared, lane: lane);
+            await Task.WhenAll(ReadRemote(first, 0, 600, viewer: 1), ReadRemote(second, 5000, 600, viewer: 1));
+            check(shared.MaxRunning == 1, "one connection's lane bounds fetches across all of its results: " + shared.MaxRunning);
+        }
+
+        // A read whose blocks do not come within its wait answers short, and the rows follow on the next read.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            var (next, rows) = await ReadRemote(remote, 2000, 50, viewer: 1, waitMs: 100);
+            check(next == 2000 && rows.Count == 0, $"a read that waits past its time answers with the rows it has (none), not an error: {next} {rows.Count}");
+            blocks.Gate.SetResult();
+            (next, rows) = await ReadRemote(remote, 2000, 50, viewer: 1);
+            check(next >= 2050 && Consecutive(rows, 2000, 50), "the next read finds the rows the held fetch brought");
+        }
+
+        // A jump cancels the viewer's stale read-ahead, and the block of a read that answered short (it became the viewer's);
+        // the new read's own block still arrives.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 10 * 256, 10, viewer: 7, waitMs: 50);
+            // Blocks 9, 11 and 12 are read-ahead (held or queued on the lane); block 10 is the read's own.
+            await ReadRemote(remote, 100 * 256, 10, viewer: 7, waitMs: 50);
+            var cancelledBefore = blocks.Cancelled;
+            blocks.Gate.SetResult();
+            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 99, 100, 101, 102 }.All(cached.Contains), 15_000);
+            var cachedAfter = remote.CachedBlocks();
+            check(settled && new long[] { 9, 10, 11, 12 }.All(block => !cachedAfter.Contains(block)),
+                $"a jump cancels the viewer's earlier read-ahead and a short-answered read's block, and keeps the new read's own: {string.Join(",", cachedAfter)} (cancelled in flight: {cancelledBefore})");
+            // Another viewer's read-ahead is its own: viewer 8 jumping does not cancel viewer 7's.
+        }
+
+        // A jump of three blocks keeps the earlier read-ahead block the new one wants (12, now behind it): it is fetched.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 10 * 256, 10, viewer: 7, waitMs: 50);
+            await ReadRemote(remote, 13 * 256, 10, viewer: 7, waitMs: 50);
+            blocks.Gate.SetResult();
+            var kept = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 12, 13, 14, 15 }.All(cached.Contains), 15_000);
+            check(kept, "a jump keeps fetching the earlier read-ahead block its new read-ahead wants: " + string.Join(",", remote.CachedBlocks()));
+        }
+
+        // A cancelled read hands the fetch it started to its viewer: the viewer's next read of those rows joins it (nothing
+        // fetched twice), and a jump stops it with the rest of the viewer's read-ahead.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            using var stop = new CancellationTokenSource();
+            var reading = remote.ReadAsync(20 * 256, 10, 3, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stop.Token);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 4, 15_000);
+            stop.Cancel();
+            try { await reading; } catch (OperationCanceledException) { }
+            var again = ReadRemote(remote, 20 * 256 + 5, 10, viewer: 3);
+            blocks.Gate.SetResult();
+            var (next, rows) = await again;
+            check(next >= 20 * 256 + 15 && Consecutive(rows, 20 * 256 + 5, 10) && blocks.Calls.Count(call => call.First == 20 * 256) == 1,
+                $"a cancelled read's fetch is joined by its viewer's next read, not fetched again: {next} {blocks.Calls.Count(call => call.First == 20 * 256)}");
+            // After a cancelled read, a jump stops that read's fetch.
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var jumped = Remote(store, held);
+            using var stopJump = new CancellationTokenSource();
+            var first = jumped.ReadAsync(40 * 256, 10, 4, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            stopJump.Cancel();
+            try { await first; } catch (OperationCanceledException) { }
+            await ReadRemote(jumped, 300 * 256, 10, viewer: 4, waitMs: 50);
+            held.Gate.SetResult();
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            var cached = jumped.CachedBlocks();
+            check(!cached.Contains(40) && cached.Contains(300),
+                $"a jump after a cancelled read stops that read's fetch: {string.Join(",", cached)} fetching {jumped.FetchingBlocks()} cancelled {held.Cancelled} calls {string.Join(",", held.Calls.Select(c => c.First / 256))}");
+            // The blocks the jump cancelled (never fetched) leave the cache's lists.
+            check(jumped.ListedBlocks() == cached.Length, $"blocks a jump cancelled are not kept: {jumped.ListedBlocks()} listed, {cached.Length} cached");
+        }
+        // A read that names no viewer (results.read without `viewer`: prefetch, Open Value, a live swap's tile read) hands its
+        // cancelled fetch to the viewerless read-ahead too: the next viewerless jump stops it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var jumped = Remote(store, held);
+            using var stopJump = new CancellationTokenSource();
+            var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            stopJump.Cancel();
+            try { await first; } catch (OperationCanceledException) { }
+            await ReadRemote(jumped, 300 * 256, 10, viewer: 0, waitMs: 50);
+            held.Gate.SetResult();
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            var cached = jumped.CachedBlocks();
+            check(!cached.Contains(40) && cached.Contains(300),
+                $"a viewerless jump after a cancelled viewerless read stops that read's fetch: {string.Join(",", cached)} cancelled {held.Cancelled}");
+        }
+
+        // Once the table has expired, a read of cached rows lists no read-ahead blocks it can never fetch.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 10 * 256, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && remote.CachedBlocks().Length >= 4, 15_000);
+            blocks.Expire = true;
+            string outcome;
+            try { await ReadRemote(remote, 30 * 256, 10, viewer: 2); outcome = "ok"; }
+            catch (RemoteExpiredException) { outcome = "REMOTE_EXPIRED"; }
+            catch (RequestException error) { outcome = error.Code; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var (next, _) = await ReadRemote(remote, 12 * 256, 10, viewer: 1);
+            check(outcome == "REMOTE_EXPIRED" && next > 12 * 256 && remote.ListedBlocks() == remote.CachedBlocks().Length,
+                $"after expiry a cached read lists no read-ahead it cannot fetch: {outcome} {next} {remote.ListedBlocks()} listed, {remote.CachedBlocks().Length} cached");
+        }
+
+        // A cache that holds two blocks reads ahead one beside the read's own, and never evicts the block on screen for it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            // The read-ahead tries for room just after the read's own block reserved its own: it counts that block once.
+            int ownReserved = 0, aheadTried = 0;
+            remote.Reserving = index => { if (index == 6) { SpinWait.SpinUntil(() => Volatile.Read(ref ownReserved) == 1, 15_000); Interlocked.Exchange(ref aheadTried, 1); } };
+            remote.Reserved = index => { if (index == 5) Interlocked.Exchange(ref ownReserved, 1); if (index == 5) SpinWait.SpinUntil(() => Volatile.Read(ref aheadTried) == 1 && (remote.CachedBlocks().Contains(6) || remote.FetchingBlocks() == 1), 15_000); };
+            var (next, _) = await ReadRemote(remote, 5 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var cached = remote.CachedBlocks();
+            check(next > 5L * remote.BlockRows && cached.Contains(5) && blocks.Calls.Count == 2 && remote.Evictions == 0,
+                $"a two-block cache reads ahead one block and keeps the one read: {string.Join(",", cached)} {blocks.Calls.Count} fetches, {remote.Evictions} evictions");
+            // Scrolling down one block, its one block of read-ahead is the next one down, not the one behind it (cached already).
+            await ReadRemote(remote, 6 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var starts = blocks.Calls.Select(call => call.First / remote.BlockRows).ToArray();
+            check(starts.Contains(7) && remote.CachedBlocks().Contains(7),
+                $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
+        }
+
+        // A read's own block evicts another grid's rows on screen only when nothing else frees room: plain LRU would give them
+        // up first (a grid's block on screen is older than its own read-ahead), and that grid's next scroll reads them again.
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks { Pad = 200 };
+            using var remote = Remote(store, blocks, rows: 16_384L * 100, rowBytes: CostPerRow(200), cache: 16L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 10L * size + 5, 40, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 30L * size + 5, 40, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 60L * size + 5, 40, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var afterJump = remote.CachedBlocks();
+            var fetches = blocks.Calls.Count;
+            await ReadRemote(remote, 10L * size + 6, 40, viewer: 1);
+            var refetched = blocks.Calls.Skip(fetches).Any(call => call.First / size == 10);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(afterJump.Contains(10) && afterJump.Contains(60) && !refetched,
+                $"a read keeps another grid's rows on screen while blocks off screen can go: cached [{string.Join(",", afterJump)}] after the jump, block 10 refetched {refetched}");
+        }
+
+        // A block's overrun stops only read-ahead no read waits for: a block another read (or this one) waits for is waited on,
+        // never cancelled and fetched again.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.Holds = first => first == size;
+            var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Before = first => { if (first == size) { secondStarted.TrySetResult(); return Task.CompletedTask; } return first == 0 ? secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(15)) : Task.CompletedTask; };
+            blocks.PadOf = row => row < size ? 48_000 : 32_000;
+            var waited = false;
+            remote.OverrunWaiting = index => { if (index == 0) { waited = true; blocks.Gate.TrySetResult(); } };
+            var (next, rows) = await ReadRemote(remote, size - 5, 10, viewer: 1);
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var second = blocks.Calls.Count(call => call.First == size);
+            check(waited && next >= size + 5 && Consecutive(rows, size - 5, 10) && blocks.Cancelled == 0 && second == 1,
+                $"an overrun waits for a block a read waits for rather than stop it: waited {waited}, next {next}, {blocks.Cancelled} cancelled, block 1 fetched {second} times");
+        }
+
+        // A table shorter than BigQuery said (it changed under the result): its block is fetched once, the rest left loading,
+        // not fetched again on every read.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { ShortAt = 100 };
+            using var remote = Remote(store, blocks, rows: 5000);
+            for (var i = 0; i < 3; i++)
+            {
+                await ReadRemote(remote, 0, 200, viewer: 1);
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            }
+            var within = blocks.Calls.Count(call => call.First < remote.BlockRows);
+            check(within == 1, $"a table shorter than BigQuery said is read once: block 0 fetched {within} times");
+        }
+
+        // A read's own block overrunning while read-ahead holds the cache's room stops that read-ahead rather than waiting on it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.Holds = first => first >= size;
+            // The read's own block is built only once the read-ahead holds its room (its fetch has begun).
+            var aheadHolds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Before = first => { if (first >= size) { aheadHolds.TrySetResult(); return Task.CompletedTask; } return aheadHolds.Task.WaitAsync(TimeSpan.FromSeconds(15)); };
+            blocks.PadOf = row => row < size ? 48_000 : 32_000;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var (next, rows) = await ReadRemote(remote, 0, 10, viewer: 1, waitMs: 10_000);
+            var took = clock.ElapsedMilliseconds;
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(next >= 10 && Consecutive(rows, 0, 10) && blocks.Cancelled >= 1 && took < 8_000,
+                $"an overrun stops read-ahead holding the room instead of waiting on it: next {next}, {blocks.Cancelled} cancelled, {took} ms");
+        }
+
+        // The cache keeps the most recently used blocks: a block read again outlives one read ahead after it, when another
+        // grid's read needs room.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            // Block 1 is read ahead once block 0, the read's own, is cached.
+            remote.Reserving = index => { if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000); };
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            // The second grid's read-ahead of block 21 tries for room before its own block 20 does: it waits behind the read
+            // rather than taking the room the read needs, which would make the read evict the first grid's block on screen.
+            var aheadTried = 0;
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
+            await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.SequenceEqual(new long[] { 0, 1 }) && after.Contains(0) && after.Contains(20) && !after.Contains(1),
+                $"the least recently used block goes first, and a read-ahead never takes the room of the read it follows: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
+        // A read-ahead block that cannot fit even with every block it may evict gone evicts none: the other grids' blocks stay
+        // cached while the cache is nearly empty, rather than being thrown away for a refusal.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            remote.Reserving = index =>
+            {
+                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+            };
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            var evicted = remote.Evictions;
+            var aheadTried = 0;
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
+            await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.SequenceEqual(new long[] { 0, 1, 50, 51 }) && new long[] { 0, 1, 20, 50, 51 }.All(after.Contains) && remote.Evictions == evicted,
+                $"a read-ahead that cannot fit evicts nothing for it: before [{string.Join(",", before)}], after [{string.Join(",", after)}], {remote.Evictions - evicted} evicted");
+        }
+
+        // The rows on screen are every block a viewer's last read covered, not only its first.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            await ReadRemote(remote, 2 * remote.BlockRows - 5, 2 * remote.BlockRows, viewer: 1);
+            var covered = new[] { 1L, 2, 3, 4 }.Select(remote.OnScreenForChecks).ToArray();
+            await ReadRemote(remote, 40 * remote.BlockRows, 10, viewer: 1);
+            check(covered.SequenceEqual(new[] { true, true, true, false }) && !remote.OnScreenForChecks(2) && remote.OnScreenForChecks(40),
+                $"the rows on screen are every block the last read covered: {string.Join(",", covered)}");
+        }
+
+        // A read-ahead the global budget refuses evicts nothing for it (evicting frees only this cache) and stops quietly.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 64L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
+            var evicted = remote.Evictions;
+            long other = 0;
+            var ownReserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Holds = first => first == 20L * size;
+            // Once the read's own block 20 has its room, the global budget is left with less than a block's estimate.
+            remote.Reserved = index => { if (index == 20) { store.TryReserveCache(ref other, long.MaxValue, store.GlobalBytes - store.UsedBytes - (4L << 20)); ownReserved.TrySetResult(); } };
+            remote.Reserving = index => { if (index != 20) ownReserved.Task.Wait(15_000); };
+            var reading = ReadRemote(remote, 20L * size, 10, viewer: 1);
+            await ownReserved.Task;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 1, 15_000);
+            var cachedWhile = remote.CachedBlocks();
+            var evictedWhile = remote.Evictions - evicted;
+            blocks.Gate.TrySetResult();
+            var (next, _) = await reading;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            store.ReturnCache(ref other, other);
+            check(cachedWhile.Contains(0) && evictedWhile == 0 && next > 20L * size,
+                $"a read-ahead the global budget refuses evicts nothing: cached [{string.Join(",", cachedWhile)}] while block 20 is read, {evictedWhile} evicted, next {next}");
+        }
+
+        // Read-ahead evicts in LRU order but never a block on screen, however old: another grid's read-ahead keeps it.
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: CostPerRow(32_000), cache: 64L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
+            await ReadRemote(remote, 50L * size, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            await ReadRemote(remote, 20L * size, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.Contains(0) && after.Contains(0) && after.Contains(20),
+                $"read-ahead never evicts an older block on screen: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
+        // Viewer ids come from the untrusted renderer: the read-ahead state of a few hundred at most is remembered.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var most = 0;
+            for (uint viewer = 1; viewer <= 600; viewer++)
+            {
+                await ReadRemote(remote, 0, 1, viewer: viewer);
+                most = Math.Max(most, remote.ViewerCount);
+            }
+            check(most == 256, $"the read-ahead remembers 256 viewers at most: {most}");
+        }
+
+        // Read-ahead whose rows come out wider than measured stops where the cache is full: it never evicts the block on screen
+        // nor passes the cache's limit, and reading the same rows again fetches neither block again; rows so wide the block
+        // outgrows the whole cache (3x) count as that wide too.
+        foreach (var (cacheMiB, pad, factor) in new[] { (16L, 50_000, 1.9), (16L, 50_000, 1.6), (64L, 200_000, 1.6), (16L, 50_000, 3.0) })
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, rows: 5000, rowBytes: CostPerRow(pad), cache: cacheMiB << 20);
+            var size = remote.BlockRows;
+            blocks.PadOf = row => row < size ? pad : (int)(pad * factor);
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reading = remote.ReadAsync(0, 10, 1, async _ => { sending.TrySetResult(); await hold.Task; }, TimeSpan.FromSeconds(15), CancellationToken.None);
+            await sending.Task;
+            SpinWait.SpinUntil(() => blocks.Calls.Any(call => call.First == size) && remote.FetchingBlocks() == 0, 15_000);
+            var heldWhile = remote.CachedBytes;
+            hold.TrySetResult();
+            await reading;
+            for (var i = 0; i < 5; i++)
+            {
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await ReadRemote(remote, 0, 10, viewer: 1);
+            }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var zero = blocks.Calls.Count(call => call.First == 0);
+            var one = blocks.Calls.Count(call => call.First == size);
+            check(heldWhile <= remote.CacheLimit && remote.PeakBytes <= remote.CacheLimit && zero == 1 && one == 1 && remote.CachedBlocks().Contains(0) && store.WindowCacheBytes == remote.CachedBytes,
+                $"read-ahead {factor}x wider than measured ({cacheMiB} MiB cache) keeps the block on screen and stops: held {heldWhile} (peak {remote.PeakBytes}) of {remote.CacheLimit}, block 0 fetched {zero}, block 1 {one}, cached {string.Join(",", remote.CachedBlocks())}");
+        }
+
+        // Scrolling up, the read-ahead takes the block above first, then the one below, then one more above.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var chosen = new List<long>();
+            await ReadRemote(remote, 10 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 9 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.SequenceEqual(new long[] { 8, 10, 7 }), $"scrolling up reads ahead the block above first: {string.Join(",", order)}");
+        }
+
+        // A fetch that fails with something other than a RequestException (a connection error past its retries): a read
+        // across it answers with the rows before it, as for BigQuery's own errors, and one starting on it fails.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blockRows = 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                await Task.Yield();
+                if (first >= blockRows) throw new HttpRequestException("No connection could be made.");
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 0);
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 0, 2 * blockRows, viewer: 1); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            string later;
+            try { await ReadRemote(remote, blockRows, 10, viewer: 1); later = "ok"; }
+            catch (Exception error) { later = error.GetType().Name; }
+            check(outcome == "ok" && next == blockRows && later == nameof(HttpRequestException),
+                $"a read across a block whose fetch fails answers with the rows before it, and one starting on it fails: {outcome} next {next}, later {later}");
+        }
+
+        // A read across the end of the seeded first page answers with its cached rows once it gives up on the rest: when
+        // the table has expired, and when the wait for the rest passes.
+        foreach (var expire in new[] { true, false })
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Expire = expire, Gate = expire ? null : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0; row < 100; row++) Blocks.Write(seed, row, 0);
+            remote.Seed(seed.Finish());
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 50, 100, viewer: 1, waitMs: 300); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            catch (RemoteExpiredException) { outcome = "expired"; }
+            blocks.Gate?.TrySetResult();
+            check(remote.BlockRows > 100 && outcome == "ok" && next == 100,
+                $"a read past the seeded rows answers with the cached ones when {(expire ? "the table expired" : "its wait passes")}: {outcome} next {next}");
+        }
+
+        // A part-cached (seeded) block whose remainder fetch stops on a rate limit or another failure: the read answers short with
+        // the rows it has rather than drawing them as loading or failing.
+        foreach (var kind in new[] { "retry", "error" })
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                await Task.Yield();
+                if (kind == "retry") throw new RemoteRetryException(new HttpRequestException("429"));
+                throw new HttpRequestException("No connection could be made.");
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0; row < 100; row++) Blocks.Write(seed, row, 0);
+            remote.Seed(seed.Finish());
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 50, 100, viewer: 1); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            check(outcome == "ok" && next == 100, $"a part-cached block whose fetch stops ({kind}) answers with its rows: {outcome}, next {next}");
+        }
+
+        // Scrolling up keeps its direction while reads stay inside the same block.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 10 * size, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 9 * size + 100, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var chosen = new List<long>();
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 9 * size + 50, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.Length > 0 && order[0] == 8, $"scrolling up keeps its direction while reads stay inside one block: read ahead [{string.Join(",", order)}]");
+        }
+
+
+        // Read-ahead takes only as many blocks as the cache holds beside the read's own (a read across two blocks).
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks(), rowBytes: 16_384, cache: 16L << 20);
+            var size = remote.BlockRows;
+            var chosen = new List<long>();
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 10L * size + size - 50, 100, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.SequenceEqual(new long[] { 12 }), $"read-ahead takes only the room beside a two-block read: read ahead [{string.Join(",", order)}]");
+        }
+
+        // A read-ahead estimate the cache's limit refuses (the read's own block not reserved yet) is not taken past the limit.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            remote.Reserving = index =>
+            {
+                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+            };
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var evicted = remote.Evictions;
+            var aheadTried = 0;
+            var aheadReserved = 0;
+            blocks.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Holds = first => first == 21L * remote.BlockRows;
+            remote.Reserved = index => { if (index == 21) Interlocked.Exchange(ref aheadReserved, 1); };
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => Volatile.Read(ref aheadReserved) == 1 || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
+            var reading = ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            var (next, _) = await reading;
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(aheadReserved == 0 && remote.PeakBytes <= remote.CacheLimit && remote.Evictions == evicted && next > 20L * remote.BlockRows,
+                $"a refused read-ahead estimate is never taken past the limit: reserved {aheadReserved}, peak {remote.PeakBytes} of {remote.CacheLimit}, {remote.Evictions - evicted} evicted, next {next}");
+        }
+
+        // Once the table is gone, a read of rows never cached is REMOTE_EXPIRED, and asks BigQuery nothing more.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            blocks.Expire = true;
+            string first;
+            try { await ReadRemote(remote, 40L * remote.BlockRows, 10, viewer: 1); first = "ok"; }
+            catch (RemoteExpiredException) { first = "expired"; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var calls = blocks.Calls.Count;
+            string second;
+            long next = -1;
+            try { (next, _) = await ReadRemote(remote, 70L * remote.BlockRows, 10, viewer: 1); second = "ok"; }
+            catch (RemoteExpiredException) { second = "expired"; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(remote.Expired && first == "expired" && second == "expired" && blocks.Calls.Count == calls,
+                $"after the table expired a read of rows never cached is REMOTE_EXPIRED and asks BigQuery nothing: first {first}, second {second} next {next}, calls {calls} -> {blocks.Calls.Count}");
+        }
+
+        // The cache evicts its least recent blocks within its limit, and gives every byte back when released.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 16_000 };
+            var remote = Remote(store, blocks, cache: 16L << 20);
+            foreach (var block in new long[] { 0, 40, 80, 120, 160, 200 }) await ReadRemote(remote, block * 256, 10, viewer: (uint)(block + 1));
+            SpinWait.SpinUntil(() => remote.Fetches >= 6 && remote.FetchingBlocks() == 0 && remote.CachedBytes <= remote.CacheLimit, 15_000);
+            check(remote.Evictions > 0 && remote.CachedBytes <= remote.CacheLimit + (5L << 20) && store.WindowCacheBytes == remote.CachedBytes,
+                $"the cache evicts least recent blocks to stay near its limit, and the store counts what it holds: {remote.Evictions} {remote.CachedBytes} {store.WindowCacheBytes}");
+            remote.Dispose();
+            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 15_000);
+            check(store.WindowCacheBytes == 0 && store.UsedBytes == 0, "a released window gives back every cached byte: " + store.UsedBytes);
+        }
+
+        // A full global budget refuses a block (TOO_LARGE) rather than passing it.
+        {
+            var store = new ResultStore(2L << 20, 1L << 20);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, cache: 64L << 20);
+            string? code = null;
+            try { await ReadRemote(remote, 0, 10); }
+            catch (RequestException error) { code = error.Code; }
+            check(code == "TOO_LARGE" && store.UsedBytes == 0, "a block the global budget has no room for answers TOO_LARGE and holds nothing: " + code);
+        }
+
+        // A gone table fails the rows not cached; the cached ones stay readable.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 0, 10);
+            blocks.Expire = true;
+            var expired = false;
+            try { await ReadRemote(remote, 50_000, 10); }
+            catch (RemoteExpiredException) { expired = true; }
+            var (next, rows) = await ReadRemote(remote, 0, 10);
+            check(expired && remote.Expired && next >= 10 && Consecutive(rows, 0, 10), "a gone table fails the rows not cached and leaves the cached rows readable");
+        }
+    }
+
+    static Jobs Lines(int count, Func<int, string>? text = null) => new()
+    {
+        Schema = Schema(Field("n", "INTEGER"), Field("s", "STRING")),
+        Rows = [.. Enumerable.Range(0, count).Select(i => Row(i.ToString(Inv), text?.Invoke(i) ?? "row " + i))],
+        Destination = Destination
+    };
+
+    /// <summary>results.read as the host runs it: the rows of its DATA pages, each row's cells as text.</summary>
+    static async Task<(string Code, ResultsReadResult? Result, List<string[]> Rows, string Message)> ReadRows(Harness harness, uint resultId, long first, int max, uint? viewer = null)
+    {
+        var set = harness.Service.Results.Find(resultId)!;
+        var bodies = new List<byte[]>();
+        using var context = new RequestContext(1, "results.read", RequestLane.Results, 60_000, 64L << 20,
+            sendData: (owner, _, body) => { lock (bodies) bodies.Add(body); owner.Grant((uint)body.Length); });
+        var parameters = new JsonObject { ["resultId"] = resultId, ["firstRow"] = first, ["maxRows"] = max };
+        if (viewer is not null) parameters["viewer"] = viewer;
+        using var document = JsonDocument.Parse(parameters.ToJsonString());
+        try
+        {
+            var result = (ResultsReadResult)await harness.Service.DispatchAsync("results.read", document.RootElement.Clone(), Wire, context);
+            lock (bodies) return ("ok", result, [.. bodies.SelectMany(body => PageReader.Read(body, set.Wires).Rows).Select(row => row.Select(cell => cell.Text ?? "").ToArray())], "");
+        }
+        catch (RequestException error) { return (error.Code, null, [], error.Message); }
+    }
+
+    /// <summary>A query-shaped request with its EVENTs, as the host runs it.</summary>
+    static async Task<(string Code, QueryResult? Result, List<JsonElement> Events, string Message)> Run(Harness harness, string method, JsonNode parameters)
+    {
+        var events = new List<JsonElement>();
+        using var context = new RequestContext(2, method, RequestLane.Query, 0, sendEvent: (_, value, _) => { lock (events) events.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json)); });
+        using var document = JsonDocument.Parse(parameters.ToJsonString());
+        try
+        {
+            var result = (QueryResult)await harness.Service.DispatchAsync(method, document.RootElement.Clone(), Wire, context);
+            lock (events) return ("ok", result, [.. events], "");
+        }
+        catch (RequestException error) { lock (events) return (error.Code, null, [.. events], error.Message); }
+    }
+
+    /// <summary>What the store holds besides window caches: stored pages, and each set's own few hundred bytes.</summary>
+    static long Pages(Harness harness) => harness.Service.Results.UsedBytes - harness.Service.Results.WindowCacheBytes;
+
+    static string[] Types(List<JsonElement> events) => [.. events.Select(item => item.GetProperty("type").GetString() ?? "")];
+    static IEnumerable<JsonElement> OfType(List<JsonElement> events, string type) => events.Where(item => item.GetProperty("type").GetString() == type);
+
+    static JsonObject Load(uint resultId, string? queryId = null, string kind = "load") =>
+        new() { ["queryId"] = queryId ?? Guid.NewGuid().ToString(), ["resultId"] = resultId, ["generation"] = 1, ["kind"] = kind };
+
+    static async Task ResidenceDecisionAsync(Action<bool, string> check)
+    {
+        // Rows that arrive whole stay in memory, whatever their size.
+        using (var harness = new Harness(Lines(100)))
+        {
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "memory", RowsTotal: 100, Revision: 0, RowsStored: 100 } && harness.Jobs.TableReads.IsEmpty,
+                $"a result that arrives in its first page stays in memory: {code} {message} {set?.Residence} {set?.RowsTotal} {set?.Revision}");
+        }
+        // Automatic keeps a result that fits in memory, ready to switch if the budget refuses it.
+        using (var harness = new Harness(Lines(1200)))
+        {
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "memory", RowsTotal: 1200, RowsStored: 1200, Revision: 0 } && harness.Service.Results.Find(set.ResultId)?.SwitchesOnRefusal == true
+                && harness.Jobs.TableReads.IsEmpty, $"Automatic keeps a result that fits in memory: {set?.Residence} {set?.RowsStored}");
+        }
+        // Too large for half the room: windowed, its first page cached, nothing read from the table yet.
+        using (var harness = new Harness(Lines(3000), new ResultStore(4L << 20, 32 * 1024)))
+        {
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
+            var set = result?.ResultSets.Single();
+            var buffer = set is null ? null : harness.Service.Results.Find(set.ResultId);
+            var store = harness.Service.Results;
+            check(code == "ok" && result?.Status == "completed" && set is { Residence: "remote", RowsTotal: 3000, RowsAvailable: 3000, Revision: 0, Truncated: null } && buffer?.IsRemote == true
+                && buffer.Remote!.CachedBlocks().SequenceEqual([0L]) && harness.Jobs.TableReads.IsEmpty,
+                $"Automatic windows a result too large for half the room, its first page cached: {code} {message} {set?.Residence} {set?.RowsAvailable} {set?.Truncated}");
+            check(store.WindowCacheBytes > 0 && store.WindowCacheBytes == buffer?.Remote?.CachedBytes && store.MemoryDetail().WindowCacheBytes == store.WindowCacheBytes,
+                "the window cache is charged to the store and shown in the memory detail: " + store.WindowCacheBytes);
+        }
+        // Always in memory truncates at the budget as before.
+        using (var harness = new Harness(Lines(3000), new ResultStore(4L << 20, 32 * 1024)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Memory);
+            var set = result?.ResultSets.Single();
+            check(set is { Residence: "memory", Truncated: "queryBudget" } && harness.Jobs.TableReads.IsEmpty, $"Always in memory truncates at the budget: {set?.Residence} {set?.Truncated}");
+        }
+        // Always windowed, with its cache setting; a result without a readable destination table stays in memory.
+        using (var harness = new Harness(Lines(1200)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", args => { Windowed(args); args["windowCacheMiB"] = 128; });
+            var set = result?.ResultSets.Single();
+            check(set is { Residence: "remote", RowsTotal: 1200 } && harness.Service.Results.Find(set.ResultId)?.Remote?.CacheLimit == 128L << 20,
+                $"Always windowed windows a small result, with the cache size asked: {set?.Residence}");
+            harness.Jobs.Destination = null;
+            (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            set = result?.ResultSets.Single();
+            check(set is { Residence: "memory", RowsStored: 1200 }, $"a result whose destination table cannot be read stays in memory: {set?.Residence} {set?.RowsStored}");
+            var (badResidence, _, _) = await harness.Execute("SELECT 1", args => args["residence"] = "disk");
+            var (badCache, _, _) = await harness.Execute("SELECT 1", args => args["windowCacheMiB"] = 8);
+            check(badResidence == "INVALID_PARAMS" && badCache == "INVALID_PARAMS", $"an unknown residence or a cache outside 16..4,096 MiB is refused: {badResidence} {badCache}");
+            var (bigCache, _, _) = await harness.Execute("SELECT 1", args => args["windowCacheMiB"] = 4097);
+            check(bigCache == "INVALID_PARAMS", $"a cache above 4,096 MiB is refused: {bigCache}");
+        }
+        // The row cap: 32-bit row indexes show at most 2,147,483,647 rows, with a note.
+        using (var harness = new Harness(Lines(1200)))
+        {
+            harness.Jobs.ReportedTotal = 3_000_000_000;
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t");
+            var set = result?.ResultSets.Single();
+            check(set is { Residence: "remote", RowsTotal: 3_000_000_000, RowsAvailable: int.MaxValue } && Says(result, "the most it can address") && Says(result, "LIMIT with OFFSET") && !Says(result, "Filter the result"),
+                $"a result past the row cap shows the first 2,147,483,647 rows and says why: {set?.RowsTotal} {set?.RowsAvailable} {Texts(result?.Messages ?? [])}");
+        }
+    }
+
+    static async Task RemoteReadsAsync(Action<bool, string> check)
+    {
+        // Always windowed under a Maximum rows smaller than the first page: the first page's rows within the cap are still
+        // cached, so reading them asks BigQuery nothing (docs/ipc.md, Choosing: "the first page kept in the cache").
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", args => { Windowed(args); args["maxRows"] = 300; });
+            var set = result!.ResultSets.Single();
+            var remote = harness.Service.Results.Find(set.ResultId)?.Remote;
+            var (code, read, rows, message) = await ReadRows(harness, set.ResultId, 0, 100);
+            check(set is { Residence: "remote", RowsAvailable: 300 } && remote?.CachedBlocks().SequenceEqual([0L]) == true && code == "ok" && read is { Rows: 100 } && Covers(rows, 0, 100)
+                && harness.Jobs.TableReads.IsEmpty,
+                $"a windowed result capped below its first page keeps the capped rows cached: {set.Residence} {set.RowsAvailable} {string.Join(",", remote?.CachedBlocks() ?? [])} {code} {message} {harness.Jobs.TableReads.Count}");
+        }
+        // A load of a result whose query's budget has stopped (another of its sets filled it) is refused BUDGET_STOPPED before
+        // any work, the result still windowed (docs/ipc.md, results.remoteQuery).
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            var buffer = harness.Service.Results.Find(id)!;
+            buffer.Budget.Stop(TruncationReason.QueryBudget);
+            var (code, _, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            check(code == "BUDGET_STOPPED" && buffer is { IsRemote: true, Revision: 0 } && events.Count == 0 && harness.Jobs.TableReads.IsEmpty,
+                $"a load of a result whose query budget stopped is refused BUDGET_STOPPED, still windowed: {code} {message} {buffer.IsRemote} {buffer.Revision} {events.Count}");
+        }
+        // Released while a read sends its pages (Close Results as the rows arrive): the read stops sending and answers
+        // RESULT_RELEASED, never the rest of the rows of a result no one holds (docs/ipc.md, Reading).
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            var sent = 0;
+            using var context = new RequestContext(1, "results.read", RequestLane.Results, 60_000, 64L << 20,
+                sendData: (owner, _, body) => { if (Interlocked.Increment(ref sent) == 1) harness.Service.Results.Release([id]); owner.Grant((uint)body.Length); });
+            using var document = JsonDocument.Parse(new JsonObject { ["resultId"] = id, ["firstRow"] = 0, ["maxRows"] = 2000 }.ToJsonString());
+            string code;
+            try { await harness.Service.DispatchAsync("results.read", document.RootElement.Clone(), Wire, context); code = "ok"; }
+            catch (RequestException error) { code = error.Code; }
+            check(code == "RESULT_RELEASED" && sent == 1, $"a read whose result is released as it sends stops there with RESULT_RELEASED: {code} {sent}");
+        }
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            var (code, read, rows, message) = await ReadRows(harness, id, 0, 200);
+            check(code == "ok" && read is { NextRow: >= 200, RowsAvailable: 3000, Complete: false, Rows: 200 } && Covers(rows, 0, 200) && rows[0][1] == "row 0" && harness.Jobs.TableReads.IsEmpty,
+                $"the first page reads from the cache without asking BigQuery: {code} {message} {read?.NextRow} {rows.Count}");
+            var (bytesCode, bytes, _) = await harness.Call("results.rowBytes", new JsonObject { ["resultId"] = id, ["firstRow"] = 2000, ["count"] = 10 });
+            check(bytesCode == "ok" && bytes is ResultsRowBytesResult { Bytes.Length: 0 } && harness.Jobs.TableReads.IsEmpty, "results.rowBytes of rows not cached answers none and reads nothing");
+            (code, read, rows, message) = await ReadRows(harness, id, 2500, 100, viewer: 3);
+            check(code == "ok" && read is { NextRow: >= 2600, Rows: 100 } && Covers(rows, 2500, 100) && rows.Single(row => row[0] == "2599")[1] == "row 2599"
+                && harness.Jobs.TableReads.TryPeek(out var first) && first.StartIndex == 500,
+                $"a read past the cache fetches the block's rows through tabledata.list from where the cache ends: {code} {message} {read?.NextRow} {rows.Count}");
+            (code, read, rows, _) = await ReadRows(harness, id, 2900, 500);
+            check(read is { NextRow: 3000, Complete: true, Rows: 100 } && Covers(rows, 2900, 100), "a read to the end is complete");
+            var (viewerCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: 0);
+            check(viewerCode == "INVALID_PARAMS", "a viewer id of 0 is refused");
+            // Past 2^31 - 1 too (docs/ipc.md): uint.MaxValue marks a read that names no viewer.
+            var (overCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: 1u << 31);
+            var (maxCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: uint.MaxValue);
+            check(overCode == "INVALID_PARAMS" && maxCode == "INVALID_PARAMS", $"a viewer id past 2^31 - 1 is refused: {overCode} {maxCode}");
+
+            // Every reader of stored pages refuses a windowed result before doing any work.
+            var refusals = new List<string>();
+            async Task Refuses(string method, JsonObject parameters)
+            {
+                parameters["resultId"] = id;
+                var (refused, _, text) = await harness.Call(method, parameters);
+                if (refused != "REMOTE_RESULT") refusals.Add(method + ": " + refused + " " + text);
+            }
+            await Refuses("results.view", new JsonObject { ["sort"] = new JsonArray(new JsonObject { ["column"] = 0, ["descending"] = false, ["mode"] = "value" }) });
+            await Refuses("results.profile", new JsonObject { ["columns"] = new JsonArray(0) });
+            await Refuses("results.search", new JsonObject { ["text"] = "row", ["fromRow"] = 0, ["maxMatches"] = 10 });
+            await Refuses("results.distinct", new JsonObject { ["column"] = 0 });
+            // A value list's later reads too (FindSnapshot), though no snapshot of a windowed set can exist.
+            await Refuses("results.distinctRead", new JsonObject { ["snapshotId"] = 1, ["order"] = "value", ["offset"] = 0, ["count"] = 10 });
+            await Refuses("results.distinctTick", new JsonObject { ["snapshotId"] = 1, ["checked"] = true, ["all"] = true });
+            await Refuses("results.pivot", new JsonObject { ["rows"] = new JsonArray(0), ["values"] = new JsonArray(new JsonObject { ["aggregate"] = "count" }) });
+            await Refuses("results.identify", new JsonObject { ["by"] = "row" });
+            await Refuses("results.rowIds", new JsonObject { ["firstRow"] = 0, ["count"] = 10 });
+            await Refuses("results.findRows", new JsonObject { ["ids"] = new JsonArray(1) });
+            // A comparison, with the windowed result on either side (the other an in-memory result), and a seek in one.
+            var (_, inMemory, _) = await harness.Execute("SELECT n, s FROM t");
+            var memoryId = inMemory!.ResultSets.Single().ResultId;
+            async Task RefusesDiff(uint left, uint right)
+            {
+                var (refused, _, text) = await harness.Call("results.diff", new JsonObject { ["left"] = left, ["right"] = right });
+                if (refused != "REMOTE_RESULT") refusals.Add($"results.diff {left}/{right}: {refused} {text}");
+            }
+            await RefusesDiff(id, memoryId);
+            await RefusesDiff(memoryId, id);
+            await Refuses("results.diffSeek", new JsonObject { ["viewId"] = 1, ["partnerOf"] = 0 });
+            check(refusals.Count == 0, "every reader of stored pages answers REMOTE_RESULT for a windowed result: " + string.Join("; ", refusals));
+            var set = harness.Service.Results.Find(id)!;
+            string? leased;
+            using (var context = new RequestContext(3, "results.copy", RequestLane.Results, 0, 16L << 20, sendData: (owner, _, body) => owner.Grant((uint)body.Length)))
+            {
+                var copy = new JsonObject
+                {
+                    ["resultId"] = id, ["parts"] = new JsonArray(new JsonObject { ["rows"] = new JsonArray(new JsonArray(0, 1)), ["columns"] = new JsonArray(new JsonArray(0, 1)) }),
+                    ["headers"] = false, ["eol"] = "lf", ["maxBytes"] = 1000
+                };
+                using var document = JsonDocument.Parse(copy.ToJsonString());
+                try { await harness.Service.DispatchAsync("results.copy", document.RootElement.Clone(), Wire, context); leased = "ok"; }
+                catch (RequestException error) { leased = error.Code; }
+            }
+            check(leased == "REMOTE_RESULT" && set.Leases == 0, "Copy and Save's lease refuses a windowed result: " + leased);
+
+            harness.Service.Results.Release([id, memoryId]);
+            check(harness.Service.Results.WindowCacheBytes == 0 && harness.Service.Results.UsedBytes == 0, "closing a windowed result gives back its cache: " + harness.Service.Results.UsedBytes);
+        }
+
+        // A gone result table: REMOTE_EXPIRED for the rows not cached, the cached rows still read.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Jobs.TableDataStatus = 404;
+            var (code, _, _, message) = await ReadRows(harness, id, 2500, 100);
+            var (cachedCode, _, rows, _) = await ReadRows(harness, id, 0, 100);
+            check(code == "REMOTE_EXPIRED" && cachedCode == "ok" && Covers(rows, 0, 100), $"a 404 from tabledata.list is REMOTE_EXPIRED, and the cached rows still read: {code} {message}");
+        }
+
+        // A rate limit backs off and reads again, never as an error.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            harness.Service.BigQuery.ReadAttempts = 1;
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            lock (harness.Jobs.TableDataReplies) { harness.Jobs.TableDataReplies.Enqueue(429); harness.Jobs.TableDataReplies.Enqueue(429); }
+            var (code, read, rows, message) = await ReadRows(harness, id, 2500, 100);
+            check(code == "ok" && Covers(rows, 2500, 100) && harness.Jobs.TableReads.Count >= 3, $"rateLimitExceeded backs off and reads the block again: {code} {message} {harness.Jobs.TableReads.Count}");
+        }
+
+        // Backing off stops once no read can still be waiting (its wait has passed), freeing the connection's lane slot.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(200);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(500);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            var (code, read, _, _) = await ReadRows(harness, id, 2500, 100);
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            // Unbounded, twelve attempts back off for about 22 seconds in all.
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && read is { Rows: 0 } && stopped, $"a rate-limited block stops backing off once its reads have given up: {code} {read?.Rows} {remote.FetchingBlocks()}");
+        }
+
+        // A block's call does not retry a rate limit itself (its own backoff is uncounted): one table read, then the block's
+        // backoff, whose first delay already passes the read wait, stops it.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromSeconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            while (harness.Jobs.TableReads.TryDequeue(out _)) { }
+            var (code, _, _, _) = await ReadRows(harness, id, 2500, 1);
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 2500 && 2500 < start + read.MaxResults);
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && stopped && covering == 1, $"a block's call does not retry a rate limit itself, so its backoff stops by the read wait: {code} {stopped} {covering}");
+        }
+
+        // A read whose thread is held up (as a loaded machine may) until its own fetch has failed waits on that fetch, never asking again.
+        using (var harness = new Harness(Lines(40000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromSeconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            while (harness.Jobs.TableReads.TryDequeue(out _)) { }
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            var stalled = 0;
+            remote.AheadChosen = _ => { if (Interlocked.Exchange(ref stalled, 1) == 0) SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000); };
+            var (code, _, _, _) = await ReadRows(harness, id, 20000, 1);
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 20000 && 20000 < start + read.MaxResults);
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && stopped && covering == 1, $"a read held up past its own fetch's failure does not fetch its block twice: {code} {stopped} covering={covering} reads={string.Join(";", harness.Jobs.TableReads.Select(r => r.StartIndex + "+" + r.MaxResults))}");
+        }
+        // Reads that join a rate-limited fetch (the grid reading again) answer short, never with an error, when it stops; the
+        // limit counts the clock, each call's own retries of a 429 included.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(100);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 2000; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            var codes = new List<string>();
+            for (var i = 0; i < 15; i++) codes.Add((await ReadRows(harness, id, 2500, 100)).Code);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(codes.All(code => code == "ok"), "reads joining a rate-limited fetch answer short when it stops, never QUOTA: " + string.Join(",", codes));
+        }
+
+        // A read whose block is slow answers short within its wait; the grid reads again.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Jobs.TableDataGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(100);
+            var (code, read, rows, _) = await ReadRows(harness, id, 2500, 100);
+            check(code == "ok" && read is { NextRow: 2500, Rows: 0, Complete: false } && rows.Count == 0, $"a read that waits past its time answers short, not with an error: {code} {read?.NextRow}");
+            harness.Jobs.TableDataGate.SetResult();
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            (code, read, rows, _) = await ReadRows(harness, id, 2500, 100);
+            check(code == "ok" && Covers(rows, 2500, 100), "the read after it finds the rows");
+        }
+    }
+
+    static async Task MisestimateAsync(Action<bool, string> check)
+    {
+        // Memory that runs low partway through a read (here at its first seal) stops it there too, rather than switch it.
+        {
+            var asked = 0;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Interlocked.Increment(ref asked) >= 2 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (code, result, _, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: not "remote", Revision: 0 } && set.RowsStored < 3000 && harness.Service.Results.WindowCacheBytes == 0 && !Says(result, "larger than estimated"),
+                $"memory running low partway through an Automatic read stops it rather than switch it to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.RowsStored} {set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // So does a Storage Read whose stream the budget refuses for low memory.
+        {
+            var jobs = Lines(3000);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(i => "r" + i))], chunk.Length)).ToList();
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, new ResultStore(1L << 30, 1L << 29, () => (100, 50)));
+            await harness.ConnectAsync();
+            var (code, result, _, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: not "remote", Revision: 0 } && !Says(result, "larger than estimated"),
+                $"a Storage Read refused for low memory stops rather than switch to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.RowsStored} {set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // An Automatic query run while the system is low on memory stops storing, as any query does: low memory is no misestimate.
+        using (var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => (100, 50))))
+        {
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            var (readCode, _, rows, _) = await ReadRows(harness, set!.ResultId, 2900, 10);
+            SpinWait.SpinUntil(() => harness.Service.Results.Find(set.ResultId)?.Remote?.FetchingBlocks() is null or 0, 15_000);
+            check(code == "ok" && set is { Residence: not "remote" } && harness.Service.Results.WindowCacheBytes == 0 && !Says(result, "larger than estimated"),
+                $"low system memory does not turn a result windowed and keep caching blocks: {code} {set?.Residence} {set?.Truncated} read={readCode} {rows.Count} cache={harness.Service.Results.WindowCacheBytes} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A compressed Storage Read batch whose decoded buffers the budget refuses switches an Automatic read to
+        // windowed, as every other refusal does (docs/bigquery.md, Misestimate), rather than truncating it.
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var jobs = Lines(3000, Wide);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var store = new ResultStore(8L << 20, 400 * 1024);
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches), store);
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 1, Truncated: null } && Says(result, "larger than estimated"),
+                $"a compressed batch the budget cannot decode switches an Automatic read to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} {set?.RowsStored}");
+        }
+        // A Storage Read batch whose message the budget refuses (the stream's own charge) switches an Automatic
+        // read to windowed too, rather than truncating it.
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var jobs = Lines(3000, Wide);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var store = new ResultStore(8L << 20, 512 * 1024);
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, store);
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 1, Truncated: null } && Says(result, "larger than estimated"),
+                $"a batch the budget refuses switches an Automatic read to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} {set?.RowsStored}");
+        }
+        // A windowed read near its deadline waits only until 5 s before it (ReadWait), then answers short: it
+        // never runs into its own deadline waiting the full read wait.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Jobs.TableDataGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            using var context = new RequestContext(9, "results.read", RequestLane.Results, 6_000, 64L << 20, sendData: (owner, _, body) => owner.Grant((uint)body.Length));
+            using var document = JsonDocument.Parse(new JsonObject { ["resultId"] = id, ["firstRow"] = 2500, ["maxRows"] = 100 }.ToJsonString());
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string code;
+            ResultsReadResult? read = null;
+            try { read = (ResultsReadResult)await harness.Service.DispatchAsync("results.read", document.RootElement.Clone(), Wire, context); code = "ok"; }
+            catch (Exception error) { code = error is RequestException own ? own.Code : error.GetType().Name; }
+            var took = watch.ElapsedMilliseconds;
+            harness.Jobs.TableDataGate.TrySetResult();
+            check(code == "ok" && read is { Rows: 0, NextRow: 2500 } && took < 4_000,
+                $"a read 6 s from its deadline answers short about 1 s in: {code} {read?.Rows} {took} ms");
+        }
+        // The first page's rows are short and the rest long: Automatic keeps it in memory, then the budget refuses it.
+        static string Text(int i) => i < 500 ? "r" : new string('w', 1000);
+        using (var harness = new Harness(Lines(3000, Text), new ResultStore(8L << 20, 512 * 1024)))
+        {
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            var types = Types(events);
+            var residence = OfType(events, "resultSet.residence").ToList();
+            check(code == "ok" && result?.Status == "completed" && set is { Residence: "remote", Revision: 1, RowsTotal: 3000, RowsAvailable: 3000, Truncated: null }
+                && Says(result, "larger than estimated") && residence.Count == 1 && residence[0].GetProperty("descriptor").GetProperty("revision").GetInt32() == 1
+                && System.Array.IndexOf(types, "resultSet.opened") < System.Array.IndexOf(types, "resultSet.residence") && System.Array.IndexOf(types, "resultSet.residence") < System.Array.LastIndexOf(types, "resultSet.closed"),
+                $"a result larger than estimated switches to windowed under a new revision and says so: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} [{string.Join(",", types)}]");
+            check(Pages(harness) < 4096, "the switch releases the rows it had stored (the empty set keeps only its own bytes): " + Pages(harness));
+            var (readCode, _, rows, _) = await ReadRows(harness, set!.ResultId, 2900, 10);
+            check(readCode == "ok" && Covers(rows, 2900, 10) && rows.Single(row => row[0] == "2900")[1].Length == 1000, "its rows then read through the window");
+        }
+        // The same through Storage Read.
+        {
+            var jobs = Lines(3000, Text);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Text))], chunk.Length)).ToList();
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches), new ResultStore(8L << 20, 512 * 1024));
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 1, Truncated: null } && OfType(events, "resultSet.residence").Count() == 1 && Says(result, "larger than estimated"),
+                $"a Storage Read larger than estimated switches to windowed too: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} {Texts(result?.Messages ?? [])}");
+            check(Pages(harness) < 4096, "the Storage Read's switch gives back every batch's charge: " + Pages(harness));
+        }
+    }
+
+    static async Task LoadIntoMemoryAsync(Action<bool, string> check)
+    {
+        // The backend's own bounds on results.remoteQuery (main's are the first): a malformed query id or result id 0 is refused
+        // before any work.
+        using (var probe = new Harness(Lines(3000)))
+        {
+            await probe.ConnectAsync();
+            var (_, executed, _) = await probe.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            var (badId, badResult, badEvents, _) = await Run(probe, "results.remoteQuery", Load(id, queryId: "not-a-guid"));
+            var still = probe.Service.Results.Find(id);
+            check(badId == "INVALID_PARAMS" && badResult is null && !OfType(badEvents, "resultSet.residence").Any() && still is { IsRemote: true, Revision: 0 },
+                $"a remote query with a malformed query id is refused before any work: {badId} {badResult?.Status} {still?.IsRemote} {still?.Revision}");
+            var (zero, _, _, _) = await Run(probe, "results.remoteQuery", Load(0));
+            check(zero == "INVALID_PARAMS", $"a remote query naming result 0 is refused as invalid: {zero}");
+        }
+        // A load refused for low memory switches back to windowed, whole, as any refusal does, and a later load still works.
+        {
+            var low = 0;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref low) == 1 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref low, 1);
+            var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            Volatile.Write(ref low, 0);
+            var (again, _, _, againMessage) = await Run(harness, "results.remoteQuery", Load(id));
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory") && Says(result, "low on memory, so the result stays windowed") && again == "ok",
+                $"a load refused for low memory leaves the result windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} rev={set?.Revision} avail={set?.RowsAvailable} stored={set?.RowsStored} trunc={set?.Truncated} msgs={Texts(result?.Messages ?? [])} | next load once memory recovers: {again} {againMessage}");
+        }
+        // So does a load during which memory runs low at a seal.
+        {
+            var asked = -1;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref asked) >= 0 && Interlocked.Increment(ref asked) >= 2 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref asked, 0);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory"),
+                $"a load during which memory runs low switches back to windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} avail={set?.RowsAvailable} trunc={set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A load whose own rows push memory low says so, though the switch back freed them by the time it ends.
+        {
+            ResultStore? held = null;
+            var armed = 0;
+            held = new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref armed) == 1 && held!.UsedBytes > (2L << 20) ? (100, 50) : (10, 50));
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), held);
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref armed, 1);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote" } && Says(result, "low on memory, so the result stays windowed") && !Says(result, "did not fit in memory"),
+                $"a load refused for low memory says so even once the switch back relieved it: {code} {message} res={set?.Residence} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A script child's load reads in the order its grid showed: its rows are the child's, but the text is the whole script's,
+        // where an ORDER BY may not show (EXECUTE IMMEDIATE, a procedure), so no read of it may split into streams.
+        {
+            var (jobs, storage) = Numbers(5000, 250, jobs => { jobs.StatementType = "SCRIPT"; jobs.ScriptChild = true; });
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("DECLARE q STRING DEFAULT 'SELECT n, s FROM t ORDER BY n'; EXECUTE IMMEDIATE q", Windowed);
+            var executedSet = executed?.ResultSets.SingleOrDefault();
+            var before = storage.Sessions.Count;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(executedSet?.ResultId ?? 0));
+            var set = result?.ResultSets.SingleOrDefault();
+            var rows = set is null ? [] : harness.Rows(set);
+            var streams = storage.Sessions.Skip(before).Select(session => session.MaxStreamCount).ToList();
+            check(executedSet is { Residence: "remote" } && code == "ok" && set is { Residence: "memory", RowsStored: 5000 } && streams.All(count => count == 1)
+                && rows.Select(row => row[0].Text).SequenceEqual(Enumerable.Range(0, 5000).Select(i => i.ToString(Inv))),
+                $"a script child's load reads its rows in order, never split into streams: {executedSet?.Residence} {code} {message} res={set?.Residence} stored={set?.RowsStored} streams={string.Join(",", streams)}");
+        }
+        // So does a script child kept in memory by Automatic that switched to windowed part way (its window is the one kept then).
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var childJobs = Lines(3000, Wide);
+            childJobs.StatementType = "SCRIPT";
+            childJobs.ScriptChild = true;
+            var childSchema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var childBatches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(childSchema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var childStorage = new BigQueryStorageFake(childSchema, childBatches) { IgnoreCompression = true };
+            using var harness = StorageHarness(childJobs, childStorage, new ResultStore(8L << 20, 400 * 1024));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("DECLARE q STRING DEFAULT 'SELECT n, s FROM t ORDER BY n'; EXECUTE IMMEDIATE q");
+            var executedSet = executed?.ResultSets.SingleOrDefault();
+            var before = childStorage.Sessions.Count;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(executedSet?.ResultId ?? 0));
+            var streams = childStorage.Sessions.Skip(before).Select(session => session.MaxStreamCount).ToList();
+            check(executedSet is { Residence: "remote", Revision: 1 } && code == "ok" && streams.Count == 0,
+                $"a script child switched to windowed part way loads through REST: {executedSet?.Residence} rev={executedSet?.Revision} {code} {message} streams={string.Join(",", streams)} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A Storage Read load refused for low memory switches back to windowed, whole, as REST's does.
+        {
+            var low = 0;
+            var jobs = Lines(3000);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(i => "row " + i))], chunk.Length)).ToList();
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref low) == 1 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref low, 1);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            var stopped = harness.Service.Results.Find(id)?.Budget.Stopped;
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory") && Says(result, "low on memory, so the result stays windowed")
+                && stopped == TruncationReason.None,
+                $"a Storage Read load refused for low memory leaves the result windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} avail={set?.RowsAvailable} trunc={set?.Truncated} stopped={stopped} msgs={Texts(result?.Messages ?? [])}");
+        }
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            var rows = set is null ? [] : harness.Rows(set);
+            check(code == "ok" && result?.Status == "completed" && set is { ResultId: var same, Residence: "memory", Revision: 1, RowsStored: 3000 } && same == id
+                && rows.Count == 3000 && rows[2999][1].Text == "row 2999" && Types(events) is ["resultSet.residence", .., "resultSet.closed"] && harness.Service.Results.WindowCacheBytes == 0,
+                $"Load into memory reads the whole result into the same result under a new revision: {code} {message} {set?.Residence} {set?.Revision} {set?.RowsStored} [{string.Join(",", Types(events))}]");
+            var (viewCode, _, _) = await harness.Call("results.view", new JsonObject { ["resultId"] = id, ["sort"] = new JsonArray(new JsonObject { ["column"] = 0, ["descending"] = true, ["mode"] = "value" }) });
+            check(viewCode == "ok", "a loaded result sorts in memory: " + viewCode);
+            var (again, _, _, _) = await Run(harness, "results.remoteQuery", Load(id));
+            var (kind, _, _, _) = await Run(harness, "results.remoteQuery", Load(id, kind: "view"));
+            var (missing, _, _, _) = await Run(harness, "results.remoteQuery", Load(999_999));
+            check(again == "INVALID_PARAMS" && kind == "INVALID_PARAMS" && missing == "RESULT_NOT_FOUND", $"only a windowed result loads, and only the load kind exists: {again} {kind} {missing}");
+        }
+        // A load the budget refuses part way goes back to windowed, whole.
+        using (var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(8L << 20, 512 * 1024)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t");
+            var id = executed!.ResultSets.Single().ResultId;
+            var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 2, RowsAvailable: 3000 } && OfType(events, "resultSet.residence").Count() == 2 && Says(result, "stays windowed")
+                && !Says(result, "larger than estimated") && Pages(harness) < 4096,
+                $"a load that does not fit goes back to windowed under another revision: {code} {message} {set?.Residence} {set?.Revision} {Texts(result?.Messages ?? [])}");
+            check(Says(result, "did not fit in memory, so it stays windowed") && !Says(result, "low on memory"), $"a load the budget refused says it did not fit, not that memory is low: {Texts(result?.Messages ?? [])}");
+        }
+        // Automatic decides by the rows the result will show: one too large for memory whole fits once Maximum rows caps it.
+        // A small cap on a small budget stays in memory with its rows: only the rows it stores are charged, not whole pages.
+        foreach (var (residence, budget, maxRows, rows) in new (string, long, int, int)[] { ("automatic", 512 * 1024, 20, 20), ("memory", 512 * 1024, 20, 20), ("automatic", 2L << 20, 600, 600) })
+        {
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(8L << 20, budget));
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => { args["maxRows"] = maxRows; args["residence"] = residence; });
+            var set = executed?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "memory" } && set.RowsStored == rows,
+                $"{residence} with Maximum rows {maxRows} on a {budget / 1024} KiB budget keeps its rows in memory: {code} {message} {set?.Residence} {set?.RowsStored} {Texts(executed?.Messages ?? [])}");
+        }
+        foreach (var maxRows in new[] { 0, 500 })
+        {
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(64L << 20, 4L << 20));
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => args["maxRows"] = maxRows);
+            var residence = executed?.ResultSets.Single().Residence;
+            check(code == "ok" && residence == (maxRows == 0 ? "remote" : "memory"),
+                $"Automatic decides residence by the rows Maximum rows ({maxRows}) lets it show: {code} {message} {residence} {executed?.ResultSets.Single().Revision} {Texts(executed?.Messages ?? [])}");
+        }
+        // The room is what both budgets still have: a query budget with room to spare is not enough when other results fill
+        // the global budget.
+        foreach (var crowded in new[] { false, true })
+        {
+            var store = new ResultStore(8L << 20, 4L << 20);
+            long other = 0;
+            var reserved = !crowded || store.TryReserveCache(ref other, long.MaxValue, (15L << 20) / 2);
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), store);
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => args["maxRows"] = 500);
+            var residence = executed?.ResultSets.Single().Residence;
+            // Decided up front, not switched part way when the global budget refused a page.
+            var messages = Texts(executed?.Messages ?? []);
+            check(reserved && code == "ok" && residence == (crowded ? "remote" : "memory") && !messages.Contains("larger than estimated"),
+                $"Automatic decides by the room left in both budgets (global {(crowded ? "nearly full" : "free")}): {code} {message} {residence} {messages}");
+        }
+        // Stop part way: back to windowed, the load reported cancelled.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Jobs.HangPages = true;
+            var queryId = Guid.NewGuid().ToString();
+            var loading = Run(harness, "results.remoteQuery", Load(id, queryId));
+            var held = await Task.WhenAny(harness.Jobs.Polling.Task, Task.Delay(15_000)) == harness.Jobs.Polling.Task;
+            var (cancel, _, _) = await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+            var (code, result, _, message) = await loading;
+            var set = result?.ResultSets.Single();
+            check(held && cancel == "ok" && code == "ok" && result?.Status == "cancelled" && set is { Residence: "remote", Revision: 2 } && harness.Service.Results.Find(id)?.IsRemote == true,
+                $"Stop during a load leaves the result windowed: {held} {cancel} {code} {message} {result?.Status} {set?.Residence} {set?.Revision}");
+        }
+    }
+
+    /// <summary>Two loads of one result at once (two clicks, two windows): the one that finds it already promoted is refused
+    /// and never switches the winner's set back to windowed.</summary>
+    static async Task TwoLoadsAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var winnerId = Guid.NewGuid().ToString();
+        Task<(string Code, QueryResult? Result, List<JsonElement> Events, string Message)>? winner = null;
+        var fired = 0;
+        // The loser has passed its check when the winner starts, and promotes only once the winner is reading.
+        harness.Service.LoadPromoting = () =>
+        {
+            if (Interlocked.Exchange(ref fired, 1) == 1) return;
+            winner = Run(harness, "results.remoteQuery", Load(id, winnerId));
+            harness.Jobs.Polling.Task.Wait(15_000);
+        };
+        var (loser, loserResult, _, loserMessage) = await Run(harness, "results.remoteQuery", Load(id));
+        var stillLoading = harness.Service.Results.Find(id) is { IsRemote: false, Revision: 1 };
+        harness.Service.LoadPromoting = null;
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = winnerId });
+        var (code, result, _, _) = winner is null ? ("none", null, [], "") : await winner;
+        check(fired == 1 && loser == "INVALID_PARAMS" && loserResult is null && stillLoading && code == "ok" && result?.Status == "cancelled"
+            && result.ResultSets.Single() is { Residence: "remote", Revision: 2 },
+            $"a load that loses the race is refused and leaves the winner loading: {fired} {loser} {loserMessage} {stillLoading} {code} {result?.Status}");
+    }
+
+    /// <summary>A disconnect between a load finding its connection and registering: the load is refused (NOT_CONNECTED) and
+    /// the set stays windowed at its revision, with no residence event.</summary>
+    static async Task LoadAfterDisconnectAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Service.LoadRegistering = () => harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = harness.ConnectionId }).GetAwaiter().GetResult();
+        var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+        harness.Service.LoadRegistering = null;
+        var set = harness.Service.Results.Find(id);
+        check(code == "NOT_CONNECTED" && result is null && !OfType(events, "resultSet.residence").Any() && set is { IsRemote: true, Revision: 0 },
+            $"a load that a disconnect overtakes before it registers is refused, the set still windowed: {code} {message} {result?.Status} {set?.IsRemote} {set?.Revision}");
+    }
+
+    /// <summary>A load whose query id is already running (another load's) is refused DUPLICATE_QUERY before any
+    /// work, its set still windowed at its revision.</summary>
+    static async Task LoadDuplicateQueryIdAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, first, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var (_, second, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var a = first!.ResultSets.Single().ResultId;
+        var b = second!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var queryId = Guid.NewGuid().ToString();
+        var loading = Run(harness, "results.remoteQuery", Load(a, queryId));
+        var held = await Task.WhenAny(harness.Jobs.Polling.Task, Task.Delay(15_000)) == harness.Jobs.Polling.Task;
+        var duplicate = Run(harness, "results.remoteQuery", Load(b, queryId));
+        var answered = await Task.WhenAny(duplicate, Task.Delay(10_000)) == duplicate;
+        var setB = harness.Service.Results.Find(b);
+        var stillWindowed = setB is { IsRemote: true, Revision: 0 };
+        if (!answered) await harness.Call("results.close", new JsonObject { ["resultIds"] = new JsonArray(b) });
+        var (code, result, events, message) = await duplicate;
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+        await loading;
+        harness.Jobs.HangPages = false;
+        check(held && answered && code == "DUPLICATE_QUERY" && result is null && !OfType(events, "resultSet.residence").Any() && stillWindowed,
+            $"a load with a query id already running is refused DUPLICATE_QUERY, still windowed: {held} {answered} {code} {message} {stillWindowed}");
+    }
+
+    /// <summary>A result closed while it loads into memory: the load stops at once and says the result was closed, never
+    /// that it was loaded.</summary>
+    static async Task LoadReleasedAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var queryId = Guid.NewGuid().ToString();
+        var loading = Run(harness, "results.remoteQuery", Load(id, queryId));
+        await Task.WhenAny(harness.Jobs.Polling.Task, loading).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("results.close", new JsonObject { ["resultIds"] = new JsonArray(id) });
+        var ended = await Task.WhenAny(loading, Task.Delay(TimeSpan.FromSeconds(15))) == loading;
+        if (!ended) await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+        var (code, result, _, message) = await loading;
+        harness.Jobs.HangPages = false;
+        check(ended && code == "ok" && result is { Status: "failed", Error.Code: "RESULT_RELEASED" } && !Says(result, "loaded into memory"),
+            $"a load whose result is closed stops at once and says so: {ended} {code} {message} {result?.Status} {result?.Error?.Code}");
+    }
+
+    /// <summary>A load that BigQuery refuses part way: the result goes back to windowed and the summary carries BigQuery's
+    /// error, not a cancel (the switch back must not read as the user stopping it).</summary>
+    static async Task LoadFailedAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.DenyPages = true;
+        var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+        harness.Jobs.DenyPages = false;
+        var set = harness.Service.Results.Find(id);
+        check(code == "ok" && result is { Status: "failed", Error.Code: "PERMISSION_DENIED" } && !Says(result, "was cancelled") && set is { IsRemote: true },
+            $"a load BigQuery refuses part way fails with BigQuery's error and stays windowed: {code} {message} {result?.Status} {result?.Error?.Code} {set?.IsRemote}");
+
+        // A load after the destination table expired says so, as a windowed read does, not to check the project.
+        using var expired = new Harness(Lines(3000));
+        await expired.ConnectAsync();
+        (_, executed, _) = await expired.Execute("SELECT n, s FROM t", Windowed);
+        id = executed!.ResultSets.Single().ResultId;
+        expired.Jobs.TableDataStatus = 404;
+        expired.Fake.On("GET", Base + "/queries/[^/]+", new BigQueryFake.Reply(404, "{\"error\":{\"code\":404,\"message\":\"Not found: Table p:_anon.t was not found in location US\",\"errors\":[{\"message\":\"Not found: Table p:_anon.t\",\"domain\":\"global\",\"reason\":\"notFound\"}],\"status\":\"NOT_FOUND\"}}"));
+        var (readCode, _, _, _) = await ReadRows(expired, id, 2000, 100);
+        (code, result, _, message) = await Run(expired, "results.remoteQuery", Load(id));
+        check(readCode == "REMOTE_EXPIRED" && code == "ok" && result is { Status: "failed", Error.Code: "REMOTE_EXPIRED" },
+            $"a load after the result table expired answers REMOTE_EXPIRED, as a read does: read {readCode}, load {code} {message} {result?.Status} {result?.Error?.Code}");
+    }
+
+    /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>
+    static void FitsHalf(Action<bool, string> check) =>
+        check(SqlService.FitsInMemory(100, 500, 100_000) && !SqlService.FitsInMemory(100, 501, 100_000) && !SqlService.FitsInMemory(100, 900, 100_000),
+            "Automatic keeps a result in memory only when its estimate fits in half of the room the query may still take");
+
+    static void DemoteAccounting(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = TextChecks.Synthetic(store, "W1", 5000);
+        var before = store.UsedBytes;
+        var pin = set.Pin();
+        var remote = RemoteResult.Create(store, set.ResultId, set.Wires, 5000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var demoted = store.Demote(set, remote, 5000);
+        var held = store.UsedBytes;
+        pin.Dispose();
+        var after = store.UsedBytes;
+        check(demoted && set.IsRemote && set.Revision == 1 && set.Residence == "remote" && held == before && after < before / 10,
+            $"Demote keeps a pinned set's pages charged until the pin ends, then frees them: {before} {held} {after}");
+        store.Release([set.ResultId]);
+        check(store.UsedBytes == 0 && store.WindowCacheBytes == 0, "releasing a demoted set gives back everything: " + store.UsedBytes);
+        var released = TextChecks.Synthetic(store, "W1", 10);
+        store.Release([released.ResultId]);
+        // Seeded first, as the switch does: a refused Demote disposes the cache and gives its bytes back.
+        var late = RemoteResult.Create(store, released.ResultId, OneText, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var lateSeed = new RemoteBlockWriter(released.ResultId, OneText, 0);
+        for (var row = 0; row < 10; row++) Blocks.Write(lateSeed, row, 0);
+        late.Seed(lateSeed.Finish());
+        var seeded = store.WindowCacheBytes;
+        check(seeded > 0 && !store.Demote(released, late, 10) && store.UsedBytes == 0 && store.WindowCacheBytes == 0,
+            $"a released set does not demote, and the seeded cache it was given is freed: seeded {seeded}, then {store.UsedBytes} {store.WindowCacheBytes}");
+
+        // A reader that found the set in memory and takes its hold after the switch is refused, never handed no pages.
+        var switching = TextChecks.Synthetic(store, "W1", 2000);
+        var pinned = switching.Pin();
+        var sealedBefore = switching.SealedSnapshot().Length;
+        var windowedLate = RemoteResult.Create(store, switching.ResultId, switching.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        store.Demote(switching, windowedLate, 2000);
+        string? snapshot = null;
+        try { switching.SealedSnapshot(); snapshot = "pages"; }
+        catch (RequestException error) { snapshot = error.Code; }
+        string? viewed = null;
+        try { store.AddView(switching, [0, 1], [], false, true, 0, null); viewed = "view"; }
+        catch (RequestException error) { viewed = error.Code; }
+        check(sealedBefore > 0 && snapshot == "REMOTE_RESULT" && switching.Released.IsCancellationRequested && viewed == "REMOTE_RESULT",
+            $"a set switched to windowed refuses a snapshot and a view, and an operation's release token is already cancelled: {sealedBefore} {snapshot} {switching.Released.IsCancellationRequested} {viewed}");
+        pinned.Dispose();
+        store.Release([switching.ResultId]);
+
+        // A search under way stops at its next checkpoint once its set switches residence, as on a release.
+        var searched = TextChecks.Synthetic(store, "W1", 2000);
+        var stopped = ResultSearcher.Stopped(store, searched, null);
+        var searchingBefore = stopped();
+        store.Demote(searched, RemoteResult.Create(store, searched.ResultId, searched.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+        check(!searchingBefore && stopped(), $"a search stops once its set switches to windowed: {searchingBefore} {stopped()}");
+        store.Release([searched.ResultId]);
+    }
+
+    /// <summary>The block cache under races: very wide rows, a table that expires part way through a read, a cache disposed
+    /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
+    static async Task RemoteRacesAsync(Action<bool, string> check)
+    {
+        // Another grid's block refused by the cache's own limit while a read-ahead fetch fails and gives its room back: which
+        // limit refused is what the reservation saw, never decided again from the cache's bytes afterwards, so the read never
+        // answers "not enough result memory" while the global budget is nearly empty.
+        {
+            var refused = new Dictionary<string, int>();
+            var random = new Random(1);
+            for (var run = 0; run < 1000; run++)
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var fail = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var blockRows = 0;
+                using var remote = RemoteResult.Create(store, 1, OneText, 16_384L * 10, false, 78, 4L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), async (first, rows, writer, token) =>
+                {
+                    var index = first / blockRows;
+                    if (index == 1) { await fail.Task.WaitAsync(token); throw new InvalidOperationException("The fetch failed."); }
+                    if (index is not (0 or 5)) await Task.Delay(Timeout.Infinite, token);
+                    for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 60);
+                });
+                blockRows = remote.BlockRows;
+                await remote.ReadAsync(0, 10, 1, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(10), CancellationToken.None);
+                var held = remote.ReadAsync(0, 10, 1, async _ => await hold.Task, TimeSpan.FromSeconds(10), CancellationToken.None);
+                var spin = random.Next(0, 4000);
+                var release = Task.Run(() => { Thread.SpinWait(spin); fail.TrySetResult(); });
+                try { await remote.ReadAsync(5L * blockRows, 10, 2, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(10), CancellationToken.None); }
+                catch (RequestException error)
+                {
+                    var key = $"{error.Code} ({error.Message}; cached {remote.CachedBytes} of {remote.CacheLimit}, blocks {string.Join(",", remote.CachedBlocks())}, fetching {remote.FetchingBlocks()}, budget {store.UsedBytes})";
+                    refused[key] = refused.GetValueOrDefault(key) + 1;
+                }
+                hold.TrySetResult();
+                await held;
+                await release;
+            }
+            // Only the budget's refusal is wrong here (the store has 1 GiB free); a machine starved enough to reorder the fetches
+            // can meet another refusal, which says what it is.
+            var budget = refused.Where(pair => pair.Key.Contains("not enough result memory", StringComparison.Ordinal)).ToList();
+            check(budget.Count == 0, "a block refused by the cache's own limit while another fetch gives room back is never refused by the budget: " + string.Join(", ", refused.Select(pair => $"{pair.Key} {pair.Value}x")));
+        }
+
+        // Rows of about 200 KB (blocks near half the cache): a grid that scrolls up a few rows past two cached blocks reads
+        // three blocks. The third passes the cache's limit for the read (trimmed back after) rather than answering no rows
+        // again and again with nothing fetched.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 200_000 };
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, size, 2 * size, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var outcomes = new List<string>();
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try { outcomes.Add((await ReadRemote(remote, size - 5L, 2 * size, viewer: 1)).Next - (size - 5L) + ""); }
+                catch (RequestException error) { outcomes.Add(error.Code); }
+            }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(outcomes.All(outcome => outcome == (2 * size).ToString(Inv)) && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
+                $"a read of three blocks near half the cache each passes the limit for the read, never answers no rows: {string.Join(",", outcomes)} of {2 * size}, cached {remote.CachedBytes} of {remote.CacheLimit}");
+        }
+
+        // Two grids on one result, rows near half the cache wide: while one grid's block is fetching, the other grid's read
+        // finds the cache's own limit full. Its block passes the limit (trimmed back after), never TOO_LARGE "not enough
+        // result memory" while the global budget is nearly empty.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockRows = 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                if (first / blockRows == 2) await gate.Task.WaitAsync(token);
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 50_000);
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 50_000, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var first = ReadRemote(remote, 2L * blockRows - 5, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 1, 15_000);
+            string other;
+            try { other = "next " + ((await ReadRemote(remote, 50L * blockRows, 10, viewer: 2)).Next - 50L * blockRows); }
+            catch (RequestException error) { other = error.Code; }
+            gate.TrySetResult();
+            var (next, _) = await first;
+            check(other.StartsWith("next ", StringComparison.Ordinal) && long.Parse(other[5..], Inv) >= 10 && next >= 2L * blockRows + 5,
+                $"another grid's read past a full window cache passes its limit by its block, not TOO_LARGE: {other}, first grid next {next - 2L * blockRows}");
+        }
+
+        // Three grids on one result, rows far wider than measured: one block is held while sent, two more are fetched at
+        // once, so the second overrun finds the cache past even twice its limit. The refusal names the window cache and how
+        // to raise it, not a global budget that is nearly empty.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var gates = new ConcurrentDictionary<long, TaskCompletionSource>();
+            TaskCompletionSource GateOf(long index) => gates.GetOrAdd(index, _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
+            var blockRows = 0;
+            int PadOf(long index) => index == 0 ? 560 : index is 5 or 10 ? 860 : 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                var index = first / blockRows;
+                if (index is 5 or 10) await GateOf(index).Task.WaitAsync(token);
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, PadOf(index));
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 16_384L * 20, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0L; row < blockRows; row++) Blocks.Write(seed, row, PadOf(0));
+            remote.Seed(seed.Finish());
+            async Task<string> Held(long first, uint viewer, Task? hold = null, TaskCompletionSource? sending = null)
+            {
+                try
+                {
+                    var next = await remote.ReadAsync(first, 10, viewer, async body => { sending?.TrySetResult(); if (hold is not null) await hold; }, TimeSpan.FromSeconds(20), CancellationToken.None);
+                    return "next " + (next - first);
+                }
+                catch (RequestException error) { return error.Code + ": " + error.Message; }
+            }
+            var holdSeed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var holdZ = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendingSeed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendingZ = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var v3 = Held(0, 3, holdSeed.Task, sendingSeed);
+            await sendingSeed.Task;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var v1 = Held(5L * blockRows, 1);
+            var v2 = Held(10L * blockRows, 2, holdZ.Task, sendingZ);
+            // Both fetches hold their estimates before either lands.
+            SpinWait.SpinUntil(() => gates.Count == 2, 15_000);
+            GateOf(5).TrySetResult();
+            GateOf(10).TrySetResult();
+            var outcome = await v1;
+            holdSeed.TrySetResult();
+            holdZ.TrySetResult();
+            await Task.WhenAll(v2, v3);
+            check(outcome.StartsWith("next ", StringComparison.Ordinal) || outcome.Contains("window cache", StringComparison.Ordinal),
+                "a read refused past twice the window cache names the cache, not the global budget: " + outcome);
+            // A refused overrun gives back its block's estimate too: the cache charges only the pages it holds.
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(store.WindowCacheBytes == remote.CachedBytes && remote.CachedBytes == remote.CachedPageCost(),
+                $"a refused overrun leaves no charge behind: window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, pages {remote.CachedPageCost()}");
+        }
+
+        // A block whose last, partly filled page takes it just past the cache (419 rows of 10,000 characters in 4 MiB): refused
+        // as too wide, never read again and again for nothing.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 10_000 };
+            using var remote = Remote(store, blocks, rows: 419, rowBytes: 16, cache: 4L << 20);
+            string outcome;
+            try { outcome = "next " + (await ReadRemote(remote, 0, 10, viewer: 1)).Next; }
+            catch (RequestException error) { outcome = error.Code + (error.Message.Contains("too wide", StringComparison.Ordinal) ? " too wide" : ""); }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(outcome == "TOO_LARGE too wide" && store.WindowCacheBytes == 0, $"a block just past its cache is refused as too wide: {outcome}, {store.WindowCacheBytes} held");
+        }
+
+        // A read across two blocks that do not fit the cache together (rows about 0.7 and 0.4 of it): the overrun passes the
+        // cache's limit for the read's own blocks rather than answering short, so the first read sends every row, the block
+        // is fetched once (no read loop fetching it again), and the cache trims back to its limit once the read is done.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 50_000, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.PadOf = row => row < size ? (int)(0.7 * (16L << 20) / size) : (int)(0.4 * (16L << 20) / size);
+            var first = size - 10L;
+            var (next, rows) = await ReadRemote(remote, first, 128);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var zero = blocks.Calls.Count(call => call.First == 0);
+            check(next >= first + 128 && Consecutive(rows.Where(row => row >= first && row < first + 128).ToList(), first, 128) && zero == 1 && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
+                $"a read's own blocks past the cache are read once and the cache trims back: next {next - first} of 128, block 0 fetched {zero}x, cached {remote.CachedBytes} of {remote.CacheLimit}");
+        }
+
+        // Rows 1.3x wider than measured: a block's overrun finds the other block's fetch holding the cache's room. The read
+        // waits for it (or stops read-ahead) and never answers TOO_LARGE while the budget is nearly empty.
+        {
+            var failures = new List<string>();
+            foreach (var (first, count) in new[] { (0L, 10), (30L, 10) })
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 260_000, DelayMs = 500 };
+                using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+                blocks.DelayFrom = remote.BlockRows;
+                var rows = new List<long>();
+                var at = first;
+                try
+                {
+                    for (var attempt = 0; attempt < 6 && at < first + count; attempt++)
+                    {
+                        var (next, got) = await ReadRemote(remote, at, (int)(first + count - at), viewer: 1);
+                        rows.AddRange(got.Where(row => row >= at && row < first + count));
+                        at = Math.Max(at, next);
+                    }
+                    if (!Consecutive(rows.Distinct().Order().ToList(), first, count)) failures.Add($"{first}: short {rows.Count}");
+                }
+                catch (RequestException error) { failures.Add($"{first}: {error.Code}"); }
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (remote.CachedBytes > remote.CacheLimit) failures.Add($"{first}: cache {remote.CachedBytes}");
+                // A read-ahead overrun refused (or stopped) gives back its block's estimate: only cached pages stay charged.
+                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{first}: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+            }
+            check(failures.Count == 0, "rows wider than the estimate allows wait for the other fetch, never TOO_LARGE: " + string.Join(", ", failures));
+        }
+
+        // Blocks read ahead far wider than measured beside the rows on screen: their overruns are refused (nothing they may
+        // evict), and each gives back its block's estimate, so only the cached pages stay charged.
+        {
+            var failures = new List<string>();
+            foreach (var wide in new[] { 2.2, 2.6, 3.0 })
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 2_000 };
+                using var remote = Remote(store, blocks, rows: 1_000_000, rowBytes: CostPerRow(2_000), cache: 16L << 20);
+                var size = remote.BlockRows;
+                blocks.PadOf = row => row < size ? 2_000 : (int)(2_000 * wide);
+                await ReadRemote(remote, 0, 10, viewer: 1);
+                // A fetch leaves the count before its finally gives the estimate back: wait for both (a leak never settles).
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), 15_000);
+                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+            }
+            check(failures.Count == 0, "a refused read-ahead overrun gives back its estimate: " + string.Join(", ", failures));
+        }
+
+        // Rows a little wider than measured, read with a block read ahead beside: the two still fit the cache, so the read's
+        // own block is never refused TOO_LARGE while the budget is nearly empty.
+        {
+            var refused = new List<string>();
+            for (var run = 0; run < 20; run++)
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 206_000 };
+                using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+                try
+                {
+                    var (_, rows) = await ReadRemote(remote, 0, 10, viewer: 1);
+                    if (!Consecutive(rows, 0, 10)) refused.Add("short");
+                }
+                catch (RequestException error) { refused.Add(error.Code); }
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (store.WindowCacheBytes != remote.CachedPageCost()) refused.Add($"charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+            }
+            check(refused.Count == 0, "rows wider than measured still read with a block ahead: " + string.Join(",", refused));
+        }
+
+        // An overrun is charged: once rows wider than measured are cached, the global budget holds what their pages cost.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 3000 };
+            using var remote = Remote(store, blocks, rows: 5000, rowBytes: 1000, cache: 64L << 20);
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var cost = remote.CachedPageCost();
+            check(cost > 0 && store.WindowCacheBytes == cost && remote.CachedBytes == cost && store.UsedBytes == cost,
+                $"rows wider than measured are charged what their pages cost: pages {cost}, window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, used {store.UsedBytes}");
+        }
+
+        // Rows of about 200 KB: a block holds what half of a 16 MiB cache holds, so the cache never passes its limit.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 200_000 };
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+            var (next, rows) = await ReadRemote(remote, 0, 10);
+            var most = remote.CachedBytes;
+            // Sampled until the read-ahead's fetches have all settled.
+            SpinWait.SpinUntil(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 3 && remote.FetchingBlocks() == 0; }, 15_000);
+            check(next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
+                $"very wide rows read in blocks that fit the cache, which stays within its limit: {next} {remote.BlockRows} {most} {remote.CacheLimit}");
+        }
+        // Rows far wider than the first page's (which sized the blocks): the block stops being built at the cache's limit and
+        // is refused, rather than built whole first (the read and its two read-ahead blocks together write fewer rows than one
+        // block holds); the cache keeps nothing of it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 10_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16, cache: 16L << 20);
+            string outcome;
+            try { await ReadRemote(remote, 0, 10); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 5000);
+            check(outcome == "TOO_LARGE" && remote.BlockRows == RemoteResult.MaxBlockRows && blocks.Written < remote.BlockRows && store.WindowCacheBytes == 0,
+                $"a block of rows far wider than estimated stops at the cache's limit and is refused: {outcome} {blocks.Written} of {remote.BlockRows} {store.WindowCacheBytes}");
+        }
+        // A read across more blocks than the cache holds answers with the rows that fit, and the grid reads on from there.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 16_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16_384, cache: 16L << 20);
+            string outcome;
+            long next = -1;
+            List<long> rows = [];
+            try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            check(outcome == "ok" && next > 0 && next < 10L * remote.BlockRows && Consecutive(rows, 0, (int)next) && remote.CachedBytes <= remote.CacheLimit,
+                $"a read across more blocks than the cache holds answers short with the rows that fit: {outcome} {next} {remote.BlockRows} {remote.CachedBytes}");
+        }
+        // The table expires after some blocks were cached: a read across them answers with the cached rows, not an error.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
+            blocks.Expire = true;
+            string outcome;
+            long next = -1;
+            try { (next, _) = await ReadRemote(remote, 0, 4 * remote.BlockRows); outcome = "ok"; }
+            catch (RemoteExpiredException) { outcome = "expired"; }
+            check(outcome == "ok" && next == 3L * remote.BlockRows && remote.Expired,
+                $"a read across cached blocks and an expired one answers with the cached rows: {outcome} {next} {remote.Expired}");
+        }
+        // Disposed under a waiting read (released, or replaced by Load into memory): the read answers short, never an error.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            var remote = Remote(store, blocks);
+            var waiting = ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => !blocks.Calls.IsEmpty, 5000);
+            remote.Dispose();
+            string outcome;
+            long next = -1;
+            try { (next, _) = await waiting.WaitAsync(TimeSpan.FromSeconds(15)); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            string after;
+            try { after = (await ReadRemote(remote, 5, 10)).Next.ToString(Inv); }
+            catch (Exception error) { after = error.GetType().Name; }
+            check(outcome == "ok" && next == 0 && after == "5" && store.WindowCacheBytes == 0,
+                $"a read waiting when the cache is disposed answers short, and so does a read after: {outcome} {next} {after} {store.WindowCacheBytes}");
+        }
+        // An operation over a set that switched to windowed and was loaded back before it noticed: REMOTE_RESULT, never a raw
+        // cancellation (which the host would answer as TIMEOUT).
+        using (var harness = new Harness(Lines(10)))
+        {
+            var results = harness.Service.Results;
+            var set = TextChecks.Synthetic(results, "W1", 2000);
+            using var gate = new ManualResetEventSlim();
+            var running = harness.Service.UntilReleased(work => { gate.Wait(TimeSpan.FromSeconds(15)); work.ThrowIfCancellationRequested(); return 1; }, CancellationToken.None, set);
+            results.Demote(set, RemoteResult.Create(results, set.ResultId, set.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+            set.Promote(2000);
+            gate.Set();
+            string outcome;
+            try { await running; outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            check(outcome == "REMOTE_RESULT", "an operation over a set switched to windowed and back answers REMOTE_RESULT: " + outcome);
+            results.Release([set.ResultId]);
+        }
+        // A block evicted after the read-ahead chose it, while a read asks for the same rows again: nothing stays charged.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            var remote = Remote(store, blocks);
+            Task<(long Next, List<long> Rows)>? again = null;
+            var fired = 0;
+            remote.AheadChosen = index =>
+            {
+                if (index != 1 || Interlocked.Exchange(ref fired, 1) == 1) return;
+                remote.EvictForChecks(1);
+                again = ReadRemote(remote, remote.BlockRows, 1);
+            };
+            await ReadRemote(remote, 0, 10);
+            if (again is not null) await again;
+            // Every fetch settled: a stray second fetch of block 1 would have started by now.
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2] && remote.FetchingBlocks() == 0, 10_000);
+            remote.Dispose();
+            var freed = SpinWait.SpinUntil(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
+            check(fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
+                $"a block evicted between the read-ahead's choice and its fetch is not fetched, and nothing stays charged: {fired} {store.WindowCacheBytes} {blocks.Calls.Count(call => call.First == remote.BlockRows)}");
+        }
+    }
+}

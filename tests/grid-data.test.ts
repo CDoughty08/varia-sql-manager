@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GridData } from '../src/renderer/src/grid/data'
+import { GridData, stalledText } from '../src/renderer/src/grid/data'
+import { gridLimits } from '../src/renderer/src/grid/constants'
 import { planTiles, tileColumnOf, tileKey, tileRowOf, type TileShape } from '../src/renderer/src/grid/tiles'
 import type { RowWindow, WindowOptions, WindowShape } from '../src/renderer/src/results/ResultClient'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
@@ -114,6 +115,24 @@ describe('grid data', () => {
     expect(changed).toHaveBeenCalledOnce()
     data.ensure(range(0, 30), 10_000, 0, 30)
     expect(reads).toHaveLength(1)
+  })
+  it('looks again shortly when other grids hold all the client\'s reads as a tile answered short is to be read on', async () => {
+    const inflight = { value: 0 }
+    const { data, reads, settle, changed, advance } = fixture(8, inflight)
+    data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    // A windowed result answers short (its cache full, or its wait ended): no rows yet.
+    inflight.value = 16
+    reads[0].resolve(0)
+    await settle()
+    changed.mockClear()
+    advance(1000)
+    for (let frame = 0; frame < 5; frame++) data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    expect(reads).toHaveLength(1)
+    inflight.value = 0
+    advance(1000)
+    expect(changed).toHaveBeenCalled()
+    data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    expect(reads).toHaveLength(2)
   })
   it('tries a read again shortly when main\'s results port is full, without marking the tile', async () => {
     const { data, reads, settle, advance, changed } = fixture()
@@ -324,6 +343,87 @@ describe('grid data', () => {
     data.ensure(range(1030, 1145, 0, 7), 10_000, 0, 30)
     expect(handle.prefetch).toHaveBeenCalledOnce()
   })
+  it('reads a tile that keeps answering no rows again after doubling waits, then marks it failed so the grid offers Retry', async () => {
+    const { data, reads, settle, advance, changed } = fixture(8)
+    // A windowed result's tile answers empty every time (rate limited, or its table shorter than BigQuery said), cached as such.
+    // The grid draws only when told to (a complete result sends no more events), so each retry rides on the data's own wake.
+    const frame = () => data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    const own = () => reads.filter(read => read.first < 128).length
+    // Each answer draws again, as the grid does when told the data changed.
+    const answer = async () => {
+      for (const read of reads) if (!read.aborted()) read.resolve(0)
+      await settle()
+      frame()
+    }
+    frame()
+    await answer()
+    expect(own()).toBe(1)
+    // Scrolled away and back: the frames stopped wanting it, so it is read again at once.
+    data.ensure(range(5_000, 5_040, 0, 7), 10_000, 0, 30)
+    await answer()
+    expect(own()).toBe(2)
+    await answer()
+    let steps = 0
+    for (; steps < 80 && !data.error; steps++) {
+      changed.mockClear()
+      advance(250)
+      if (changed.mock.calls.length > 0) { frame(); await answer() }
+    }
+    expect(own()).toBe(gridLimits.stallRetries + 2)
+    // Each wait doubles from 250 ms: 250 + 500 + ... is about 8 s before it is marked failed, not 5 waits of 250 ms.
+    const waits = Array.from({ length: gridLimits.stallRetries }, (_, index) => gridLimits.busyRetryMs * 2 ** index).reduce((sum, ms) => sum + ms, 0)
+    expect(steps * 250).toBeGreaterThanOrEqual(waits - gridLimits.busyRetryMs * 2)
+    expect(data.error).toBe(stalledText)
+    // Retry reads it again at once.
+    data.retry()
+    frame()
+    expect(own()).toBe(gridLimits.stallRetries + 3)
+  })
+
+  it('reads a stalled tile again at once when more rows arrive, and never lets its long wait hold back another tile', async () => {
+    const { data, reads, settle, advance, changed } = fixture(8)
+    data.ensure(range(0, 40, 0, 7), 50, 0, 30)
+    reads[0].resolve(50)
+    await settle()
+    // Rows arrive past it, and its read on brings none: stalled, waiting 250 ms.
+    data.ensure(range(0, 40, 0, 7), 60, 0, 30)
+    reads[1].resolve(0)
+    await settle()
+    data.ensure(range(0, 40, 0, 7), 60, 0, 30)
+    expect(reads).toHaveLength(2)
+    // More rows: read on at once.
+    data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    expect(reads).toHaveLength(3)
+    // Stalled for long (a wait of seconds), then a fast drag elsewhere: the reads there start 50 ms after it settles.
+    for (let tries = 0; tries < 4; tries++) {
+      reads.at(-1)!.resolve(0)
+      await settle()
+      advance(10_000)
+      data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    }
+    reads.at(-1)!.resolve(0)
+    await settle()
+    data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    const before = reads.length
+    for (const first of [20_000, 40_000, 60_000]) data.ensure(range(first, first + 40, 0, 7), 1_000_000, 20_000, 30)
+    changed.mockClear()
+    advance(100)
+    expect(changed).toHaveBeenCalled()
+    data.ensure(range(60_000, 60_040, 0, 7), 1_000_000, 0, 30)
+    expect(reads.length).toBeGreaterThan(before)
+  })
+
+  it('reads as its own viewer, so two grids on one windowed result each get their own read-ahead', () => {
+    const a = fixture(8), b = fixture(8)
+    a.data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    b.data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    const viewer = (read: { o: { viewer?: number } }) => read.o.viewer
+    expect(viewer(a.reads[0])).toBe(a.data.viewer)
+    expect(viewer(b.reads[0])).toBe(b.data.viewer)
+    expect(a.data.viewer).not.toBe(b.data.viewer)
+    for (const id of [a.data.viewer, b.data.viewer]) expect(id >= 1 && id <= 0x7ffffffe).toBe(true)
+  })
+
   it('aborts its reads and timers when disposed', () => {
     const { data, reads, timers } = fixture()
     data.ensure(range(0, 10), 10_000, 0, 30)
@@ -332,5 +432,42 @@ describe('grid data', () => {
     expect(reads[0].aborted()).toBe(true)
     expect(timers.pending.size).toBe(0)
     expect(data.ensure(range(0, 10), 10_000, 0, 30)).toBe(false)
+  })
+})
+
+describe('grid data stalls', () => {
+  it('starts a tile\'s stall backoff again after a read that brought rows, rather than carrying the old count on', async () => {
+    const cache = new Map<string, RowWindow>(), reads: { first: number; count: number; resolve: (rows: number) => void }[] = []
+    const keyOf = (first: number, count: number, o: WindowShape) => `${first}:${count}:${o.colStart}:${o.colEnd}:${o.maxCellChars}:${o.display}`
+    const handle = {
+      getWindow: (first: number, count: number, o: WindowOptions = {}) => new Promise<RowWindow>(resolve => {
+        reads.push({ first, count, resolve: rows => {
+          const width = (o.colEnd ?? 8) - (o.colStart ?? 0)
+          const window = { first, count: rows, colStart: o.colStart ?? 0, colEnd: o.colEnd ?? 8, text: Array.from({ length: rows * width }, () => 'x'), flags: new Uint8Array(rows * width) }
+          cache.set(keyOf(first, count, o), window); resolve(window)
+        } })
+      }),
+      peekWindow: (first: number, count: number, o: WindowShape = {}) => cache.get(keyOf(first, count, o)),
+      prefetch: vi.fn()
+    }
+    const timers = manualTimers()
+    let now = 0
+    const data = new GridData({ handle, columns: 8, clientInflight: () => data.reading, changed: () => {}, timers: timers.timers, now: () => now })
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+    const advance = (ms: number) => { now += ms; timers.advance(ms) }
+    const frame = () => data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 60, 0, 30)
+    data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 50, 0, 30)
+    reads[0].resolve(50); await settle()
+    // Rows 50-59 arrive; the read on from 50 brings none: stalled once (250 ms).
+    frame(); expect(reads).toHaveLength(2)
+    reads[1].resolve(0); await settle()
+    advance(1_000); frame(); expect(reads).toHaveLength(3)
+    // The read after the wait brings rows (50-54): the tile is no longer stalled.
+    reads[2].resolve(5); await settle()
+    advance(1_000); frame(); expect(reads).toHaveLength(4)
+    // It stalls once more: a first stall again, read after the base wait (250 ms), not a second one's 500 ms.
+    reads[3].resolve(0); await settle()
+    advance(300); frame()
+    expect(reads).toHaveLength(5)
   })
 })

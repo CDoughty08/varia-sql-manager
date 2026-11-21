@@ -179,7 +179,7 @@ internal sealed class BigQueryField
 }
 
 /// <summary>
-/// The REST reader of a BigQuery result set (docs/bigquery.md, Types and display): the schema's columns, and each
+/// The REST reader of a BigQuery result set (docs/bigquery.md, Types): the schema's columns, and each
 /// <c>TableRow</c> (<c>{"f":[{"v":…}]}</c>) decoded by Varia's own converter straight into a <see cref="PageBuilder"/>, as
 /// <see cref="ColumnPlan"/> reads a SqlDataReader. Not BigQueryRow: the client throws on RANGE and INTERVAL, and would format
 /// values and take memory outside the budget's accounting. Values are read from the page's JSON without copying where
@@ -209,6 +209,22 @@ internal sealed class BigQueryColumnPlan
         warned = new bool[fields.Length];
         DescriptorBytes = ColumnPlan.DescriptorBytesOf(Columns);
     }
+
+    private BigQueryColumnPlan(BigQueryColumnPlan from)
+    {
+        fields = from.fields;
+        TruncatedColumns = from.TruncatedColumns;
+        Columns = from.Columns;
+        Wires = from.Wires;
+        Lengths = from.Lengths;
+        caps = from.caps;
+        warned = (bool[])from.warned.Clone();
+        DescriptorBytes = from.DescriptorBytes;
+    }
+
+    /// <summary>The same columns with working buffers of its own: a plan decodes on one thread at a time, so each concurrent
+    /// reader of a result (a windowed result's block fetches, and Load into memory through tabledata.list beside them) takes a fork.</summary>
+    internal BigQueryColumnPlan Fork() => new(this);
 
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }

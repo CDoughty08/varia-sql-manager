@@ -135,6 +135,7 @@ const api: VariaApi = {
   },
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
+  remoteQuery: params => request('results.remoteQuery', params),
   closeQuerySession: (sessionId, options) => request('query.session.close', {
     sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {}
   }),
