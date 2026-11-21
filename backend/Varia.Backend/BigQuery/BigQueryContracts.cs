@@ -55,11 +55,12 @@ internal static partial class BigQueryLimits
     public const long MaxSafeInteger = 9_007_199_254_740_991;
     public static readonly string[] Modes = ["gcloud", "serviceAccountKey", "externalAccount"];
 
-    [GeneratedRegex(@"^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]\z")]
+    [GeneratedRegex(@"^(?:[a-z0-9][a-z0-9.-]{0,61}[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]\z")]
     public static partial Regex ProjectId();
-    [GeneratedRegex(@"^[A-Za-z\d_]+\z")]
+    // ASCII digits only, as zod's \w (.NET's \d matches every Unicode digit).
+    [GeneratedRegex(@"^[A-Za-z0-9_]+\z")]
     public static partial Regex DatasetId();
-    [GeneratedRegex(@"^[A-Za-z\d-]+\z")]
+    [GeneratedRegex(@"^[A-Za-z0-9-]+\z")]
     public static partial Regex LocationId();
     [GeneratedRegex(@"^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$", RegexOptions.IgnoreCase)]
     public static partial Regex Uuid();
@@ -126,3 +127,14 @@ internal sealed record BigQueryDryRunArgs(string ConnectionId, string Sql, strin
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
 /// whether emulator mode faked it. A refused query is an error value (SQL_ERROR with BigQuery's <c>[line:column]</c>).</summary>
 internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incomplete = null, string? StatementType = null, bool Faked = false);
+
+/// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
+/// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
+internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
+/// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
+internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
+internal sealed record BigQueryFact(string Label, string Value);
+internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
+/// order, each left out when it has no facts.</summary>
+internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);

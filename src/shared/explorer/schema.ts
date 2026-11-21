@@ -9,6 +9,7 @@ import {
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, type PeekDefinitionParams, type PeekParams } from './peek.ts'
 import { dependencyDirections, isDependencyKind, type DependenciesParams } from './dependencies.ts'
+import { isBigQueryFieldPath, isBigQueryName, type BigQueryNameKind } from '../bigquery/names.ts'
 
 // zod's max() counts code points, while sysname holds 128 UTF-16 code units.
 const utf16 = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -22,6 +23,20 @@ const refName = utf16(explorerLimits.maxName).refine(value => !value.includes('\
 export type KindSpecs = { readonly [K in NodeKind]: KindSpec }
 
 const parentRefSchema = z.object({ kind: z.enum(parentKinds), schema: ident, name: ident }).strict()
+/** The rule a BigQuery kind's own name follows ('path' for a column's field path); SQL Server kinds have none here. */
+const bigQueryNameOf: Partial<Record<NodeKind, BigQueryNameKind | 'path'>> = {
+  bqProject: 'project', bqDataset: 'dataset', bqTable: 'table', bqView: 'table', bqMaterializedView: 'table', bqExternalTable: 'table', bqRoutine: 'routine', bqModel: 'model',
+  bqColumn: 'path'
+}
+const bigQueryProblems = (ref: ObjectRef): string[] => {
+  const rule = bigQueryNameOf[ref.kind]
+  const problems: string[] = []
+  if (rule && ref.name !== undefined && !(rule === 'path' ? isBigQueryFieldPath(ref.name) : isBigQueryName(rule, ref.name))) problems.push(`This is not a BigQuery ${rule === 'path' ? 'column' : rule} name.`)
+  if (ref.project !== undefined && !isBigQueryName('project', ref.project)) problems.push('This is not a Google Cloud project id.')
+  if (ref.dataset !== undefined && !isBigQueryName('dataset', ref.dataset)) problems.push('This is not a BigQuery dataset name.')
+  if (ref.table !== undefined && !isBigQueryName('table', ref.table)) problems.push('This is not a BigQuery table name.')
+  return problems
+}
 /** Problems with a ref's shape: the fields its kind's scope requires or forbids, the kind's name bound, and a child's parent kind. */
 export function objectRefProblems(ref: ObjectRef, specs: KindSpecs = kindSpecs): string[] {
   if (!Object.hasOwn(specs, ref.kind)) return ['Unknown kind.']
@@ -34,11 +49,12 @@ export function objectRefProblems(ref: ObjectRef, specs: KindSpecs = kindSpecs):
   ]
   if (ref.name !== undefined && ref.name.length > maxNameOf(spec)) problems.push(`A ${ref.kind} name has at most ${maxNameOf(spec)} UTF-16 code units.`)
   if (ref.parent && !childParentKinds(ref.kind).includes(ref.parent.kind)) problems.push(`A ${ref.kind} cannot belong to a ${ref.parent.kind}.`)
-  return problems
+  return [...problems, ...bigQueryProblems(ref)]
 }
 export const objectRefSchema = z.object({
   kind: z.enum(nodeKinds), database: ident.optional(), schema: ident.optional(), name: refName.optional(), parent: parentRefSchema.optional(),
-  ssisFolder: ident.optional(), ssisProject: ident.optional()
+  ssisFolder: ident.optional(), ssisProject: ident.optional(),
+  project: z.string().min(1).max(128).optional(), dataset: z.string().min(1).max(1024).optional(), table: z.string().min(1).max(1024).optional()
 }).strict().superRefine((ref, context) => { for (const message of objectRefProblems(ref)) context.addIssue({ code: 'custom', message }) }) satisfies z.ZodType<ObjectRef>
 export const nodeRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('object'), object: objectRefSchema }).strict(),

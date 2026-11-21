@@ -132,6 +132,16 @@ internal sealed class ObjectDetails
     /// or a table the index does not hold).</summary>
     public int Referenced(int at) => Array.BinarySearch(keyAt, at) is var item and >= 0 ? keyReferenced[item] : -1;
 
+    /// <summary>How many foreign keys reference a table the index holds.</summary>
+    public int ForeignKeyCount => keyReferenced.Count(referenced => referenced >= 0);
+
+    /// <summary>Each foreign key that references a table the index holds, with that table, in entry order.</summary>
+    public IEnumerable<(int At, int Referenced)> ForeignKeys()
+    {
+        for (var item = 0; item < keyAt.Length; item++)
+            if (keyReferenced[item] >= 0) yield return (keyAt[item], keyReferenced[item]);
+    }
+
     /// <summary>Collects a read's details as it goes; <see cref="Build"/> sorts them by entry and renumbers them as the table's
     /// builder renumbers its entries.</summary>
     internal sealed class Builder

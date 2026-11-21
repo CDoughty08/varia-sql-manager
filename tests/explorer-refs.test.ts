@@ -20,6 +20,10 @@ function minimal(kind: NodeKind): ObjectRef {
     case 'ssisCatalog': case 'ssisFolder': return { kind, name: 'n' }
     case 'ssisFolderObject': return { kind, ssisFolder: 'f', name: 'n' }
     case 'ssisProjectObject': return { kind, ssisFolder: 'f', ssisProject: 'p', name: 'n' }
+    case 'bqProject': return { kind, name: 'my-project' }
+    case 'bqDataset': return { kind, project: 'my-project', name: 'd' }
+    case 'bqObject': return { kind, project: 'my-project', dataset: 'd', name: 'n' }
+    case 'bqField': return { kind, project: 'my-project', dataset: 'd', table: 't', name: 'n' }
   }
 }
 /** The catalogue with one kind changed: the mechanisms SSIS kinds use (S1b) are checked before any shipped kind uses them. */
@@ -44,7 +48,8 @@ describe('node identity', () => {
       schemaObject: ['table', 'view', 'synonym', 'procedure', 'function', 'sequence', 'type', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy'],
       child: ['column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter'],
       childUnnamed: ['returnValue'],
-      ssisCatalog: ['ssisCatalog'], ssisFolder: ['ssisFolder'], ssisFolderObject: ['ssisProject', 'ssisEnvironment'], ssisProjectObject: ['ssisPackage']
+      ssisCatalog: ['ssisCatalog'], ssisFolder: ['ssisFolder'], ssisFolderObject: ['ssisProject', 'ssisEnvironment'], ssisProjectObject: ['ssisPackage'],
+      bqProject: ['bqProject'], bqDataset: ['bqDataset'], bqObject: ['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine', 'bqModel'], bqField: ['bqColumn']
     }
     for (const scope of kindScopes) expect(nodeKinds.filter(kind => kindScope(kind) === scope), scope).toEqual(expected[scope])
   })
@@ -60,9 +65,10 @@ describe('node identity', () => {
     // Generated at 74d3ab7, before ObjectRef had SSIS fields: Object Explorer keys its selection, filters and expansion by these.
     const golden = JSON.parse(readFileSync('tests/fixtures/explorer/ref-keys.json', 'utf8')) as { connectionId: string; ref: ExplorerNodeRef; key: string }[]
     expect(golden.length).toBeGreaterThan(300)
-    // Every kind and folder but the SSIS ones (S1b) and SQL Server Agent's (AG-1), which came after the golden keys.
-    expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis') && !kind.startsWith('agent'))))
-    expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis') && !id.startsWith('agent'))))
+    // Every kind and folder but the SSIS ones (S1b), SQL Server Agent's (AG-1) and BigQuery's (BQ-5), which came after the golden keys.
+    const later = (id: string) => id.startsWith('agent') || id.startsWith('bq')
+    expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis') && !later(kind))))
+    expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis') && !later(id))))
     for (const entry of golden) expect(refKey(entry.connectionId, entry.ref), entry.key).toBe(entry.key)
   })
   it('keys the SSIS kinds and their folders with their folder and project appended', () => {
@@ -118,7 +124,10 @@ describe('node identity', () => {
       // SSIS Catalog objects are not SQL objects: dragging them inserts nothing.
       ssisCatalog: undefined, ssisFolder: undefined, ssisProject: undefined, ssisPackage: undefined, ssisEnvironment: undefined,
       // SQL Server Agent's named objects insert their name unquoted, as msdb's procedures take it (@job_name = N'…'); its other rows nothing.
-      agent: undefined, agentJobActivity: undefined, agentJob: 'n', agentAlert: 'n', agentOperator: 'n', agentProxySubsystem: undefined, agentProxy: 'n', agentErrorLog: undefined
+      agent: undefined, agentJobActivity: undefined, agentJob: 'n', agentAlert: 'n', agentOperator: 'n', agentProxySubsystem: undefined, agentProxy: 'n', agentErrorLog: undefined,
+      // BigQuery's objects insert their backtick-quoted path; a column its quoted field path.
+      bqProject: '`my-project`', bqDataset: '`my-project.d`', bqTable: '`my-project.d.n`', bqView: '`my-project.d.n`', bqMaterializedView: '`my-project.d.n`',
+      bqExternalTable: '`my-project.d.n`', bqRoutine: '`my-project.d.n`', bqModel: '`my-project.d.n`', bqColumn: '`n`'
     }
     for (const kind of nodeKinds) {
       const style = kindSpecs[kind].insert
@@ -192,10 +201,11 @@ describe('explorer request schemas', () => {
     }
   })
   it('bounds names by kind: 128 unless the kind declares a longer one, never past the catalogue\'s maximum', () => {
-    expect(explorerLimits.maxName).toBe(260)
+    expect(explorerLimits.maxName).toBe(4514)
     for (const kind of nodeKinds) {
       const named = minimal(kind)
-      if (named.name === undefined) continue
+      // BigQuery's names follow their own rules (tests/bigquery-explorer.test.ts).
+      if (named.name === undefined || kindScope(kind).startsWith('bq')) continue
       const max = kind === 'ssisPackage' ? 260 : 128
       expect(maxNameOf(kindSpecs[kind]), kind).toBe(max)
       accepts(objectRefSchema, { ...named, name: 'x'.repeat(max) })

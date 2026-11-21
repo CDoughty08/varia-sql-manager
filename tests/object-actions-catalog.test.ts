@@ -68,8 +68,10 @@ describe('object action catalogue', () => {
     expect(states('function', 'aggregate')).toBe('- enabled disabled - - - -')
     // Properties opens for every database, SQL Server's own and snapshots included, as in SSMS.
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled - - -', '- disabled disabled enabled - - -', '- disabled enabled enabled - - -'])
-    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties.
-    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table'])
+    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties, and the
+    // SQL Server Agent node's SQL Server Agent Properties (AG-8a).
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent'])
+    expect([actionDialog('agent', 'properties'), kindDialogActionSpecs.agentProperties]).toEqual(['agentProperties', { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
     // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
     // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
     expect([tasks('database'), tasks('database', 'system'), tasks('database', 'snapshot')]).toEqual(['enabled enabled enabled enabled enabled', 'disabled disabled disabled disabled disabled', '- - - - -'])
@@ -200,11 +202,15 @@ describe('object action catalogue', () => {
     // A login's Disable and Enable have their own group between Copy Name and Rename.
     expect(ids.slice(at('explorer.copyName') + 1, at('explorer.rename'))).toEqual(['---', 'explorer.disable', 'explorer.enable', 'explorer.unlock', '---'])
     // Properties is the last item, after Refresh in its own group, as in SSMS; an SSIS Catalog object's Properties takes its place.
-    expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
+    // A BigQuery table's or view's Properties (BQ-5) after SQL Server's.
+    expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'explorer.bigQueryProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
-      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent'])
+      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
+    // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
+    expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
+      pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })
     // Learn's Detach Database dialog, as a modal (wave 5 decisions): its title names the database.
     expect(dialogSpecs.detachDatabase).toEqual({ title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }], steps: true })
@@ -240,16 +246,16 @@ describe('object action catalogue', () => {
     expect([actionVerb('loginProperties'), actionVerb('properties'), actionVerb('createLogin')]).toEqual(['properties', 'properties', undefined])
     // Delete Object is a confirmation, and Attach, New Login, Take Offline, Bring Online, Detach, Unlock and Login Properties are dialogs (wave 5 decisions 1), so
     // they are modal; Database Properties opens as a document (U1 D2).
-    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent'])
+    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })
   it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.detachDatabase' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
       | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock' | 'explorer.startJob' | 'explorer.stopJob' | 'explorer.startAgent' | 'explorer.stopAgent' | 'explorer.restartAgent'>()
-    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties' | 'startJobAtStep' | 'startAgent' | 'stopAgent' | 'restartAgent'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties'])
+    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties' | 'startJobAtStep' | 'startAgent' | 'stopAgent' | 'restartAgent' | 'agentProperties'>()
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties' | 'history'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties', 'history'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)

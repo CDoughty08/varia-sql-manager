@@ -83,7 +83,7 @@ internal static class RestoreFilesChecks
         var invalid = new (string Name, ActionArgs Args)[]
         {
             ("no options", Args(null)), ("no identity", Args(good, noIdentity: true)), ("a bad identity", Args(good, id: new(0, "2026-10-29T21:05:43.000"))), ("master", Args(good, "master")), ("MSDB", Args(good, "MSDB")),
-            ("a log first", Args(Options([chain[1]]))), ("a differential after the base", Args(Options([chain[0], Set("2:1", "differential", 1, path)]))), ("two bases", Args(Options([chain[0], chain[0] with { Id = "1:3" }]))),
+            ("a log first", Args(Options([chain[1]]))), ("a set GUID that is no GUID", Args(Options([chain[0] with { Guid = "abcdef00" }, chain[1]]))), ("a differential after the base", Args(Options([chain[0], Set("2:1", "differential", 1, path)]))), ("two bases", Args(Options([chain[0], chain[0] with { Id = "1:3" }]))),
             ("a differential base", Args(Options([Set("2:1", "differential", 1, path)]))), ("a set twice", Args(Options([chain[0], chain[1], chain[1]]))),
             ("nothing to restore", Args(Options(chain, [], []))), ("a file twice", Args(Options(chain, ["a", "a"]))), ("a filegroup twice", Args(Options(chain, [], ["g", "g"]))),
             ("257 files", Args(Options(chain, many))), ("257 filegroups", Args(Options(chain, [], many))), ("an empty file name", Args(Options(chain, [""]))),

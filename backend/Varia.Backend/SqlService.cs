@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "agent.profile",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile",
         "results.diffSeek"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -151,6 +151,25 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Follows the SET prologue in the same command, so opening a session costs no extra round trip. The login
     /// is the session's as it opened, as SSMS shows it from the connection.</summary>
     internal const string LoginSql = "SELECT SUSER_SNAME(), (SELECT connection_id FROM sys.dm_exec_requests WHERE session_id=@@SPID);";
+    /// <summary>Confirms a query session's catalog after a database change SqlClient saw no notice for. It reads no row (or
+    /// a plan) when SET NOEXEC, PARSEONLY, FMTONLY or SHOWPLAN_* is on, which also kept the USE from running.</summary>
+    internal const string InDatabaseSql = "SELECT CONVERT(bit, CASE WHEN DB_ID() = DB_ID(@database) THEN 1 ELSE 0 END);";
+
+    private static async Task<bool> InDatabaseAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = InDatabaseSql;
+        command.CommandTimeout = 0;
+        command.Parameters.Add(new SqlParameter("@database", System.Data.SqlDbType.NVarChar, 128) { Value = database });
+        return await command.ExecuteScalarAsync(token) is true;
+    }
+
+    /// <summary>The answer when a query session stayed in <paramref name="current"/> after Varia asked for
+    /// <paramref name="requested"/>; no batch of the script was sent.</summary>
+    internal static string DatabaseNotChanged(string requested, string current) =>
+        "The session is still using database '" + current + "', not '" + requested + "': SQL Server did not run the database change, "
+        + "which happens while SET NOEXEC, PARSEONLY, FMTONLY or SHOWPLAN is on in this tab. This script was not executed. "
+        + "Turn the option off (for example, run SET NOEXEC OFF) with '" + current + "' selected, then execute again.";
     /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
     /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
     internal string CommitSql { get; set; } = DefaultCommitSql;
@@ -502,6 +521,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
+        "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -541,7 +561,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.distinctClose" => CloseSnapshots(Read<ResultsDistinctCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
-        "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
+        "explorer.children" => Read<ExplorerChildrenArgs>(parameters, json) is var childrenArgs && bigQuery.Owns(childrenArgs.ConnectionId)
+            ? await bigQuery.ChildrenAsync(childrenArgs, Varia.Backend.Explorer.ExplorerCatalog.Current, Token(context)) : await explorer.ChildrenAsync(childrenArgs, Token(context)),
         "explorer.peek" => await explorer.PeekAsync(Read<PeekArgs>(parameters, json), Token(context)),
         "explorer.peekDependencies" => await explorer.PeekDependenciesAsync(Read<PeekArgs>(parameters, json), Token(context)),
         "explorer.dependencies" => await explorer.DependenciesAsync(Read<DependenciesArgs>(parameters, json), Token(context)),
@@ -549,7 +570,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
         "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
-        "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
+        "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
+            ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs, Providers.BigQuery).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
@@ -1194,7 +1216,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
-        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection)
+            return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         Name(args.Database);
@@ -1353,9 +1377,28 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
+            {
+                var before = connection.Database;
                 await connection.ChangeDatabaseAsync(args.Database!, token);
+                // SqlClient learns the catalog only from SQL Server's change notice, and a session with NOEXEC, PARSEONLY,
+                // FMTONLY or SHOWPLAN_* on compiles the USE without running it and sends none, so the script would run in
+                // the old database. So an unchanged catalog is confirmed by the server (a case-only difference from the
+                // session's name leaves it unchanged too). The confirmation is a query of Varia's own, not part of the
+                // switch, so its messages (SET STATISTICS TIME's) stay out of Messages.
+                bool confirmed;
+                connection.InfoMessage -= onInfo;
+                try { confirmed = !string.Equals(connection.Database, before, StringComparison.Ordinal) || await InDatabaseAsync(connection, args.Database!, token); }
+                finally { connection.InfoMessage += onInfo; }
+                if (!confirmed)
+                {
+                    status = "failed";
+                    var text = DatabaseNotChanged(args.Database!, before);
+                    messages.Add(text, MessageKind.Error);
+                    failure = new("SQL_ERROR", text, 0, 0);
+                }
+            }
             database = connection.Database;
-            if ((args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
+            if (failure is null && (args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
             {
                 var profile = Profile(args.ConnectionId);
                 if (profile.Major is > 0 and < 14 && profile.EngineEdition is not (5 or 8))

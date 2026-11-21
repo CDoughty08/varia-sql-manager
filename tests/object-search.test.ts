@@ -55,7 +55,8 @@ describe('object search contracts', () => {
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
-    const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis') && !(unindexedKinds as readonly string[]).includes(kind))
+    // BigQuery's kinds join the index with its own lane (BQ-6a); Object Explorer lists them first (BQ-5).
+    const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis') && !kindSpecs[kind].scope.startsWith('bq') && !(unindexedKinds as readonly string[]).includes(kind))
     expect([...searchKinds].sort()).toEqual([...listed].sort())
     expect(searchKinds.length).toBeLessThanOrEqual(objectSearchLimits.kinds)
     // The type filters name every kind the index holds exactly once, so a kind can neither be unreachable nor in two chips.
