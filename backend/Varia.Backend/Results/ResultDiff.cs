@@ -157,7 +157,7 @@ internal sealed class RowAccess
             var first = PageView.Parse(body, columns);
             Volatile.Write(ref parsed[page], layout = new Parsed(body, first.Layout, first.BlobStart));
         }
-        return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
+        return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns).With(stored.Lengths);
     }
 
     /// <summary>Reads the packed pages behind <paramref name="rows"/> (negative ones skipped) together
@@ -887,7 +887,10 @@ internal static class ResultDiffer
                 continue;
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
-            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r))) continue;
+            // Equal text is the same value unless a float or real's exact value, kept apart from its text, differs.
+            var leftExact = leftView.TryExact(lc, l, out var x);
+            var rightExact = rightView.TryExact(rc, r, out var y);
+            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r)) && leftExact == rightExact && (!leftExact || x == y)) continue;
             var text = leftHasher.IsText(lc);
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
             // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
@@ -1227,6 +1230,8 @@ internal static class UnifiedDiff
             var span = view.Span(c, at);
             if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
             else builder.AppendUtf8(span, cut);
+            // A float or real's exact value goes with its text, so the comparison sorts and filters as its inputs do.
+            if (lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
             var rule = side.Rules[c];
             CellSize size;
             if (lengths.TryCell(at, c, out var kept)) size = new CellSize(kept.Chars, kept.Bytes, kept.Exact && !rule.Estimated);

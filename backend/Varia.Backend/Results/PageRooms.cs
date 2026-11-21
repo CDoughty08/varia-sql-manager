@@ -144,8 +144,10 @@ internal sealed class RoomReader(PageRooms? rooms, int columns, int slots = 1) :
     /// it in place.</summary>
     internal Action? BeforeRead { get; init; }
 
-    /// <summary>A page, as sealed. Read only while its set is pinned.</summary>
-    public PageView Read(StoredPage page)
+    /// <summary>A page, as sealed, with its lengths sidecar. Read only while its set is pinned.</summary>
+    public PageView Read(StoredPage page) => ReadBody(page).With(page.Lengths);
+
+    private PageView ReadBody(StoredPage page)
     {
         if (rooms is null || page.Set is not { } set) return PageView.Parse(page.Body(), columns, scratch);
         if (set.Raw(page) is { } raw) return PageView.Parse(raw, columns, scratch);
@@ -312,7 +314,7 @@ internal sealed class PageAhead : IDisposable
     {
         var page = pages[uses[use]];
         var k = use - start;
-        return PageView.At(bytes[half, k].AsSpan(0, page.Length), blobStarts[half, k], layouts[half, k], page.FirstRow, page.Rows, columns);
+        return PageView.At(bytes[half, k].AsSpan(0, page.Length), blobStarts[half, k], layouts[half, k], page.FirstRow, page.Rows, columns).With(page.Lengths);
     }
 
     public void Dispose()

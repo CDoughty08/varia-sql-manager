@@ -347,11 +347,21 @@ internal sealed class CellHasher
 
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(Value(view.Span(column, row), column, Offset));
+        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
 
     /// <summary>A cell's hash, and whether the cell is NULL or unreadable: what the diff compares per cell.</summary>
     public ulong CellValue(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? NullHash : Finish(Value(view.Span(column, row), column, Offset));
+        view.IsNull(column, row) ? NullHash : Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
+
+    /// <summary>A float or real cell's exact value after its text, when the text reads back as another value: 1E0 and
+    /// 1.0000000000000002E0 both show as 1, and are different values.</summary>
+    private static ulong WithExact(PageView view, int column, int row, ulong hash)
+    {
+        if (!view.TryExact(column, row, out var exact)) return hash;
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, BitConverter.DoubleToInt64Bits(exact));
+        return Bytes(Step(hash, 0xfe), bytes);
+    }
 
     /// <summary>Whether two non-NULL cells hold the same value by this column's rules (<paramref name="other"/> hashes its
     /// column the same way, and is another hasher, whose buffers it decodes into): what a diff checks rather than trusting
@@ -360,6 +370,11 @@ internal sealed class CellHasher
     {
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
+        // A float or real whose display text reads back as another value compares by its exact value.
+        var exactA = view.TryExact(column, row, out var exactX);
+        var exactB = otherView.TryExact(otherColumn, otherRow, out var exactY);
+        if (exactA || exactB)
+            return (exactA || double.TryParse(a, NumberStyles.Float, CultureInfo.InvariantCulture, out exactX)) && (exactB || double.TryParse(b, NumberStyles.Float, CultureInfo.InvariantCulture, out exactY)) && exactX == exactY;
         switch (kinds[column])
         {
             case Kind.Collated:
@@ -408,7 +423,7 @@ internal sealed class CellHasher
         {
             if (view.IsTruncated(c, row)) approximate = true;
             hash = Step(hash, 1);
-            hash = Value(view.Span(c, row), c, hash);
+            hash = WithExact(view, c, row, Value(view.Span(c, row), c, hash));
         }
         return Step(hash, 0xff);
     }

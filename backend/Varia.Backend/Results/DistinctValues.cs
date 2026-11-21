@@ -81,11 +81,12 @@ internal sealed class DistinctSnapshot
         var take = Math.Max(0, Math.Min(count, total - offset));
         var values = new DistinctValue[take];
         var wire = Set.Wires[Column];
+        var real = string.Equals(Set.Columns[Column].DataType, "real", StringComparison.OrdinalIgnoreCase);
         var texts = new string[take];
         int GroupAt(int i) => list?[offset + i] ?? offset + i;
         // The display texts read the pages, which only the search lock's holders also read.
         lock (searching)
-            source.Each(take, i => reps[GroupAt(i)], (i, view, local) => texts[i] = ViewSorter.Display(view, local, Column, wire), token);
+            source.Each(take, i => reps[GroupAt(i)], (i, view, local) => texts[i] = ViewSorter.Display(view, local, Column, wire, real), token);
         for (var i = 0; i < take; i++)
         {
             var group = GroupAt(i);
@@ -508,10 +509,14 @@ internal static partial class ViewSorter
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and
     /// a truncated stored value marked too.</summary>
-    internal static string Display(PageView view, int local, int column, WireKind wire)
+    internal static string Display(PageView view, int local, int column, WireKind wire, bool real = false)
     {
         var cell = view.Span(column, local);
         var cut = view.IsTruncated(column, local);
+        // A float or real whose display text reads back as another value shows its shortest exact text, so the values
+        // the list tells apart (1 and 1.0000000000000002) read apart.
+        if (view.TryExact(column, local, out var exact))
+            return real ? ((float)exact).ToString("R", System.Globalization.CultureInfo.InvariantCulture) : exact.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
         string text;
         if (wire == WireKind.Binary)
         {
@@ -601,7 +606,7 @@ internal sealed class KeptPages
                     layouts[index] = layout = parsed.Layout;
                     blobStarts[index] = parsed.BlobStart;
                 }
-                visit(item, PageView.At(body, blobStarts[index], layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow));
+                visit(item, PageView.At(body, blobStarts[index], layout, page.FirstRow, page.Rows, columns).With(page.Lengths), (int)(row - page.FirstRow));
             }
             return;
         }
@@ -631,7 +636,7 @@ internal sealed class KeptPages
                 blobStart = PageView.Parse(bytes, columns, scratch).BlobStart;
                 current = index;
             }
-            visit(item, PageView.At(bytes, blobStart, scratch, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow));
+            visit(item, PageView.At(bytes, blobStart, scratch, page.FirstRow, page.Rows, columns).With(page.Lengths), (int)(row - page.FirstRow));
         }
     }
 }

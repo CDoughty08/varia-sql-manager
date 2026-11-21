@@ -225,6 +225,12 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   Save, highlights and length sorts read `sortKind`, never type-name lists. SQL Server-only refinements the kinds lack
   (uniqueidentifier order, money scale, text and ntext as keys) live beside the factory; `SortKindChecks` and
   `tests/sort-kind.test.ts` pin each consumer's kinds for every SQL Server type.
+- **float and real cells keep their exact value apart from their text.** A page holds SSMS's display text (15 and 7
+  significant digits), so Copy, Save and the grid are unchanged; a cell whose text reads back as another value
+  (`PageBuilder.AppendFloat`/`AppendReal`) keeps its exact value in the page's lengths sidecar (`PageLengths.Exacts`,
+  charged with it, never sent to main). Stored pages' readers attach the sidecar (`PageView.With`), and every value
+  operation (sort keys, filters, distinct values, duplicates, profiles, Pivot, row identity and comparisons) reads
+  `PageView.TryExact` before parsing the text. A new reader of stored pages attaches it too.
 - **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
   names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
   `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker

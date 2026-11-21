@@ -316,8 +316,8 @@ internal sealed class ColumnPlan
                 return Decimal(builder, CellFormat.WriteSqlDecimal(span, value), ColumnLength.DecimalBytes(value));
             }
             case CellCodec.Money: builder.EndFormatted(CellFormat.WriteMoney(builder.BeginFormatted(), reader.GetDecimal(i))); return false;
-            case CellCodec.Real: builder.EndFormatted(CellFormat.WriteReal(builder.BeginFormatted(), reader.GetFloat(i))); return false;
-            case CellCodec.Float: builder.EndFormatted(CellFormat.WriteFloat(builder.BeginFormatted(), reader.GetDouble(i))); return false;
+            case CellCodec.Real: builder.AppendReal(reader.GetFloat(i)); return false;
+            case CellCodec.Float: builder.AppendFloat(reader.GetDouble(i)); return false;
             case CellCodec.Date: builder.EndFormatted(CellFormat.WriteDate(builder.BeginFormatted(), reader.GetDateTime(i))); return false;
             case CellCodec.Time: builder.EndFormatted(CellFormat.WriteTime(builder.BeginFormatted(), reader.GetTimeSpan(i), column.Scale)); return false;
             case CellCodec.SmallDateTime: builder.EndFormatted(CellFormat.WriteSmallDateTime(builder.BeginFormatted(), reader.GetDateTime(i))); return false;

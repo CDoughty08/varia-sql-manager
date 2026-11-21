@@ -232,7 +232,8 @@ internal static class ResultPivoter
                         Add(item, cell, parsed, number);
                         Add(item, totalCell, parsed, number);
                     }
-                    else if (double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+                    // A float or real whose display text reads back as another value adds its exact value.
+                    else if (view.TryExact(value.Column, r, out var number) || double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out number))
                     {
                         if (cell >= 0) { item.Doubles[cell] += number; item.Counts[cell]++; }
                         item.Doubles[totalCell] += number;

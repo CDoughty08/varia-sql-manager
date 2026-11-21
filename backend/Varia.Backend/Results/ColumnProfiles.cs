@@ -294,7 +294,9 @@ internal static class ColumnProfiler
             var cell = view.Span(column, row);
             var truncated = view.IsTruncated(column, row);
             if (truncated) approximate = true;
-            var normal = Normalize(cell);
+            // A float or real whose display text reads back as another value counts by its exact value.
+            var hasExact = lengths.TryExact(row, column, out var exact);
+            var normal = hasExact ? Ordered(exact) : Normalize(cell);
             Distinct(normal);
             if (minLength < 0 || Compare(normal, minKey.AsSpan(0, minLength)) < 0) { minLength = Hold(normal, ref minKey); minCut = Keep(cell, truncated, ref minCell); }
             if (maxLength < 0 || Compare(normal, maxKey.AsSpan(0, maxLength)) > 0) { maxLength = Hold(normal, ref maxKey); maxCut = Keep(cell, truncated, ref maxCell); }
@@ -304,7 +306,7 @@ internal static class ColumnProfiler
                 charStats?.Add(size.Chars, size.Exact);
                 byteStats.Add(size.Bytes, size.Exact);
             }
-            if (basis is Basis.Value or Basis.Time && Measure(cell) is { } measure)
+            if (basis is Basis.Value or Basis.Time && (hasExact ? exact : Measure(cell)) is { } measure)
             {
                 if (measure < low) low = measure;
                 if (measure > high) high = measure;
@@ -357,7 +359,7 @@ internal static class ColumnProfiler
             {
                 Basis.Chars => Size(lengths, row, cell, view.IsTruncated(column, row)).Chars,
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
-                _ => Measure(cell)
+                _ => lengths.TryExact(row, column, out var exact) ? exact : Measure(cell)
             };
             if (measure is not { } value) return -1;
             var (from, to) = Range();
@@ -418,12 +420,7 @@ internal static class ColumnProfiler
             {
                 case ViewSorter.Kind.Exact: return Canonical(cell);
                 case ViewSorter.Kind.Approximate:
-                {
-                    var number = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : double.NaN;
-                    if (number == 0) number = 0;
-                    var bits = BitConverter.DoubleToInt64Bits(number);
-                    return Eight(bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
-                }
+                    return Ordered(double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : double.NaN);
                 case ViewSorter.Kind.Ticks:
                 {
                     if (ViewSorter.UtcTicks(cell) is { } instant) return Eight((ulong)instant ^ 0x8000_0000_0000_0000UL);
@@ -462,6 +459,14 @@ internal static class ColumnProfiler
 
         private int Compare(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
             kind == ViewSorter.Kind.Exact ? ViewSorter.CompareNumericText(a, b) : Math.Sign(a.SequenceCompareTo(b));
+
+        /// <summary>A float's key: its bits, the two zeros as one, in an order bytes compare in.</summary>
+        private ReadOnlySpan<byte> Ordered(double number)
+        {
+            if (number == 0) number = 0;
+            var bits = BitConverter.DoubleToInt64Bits(number);
+            return Eight(bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
+        }
 
         private ReadOnlySpan<byte> Eight(ulong value)
         {
