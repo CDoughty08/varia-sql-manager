@@ -39,9 +39,17 @@ internal static class AgentPropertiesLiveChecks
             + JsonSerializer.Serialize(before.AgentProperties?.Settings) + " " + before.Error?.Message + " msdb: " + stored);
         if (settings is null) return;
 
-        // OK: the restart box toggles and comes back; the history sizes go as they are, so nothing trims anyone's history.
-        try
+        // On Linux mssql-conf sets Agent's settings and sp_set_sqlagent_properties' registry writes end the session: the settings show
+        // read-only and OK is refused before any batch runs.
+        if (before.AgentProperties?.SettingsNote is { } note)
         {
+            var refused = await Execute(new(null, !settings.MonitorAutostart, null, null));
+            check(note == ActionService.AgentPropertiesLinux && refused.Error is { Code: "NOT_SUPPORTED" } && refused.Steps.Count == 0,
+                "on Linux SQL Server Agent Properties shows the settings read-only and refuses OK's write before it runs: " + Steps(refused));
+        }
+        else try
+        {
+            // OK: the restart box toggles and comes back; the history sizes go as they are, so nothing trims anyone's history.
             var toggled = await Execute(new(null, !settings.MonitorAutostart, null, null));
             var flipped = await Describe();
             var sizes = await Execute(settings.HistoryMaxRows == -1 ? new(null, null, -1, null) : new(null, null, settings.HistoryMaxRows, settings.HistoryMaxRowsPerJob));
@@ -69,6 +77,11 @@ internal static class AgentPropertiesLiveChecks
             var planted = await sql("INSERT INTO msdb.dbo.sysjobhistory (job_id, step_id, step_name, sql_message_id, sql_severity, message, run_status, run_date, run_time, run_duration, operator_id_emailed, operator_id_netsent, operator_id_paged, retries_attempted, server)\n"
                 + "VALUES (" + id + ", 0, N'(Job outcome)', 0, 0, N'varia.scratch', 1, 19300101, 120000, 1, 0, 0, 0, 0, @@SERVERNAME), (" + id + ", 1, N'Step 1', 0, 0, N'varia.scratch', 1, 19300101, 120000, 1, 0, 0, 0, 0, @@SERVERNAME);", "msdb");
             var counted = await Describe();
+            // A purge of one day bounded by a confirmed 1920 cut-off deletes nothing newer than 1920: the planted rows stay.
+            var bounded = await Execute(purge: new(1, 1, "1920-01-01T00:00:00"));
+            var stayed = await sql("SELECT COUNT(*) FROM msdb.dbo.sysjobhistory WHERE job_id = " + id + " AND run_date = 19300101;", "msdb");
+            check(bounded.Error is null && stayed.Scalar == "2", "Delete old history never deletes past the cut-off the confirmation showed, whatever the server's clock says: "
+                + Steps(bounded) + " left " + (stayed.Scalar ?? stayed.Error));
             var purged = await Execute(purge: new(999, 3));
             var left = await sql("SELECT CONCAT(SUM(CASE WHEN run_date = 19300101 THEN 1 ELSE 0 END), ',', COUNT(*)) FROM msdb.dbo.sysjobhistory WHERE job_id = " + id + ";", "msdb");
             var oldest = (int)AgentCatalog.Current.Limit("historyAgeDays");

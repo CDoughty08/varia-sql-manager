@@ -583,7 +583,8 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
 /// <summary>SQL Server Agent Properties' "Delete old history now": every job's history older than Count (1 to agentLimits.purgeCount) days,
 /// weeks or months (Unit 1, 2 or 3) before the server's clock, which the batch computes.</summary>
-internal sealed record AgentHistoryPurgeDto(int Count, int Unit);
+/// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
+internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
 /// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
@@ -751,7 +752,8 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null);
 /// <summary>SQL Server Agent Properties' describe (AG-8a, src/shared/actions/agent-properties.ts AgentPropertiesModel).</summary>
-internal sealed record AgentPropertiesDto(AgentSettingsDto Settings, string ServerNow, int ServerOffsetMinutes, string? ReadOnly = null, AgentHistoryFactsDto? History = null, string? HistoryNote = null);
+internal sealed record AgentPropertiesDto(AgentSettingsDto Settings, string ServerNow, int ServerOffsetMinutes, string? ReadOnly = null, AgentHistoryFactsDto? History = null, string? HistoryNote = null,
+    string? SettingsNote = null);
 internal sealed record AgentSettingsDto(bool SqlserverRestart, bool MonitorAutostart, int HistoryMaxRows, int HistoryMaxRowsPerJob, bool? AutoStart = null, string? StartupAccount = null,
     string? ErrorLogFile = null, int? ErrorLoggingLevel = null);
 internal sealed record AgentHistoryFactsDto(long Total, long Recent, List<AgentRetentionJobDto> Jobs, bool JobsTruncated, List<AgentHistoryAgeDto> Ages);

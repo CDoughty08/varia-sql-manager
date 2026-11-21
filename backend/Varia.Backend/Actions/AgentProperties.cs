@@ -8,12 +8,14 @@ namespace Varia.Backend.Actions;
 
 /// <summary>SQL Server Agent Properties from the Agent node (AG-8a). The describe reads sp_get_sqlagent_properties (every Agent role), the server's
 /// clock and, for sysadmin, every job's history counts; it says read-only on Managed Instance (which refuses sp_set_sqlagent_properties) and below
-/// sysadmin (msdb grants that procedure to no role). The action's execute runs one server write (AgentSql.Properties.cs): the changed settings,
+/// sysadmin (msdb grants that procedure to no role), and the settings read-only on Linux, where Delete old history still runs. The action's execute runs one server write (AgentSql.Properties.cs): the changed settings,
 /// or the purge of every job's history older than a cut-off the server computes; never both, and never on Managed Instance.</summary>
 internal sealed partial class ActionService
 {
     internal const string AgentPropertiesStoppedMessage = "SQL Server Agent is not running (Agent XPs is off), so its properties cannot be read. Start it, then try again.";
     internal const string AgentPropertiesManagedInstance = "Managed Instance does not allow changing SQL Server Agent properties.";
+    /// <summary>SQL Server on Linux keeps Agent's settings in mssql.conf: sp_set_sqlagent_properties' registry writes end the session there.</summary>
+    internal const string AgentPropertiesLinux = "On Linux, SQL Server Agent's settings are set with mssql-conf, so they cannot change here.";
     internal const string AgentPropertiesNotSysadmin = "Only sysadmin can change SQL Server Agent properties.";
     internal const string AgentHistoryHidden = "Only sysadmin can read every job's history, so what these settings keep is not shown.";
     internal const string AgentHistoryUnread = "Every job's history could not be read, so what these settings keep is not shown.";
@@ -40,9 +42,15 @@ internal sealed partial class ActionService
             if (changes.HistoryMaxRows is { } rows && rows != -1 && (rows < 2 || rows > max)) throw Invalid("historyMaxRows.");
             if (changes.HistoryMaxRowsPerJob is { } perJob && (perJob < 1 || changes.HistoryMaxRows is not { } log || log == -1 || perJob > log)) throw Invalid("historyMaxRowsPerJob.");
         }
-        if (args.AgentPurge is { } purge && (purge.Count < 1 || purge.Count > AgentCatalog.Current.Limit("purgeCount") || purge.Unit is < 1 or > 3)) throw Invalid("agentPurge.");
+        if (args.AgentPurge is { } purge && (purge.Count < 1 || purge.Count > AgentCatalog.Current.Limit("purgeCount") || purge.Unit is < 1 or > 3
+            || (purge.Before is { } before && PurgeBefore(before) is null))) throw Invalid("agentPurge.");
         return target;
     }
+
+    /// <summary>The purge's confirmed cut-off as a datetime, or null unless it is exactly yyyy-MM-ddTHH:mm:ss inside datetime's range (19 characters,
+    /// agentHistoryPurgeSchema's bound).</summary>
+    internal static DateTime? PurgeBefore(string text) =>
+        text.Length == 19 && DateTime.TryParseExact(text, "yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) && value.Year >= 1753 ? value : null;
 
     private static int? Int(object? value) => value is null or DBNull ? null : Convert.ToInt32(value, CultureInfo.InvariantCulture);
     private static string? Text(object? value) => value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
@@ -71,11 +79,12 @@ internal sealed partial class ActionService
             Int(Value("auto_start")) is { } start ? start == 1 : null, Text(Value("startup_account")), Text(Value("errorlog_file")), Int(Value("errorlogging_level")));
         var managed = profile.Explorer(explorer).ServerEngine == "managedInstance";
         var readOnly = managed ? AgentPropertiesManagedInstance : sysadmin ? null : AgentPropertiesNotSysadmin;
+        var settingsNote = readOnly is null && profile.Linux ? AgentPropertiesLinux : null;
         if (!sysadmin) return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, null, AgentHistoryHidden));
-        try { return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, await ReadAgentHistoryAsync(connection, token))); }
+        try { return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, await ReadAgentHistoryAsync(connection, token), SettingsNote: settingsNote)); }
         catch (SqlException) when (!token.IsCancellationRequested && connection.State == ConnectionState.Open)
         {
-            return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, null, AgentHistoryUnread));
+            return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, null, AgentHistoryUnread, settingsNote));
         }
     }
 
@@ -127,21 +136,24 @@ internal sealed partial class ActionService
         return "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties " + string.Join(", ", parts) + "\nGO\n";
     }
 
-    private ActionError? AgentPropertiesRefusal(string connectionId)
+    private ActionError? AgentPropertiesRefusal(ActionArgs args)
     {
-        var engine = host.Profile(connectionId).Explorer(explorer).ServerEngine;
+        var profile = host.Profile(args.ConnectionId);
+        var engine = profile.Explorer(explorer).ServerEngine;
         if (engine == "managedInstance") return Error("NOT_SUPPORTED", AgentPropertiesManagedInstance);
+        if (profile.Linux && args.AgentProperties is not null) return Error("NOT_SUPPORTED", AgentPropertiesLinux);
         return Serves("agentProperties", engine) ? null : Error("NOT_SUPPORTED", EngineMessage(engine));
     }
 
     private Task<ActionScriptResult> ScriptAgentProperties(ActionArgs args) =>
-        Task.FromResult(AgentPropertiesRefusal(args.ConnectionId) is { } refused ? new ActionScriptResult(null, "msdb", [], refused) : new ActionScriptResult(AgentPropertiesScript(args), "msdb", []));
+        Task.FromResult(AgentPropertiesRefusal(args) is { } refused ? new ActionScriptResult(null, "msdb", [], refused) : new ActionScriptResult(AgentPropertiesScript(args), "msdb", []));
 
-    /// <summary>The write, its step title and its parameters' values: the settings' four (NULL leaves one as it is), or the purge's count and unit.</summary>
+    /// <summary>The write, its step title and its parameters' values: the settings' four (NULL leaves one as it is), or the purge's count, unit and
+    /// confirmed cut-off (NULL: none, the server's own).</summary>
     internal static (AgentWrite Write, string Title, object?[] Values) AgentPropertiesPlan(ActionArgs args)
     {
         static object? Bit(bool? value) => value is { } on ? (on ? 1 : 0) : null;
-        if (args.AgentPurge is { } purge) return (AgentSql.PurgeHistory, PurgeHistoryStep, [purge.Count, purge.Unit]);
+        if (args.AgentPurge is { } purge) return (AgentSql.PurgeHistory, PurgeHistoryStep, [purge.Count, purge.Unit, purge.Before is { } before ? PurgeBefore(before) : null]);
         var changes = args.AgentProperties!;
         return (AgentSql.SetProperties, SavePropertiesStep, [Bit(changes.SqlserverRestart), Bit(changes.MonitorAutostart), changes.HistoryMaxRows, changes.HistoryMaxRowsPerJob]);
     }

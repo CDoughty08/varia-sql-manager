@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   agentPropertiesChanges, agentPropertiesProblems, agentPropertiesText, draftLimits, draftPurge, initialAgentPropertiesDraft, keptFor, purgeCutoff, purgeRowsEstimate, rateText,
-  serverTimeDiffers, spanText, type AgentHistoryFacts, type AgentPropertiesDraft, type AgentPropertiesModel
+  retentionLimits, serverClock, serverTimeDiffers, sizesTouched, spanText, type AgentHistoryFacts, type AgentPropertiesDraft, type AgentPropertiesModel
 } from '../src/shared/actions/agent-properties'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionScriptRequestSchema, type ActionDescribeResult, type ActionExecuteResult } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
@@ -48,6 +48,9 @@ describe('the agentProperties request', () => {
     expect(parse({ agentPurge: { count: 0, unit: 1 } })).toBe(false)
     expect(parse({ agentPurge: { count: 1000, unit: 3 } })).toBe(false)
     expect(parse({ agentPurge: { count: 1, unit: 4 } })).toBe(false)
+    expect(parse({ agentPurge: { count: 4, unit: 2, before: '2026-03-03T10:00:00' } })).toBe(true)
+    expect(parse({ agentPurge: { count: 4, unit: 2, before: '2026-02-30T10:00:00' } })).toBe(false)
+    expect(parse({ agentPurge: { count: 4, unit: 2, before: '2026-03-03 10:00:00' } })).toBe(false)
     expect(actionExecuteRequestSchema.safeParse({ ...base, target: { kind: 'agent', name: 'x' }, agentPurge: { count: 1, unit: 1 } }).success).toBe(false)
     expect(actionExecuteRequestSchema.safeParse({ ...base, target: { kind: 'agentJob', name: 'x' }, agentPurge: { count: 1, unit: 1 } }).success).toBe(false)
     // Another action never carries them.
@@ -71,6 +74,17 @@ describe('the draft', () => {
     expect(agentPropertiesChanges(model(), draft({ maxRowsPerJob: '200' }))).toEqual({ historyMaxRows: 1000, historyMaxRowsPerJob: 200 })
     expect(agentPropertiesChanges(model(), draft({ limit: false }))).toEqual({ historyMaxRows: -1 })
   })
+  it('neither checks nor sends history sizes the user did not touch, however msdb stores them', () => {
+    // A log set above the dialog's cap through T-SQL: a restart box still saves alone, and OK is not blocked.
+    const huge = model({ settings: { ...model().settings, historyMaxRows: 2_000_000, historyMaxRowsPerJob: 100 } })
+    expect(sizesTouched(huge, draft({}, huge))).toBe(false)
+    expect(agentPropertiesChanges(huge, draft({ sqlserverRestart: false }, huge))).toEqual({ sqlserverRestart: false })
+    expect(agentPropertiesDefinition.blocked!(huge, draft({}, huge))).toBeUndefined()
+    expect(agentPropertiesDefinition.blocked!(huge, draft({ maxRows: '2000001' }, huge))).toBe(agentPropertiesText.maxRowsRange)
+    // A limited log with no rows per job (NULL, read as 0) drafts 100 but sends nothing until the user changes it.
+    const noPerJob = model({ settings: { ...model().settings, historyMaxRowsPerJob: 0 } })
+    expect(agentPropertiesChanges(noPerJob, draft({ monitorAutostart: false }, noPerJob))).toEqual({ monitorAutostart: false })
+  })
   it('says why sizes or a purge count cannot be sent', () => {
     expect(draftLimits(draft({ maxRows: '1' }))).toEqual({ problem: agentPropertiesText.maxRowsRange })
     expect(draftLimits(draft({ maxRows: '1000000' }))).toEqual({ problem: agentPropertiesText.maxRowsRange })
@@ -92,6 +106,11 @@ describe('the server clock', () => {
     expect(purgeCutoff('nonsense', { count: 1, unit: 1 })).toBeUndefined()
     expect(serverTimeDiffers(60, 60)).toBe(false)
     expect(serverTimeDiffers(60, -300)).toBe(true)
+  })
+  it('advances the server clock by the time the dialog has been open', () => {
+    expect(serverClock({ serverNow: '2026-03-31T23:59:30', readAt: 1_000 }, 1_000 + 8 * 3_600_000 + 999)).toBe('2026-04-01T07:59:30')
+    expect(serverClock({ serverNow: '2026-03-31T10:00:00' }, 5_000)).toBe('2026-03-31T10:00:00')
+    expect(serverClock({ serverNow: '2026-03-31T10:00:00', readAt: 5_000 }, 4_000)).toBe('2026-03-31T10:00:00')
   })
   it('estimates the rows a purge deletes from the ages, and nothing past the ages it counts', () => {
     expect(purgeRowsEstimate(model(), { count: 1, unit: 1 })).toBe(800)
@@ -132,8 +151,23 @@ describe('the dialog definition', () => {
     expect(agentPropertiesDefinition.blocked!(model(), draft({ maxRows: '1' }))).toBe(agentPropertiesText.maxRowsRange)
     expect(agentPropertiesDefinition.blocked!(model({ readOnly: 'x' }), draft({ maxRows: '1' }))).toBeUndefined()
     expect(agentPropertiesDefinition.readOnly!(model({ readOnly: agentPropertiesText.managedInstance }))).toBe(agentPropertiesText.managedInstance)
-    expect(agentPurgeRequest(agentRef, draft({ purgeCount: '6', purgeUnit: 3 }))).toEqual({ action: 'agentProperties', target: agentRef, agentPurge: { count: 6, unit: 3 } })
-    expect(agentPurgeRequest(agentRef, draft({ purgeCount: '' }))).toBeUndefined()
+    // The purge carries the cut-off its confirmation showed, which the server never deletes past.
+    expect(agentPurgeRequest(agentRef, draft({ purgeCount: '6', purgeUnit: 3 }), '2026-03-31T10:00:00')).toEqual({ action: 'agentProperties', target: agentRef, agentPurge: { count: 6, unit: 3, before: '2025-09-30T10:00:00' } })
+    expect(agentPurgeRequest(agentRef, draft({ purgeCount: '' }), '2026-03-31T10:00:00')).toBeUndefined()
+  })
+  it('on Linux keeps the settings as they are (mssql-conf sets them) and still allows Delete old history', () => {
+    const linux = model({ settingsNote: agentPropertiesText.linux })
+    expect(agentPropertiesDefinition.request(agentRef, linux, draft({ sqlserverRestart: false }, linux))).toBeUndefined()
+    expect(agentPropertiesDefinition.blocked!(linux, draft({ maxRows: '1' }, linux))).toBeUndefined()
+    expect(agentPropertiesDefinition.readOnly!(linux)).toBeUndefined()
+    expect(agentPurgeRequest(agentRef, draft({}, linux), '2026-03-31T10:00:00')).toMatchObject({ agentPurge: { count: 4, unit: 2 } })
+  })
+  it('shows Kept after OK only for sizes OK will send', () => {
+    // msdb stores a log of 1,000 rows with no rows per job: the draft offers 100 per job, which OK never sends untouched.
+    const odd = model({ settings: { ...model().settings, historyMaxRowsPerJob: 0 } })
+    expect(retentionLimits(odd, draft({}, odd))).toEqual({ now: { maxRows: 1000, maxRowsPerJob: undefined } })
+    expect(retentionLimits(odd, draft({ maxRowsPerJob: '50' }, odd)).after).toEqual({ maxRows: 1000, maxRowsPerJob: 50 })
+    expect(retentionLimits(model(), draft({ maxRows: '1' })).after).toBeUndefined()
   })
 })
 
@@ -164,7 +198,7 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
     dialogs.updateDraft({ maxRowsPerJob: '250' })
     const execute = deferred<ApiResult<ActionExecuteResult>>()
     api.executeObjectAction.mockReturnValueOnce(execute.promise)
-    const run = dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft)!)
+    const run = dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
     expect(dialogs.current?.phase).toBe('executing')
     expect(api.executeObjectAction.mock.calls[0]![0]).toMatchObject({ action: 'agentProperties', target: agentRef, agentPurge: { count: 4, unit: 2 }, connectionId: 'server-a' })
     execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Delete old job history' }], messages: ['120 history entries purged.'], elapsedMs: 1 } })
@@ -172,13 +206,44 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
     await settle()
     expect(dialogs.current).toMatchObject({ phase: 'ready', inline: { state: 'done', messages: ['120 history entries purged.'] }, draft: { maxRowsPerJob: '250' } })
     expect(api.describeObject).toHaveBeenCalledTimes(2)
+    expect(api.executeObjectAction.mock.calls[0]![0]).toMatchObject({ agentPurge: { before: '2026-03-03T10:00:00' } })
+  })
+  it('keeps the dialog usable with the model it had when the read after a purge fails', async () => {
+    const { dialogs, api, settle } = setup(model())
+    dialogs.open('agentProperties', node)
+    await settle()
+    dialogs.updateDraft({ monitorAutostart: false })
+    api.describeObject.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT', error: 'Timed out.' } as never)
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Delete old job history' }], messages: [], elapsedMs: 1 } })
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'ready', inline: { state: 'done' }, draft: { monitorAutostart: false }, model: { serverNow: '2026-03-31T10:00:00' } })
+    expect(dialogs.current?.error).toBeUndefined()
+  })
+  it('keeps the model read after a purge when OK, pressed during that read, fails', async () => {
+    const { dialogs, api, settle } = setup(model())
+    dialogs.open('agentProperties', node)
+    await settle()
+    const reread = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(reread.promise)
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Delete old job history' }], messages: [], elapsedMs: 1 } })
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
+    dialogs.updateDraft({ monitorAutostart: false })
+    const ok = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(ok.promise)
+    const pressed = dialogs.ok()
+    reread.resolve({ ok: true, value: { agentProperties: model({ serverNow: '2026-03-31T11:00:00' }), elapsedMs: 1 } as ActionDescribeResult })
+    await settle()
+    ok.resolve({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'SQL_ERROR', message: 'Failed.', retryable: false } } })
+    await pressed
+    expect(dialogs.current).toMatchObject({ phase: 'failed', model: { serverNow: '2026-03-31T11:00:00' } })
   })
   it('shows a failed purge as a value and stays open', async () => {
     const { dialogs, api, settle } = setup(model())
     dialogs.open('agentProperties', node)
     await settle()
     api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'Denied.', retryable: false } } })
-    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft)!)
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
     expect(dialogs.current).toMatchObject({ phase: 'ready', inline: { state: 'failed', error: { code: 'PERMISSION_DENIED' } } })
   })
   it('closes on OK when read-only and runs nothing, inline or not', async () => {

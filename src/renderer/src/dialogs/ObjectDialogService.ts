@@ -475,18 +475,20 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reloadAfterPartial(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    const model = spent?.patch.model ?? definition.afterFailure?.(open.model, failure) ?? open.model
+    // The model as it is now: a read after a page's own run (readAgain) may have landed while OK ran.
+    const known = (this.current?.id === open.id ? this.current.model : undefined) ?? open.model
+    const model = spent?.patch.model ?? definition.afterFailure?.(known, failure) ?? known
     this.update(open, { phase: 'failed', error: withNote(failure), ...(value ? { steps: value.steps } : {}), ...spent?.patch, model })
     if (partial) { this.reloadAfterPartial(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
-    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+    if (!confirmation && model !== known && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
   }
 
   /**
    * A page's own action apart from OK (SQL Server Agent Properties' Delete old history now, which runs once and is never stored): it runs as OK
    * runs, in the executing phase with Stop, and the dialog stays open on `ready` with how it went in `inline`; a success reads the object
-   * again, so the page shows what is there now. Never while another request runs or in a read-only dialog.
+   * again (readAgain), so the page shows what is there now, keeping what it showed if that read fails. Never while another request runs or in a read-only dialog.
    */
   async runInline(request: BuiltRequest): Promise<void> {
     const open = this.current
@@ -496,10 +498,20 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId: open.connectionId, requestId } as ActionRequest))
     if (!this.end(open, requestId)) return
     const value = result.ok ? result.value : undefined
-    if (value && !value.error) { this.update(open, { phase: 'ready', inline: { state: 'done', messages: value.messages } }); this.reload(); return }
+    if (value && !value.error) { this.update(open, { phase: 'ready', inline: { state: 'done', messages: value.messages } }); void this.readAgain(open); return }
     const failure = value?.error ?? (!result.ok && result.code === 'CANCELLED' ? error('CANCELLED', dialogMessages.stopped)
       : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
     this.update(open, { phase: 'ready', inline: { state: 'failed', error: failure } })
+  }
+
+  /** After a page's own run: reads the model again and swaps it in, keeping the phase, the draft and, if the read fails, the model it had. */
+  private async readAgain(open: OpenObjectDialog): Promise<void> {
+    const requestId = this.begin(open)
+    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
+    if (!this.end(open, requestId)) return
+    const model = result.ok && !result.value.error ? definitionOf(open.dialog).modelOf(result.value) : undefined
+    const current = this.current
+    if (model && current && current.phase !== 'loading' && current.phase !== 'loadFailed') this.update(current, { model })
   }
 
   /** Main's box for a confirmation: Open Connections' Yes, or any action prompt answer but its cancel one. A failure counts as No. */

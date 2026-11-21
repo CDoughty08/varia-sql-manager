@@ -21,8 +21,10 @@ export interface AgentPropertiesChanges {
   readonly historyMaxRows?: number
   readonly historyMaxRowsPerJob?: number
 }
-/** "Delete old history now": every job's history older than `count` days, weeks or months before the server's clock. */
-export interface AgentHistoryPurge { readonly count: number; readonly unit: AgentPurgeUnit }
+/** "Delete old history now": every job's history older than `count` days, weeks or months before the server's clock. `before` is the
+ *  cut-off the confirmation showed (server time, `yyyy-mm-ddThh:mm:ss`): the server never deletes past it, however long the dialog
+ *  stayed open. Script sends none. */
+export interface AgentHistoryPurge { readonly count: number; readonly unit: AgentPurgeUnit; readonly before?: string }
 export interface AgentPropertiesRequest {
   readonly action: 'agentProperties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
   readonly agentProperties?: AgentPropertiesChanges; readonly agentPurge?: AgentHistoryPurge
@@ -62,12 +64,17 @@ export interface AgentPropertiesModel {
   /** Every job's history, for sysadmin; absent with `historyNote` saying why. */
   readonly history?: AgentHistoryFacts
   readonly historyNote?: string
+  /** Why the settings cannot change though Delete old history can (Linux, where mssql-conf sets them): they show read-only and OK only closes. */
+  readonly settingsNote?: string
+  /** When the renderer received this (Date.now()), so the server's clock can be advanced by the time the dialog has been open. */
+  readonly readAt?: number
 }
 
 /** The dialog's words, which the pages, the tests and the docs share. */
 export const agentPropertiesText = {
   managedInstance: 'Managed Instance does not allow changing SQL Server Agent properties.',
   notSysadmin: 'Only sysadmin can change SQL Server Agent properties.',
+  linux: "On Linux, SQL Server Agent's settings are set with mssql-conf, so they cannot change here.",
   historyHidden: "Only sysadmin can read every job's history, so what these settings keep is not shown.",
   limit: 'Limit size of job history log',
   maxRows: 'Maximum job history log size (rows)',
@@ -88,8 +95,9 @@ export const agentPropertiesChangesSchema = z.object({
   sqlserverRestart: z.boolean().optional(), monitorAutostart: z.boolean().optional(),
   historyMaxRows: maxRowsSchema.optional(), historyMaxRowsPerJob: z.number().int().min(1).max(agentLimits.historyMaxRows).optional()
 }).strict() satisfies z.ZodType<AgentPropertiesChanges>
+const serverTimeSchema = z.string().max(19).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$/).refine(text => naive(text) !== undefined, 'not a date')
 export const agentHistoryPurgeSchema = z.object({
-  count: z.number().int().min(1).max(agentLimits.purgeCount), unit: z.union([z.literal(1), z.literal(2), z.literal(3)])
+  count: z.number().int().min(1).max(agentLimits.purgeCount), unit: z.union([z.literal(1), z.literal(2), z.literal(3)]), before: serverTimeSchema.optional()
 }).strict() satisfies z.ZodType<AgentHistoryPurge>
 export const agentPropertiesRequestSchema = z.object({
   action: z.literal('agentProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema,
@@ -141,14 +149,31 @@ export function draftLimits(draft: AgentPropertiesDraft): { readonly maxRows: nu
   return { maxRows, maxRowsPerJob: perJob }
 }
 
+/** Whether the user changed History's limit fields from what the describe drafted. Untouched, they are never checked or sent, so a value
+ *  set outside the dialog's range through T-SQL (more than `historyMaxRows`, or no rows per job) neither blocks OK nor is replaced. */
+export function sizesTouched(model: AgentPropertiesModel, draft: AgentPropertiesDraft): boolean {
+  const initial = initialAgentPropertiesDraft(model)
+  return draft.limit !== initial.limit || draft.maxRows !== initial.maxRows || draft.maxRowsPerJob !== initial.maxRowsPerJob
+}
+
+/** The limits now, and those OK would send when they differ ("Kept after OK"): none for sizes left as they were, which OK never sends. */
+export function retentionLimits(model: AgentPropertiesModel, draft: AgentPropertiesDraft): { readonly now: { readonly maxRows: number; readonly maxRowsPerJob?: number }; readonly after?: { readonly maxRows: number; readonly maxRowsPerJob?: number } } {
+  const now = { maxRows: model.settings.historyMaxRows, maxRowsPerJob: model.settings.historyMaxRowsPerJob || undefined }
+  if (model.settingsNote || !sizesTouched(model, draft)) return { now }
+  const asked = draftLimits(draft)
+  return 'problem' in asked || (asked.maxRows === now.maxRows && asked.maxRowsPerJob === now.maxRowsPerJob) ? { now } : { now, after: asked }
+}
+
 /** What OK sends: only what differs from the describe (SSMS sends every setting; msdb leaves a NULL argument as it is), or nothing. */
 export function agentPropertiesChanges(model: AgentPropertiesModel, draft: AgentPropertiesDraft): AgentPropertiesChanges | { readonly problem: string } | undefined {
-  const limits = draftLimits(draft)
-  if ('problem' in limits) return limits
+  const touched = sizesTouched(model, draft)
+  const limits = touched ? draftLimits(draft) : undefined
+  if (limits && 'problem' in limits) return limits
   const { settings } = model, changes: { -readonly [K in keyof AgentPropertiesChanges]: AgentPropertiesChanges[K] } = {}
   if (draft.sqlserverRestart !== settings.sqlserverRestart) changes.sqlserverRestart = draft.sqlserverRestart
   if (draft.monitorAutostart !== settings.monitorAutostart) changes.monitorAutostart = draft.monitorAutostart
-  if (limits.maxRows === -1) { if (settings.historyMaxRows !== -1) changes.historyMaxRows = -1 }
+  if (!limits) { /* History's fields as drafted: nothing to send. */ }
+  else if (limits.maxRows === -1) { if (settings.historyMaxRows !== -1) changes.historyMaxRows = -1 }
   else if (limits.maxRows !== settings.historyMaxRows || limits.maxRowsPerJob !== settings.historyMaxRowsPerJob) {
     // msdb checks rows per job against the log size it is given, or the stored one, so both go together.
     changes.historyMaxRows = limits.maxRows
@@ -171,7 +196,9 @@ function naive(text: string): Date | undefined {
   if (!match) return undefined
   const [, y, mo, d, h, mi, s] = match.map(Number)
   const date = new Date(Date.UTC(y, mo - 1, d, h, mi, s))
-  return Number.isNaN(date.getTime()) ? undefined : date
+  // Date.UTC rolls 30 February over into March; a value that does not read back as written is not a date.
+  const exact = date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d && date.getUTCHours() === h && date.getUTCMinutes() === mi && date.getUTCSeconds() === s
+  return exact ? date : undefined
 }
 const pad = (value: number) => String(value).padStart(2, '0')
 const naiveText = (date: Date) => `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
@@ -191,13 +218,21 @@ export function purgeCutoff(serverNow: string, purge: AgentHistoryPurge): string
   } else date.setUTCDate(date.getUTCDate() - purge.count * (purge.unit === 2 ? 7 : 1))
   return naiveText(date)
 }
+/** The server's clock now: the describe's, advanced by the time since the renderer received it. */
+export function serverClock(model: Pick<AgentPropertiesModel, 'serverNow' | 'readAt'>, now = Date.now()): string {
+  const read = naive(model.serverNow)
+  if (!read || model.readAt === undefined || now <= model.readAt) return model.serverNow
+  return naiveText(new Date(read.getTime() + Math.floor((now - model.readAt) / 1000) * 1000)).replace(' ', 'T')
+}
+/** The cut-off a purge request carries (`before`), in the server-time format the backend parses. */
+export const cutoffParameter = (cutoff: string) => cutoff.replace(' ', 'T')
 /** Whether the confirmation labels the cut-off "(server time)": the server's offset from UTC differs from this computer's. */
 export const serverTimeDiffers = (serverOffsetMinutes: number, localOffsetMinutes = -new Date().getTimezoneOffset()): boolean => serverOffsetMinutes !== localOffsetMinutes
 
 /** About how many rows the purge deletes: those whole days older than the cut-off. Undefined without the history counts, or when the cut-off
  *  is older than the ages the describe counts separately. */
-export function purgeRowsEstimate(model: AgentPropertiesModel, purge: AgentHistoryPurge): number | undefined {
-  const history = model.history, now = naive(model.serverNow), cutoff = purgeCutoff(model.serverNow, purge)
+export function purgeRowsEstimate(model: AgentPropertiesModel, purge: AgentHistoryPurge, clock = model.serverNow): number | undefined {
+  const history = model.history, now = naive(clock), cutoff = purgeCutoff(clock, purge)
   if (!history || !now || !cutoff) return undefined
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   const cut = naive(cutoff.replace(' ', 'T'))!

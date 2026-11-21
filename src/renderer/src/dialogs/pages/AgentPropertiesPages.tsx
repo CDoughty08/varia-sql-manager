@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import {
-  agentPropertiesText, agentPurgeUnitLabels, agentPurgeUnits, draftLimits, draftPurge, keptFor, purgeCutoff, purgeRowsEstimate, rateText, serverTimeDiffers,
+  agentPropertiesText, agentPurgeUnitLabels, agentPurgeUnits, draftPurge, keptFor, purgeCutoff, purgeRowsEstimate, rateText, retentionLimits, serverClock, serverTimeDiffers,
   type AgentPropertiesDraft, type AgentPropertiesModel, type AgentPurgeUnit
 } from '../../../../shared/actions/agent-properties.ts'
 import { agentLimits } from '../../../../shared/agent/catalog.ts'
@@ -21,7 +21,8 @@ export function AgentGeneralPage({ open, editable }: PageProps) {
   if (!model || !draft) return loading(open)
   const { settings } = model
   return <div className="agent-properties">
-    <fieldset className="object-dialog-options" disabled={!editable}>
+    {model.settingsNote && <p className="field-note">{model.settingsNote}</p>}
+    <fieldset className="object-dialog-options" disabled={!editable || !!model.settingsNote}>
       <legend className="object-dialog-caption">Agent service</legend>
       <dl className="agent-service-facts">
         <dt>Service account:</dt><dd>{settings.startupAccount ? displayText(settings.startupAccount) : '—'}</dd>
@@ -48,9 +49,7 @@ function RetentionTable({ model, draft }: { readonly model: AgentPropertiesModel
   const history = model.history
   if (!history) return model.historyNote ? <p className="field-note">{model.historyNote}</p> : null
   if (!history.jobs.length) return <p className="field-note">No job has history on this server yet.</p>
-  const now = { maxRows: model.settings.historyMaxRows, maxRowsPerJob: model.settings.historyMaxRowsPerJob || undefined }
-  const asked = draftLimits(draft)
-  const after = 'problem' in asked || (asked.maxRows === now.maxRows && asked.maxRowsPerJob === now.maxRowsPerJob) ? undefined : asked
+  const { now, after } = retentionLimits(model, draft)
   const kept = history.jobs.map(job => ({ job, now: keptFor(job, history, now), after: after && keptFor(job, history, after) }))
   const tighter = kept.some(row => (row.after ?? row.now).server)
   const limit = after?.maxRows ?? now.maxRows
@@ -73,16 +72,19 @@ function RetentionTable({ model, draft }: { readonly model: AgentPropertiesModel
  *  purge apart from OK. */
 function PurgeSection({ open, model, draft, editable }: { readonly open: PageProps['open']; readonly model: AgentPropertiesModel; readonly draft: AgentPropertiesDraft; readonly editable: boolean }) {
   const { dialogs } = useWorkbench()
-  const cancel = useRef<HTMLButtonElement>(null)
+  const cancel = useRef<HTMLButtonElement>(null), ask = useRef<HTMLButtonElement>(null)
   // The confirmation's default is Cancel, as every destructive confirmation's is.
   useEffect(() => { if (draft.purgeConfirming) cancel.current?.focus() }, [draft.purgeConfirming])
+  // The server's clock as of this render: the confirmation shows the cut-off its request then carries, and the server deletes no later.
+  const clock = serverClock(model)
   const purge = draftPurge(draft), valid = !('problem' in purge)
-  const cutoff = valid ? purgeCutoff(model.serverNow, purge) : undefined
-  const estimate = valid ? purgeRowsEstimate(model, purge) : undefined
+  const cutoff = valid ? purgeCutoff(clock, purge) : undefined
+  const estimate = valid ? purgeRowsEstimate(model, purge, clock) : undefined
   const serverTime = serverTimeDiffers(model.serverOffsetMinutes)
   const usable = editable && !model.readOnly
+  const dismiss = () => { dialogs.updateDraft({ purgeConfirming: false }); queueMicrotask(() => ask.current?.focus()) }
   const run = () => {
-    const request = agentPurgeRequest(open.target, draft)
+    const request = agentPurgeRequest(open.target, draft, clock)
     dialogs.updateDraft({ purgeConfirming: false })
     if (request) void dialogs.runInline(request)
   }
@@ -90,21 +92,23 @@ function PurgeSection({ open, model, draft, editable }: { readonly open: PagePro
     <legend className="object-dialog-caption">Delete old history now</legend>
     <div className="agent-purge-row">
       <label htmlFor="agent-purge-count">Older than</label>
-      <input id="agent-purge-count" type="text" inputMode="numeric" className="agent-purge-count" value={draft.purgeCount} aria-invalid={!valid}
+      <input id="agent-purge-count" type="text" inputMode="numeric" className="agent-purge-count" value={draft.purgeCount} aria-invalid={!valid} aria-describedby="agent-purge-hint"
         onChange={event => dialogs.updateDraft({ purgeCount: event.target.value, purgeConfirming: false })}
         // Enter here asks to delete, as Delete history… does, rather than pressing OK, which would save the settings instead.
         onKeyDown={event => { if (event.key !== 'Enter') return; event.preventDefault(); event.stopPropagation(); if (valid) dialogs.updateDraft({ purgeConfirming: true }) }} />
       <select aria-label="Unit" value={draft.purgeUnit} onChange={event => dialogs.updateDraft({ purgeUnit: Number(event.target.value) as AgentPurgeUnit, purgeConfirming: false })}>
         {agentPurgeUnits.map(unit => <option key={unit} value={unit}>{agentPurgeUnitLabels[unit]}</option>)}
       </select>
-      <button type="button" disabled={!valid || draft.purgeConfirming} onClick={() => dialogs.updateDraft({ purgeConfirming: true })}>Delete history…</button>
+      <button ref={ask} type="button" disabled={!valid || draft.purgeConfirming} onClick={() => dialogs.updateDraft({ purgeConfirming: true })}>Delete history…</button>
     </div>
     <p className="field-note" id="agent-purge-hint">{valid ? [cutoff && `Before ${cutoff}${serverTime ? ', server time' : ''}`, estimate !== undefined && `about ${count(estimate)} ${estimate === 1 ? 'row' : 'rows'}`].filter(Boolean).join(' · ') : purge.problem}</p>
     <p className="field-note">{agentPropertiesText.purgeNote}</p>
-    {draft.purgeConfirming && valid && <div className="agent-purge-confirm" role="group" aria-label="Confirm Delete old history now">
+    {draft.purgeConfirming && valid && <div className="agent-purge-confirm" role="group" aria-label="Confirm Delete old history now"
+      // Escape answers the question (no), as Cancel does, instead of closing the dialog and its unsaved changes.
+      onKeyDown={event => { if (event.key !== 'Escape') return; event.preventDefault(); event.stopPropagation(); dismiss() }}>
       <Icon name="warning" /><span className="agent-purge-question">{agentPropertiesText.purgeConfirm(displayText(open.server), cutoff ?? '', serverTime)}</span>
       <span className="agent-purge-actions">
-        <button ref={cancel} type="button" onClick={() => dialogs.updateDraft({ purgeConfirming: false })}>Cancel</button>
+        <button ref={cancel} type="button" onClick={dismiss}>Cancel</button>
         <button type="button" className="danger" onClick={run}>Delete history</button>
       </span>
     </div>}
@@ -119,7 +123,8 @@ export function AgentHistoryPage({ open, editable }: PageProps) {
   const model = open.model as AgentPropertiesModel | undefined, draft = open.draft as AgentPropertiesDraft | undefined
   if (!model || !draft) return loading(open)
   return <div className="agent-properties">
-    <fieldset className="object-dialog-options property-grid" disabled={!editable}>
+    {model.settingsNote && <p className="field-note">{model.settingsNote}</p>}
+    <fieldset className="object-dialog-options property-grid" disabled={!editable || !!model.settingsNote}>
       <legend className="object-dialog-caption">Job history log</legend>
       <label className="checkbox-label"><input type="checkbox" checked={draft.limit} onChange={event => dialogs.updateDraft({ limit: event.target.checked })} />{agentPropertiesText.limit}</label>
       <div className="property-row"><label htmlFor="agent-history-max">{agentPropertiesText.maxRows}</label>

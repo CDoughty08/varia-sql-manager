@@ -520,7 +520,7 @@ internal sealed partial class ActionService : IDisposable
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
         // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
-        if (args.Action == "agentProperties" && AgentPropertiesRefusal(args.ConnectionId) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
+        if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch

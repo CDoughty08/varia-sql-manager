@@ -19,6 +19,8 @@ internal static partial class AgentSql
     /// <summary>The cut-off from the server's clock: @count days, weeks or months back (@unit 1, 2, 3). Delete History (AG-5a) shares it.</summary>
     internal const string PurgeCutoff = "SET @oldest_date = CASE @unit WHEN 1 THEN DATEADD(day, -@count, GETDATE()) WHEN 2 THEN DATEADD(week, -@count, GETDATE()) WHEN 3 THEN DATEADD(month, -@count, GETDATE()) END;\n";
     internal const string PurgeGuard = "IF @oldest_date IS NULL THROW 50013, N'" + CutoffMessage + "', 1;\n";
+    /// <summary>The cut-off the confirmation showed bounds the server's: a dialog left open for hours never deletes more than it said.</summary>
+    internal const string PurgeClamp = "IF @before IS NOT NULL AND @oldest_date > @before SET @oldest_date = @before;\n";
 
     private static readonly AgentParameter[] PropertyParameters =
         [new("@sqlserver_restart", SqlDbType.Int), new("@monitor_autostart", SqlDbType.Int), new("@jobhistory_max_rows", SqlDbType.Int), new("@jobhistory_max_rows_per_job", SqlDbType.Int)];
@@ -27,8 +29,8 @@ internal static partial class AgentSql
         ServerHead + "EXEC @rc = msdb.dbo.sp_set_sqlagent_properties " + string.Join(", ", PropertyParameters.Select(parameter => parameter.Name + " = " + parameter.Name)) + ";" + Check, PropertyParameters);
 
     public static readonly AgentWrite PurgeHistory = new("purgeHistory", "sp_purge_jobhistory",
-        PurgeHead + PurgeCutoff + PurgeGuard + "EXEC @rc = msdb.dbo.sp_purge_jobhistory @oldest_date = @oldest_date;" + Check,
-        [new("@count", SqlDbType.Int), new("@unit", SqlDbType.Int)]);
+        PurgeHead + PurgeCutoff + PurgeGuard + PurgeClamp + "EXEC @rc = msdb.dbo.sp_purge_jobhistory @oldest_date = @oldest_date;" + Check,
+        [new("@count", SqlDbType.Int), new("@unit", SqlDbType.Int), new("@before", SqlDbType.DateTime)]);
 
     public static IReadOnlyList<AgentWrite> ServerWrites { get; } = [SetProperties, PurgeHistory];
 
@@ -65,8 +67,8 @@ internal static partial class AgentSql
         if (purge)
         {
             body = text[PurgeHead.Length..];
-            if (!body.StartsWith(PurgeCutoff + PurgeGuard, StringComparison.Ordinal)) { problems.Add("does not compute and guard the cut-off before the purge"); return problems; }
-            body = body[(PurgeCutoff + PurgeGuard).Length..];
+            if (!body.StartsWith(PurgeCutoff + PurgeGuard + PurgeClamp, StringComparison.Ordinal)) { problems.Add("does not compute, guard and bound the cut-off before the purge"); return problems; }
+            body = body[(PurgeCutoff + PurgeGuard + PurgeClamp).Length..];
         }
         else if (text.StartsWith(ServerHead, StringComparison.Ordinal)) body = text[ServerHead.Length..];
         else { problems.Add("does not open with the server write's declaration"); return problems; }

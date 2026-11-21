@@ -67,16 +67,19 @@ in later lanes, behind the same gate until 0.11.0.
   or the log's size over every job's rate where that is less, which a note points out, since Agent then removes the oldest
   rows of any job. Reading every job's history needs sysadmin; below it the table says why it is missing.
   OK sends only what changed, through `sp_set_sqlagent_properties` with NULL for the rest, which msdb leaves as it is (the two
-  sizes go together, since msdb checks one against the other). **Delete old history now** is not a setting: older than a
+  sizes go together, since msdb checks one against the other; sizes left as they were are never sent). **Delete old history now** is not a setting: older than a
   number of days, weeks or months (up to `purgeCount`), with the cut-off and about how many rows it deletes. Delete history…
   asks inline, Cancel focused, naming the server, the cut-off and, when the server's clock is in another time zone,
-  "(server time)"; Delete history then runs at once, apart from OK, and the dialog reads the history again and keeps any
-  unsaved change. The server computes the cut-off from its own clock (`DATEADD` back from `GETDATE()`, the local time msdb
-  stores), and the batch THROWs before `sp_purge_jobhistory` if it is NULL, which msdb would read as all history; msdb's
+  "(server time)"; Escape or Cancel answers no. Delete history then runs at once, apart from OK, and the dialog reads the
+  history again and keeps any unsaved change. The confirmation's cut-off is the server's clock advanced by the time the dialog has been open. The
+  server computes the cut-off from its own clock (`DATEADD` back from `GETDATE()`, the local time msdb stores), never later
+  than the one the confirmation showed, and the batch THROWs before `sp_purge_jobhistory` if it is NULL, which msdb would read as all history; msdb's
   info message says how many rows went. Both writes name no job, so they have their own exact-shape lint,
   `AgentSql.LintServerExecutable`. msdb grants `sp_set_sqlagent_properties` to no role and Managed Instance refuses it, so
   below sysadmin and on Managed Instance the dialog opens read-only with the reason and only Close; the action and its Script
-  are refused `NOT_SUPPORTED` on Managed Instance before any connection opens. A purge msdb refuses (14392) is
+  are refused `NOT_SUPPORTED` on Managed Instance before any connection opens. On Linux, where mssql-conf sets Agent's settings and
+  `sp_set_sqlagent_properties`' registry writes end the session, the settings show read-only with that reason, a settings write
+  and its Script are refused `NOT_SUPPORTED` before any connection opens, and Delete old history still runs. A purge msdb refuses (14392) is
   `PERMISSION_DENIED`, and Agent XPs off is `AGENT_STOPPED`.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in

@@ -50,11 +50,12 @@ internal static class AgentPropertiesChecks
         var set = AgentSql.SetProperties.Text;
         var purge = AgentSql.PurgeHistory.Text;
         string Server(string call) => AgentSql.ServerHead + call + AgentSql.Check;
-        string Purge(string call) => AgentSql.PurgeHead + AgentSql.PurgeCutoff + AgentSql.PurgeGuard + call + AgentSql.Check;
+        string Purge(string call) => AgentSql.PurgeHead + AgentSql.PurgeCutoff + AgentSql.PurgeGuard + AgentSql.PurgeClamp + call + AgentSql.Check;
         var misses = new (string Text, string Problem)[]
         {
             (Server("EXEC @rc = msdb.dbo.sp_purge_jobhistory @oldest_date = @oldest_date;"), "purges history without the guarded cut-off"),
-            (purge.Replace(AgentSql.PurgeGuard, "", StringComparison.Ordinal), "does not compute and guard the cut-off before the purge"),
+            (purge.Replace(AgentSql.PurgeGuard, "", StringComparison.Ordinal), "does not compute, guard and bound the cut-off before the purge"),
+            (purge.Replace(AgentSql.PurgeClamp, "", StringComparison.Ordinal), "does not compute, guard and bound the cut-off before the purge"),
             (Purge("EXEC @rc = msdb.dbo.sp_purge_jobhistory @job_id = @job_id;"), "names a job in a server write"),
             (Purge("EXEC @rc = msdb.dbo.sp_set_sqlagent_properties @jobhistory_max_rows = @jobhistory_max_rows;"), "computes a cut-off for sp_set_sqlagent_properties"),
             (Server("EXEC @rc = msdb.dbo.sp_set_sqlagent_properties @errorlog_file = @errorlog_file;"), "passes @errorlog_file to sp_set_sqlagent_properties"),
@@ -71,8 +72,9 @@ internal static class AgentPropertiesChecks
         check(AgentSql.LintExecutable(AgentSql.Resolve + "EXEC @rc = msdb.dbo.sp_purge_jobhistory @job_id = @job_id;" + AgentSql.Check).Count > 0,
             "a job-shaped write may not purge with this lane's arguments: sp_purge_jobhistory takes only @oldest_date until Delete History adds its own template");
         check(purge.Contains("IF @oldest_date IS NULL THROW 50013", StringComparison.Ordinal) && purge.IndexOf("THROW 50013", StringComparison.Ordinal) < purge.IndexOf("sp_purge_jobhistory", StringComparison.Ordinal)
-            && purge.Contains("DATEADD(month, -@count, GETDATE())", StringComparison.Ordinal),
-            "the purge computes its cut-off from the server's own clock and THROWs before the call when it is NULL, which msdb would read as all history");
+            && purge.Contains("DATEADD(month, -@count, GETDATE())", StringComparison.Ordinal)
+            && purge.IndexOf(AgentSql.PurgeClamp, StringComparison.Ordinal) is > 0 and var clamp && clamp < purge.IndexOf("sp_purge_jobhistory", StringComparison.Ordinal),
+            "the purge computes its cut-off from the server's own clock, THROWs before the call when it is NULL (msdb would read that as all history), and never goes past the cut-off the confirmation showed");
         check(ActionErrors.Numbers["PERMISSION_DENIED"].Contains(14392), "sp_purge_jobhistory's 14392 (not sysadmin or SQLAgentOperatorRole) maps to PERMISSION_DENIED");
     }
 
@@ -87,7 +89,7 @@ internal static class AgentPropertiesChecks
         var valid = new (string Name, ActionArgs Args)[]
         {
             ("a restart box", Args(new(false, null, null, null))), ("the sizes", Args(new(null, null, 5000, 500))), ("no limit", Args(new(null, null, -1, null))),
-            ("the largest log", Args(new(null, null, 999_999, 999_999))), ("a purge", Args(purge: new(4, 2))), ("the longest purge", Args(purge: new(999, 3)))
+            ("the largest log", Args(new(null, null, 999_999, 999_999))), ("a purge", Args(purge: new(4, 2))), ("a purge with its confirmed cut-off", Args(purge: new(4, 2, "2026-03-03T10:00:00"))), ("the longest purge", Args(purge: new(999, 3)))
         };
         foreach (var (name, args) in valid) check(Answer(args) == "accepted" && Answer(args, script: true) == "accepted", "SQL Server Agent Properties validates: " + name);
         var invalid = new (string Name, ActionArgs Args)[]
@@ -96,7 +98,9 @@ internal static class AgentPropertiesChecks
             ("a log of 0 rows", Args(new(null, null, 0, null))), ("a log of 1 row", Args(new(null, null, 1, null))), ("a log of -2", Args(new(null, null, -2, null))),
             ("a log past the cap", Args(new(null, null, 1_000_000, null))), ("rows per job without a limit", Args(new(null, null, -1, 10))),
             ("rows per job above the log", Args(new(null, null, 100, 101))), ("rows per job of 0", Args(new(null, null, 10, 0))), ("rows per job without the log size", Args(new(null, null, null, 10))),
-            ("a purge of 0", Args(purge: new(0, 1))), ("a purge past the cap", Args(purge: new(1000, 3))), ("a purge unit of 4", Args(purge: new(1, 4))),
+            ("a purge of 0", Args(purge: new(0, 1))), ("a purge past the cap", Args(purge: new(1000, 3))), ("a purge unit of 4", Args(purge: new(1, 4))), ("a cut-off that is no date", Args(purge: new(1, 1, "2026-02-30T10:00:00"))),
+            ("a cut-off with a space", Args(purge: new(1, 1, "2026-03-03 10:00:00"))), ("a cut-off before datetime", Args(purge: new(1, 1, "1700-01-01T00:00:00"))),
+            ("a cut-off too long", Args(purge: new(1, 1, "2026-03-03T10:00:00.000"))),
             ("a job's target", Args(purge: new(1, 1), target: new ObjectRefDto("agentJob", Name: "Nightly"))), ("a named agent", Args(purge: new(1, 1), target: new ObjectRefDto("agent", Name: "x"))),
             ("another member", Args(purge: new(1, 1)) with { NewName = "x" }),
             ("the members on another action", new ActionArgs("restartAgent", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), AgentNode) { AgentPurge = new(1, 1) })
@@ -108,8 +112,9 @@ internal static class AgentPropertiesChecks
     {
         check(ActionService.AgentPropertiesPlan(Args(new(true, false, null, null))) is { Write: var set, Title: ActionService.SavePropertiesStep, Values: [1, 0, null, null] } && set == AgentSql.SetProperties
             && ActionService.AgentPropertiesPlan(Args(new(null, null, 5000, 500))).Values is [null, null, 5000, 500]
-            && ActionService.AgentPropertiesPlan(Args(purge: new(6, 3))) is { Write: var purge, Title: ActionService.PurgeHistoryStep, Values: [6, 3] } && purge == AgentSql.PurgeHistory,
-            "OK sends the changed settings, NULL for those that stay; Delete old history sends its count and unit for the server to compute the cut-off");
+            && ActionService.AgentPropertiesPlan(Args(purge: new(6, 3))) is { Write: var purge, Title: ActionService.PurgeHistoryStep, Values: [6, 3, null] } && purge == AgentSql.PurgeHistory
+            && ActionService.AgentPropertiesPlan(Args(purge: new(6, 3, "2025-09-30T10:00:00"))).Values is [6, 3, DateTime before] && before == new DateTime(2025, 9, 30, 10, 0, 0),
+            "OK sends the changed settings, NULL for those that stay; Delete old history sends its count and unit for the server to compute the cut-off, bounded by the one it confirmed");
         check(ActionService.AgentPropertiesScript(Args(new(null, false, 5000, 500))) == "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart=0, @jobhistory_max_rows=5000, @jobhistory_max_rows_per_job=500\nGO\n"
             && ActionService.AgentPropertiesScript(Args(new(null, null, -1, null))) == "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties @jobhistory_max_rows=-1\nGO\n"
             && ActionService.AgentPropertiesScript(Args(purge: new(4, 2))) == "USE [msdb]\nGO\nDECLARE @oldest_date datetime = DATEADD(week, -4, GETDATE());\nEXEC msdb.dbo.sp_purge_jobhistory @oldest_date=@oldest_date\nGO\n",
@@ -124,5 +129,15 @@ internal static class AgentPropertiesChecks
         var scripted = await service.ScriptAsync(Args(purge: new(1, 1)), CancellationToken.None);
         check(executed.Error is { Code: "NOT_SUPPORTED" } && executed.Error.Message == ActionService.AgentPropertiesManagedInstance && scripted.Error is { Code: "NOT_SUPPORTED" } && host.Connections == 0,
             "Managed Instance refuses sp_set_sqlagent_properties, so the action and its Script answer NOT_SUPPORTED before any connection opens");
+
+        // SQL Server on Linux keeps Agent's settings in mssql.conf, and sp_set_sqlagent_properties' registry writes end the session there.
+        var linux = new Host(Box2022 with { Linux = true });
+        using var onLinux = new ActionService(linux);
+        var saved = await onLinux.ExecuteAsync(Args(new(null, false, null, null)), CancellationToken.None);
+        var savedScript = await onLinux.ScriptAsync(Args(new(null, false, null, null)), CancellationToken.None);
+        var purgeScript = await onLinux.ScriptAsync(Args(purge: new(1, 1)), CancellationToken.None);
+        check(saved.Error is { Code: "NOT_SUPPORTED" } && saved.Error.Message == ActionService.AgentPropertiesLinux && savedScript.Error is { Code: "NOT_SUPPORTED" }
+            && purgeScript.Error is null && purgeScript.Text is not null && linux.Connections == 0,
+            "on Linux the settings write and its Script answer NOT_SUPPORTED before any connection opens, and Delete old history still scripts");
     }
 }
