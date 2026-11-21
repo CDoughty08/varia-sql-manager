@@ -363,6 +363,23 @@ describe('ResultClient', () => {
     expect(client.trackedResults).toBe(0)
   })
 
+  it('leaves a released result released when its residence event arrives late', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor({ resultId: 3 }))
+    const closing = client.release([handle.key])
+    await settle()
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.find(request => request.t === 'close')!.rid, ok: true, result: { closed: 1, usedBytes: 0 } })
+    await closing
+    expect(client.trackedResults).toBe(0)
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: { ...descriptor({ resultId: 3 }), revision: 1, residence: 'remote', rowsStored: 0 } } })
+    await settle()
+    expect(client.trackedResults).toBe(0)
+    expect(handle.getSnapshot().state).toBe('released')
+  })
+
   it('identifies the rows of a result, reads and finds identities by view position, and refuses bad arguments in the page', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

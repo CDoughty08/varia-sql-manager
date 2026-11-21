@@ -998,7 +998,11 @@ export class ResultClient implements Disposable {
 
   private queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened' || event.type === 'resultSet.closed') this.update(this.state(event.descriptor), event.descriptor, false)
-    else if (event.type === 'resultSet.residence') this.revise(this.state(event.descriptor), event.descriptor)
+    else if (event.type === 'resultSet.residence') {
+      // A switch never opens a result: one released before its late residence event (the summary overtook it) stays released.
+      const state = this.results.get(keyOf(event.descriptor))
+      if (state) this.revise(state, event.descriptor)
+    }
     else if (event.type === 'progress') {
       for (const item of event.results) {
         const state = this.results.get(keyOf({ generation: this.generation, resultId: item.resultId }))
