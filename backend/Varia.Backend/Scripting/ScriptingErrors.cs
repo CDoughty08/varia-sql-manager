@@ -108,6 +108,8 @@ internal static class ScriptingErrors
             "SQL_ERROR" => "Could not script " + o + ": Msg " + number.ToString(CultureInfo.InvariantCulture) + ": " + Detail(detail ?? "", MaxDetail),
             // The detail is ConnectionFailures' or EntraFailures' advice (run kinit, install the library, connect again).
             "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
+            // BigQuery's (BigQueryService.ScriptAsync answers them with BigQueryErrors' text); listed so every catalogue code has a message.
+            "COST_CAP" or "QUOTA" or "AUTH_EXPIRED" => "Could not script " + o + ": " + Detail(detail ?? "", MaxDetail),
             _ => throw new InvalidOperationException("Unknown scripting error " + code)
         };
         return new(code, Clip(message, MaxMessage), catalog.Retryable(code));

@@ -21,7 +21,8 @@
     {"action":"createDatabase","class":"dialog","cleanupMs":10000,"engines":["box"],"scope":"server","title":"New Database…"},
     {"action":"createLogin","class":"create","cleanupMs":10000,"engines":["box","managedInstance"],"title":"New Login"},
     {"action":"loginProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"login","title":"Login Properties","verb":"properties"},
-    {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"}
+    {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"},
+    {"action":"agentProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"SQL Server Agent Properties","verb":"properties"}
   ],
   "compatibilityLevels": [100,110,120,130,140,150,160,170],
   "databaseOptions": [
@@ -102,7 +103,8 @@
     {"action":"startJob","dialog":"startJobAtStep","pages":["general"]},
     {"action":"startAgent","dialog":"startAgent","pages":["general"]},
     {"action":"stopAgent","dialog":"stopAgent","pages":["general"]},
-    {"action":"restartAgent","dialog":"restartAgent","pages":["general"]}
+    {"action":"restartAgent","dialog":"restartAgent","pages":["general"]},
+    {"action":"agentProperties","dialog":"agentProperties","pages":["general","history"]}
   ],
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
@@ -190,7 +192,7 @@
     {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"scalar"},
     {"disabled":[],"enabled":["rename","delete"],"kind":"function","subtype":"clrScalar"},
     {"disabled":["delete"],"enabled":["rename"],"kind":"function","subtype":"aggregate"},
-    {"disabled":[],"enabled":["startAgent","stopAgent","restartAgent"],"kind":"agent","subtype":""},
+    {"disabled":[],"enabled":["properties","startAgent","stopAgent","restartAgent"],"kind":"agent","subtype":""},
     {"disabled":[],"enabled":["rename","delete","disable","startJob","stopJob"],"kind":"agentJob","subtype":""},
     {"disabled":[],"enabled":["rename","delete","enable","startJob","stopJob"],"kind":"agentJob","status":"disabled","subtype":""}
   ],

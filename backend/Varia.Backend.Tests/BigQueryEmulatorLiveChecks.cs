@@ -126,6 +126,7 @@ internal static class BigQueryEmulatorLiveChecks
 
             await ExecuteAsync(check, service, connection.Id, table);
             await StorageReadAsync(check, environment);
+            await ExplorerAsync(check, service, connection.Id, table);
 
             // The emulator finishes jobs synchronously, so cancel meets a finished job; it must still answer (Job History's Cancel).
             var cancelled = await api.Jobs.Cancel(Project, jobId).ExecuteAsync();
@@ -151,6 +152,51 @@ internal static class BigQueryEmulatorLiveChecks
 
         var (closed, disconnected, _) = await Call("connections.disconnect", new JsonObject { ["connectionId"] = connection.Id });
         check(closed == "ok" && disconnected.GetProperty("disconnected").GetBoolean() && service.BigQuery.Count == 0, "emulator: disconnect releases the BigQuery handle");
+    }
+
+    /// <summary>Object Explorer, Preview Rows and Script As end to end (docs/bigquery.md, Object Explorer): the emulator's datasets.list,
+    /// tables.list, tables.get and tabledata.list behind explorer.children, query.execute's preview and scripting.script.</summary>
+    static async Task ExplorerAsync(Action<bool, string> check, SqlService service, string connectionId, string table)
+    {
+        async Task<(string Code, object? Result, string Message)> Call(string method, JsonNode parameters)
+        {
+            using var document = JsonDocument.Parse(parameters.ToJsonString());
+            try { return ("ok", await service.DispatchAsync(method, document.RootElement.Clone(), Wire), ""); }
+            catch (RequestException error) { return (error.Code, null, error.Message); }
+        }
+        JsonObject Children(JsonObject node) => new() { ["connectionId"] = connectionId, ["requestId"] = Guid.NewGuid().ToString(), ["node"] = node, ["pageSize"] = 500 };
+        var project = new JsonObject { ["kind"] = "bqProject", ["name"] = Project };
+        var dataset = new JsonObject { ["kind"] = "bqDataset", ["name"] = Dataset, ["project"] = Project };
+        var orders = new JsonObject { ["kind"] = "bqTable", ["name"] = table, ["project"] = Project, ["dataset"] = Dataset };
+
+        var datasets = await Call("explorer.children", Children(new JsonObject { ["type"] = "object", ["object"] = project }));
+        check(datasets is { Code: "ok", Result: ExplorerChildrenResult { Error: null } listed } && listed.Nodes.Any(node => node.Label == Dataset),
+            $"emulator: a project lists its datasets in Object Explorer: {datasets.Code} {datasets.Message} {(datasets.Result as ExplorerChildrenResult)?.Error?.Message}");
+        var tables = await Call("explorer.children", Children(new JsonObject { ["type"] = "folder", ["owner"] = dataset, ["folder"] = "bqTables" }));
+        check(tables is { Code: "ok", Result: ExplorerChildrenResult { Error: null } rows } && rows.Nodes.Any(node => node.Label == table && node.Ref.Object?.Kind == "bqTable"),
+            $"emulator: a dataset's Tables folder lists the table: {tables.Code} {tables.Message} {(tables.Result as ExplorerChildrenResult)?.Error?.Message}");
+        var columns = await Call("explorer.children", Children(new JsonObject { ["type"] = "folder", ["owner"] = orders.DeepClone(), ["folder"] = "bqColumns" }));
+        var labels = (columns.Result as ExplorerChildrenResult)?.Nodes.Select(node => node.Label + " " + node.Sublabel).ToArray() ?? [];
+        check(labels.SequenceEqual(["id INT64, required", "customer STRING", "amount NUMERIC"]), "emulator: a table's Columns show each column's type: " + string.Join(", ", labels));
+
+        var preview = await Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = connectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1", ["maxRows"] = 0, ["timeoutSeconds"] = 0,
+            ["preview"] = new JsonObject { ["project"] = Project, ["dataset"] = Dataset, ["table"] = table }
+        });
+        var result = preview.Result as QueryResult;
+        check(result is { Status: "completed" } && result.ResultSets.Single().RowsStored == 25,
+            $"emulator: Preview Rows reads the table's rows with tabledata.list: {preview.Code} {preview.Message} {result?.Status} {result?.Error?.Message} {result?.ResultSets.FirstOrDefault()?.RowsStored}");
+
+        var options = new JsonObject();
+        foreach (var option in Varia.Backend.Scripting.ScriptingCatalog.Current.Options) options[option.Key] = JsonNode.Parse(option.Default.GetRawText());
+        var script = await Call("scripting.script", new JsonObject
+        {
+            ["connectionId"] = connectionId, ["requestId"] = Guid.NewGuid().ToString(), ["targets"] = new JsonArray(orders.DeepClone()), ["verb"] = "select", ["options"] = options
+        });
+        var text = (script.Result as ScriptResult)?.Text ?? "";
+        check(text.Contains("`customer`", StringComparison.Ordinal) && text.Contains($"FROM `{Project}`.`{Dataset}`.`{table}`", StringComparison.Ordinal),
+            $"emulator: Script As › SELECT names the table's columns from tables.get: {script.Code} {script.Message} {(script.Result as ScriptResult)?.Error?.Message}");
     }
 
     /// <summary>query.execute end to end (docs/bigquery.md, Execution): a job per query, results polled and paged into the

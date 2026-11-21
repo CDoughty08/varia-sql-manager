@@ -575,7 +575,8 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   and drops their answers.
 - **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
-  `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, names, definitions, by
+  `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, and the lookup arrays the
+  editor's in-process `IndexLookup` builds on first use, names, definitions, by
   `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
   held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
@@ -688,6 +689,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `BigQuerySql` (`COMMIT TRANSACTION` in the tab's session; `CALL BQ.ABORT_SESSION(@session_id)` outside it, the id a
   STRING parameter), held to constant text by `BigQuerySessionChecks`; a session id is kept only when `BigQuerySql.SessionId`
   accepts it, and never leaves the backend.
+- **BigQuery names** (`BqNames`, docs/bigquery.md#object-explorer). BigQuery has no `QUOTENAME` and no identifier parameters,
+  so an object's name reaches SQL text (Script As' templates and CREATE's `INFORMATION_SCHEMA` qualifier) only through
+  `BqNames`: its kind's rule, the same as `src/shared/bigquery/names.ts`, then backticks with backslashes and backticks
+  escaped; a refused name throws `INVALID_PARAMS` first, and values stay parameters. `BigQueryExplorerChecks` renders every
+  template with hostile names. Object Explorer, Preview Rows and Properties read only BigQuery's free REST metadata calls,
+  through the per-principal limiter (`BigQueryRateLimiter`), and never run a job; Script As › CREATE's billed query goes
+  through the cost prompts first.
 - **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
   the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
   beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes

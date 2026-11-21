@@ -601,3 +601,32 @@ describe('Object Explorer\'s Refresh', () => {
     disposable.dispose()
   })
 })
+
+describe("BigQuery's Preview Rows command", () => {
+  it('opens a query tab with the SELECT it stands for and previews the table, in its dataset only when the table is in the billing project', async () => {
+    const handlers = new Map<string, { when?: (args?: unknown) => boolean; run: (args?: unknown) => unknown }>()
+    const commands = { register: (id: string, handler: { when?: (args?: unknown) => boolean; run: (args?: unknown) => unknown }) => { handlers.set(id, handler); return { dispose: () => {} } } }
+    const connection = { id: 'bq-1', server: 'varia-alpha', database: 'sales_home' }
+    let node: unknown
+    const table = (project: string, kind = 'bqTable') => ({ id: 3, connectionId: 'bq-1', kind, lost: false, ref: { type: 'object', object: { kind, project, dataset: 'sales', name: 'orders' } } })
+    const explorer = { menuNode: () => node, getSnapshot: () => ({ selected: 3 }) }
+    const newQuery = vi.fn((_sql: string, _name: unknown, _connection: string, _dataset: string) => ({ id: 'tab-1' }))
+    const execute = vi.fn(async () => {})
+    const disposable = explorerContribution({ commands, documents: { newQuery }, connections: { isLive: () => true, get: () => connection }, explorer, queries: { execute } } as never, {} as never)
+    const preview = handlers.get('explorer.previewRows')!
+    node = table('varia-alpha', 'bqView')
+    expect(preview.when?.()).toBe(false)
+    node = table('varia-alpha')
+    expect(preview.when?.()).toBe(true)
+    await preview.run()
+    expect(newQuery.mock.calls[0][0]).toContain('SELECT *\nFROM `varia-alpha.sales.orders`\nLIMIT 1000;')
+    expect(newQuery.mock.calls[0].slice(2)).toEqual(['bq-1', 'sales'])
+    expect(execute).toHaveBeenCalledWith('tab-1', { project: 'varia-alpha', dataset: 'sales', table: 'orders' })
+    // Another project's table: the tab keeps the connection's dataset, and the preview names the table in full.
+    node = table('other-proj')
+    await preview.run()
+    expect(newQuery.mock.calls[1].slice(2)).toEqual(['bq-1', 'sales_home'])
+    expect(execute).toHaveBeenLastCalledWith('tab-1', { project: 'other-proj', dataset: 'sales', table: 'orders' })
+    disposable.dispose()
+  })
+})

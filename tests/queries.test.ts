@@ -760,6 +760,23 @@ describe('BigQuery execution', () => {
     await f.queries.execute(f.tab.id)
     expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('startColumn')
   })
+  it('runs Preview Rows without the cost prompt, sending its table, and never for SQL Server', async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const gate = vi.fn(async () => true)
+    f.queries.setCostGate(gate)
+    const preview = { project: 'varia-alpha', dataset: 'sales', table: 'orders' }
+    await f.queries.execute(f.tab.id, preview)
+    expect(gate).not.toHaveBeenCalled()
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ preview })
+    // An ordinary run still asks, and sends no preview.
+    await f.queries.execute(f.tab.id)
+    expect(gate).toHaveBeenCalledOnce()
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('preview')
+    Object.assign(f.connection, { providerId: undefined })
+    await f.queries.execute(f.tab.id, preview)
+    expect(f.queryApi.execute).toHaveBeenCalledTimes(2)
+  })
   it("says BigQuery ended a lost session, not SQL Server", async () => {
     const f = fixture()
     Object.assign(f.connection, { providerId: 'bigquery' })

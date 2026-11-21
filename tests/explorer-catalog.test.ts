@@ -59,8 +59,8 @@ describe('Object Explorer catalogue', () => {
     for (const [name, values] of Object.entries({ nodeKinds, folderIds, nodeSubtypes, queryIds, explorerIcons, kindScopes, parentKinds, filterProperties })) {
       expect(unique(values), name).toBe(true)
     }
-    expect(nodeKinds).toHaveLength(64)
-    expect(folderIds).toHaveLength(82)
+    expect(nodeKinds).toHaveLength(73)
+    expect(folderIds).toHaveLength(89)
     for (const id of folderIds) expect(folderSpecs[id].id).toBe(id)
     for (const kind of nodeKinds) expect(kindSpecs[kind].kind).toBe(kind)
     expect(Object.keys(folderSpecs)).toEqual([...folderIds])
@@ -138,7 +138,8 @@ describe('Object Explorer catalogue', () => {
     }
     // SSMS lists an SSIS catalog's folders directly below it, with no folder in between.
     // Agent's Proxies folder lists a row per subsystem, and each subsystem row lists its proxies.
-    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual(['ssisCatalog', 'agentProxySubsystem'])
+    // A BigQuery project lists its datasets, and a STRUCT column its fields, the same way.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual(['ssisCatalog', 'agentProxySubsystem', 'bqProject', 'bqColumn'])
     expect(kindSpecs.ssisCatalog).toMatchObject({ list: 'ssisFolders', rows: ['ssisFolder'], folders: [] })
     for (const id of folderIds) {
       const spec = folderSpecs[id]
@@ -160,13 +161,15 @@ describe('Object Explorer catalogue', () => {
       expect(kindScopes, kind).toContain(spec.scope)
       expect(explorerIcons, kind).toContain(spec.icon)
       // Singletons (SQL Server Agent, Job Activity Monitor) appear below their owners instead of being listed.
-      if (kind !== 'server') expect(listed.has(kind) || singletonOwners(kind).length > 0, kind).toBe(true)
+      // A BigQuery connection's root (the server kind) lists its projects.
+      if (kind !== 'server' && kind !== 'bqProject') expect(listed.has(kind) || singletonOwners(kind).length > 0, kind).toBe(true)
       for (const subtype of spec.subtypes ?? []) usedSubtypes.add(subtype)
       expect(unique(spec.subtypes ?? []), kind).toBe(true)
       for (const map of [spec.subtypeIcons, spec.subtypeFolders, spec.subtypeSmo]) for (const subtype of Object.keys(map ?? {})) expect(spec.subtypes, kind).toContain(subtype)
       for (const subtype of spec.historyLookup ?? []) expect(spec.subtypes, kind).toContain(subtype)
       for (const icon of [...Object.values(spec.subtypeIcons ?? {}), ...Object.values(spec.variantIcons ?? {})]) expect(explorerIcons, kind).toContain(icon)
-      if (spec.scriptable) expect(spec.smo, kind).toBeDefined()
+      // SMO scripts SQL Server's kinds; BigQuery's are scripted by the backend's own templates and INFORMATION_SCHEMA.
+      if (spec.scriptable && !spec.scope.startsWith('bq')) expect(spec.smo, kind).toBeDefined()
       // A kind's own folders hang directly below it.
       const owner = kind === 'server' ? 'server' : kind === 'database' ? 'database' : 'object'
       for (const set of [spec.folders, ...Object.values(spec.subtypeFolders ?? {})]) for (const id of set!) {
@@ -180,12 +183,19 @@ describe('Object Explorer catalogue', () => {
     // Jobs, alerts, operators and proxies are scriptable (AG-4); the node, its documents, subsystems and error logs are not.
     // Jobs, alerts, operators and proxies insert their name unquoted (raw).
     const agentKinds = ['agent', 'agentJobActivity', 'agentProxySubsystem', 'agentErrorLog']
-    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds, ...agentKinds])
+    const bqKinds = ['bqProject', 'bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine', 'bqModel', 'bqColumn'] as const
+    // BigQuery scripts tables, views and routines; projects, datasets, models and columns have no script.
+    expect(nodeKinds.filter(kind => !kindSpecs[kind].scriptable)).toEqual(['server', 'column', 'parameter', 'returnValue', ...ssisKinds, ...agentKinds, 'bqProject', 'bqDataset', 'bqModel', 'bqColumn'])
     // Schema-scoped objects insert [schema].[name]; the rest a one-part name, except parameters, the server and return values.
     for (const kind of nodeKinds) expect(kindSpecs[kind].insert === 'twoPart', kind).toBe(kindSpecs[kind].scope === 'schemaObject')
     expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'none')).toEqual(['server', 'returnValue', ...ssisKinds, 'agent', 'agentJobActivity', 'agentProxySubsystem', 'agentErrorLog'])
     expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('ssis'))).toEqual(ssisKinds)
     expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxy'])
+    // BigQuery's kinds insert their backtick-quoted path, and only they do; each declares BigQuery alone.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'bqPath')).toEqual(bqKinds)
+    expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('bq'))).toEqual(bqKinds)
+    for (const kind of bqKinds) expect(kindSpecs[kind].providers, kind).toEqual(['bigquery'])
+    expect(kindSpecs.server.providers).toEqual(['sqlserver', 'bigquery'])
   })
   it('groups by schema exactly the folders of schema-scoped objects below Tables, Views, Synonyms and Programmability', () => {
     const placed = folderIds.filter(id => schemaPlacement(id) !== undefined)
@@ -232,7 +242,7 @@ describe('Object Explorer catalogue', () => {
       // Group by Schema hangs the folders of schema-scoped objects below a schema row as well.
       if (owner === 'server' || owner === 'database') expect(owners, id).toEqual(belowSchema(id) ? [owner, 'schema'] : [owner])
       // Object folders hang below the SQL objects that own child refs, or below SSIS folders and projects.
-      else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject', 'agent'], id).toContain(kind)
+      else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject', 'agent', 'bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable'], id).toContain(kind)
     }
     expect(folderOwnerKinds('integrationServicesCatalogs')).toEqual(['server'])
     expect(folderOwnerKinds('ssisProjects')).toEqual(['ssisFolder'])
@@ -240,6 +250,8 @@ describe('Object Explorer catalogue', () => {
     expect(folderOwnerKinds('ssisPackages')).toEqual(['ssisProject'])
     for (const id of ['agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'] as const) expect(folderOwnerKinds(id), id).toEqual(['agent'])
     expect(folderOwnerKinds('columns')).toEqual(['table', 'view', 'function', 'tableType'])
+    for (const id of ['bqTables', 'bqViews', 'bqMaterializedViews', 'bqExternalTables', 'bqRoutines', 'bqModels'] as const) expect(folderOwnerKinds(id), id).toEqual(['bqDataset'])
+    expect(folderOwnerKinds('bqColumns')).toEqual(['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable'])
     expect(folderOwnerKinds('parameters')).toEqual(['procedure', 'function'])
     expect(folderOwnerKinds('systemTables')).toEqual(['database', 'schema'])
     expect(folderOwnerKinds('databaseTriggers')).toEqual(['database'])
@@ -256,7 +268,11 @@ describe('Object Explorer catalogue', () => {
       const { required, forbidden } = scopeFields[scope]
       expect([...required, ...forbidden].sort(), scope).toEqual([...refFields].sort())
     }
-    expect(refFields).toEqual(['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject'])
+    expect(refFields).toEqual(['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject', 'project', 'dataset', 'table'])
+    expect(scopeFields.bqDataset.required).toEqual(['project', 'name'])
+    expect(scopeFields.bqObject.required).toEqual(['project', 'dataset', 'name'])
+    expect(scopeFields.bqField.required).toEqual(['project', 'dataset', 'table', 'name'])
+    for (const scope of kindScopes.filter(scope => !scope.startsWith('bq'))) expect(scopeFields[scope].forbidden, scope).toEqual(expect.arrayContaining(['project', 'dataset', 'table']))
     expect(scopeFields.ssisFolderObject.required).toEqual(['ssisFolder', 'name'])
     expect(scopeFields.ssisProjectObject.required).toEqual(['ssisFolder', 'ssisProject', 'name'])
     for (const scope of kindScopes.filter(scope => !scope.startsWith('ssis'))) expect(scopeFields[scope].forbidden, scope).toEqual(expect.arrayContaining(['ssisFolder', 'ssisProject']))
@@ -267,14 +283,17 @@ describe('Object Explorer catalogue', () => {
       if (maxName !== undefined) expect(Number.isInteger(maxName) && maxName > 128 && maxName <= explorerLimits.maxName, kind).toBe(true)
     }
     // An SSIS package name may be 260 code units (catalog.packages.name is nvarchar(260)).
-    expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual(['ssisPackage'])
+    // BigQuery's names are longer (src/shared/bigquery/names.ts), and a column's path joins up to 15 of its names.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual(['ssisPackage', 'bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine', 'bqModel', 'bqColumn'])
+    expect(maxNameOf(kindSpecs.bqColumn)).toBe(explorerLimits.maxName)
     expect(maxNameOf(kindSpecs.ssisPackage)).toBe(260)
     expect(maxNameOf(kindSpecs.table)).toBe(128)
     expect(maxNameOf({ maxName: 260 })).toBe(260)
   })
   it('gives a kind with names past 128 no folders, history row or rows, which bind their owner\'s name as a sysname', () => {
     const ownsChildren = (spec: KindSpec) => spec.folders.length > 0 || Object.keys(spec.subtypeFolders ?? {}).length > 0 || (spec.historyLookup?.length ?? 0) > 0 || spec.list !== undefined
-    for (const kind of nodeKinds) if (maxNameOf(kindSpecs[kind]) > 128) expect(ownsChildren(kindSpecs[kind]), kind).toBe(false)
+    // BigQuery's listers pass names to REST, never as a sysname.
+    for (const kind of nodeKinds) if (maxNameOf(kindSpecs[kind]) > 128 && !kindSpecs[kind].scope.startsWith('bq')) expect(ownsChildren(kindSpecs[kind]), kind).toBe(false)
     expect(ownsChildren(kindSpecs.synonym)).toBe(false)
     expect([{ list: 'logins' as const }, { folders: ['columns'] as const }, { historyLookup: ['history'] as const }, { subtypeFolders: { history: ['columns'] as const } }]
       .map(change => ownsChildren({ ...kindSpecs.synonym, ...change }))).toEqual([true, true, true, true])
@@ -325,7 +344,9 @@ describe('Object Explorer catalogue', () => {
     expect(labels('ssisProject')).toEqual(['Packages'])
     expect(labels('server')).toEqual(['Databases', 'Security', 'Server Objects', 'Integration Services Catalogs'])
     expect(labels('agent')).toEqual(['Jobs', 'Alerts', 'Operators', 'Proxies', 'Error Logs'])
-    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function', 'ssisFolder', 'ssisProject', 'agent']
+    expect(labels('bqDataset')).toEqual(['Tables', 'Views', 'Materialized Views', 'External Tables', 'Routines', 'Models'])
+    for (const kind of ['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable'] as const) expect(labels(kind), kind).toEqual(['Columns'])
+    const parents = ['server', 'database', 'table', 'view', 'tableType', 'procedure', 'function', 'ssisFolder', 'ssisProject', 'agent', 'bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable']
     for (const kind of nodeKinds.filter(kind => !parents.includes(kind))) expect(foldersFor(kind), kind).toEqual([])
     for (const id of ['columns', 'parameters'] as const) expect(staticChildren({ folder: id }, box(12))).toEqual([])
   })
@@ -382,7 +403,7 @@ describe('Object Explorer catalogue', () => {
       pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
       cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
       typeAheadMax: 64, rowHeight: 22, serverRowHeight: 30, indent: 16, overscan: 10, deleteSlice: 10_000,
-      cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260
+      cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 4514
     })
   })
 })

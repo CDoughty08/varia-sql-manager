@@ -1621,7 +1621,7 @@ describe('ExplorerService: connections', () => {
     expect(explorer.menuNode(security.id)).toBeUndefined()
     expect(explorer.node(root)).toMatchObject({ expanded: true, lost: false, connectionId: fresh.id })
   })
-  it('shows a BigQuery connection as a root of its own with BigQuery commands and no catalog to load until its Explorer', async () => {
+  it('shows a BigQuery connection as a root of its own with BigQuery commands, its projects loaded on expand', async () => {
     class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
     const backend = fakeBackend(), connections = new Connections([])
     const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => callback() })
@@ -1630,17 +1630,19 @@ describe('ExplorerService: connections', () => {
     connections.set([bigQuery])
     await settle()
     const root = explorer.rootIds[0]!
-    expect(explorer.node(root)).toMatchObject({ label: 'varia-alpha', hasChildren: false, expanded: false, sublabel: '(BigQuery - ada@example.com)' })
-    expect(backend.api.explorerChildren).not.toHaveBeenCalled()
+    expect(explorer.node(root)).toMatchObject({ label: 'varia-alpha', hasChildren: true, sublabel: '(BigQuery - ada@example.com)' })
+    // Whatever it loads asks the backend for the connection node's children: its projects.
+    const asked = () => vi.mocked(backend.api.explorerChildren).mock.calls.map(([params]) => params.node)
+    expect(asked().every(node => node.type === 'object' && node.object.kind === 'server')).toBe(true)
     expect(explorer.menuNode(root)).toMatchObject({ provider: 'bigquery' })
     expect(explorerNodeProvider(explorer.menuNode(root))).toBe('bigquery')
-    // A reconnect under a new handle keeps it childless.
+    // A reconnect under a new handle can be expanded again (BQ-5: the backend lists its projects).
     connections.set([{ ...bigQuery, lost: true }])
     await settle()
     connections.set([{ ...bigQuery, id: cid('varia-alpha-2'), generation: 2 }])
     await settle()
-    expect(explorer.node(root)).toMatchObject({ lost: false, hasChildren: false })
-    expect(backend.api.explorerChildren).not.toHaveBeenCalled()
+    expect(explorer.node(root)).toMatchObject({ lost: false, hasChildren: true })
+    expect(asked().every(node => node.type === 'object' && node.object.kind === 'server')).toBe(true)
   })
   it('updates target details in place and hides only Explorer membership while keeping other targets in order', async () => {
     class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
