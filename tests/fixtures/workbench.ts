@@ -460,6 +460,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSets: results.resultSets,
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
+    resultsComparing: results.comparing,
     scripting: scripting.running,
     bookmarks,
     recentFiles,

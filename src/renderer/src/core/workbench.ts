@@ -354,7 +354,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
   const derivedJobs = new DerivedJobs()
   // Each counts the other's new results in flight against a run's 1,000.
-  const compare: CompareService = new CompareService(results, { jobs: derivedJobs, adding: tabId => pivot.adding(tabId) })
+  // A new comparison takes the layout setting; a change of one carries its highlights over (D15).
+  const compare: CompareService = new CompareService(results, {
+    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
+  })
   // A shown Pivot rebuilds by itself when its Table's filters change; what is shown depends on the results' layout.
   const pivot: PivotService = new PivotService(results, {
     jobs: derivedJobs, adding: tabId => compare.adding(tabId),
@@ -542,6 +545,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultSets: results.resultSets,
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
+    resultsComparing: results.comparing,
     scripting: scripting.running,
     bookmarks,
     inputMode,

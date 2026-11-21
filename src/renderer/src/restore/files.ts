@@ -217,7 +217,7 @@ export function restoreFilesRequest(draft: RestoreDraft, facts: RestoreFacts, id
   if (facts.sets.length === 0) return { problem: draft.source === 'device' ? restoreMessages.noSets : restoreMessages.noHistory }
   const destination = filesDestination(draft, facts), base = filesBase(draft, facts), files = draft.files
   if (!destination || !base || !files) return { problem: restoreMessages.noFiles }
-  const set = (row: BackupSetRow, type: RestoreFilesSet['type']): RestoreFilesSet => ({ id: row.id, devices: row.devices, file: row.position, type, ...row.name ? { name: row.name.slice(0, restoreLimits.setName) } : {} })
+  const set = (row: BackupSetRow, type: RestoreFilesSet['type']): RestoreFilesSet => ({ id: row.id, devices: row.devices, file: row.position, type, ...row.name ? { name: row.name.slice(0, restoreLimits.setName) } : {}, ...row.backupSetGuid ? { guid: row.backupSetGuid } : {} })
   const sets: RestoreFilesSet[] = [set(base, base.type === 'file' ? 'file' : 'full'), ...fileRestoreLogs(sourceSets(draft, facts), base).map(log => set(log, 'log'))]
   const separator = facts.server?.separator ?? '\\'
   const relocate: RestoreMove[] = filesMoveRows(draft, facts).filter(row => !sameServerPath(row.restoreAs, row.file.physical, separator)).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
