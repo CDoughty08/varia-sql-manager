@@ -68,6 +68,12 @@ internal sealed class ObjectSearchService : IDisposable
         public int Indexed;
         public SkipList Skipped = new(MaxSkipped);
         public DateTime? BuiltAt;
+        /// <summary>When the running (or last) build started (UTC): a database read before it is not yet read by it.</summary>
+        public DateTime? BuildStarted;
+        /// <summary>The databases the running (or last) build listed.</summary>
+        public HashSet<string> Listed = new(StringComparer.Ordinal);
+        /// <summary>The running (or last) build's skips by database, uncapped (the status lists at most <see cref="MaxSkipped"/>).</summary>
+        public Dictionary<string, ObjectIndexSkip> SkippedBy = new(StringComparer.Ordinal);
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -177,11 +183,13 @@ internal sealed class ObjectSearchService : IDisposable
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
+            state.SkippedBy = new(StringComparer.Ordinal);
+            state.BuildStarted = DateTime.UtcNow;
         }
         try
         {
             var names = await ListAsync(args.ConnectionId, source.Token);
-            lock (state.Gate) state.Databases = names.Count;
+            lock (state.Gate) (state.Databases, state.Listed) = (names.Count, names.ToHashSet(StringComparer.Ordinal));
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
@@ -194,7 +202,7 @@ internal sealed class ObjectSearchService : IDisposable
                 lock (state.Gate)
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
-                    if (skip is not null) state.Skipped.Add(at, skip);
+                    if (skip is not null) { state.Skipped.Add(at, skip); state.SkippedBy[names[at]] = skip; }
                 }
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
@@ -251,6 +259,16 @@ internal sealed class ObjectSearchService : IDisposable
 
     /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
     internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
+
+    /// <summary>The editor's lookup into a connection's index (<see cref="IndexLookup"/>), or null when it has none: a snapshot of
+    /// its build's state and the reads held now.</summary>
+    internal IndexLookup? Lookup(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return null;
+        lock (state.Gate)
+            return new IndexLookup(state.Index, budget, state.Building, state.BuildStarted, state.Listed.ToHashSet(StringComparer.Ordinal),
+                new Dictionary<string, ObjectIndexSkip>(state.SkippedBy, StringComparer.Ordinal));
+    }
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
     internal ConnectionIndex? IndexOf(string connectionId) => states.TryGetValue(connectionId, out var state) ? state.Index : null;
@@ -770,7 +788,12 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 await Keys(reader, byId, indexes, token);
             }
             await Definitions(reader, byId, definitions, token);
-            return Partial();
+            // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
+            bool? caseSensitive = await reader.NextResultAsync(token) && await reader.ReadAsync(token) ? reader.GetBoolean(0) : null;
+            var index = Partial();
+            index.CaseSensitive = caseSensitive;
+            index.DefinitionsLeftOut = !definitions;
+            return index;
         }
         catch (TooLarge)
         {

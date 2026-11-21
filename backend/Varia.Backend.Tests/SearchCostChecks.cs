@@ -132,11 +132,13 @@ internal static class SearchCostChecks
 
     /// <summary>A database batch without children and with definitions: <paramref name="count"/> procedures, each with one
     /// (<paramref name="text"/>'s, or its own), after plan guides with their names and statements.</summary>
-    private static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null)
+    /// <summary>A batch of <paramref name="count"/> procedures; without <paramref name="definitions"/> it has no definitions set, as the
+    /// real batch then has none (the collation's case set, which the read does not need here, is left out either way).</summary>
+    private static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null, bool definitions = true)
     {
         var at = DateTime.UnixEpoch;
         var ids = Enumerable.Range(1, count).ToList();
-        return new([
+        return new([.. new[] {
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)), ("modified", typeof(DateTime)), ("parent", typeof(int)),
                 ("system", typeof(bool)), ("variant", typeof(byte)), ("current", typeof(int))], ids.Select(id => new object?[] { id, "dbo", "p" + id, "P", at, 0, false, (byte)0, null })),
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("table", typeof(bool)), ("assembly", typeof(bool)), ("object", typeof(int))], []),
@@ -144,7 +146,7 @@ internal static class SearchCostChecks
             Rows([("id", typeof(int)), ("name", typeof(string)), ("modified", typeof(DateTime)), ("system", typeof(bool))], []),
             Rows([("name", typeof(string)), ("modified", typeof(DateTime)), ("text", typeof(string))], (guides ?? []).Select(guide => new object?[] { guide.Name, at, guide.Text })),
             Rows([("id", typeof(int)), ("text", typeof(string))], ids.Select(id => new object?[] { id, text ?? "CREATE PROCEDURE dbo.p" + id + " AS SELECT " + id }))
-        ]);
+        }.Take(definitions ? 6 : 5)]);
     }
 
     private static async Task Reads(Action<bool, string> check)
@@ -209,7 +211,7 @@ internal static class SearchCostChecks
         const string repeat = "((0))";
         (string, string)[] guides = [("g1", repeat), (new string('g', 2000), repeat)];
         var measure = new IndexBudget(1 << 20);
-        await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 0 }, new StringPool(measure)).ReadAsync(Procedures(3, guides, repeat), false, CancellationToken.None, children: false);
+        await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 0 }, new StringPool(measure)).ReadAsync(Procedures(3, guides, repeat, definitions: false), false, CancellationToken.None, children: false);
         const long reserve = 1 << 20;
         var tight = new IndexBudget(measure.Used + reserve - 2000);
         var repeats = Procedures(3, guides, repeat);

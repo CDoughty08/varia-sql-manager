@@ -99,6 +99,24 @@ column-wise beside the entries, found by binary search on the entry):
 - The resource database's columns and parameters carry their types too. A database read without its children
   (`CHILDREN_LEFT_OUT`) has no metadata.
 
+### Editor lookup
+
+The query editor reads the index in process through `IndexLookup` (no IPC), a snapshot of a connection's build state and
+the reads held when it is made:
+
+- Objects by database, schema and name (any schema when none is given, optionally only some kinds), the database's own
+  and the resource database's `sys` and `INFORMATION_SCHEMA` ones; then an object's columns and parameters by ordinal with
+  their types, its indexes and primary and unique keys with their columns by name, and its foreign keys out (to the table
+  they reference) and in (from the tables that reference it).
+- Names compare as the database's catalog collation does for case: each database batch ends by comparing `a` with `A`
+  under `CATALOG_DEFAULT`, which reads no catalog row. Where that is unknown (a batch that failed part way) names compare
+  without case. Accent- and kana-insensitive collations are not followed. A database's own name matches exactly, else
+  the one known name that differs from it only in case.
+- Every answer carries its database's state: `Ready`; `Partial` with its gaps (children left out, definitions left out
+  by the build, definitions cut); `Building` (a build is running and has not read it yet, while an earlier read still
+  answers); `Skipped` with the skip of its last read (an earlier read still answers where there is one); `Absent`. It
+  also carries when the read it answers from finished, and the database's case rule.
+
 ### Failures and skipped databases
 
 - A failing statement (a catalog view the login may not read, or an edition lacks) lists the server or database as
@@ -126,7 +144,10 @@ column-wise beside the entries, found by binary search on the entry):
   only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
   predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.
 - The editor metadata is charged per item: 13 bytes a typed column, parameter or function, 14 an index or key,
-  5 a key column and 16 a type. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
+  5 a key column and 16 a type. A database's first editor lookup builds its lookup arrays (names, children by parent,
+  and foreign keys by the table they reference, 4 bytes per entry and per such foreign key), charged until its read is
+  replaced or dropped; where the budget cannot take them, lookups scan the table instead. The Memory panel counts them
+  with the records. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
   840 key columns) beside about 195 KB of entries.
 - A database that does not fit with its children is read again without columns, indexes, statistics and parameters
   (status: `CHILDREN_LEFT_OUT`); one that still does not fit is skipped as `TOO_LARGE`. A read that runs out of room

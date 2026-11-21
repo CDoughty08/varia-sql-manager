@@ -22,8 +22,13 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
 internal sealed class DatabaseIndex(string database, ObjectTable table, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null,
-    bool pooled = false)
+    bool pooled = false, DateTime? readAt = null)
 {
+    private readonly object gate = new();
+    private TableLookup? lookup;
+    private long lookupBytes;
+    private bool dropped;
+
     /// <summary>An index of <paramref name="objects"/> as they are, holding no pool references (checks and benchmarks).</summary>
     public DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut) : this(database, ObjectTable.Of(objects), bytes, modules, cut) { }
 
@@ -44,6 +49,44 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
     /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
     public bool ChildrenLeftOut { get; set; }
+    /// <summary>Read by a build without definitions: no entry has one.</summary>
+    public bool DefinitionsLeftOut { get; set; }
+    /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
+    /// read did not reach it (a batch that failed part way).</summary>
+    public bool? CaseSensitive { get; set; }
+    /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
+    public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+
+    /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
+    public long LookupBytes { get { lock (gate) return lookupBytes; } }
+
+    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped.
+    /// Null once it is dropped, or when the budget cannot take them: the lookup then scans the table.</summary>
+    public TableLookup? Lookup(IndexBudget budget)
+    {
+        if (Volatile.Read(ref lookup) is { } built) return built;
+        lock (gate)
+        {
+            if (lookup is not null || dropped) return lookup;
+            var bytes = TableLookup.BytesFor(Table);
+            if (!budget.TryTake(bytes)) return null;
+            lookupBytes = bytes;
+            Volatile.Write(ref lookup, TableLookup.Build(Table));
+            return lookup;
+        }
+    }
+
+    /// <summary>Gives back its lookup arrays' share once the index no longer holds it; a later lookup builds none.</summary>
+    public void Dropped(IndexBudget budget)
+    {
+        lock (gate)
+        {
+            dropped = true;
+            budget.Release(lookupBytes);
+            lookupBytes = 0;
+            Volatile.Write(ref lookup, null);
+        }
+    }
 }
 
 /// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
@@ -194,6 +237,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private void Drop(DatabaseIndex value, long bytes)
     {
         budget.Release(bytes);
+        value.Dropped(budget);
         pool?.Release(value.Pooled);
     }
 

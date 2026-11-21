@@ -56,7 +56,7 @@ internal static class SearchDetailChecks
 
     /// <summary>Two tables with keys, an index with a descending and an included column, a foreign key and one to a table the login
     /// cannot see, a table type with its key, a procedure with output and READONLY parameters, a scalar function with a return type.</summary>
-    private static DataTableReader Fixture(bool children = true) => SearchChecks.Batch(children,
+    internal static DataTableReader Fixture(bool children = true, bool? caseSensitive = null) => SearchChecks.Batch(children,
         [
             [10, "dbo", "Orders", "U", At, 0, false, (byte)0, null],
             [20, "dbo", "Customers", "U", At, 0, false, (byte)0, null],
@@ -103,7 +103,7 @@ internal static class SearchDetailChecks
         allTypes: [.. SearchChecks.SystemTypes, [257, "dbo", "List", (byte)243, true, true], [258, "dbo", "Phone", (byte)231, true, false], [255, "sys", "vector", (byte)165, false, false]],
         indexColumns: [[10, 1, 1, false, false], [10, 2, 2, true, false], [10, 2, 4, false, true], [20, 2, 1, false, false], [900, 1, 1, false, false], [998, 2, 1, false, false]],
         keys: [[30, 10, 1], [32, 20, 2], [33, 900, 1], [999, 10, 1]],
-        foreignKeys: [[31, 2, 20, 1], [34, 1, 997, 1], [998, 1, 20, 1]]);
+        foreignKeys: [[31, 2, 20, 1], [34, 1, 997, 1], [998, 1, 20, 1]], caseSensitive: caseSensitive);
 
     private static async Task Reads(Action<bool, string> check)
     {
