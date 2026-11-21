@@ -873,7 +873,7 @@ internal static partial class BigQueryExecutionChecks
             var blocks = new Blocks { Pad = 16_000 };
             var remote = Remote(store, blocks, cache: 16L << 20);
             foreach (var block in new long[] { 0, 40, 80, 120, 160, 200 }) await ReadRemote(remote, block * 256, 10, viewer: (uint)(block + 1));
-            SpinWait.SpinUntil(() => remote.Fetches >= 6 && remote.CachedBytes <= remote.CacheLimit, 15_000);
+            SpinWait.SpinUntil(() => remote.Fetches >= 6 && remote.FetchingBlocks() == 0 && remote.CachedBytes <= remote.CacheLimit, 15_000);
             check(remote.Evictions > 0 && remote.CachedBytes <= remote.CacheLimit + (5L << 20) && store.WindowCacheBytes == remote.CachedBytes,
                 $"the cache evicts least recent blocks to stay near its limit, and the store counts what it holds: {remote.Evictions} {remote.CachedBytes} {store.WindowCacheBytes}");
             remote.Dispose();
