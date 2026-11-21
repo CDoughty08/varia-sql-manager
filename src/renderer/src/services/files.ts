@@ -169,7 +169,8 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       try {
         const fileId = document.file.id
         const ask = async (dirty: boolean) => {
-          const later = ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
+          // Once Yes to All answers for the rest, a question asked again about an edit has no "All" buttons to undo it.
+          const later = !all && ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
           const answer = unwrap(await confirmReload({ fileId, dirty, more: later }))
           if (answer === 'yesToAll') all = 'yes'
           if (answer === 'noToAll') all = 'no'
@@ -178,10 +179,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (!(silent(document) || all === 'yes' || (!all && await ask(this.documents.hasUnsavedEdits(id))))) continue
         // The read is awaited: an edit made meanwhile was covered by no answer (and a silent reload is only for a clean
         // query), so the text read replaces it only once File changed asks again and the user says so. A large file's
-        // fill still appending is not an edit.
+        // fill still appending is not an edit, and an edit undone back to the saved text loses nothing.
         const revision = this.documents.editRevision(id), read = await this.readAgain(id)
         if (!read || this.disposed || !this.documents.get(id)) continue
-        if (this.documents.editRevision(id) === revision || await ask(this.documents.hasUnsavedEdits(id))) this.applyReload(id, read)
+        if (this.documents.editRevision(id) === revision || !this.documents.hasUnsavedEdits(id) || await ask(this.documents.hasUnsavedEdits(id))) this.applyReload(id, read)
       } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
     if (failed.length) throw new Error([...failed, ...deleted].join(' '))
