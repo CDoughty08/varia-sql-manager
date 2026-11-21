@@ -350,11 +350,14 @@ internal static class BigQueryExplorerChecks
         var rows = 1;
         var hold = false;
         JsonObject? jobError = null;
+        var dryRunDenied = false;
         BigQueryFake Routes(BigQueryFake fake) => fake
             .On("POST", BigQueryFake.Jobs, request =>
             {
                 var body = JsonNode.Parse(request.Body)!;
-                if (body["configuration"]?["dryRun"]?.GetValue<bool>() == true) return BigQueryFake.Fixture("dry-run");
+                if (body["configuration"]?["dryRun"]?.GetValue<bool>() == true)
+                    return dryRunDenied ? new BigQueryFake.Reply(403, "{\"error\":{\"code\":403,\"message\":\"Access Denied: Table varia-alpha:sales.orders: Permission bigquery.tables.get denied\",\"errors\":[{\"reason\":\"accessDenied\",\"message\":\"Access Denied\"}]}}")
+                        : BigQueryFake.Fixture("dry-run");
                 inserts.Enqueue(body);
                 var id = body["jobReference"]!["jobId"]!.GetValue<string>();
                 return new BigQueryFake.Reply(200, new JsonObject
@@ -430,6 +433,11 @@ internal static class BigQueryExplorerChecks
             jobError = new JsonObject { ["reason"] = "accessDenied", ["message"] = "Access Denied: Table varia-alpha:sales.INFORMATION_SCHEMA.TABLES" };
             var denied = await capped.Script("create", (JsonObject)orders.DeepClone());
             jobError = null;
+            dryRunDenied = true;
+            var estimateDenied = await capped.Script("create", (JsonObject)orders.DeepClone(), estimateOnly: true);
+            dryRunDenied = false;
+            check(estimateDenied.Result?.Error is { Code: "PERMISSION_DENIED" } refusal && !refusal.Message.Contains("jobs.create", StringComparison.Ordinal) && refusal.Message.Contains("bigquery.tables.get", StringComparison.Ordinal),
+                "a CREATE estimate refused for the table shows Google's reason, not jobs.create: " + estimateDenied.Result?.Error?.Message);
             check(overCap.Result?.Error?.Code == "COST_CAP" && denied.Result?.Error?.Code == "PERMISSION_DENIED",
                 $"a CREATE job BigQuery fails keeps its own error (COST_CAP, PERMISSION_DENIED): {overCap.Result?.Error?.Code} {overCap.Result?.Error?.Message} {denied.Result?.Error?.Code}");
             check(run.Result?.Error is null && inserts.Last()["configuration"]!["query"]!["maximumBytesBilled"]!.ToString() == "1048576",

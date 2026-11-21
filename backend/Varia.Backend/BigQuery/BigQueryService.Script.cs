@@ -69,7 +69,9 @@ internal sealed partial class BigQueryService
             // The CREATE job's own failure (bytesBilledLimitExceeded, accessDenied, quotaExceeded…) maps as Execute's does.
             var job = error as BigQueryJobException ?? error.InnerException as BigQueryJobException;
             var mapped = job is not null ? BigQueryErrors.Job(job.Result, job.Errors, project, cap)
-                : BigQueryErrors.Map(error, project, verb == "create" ? "bigquery.jobs.create" : "bigquery.tables.get", cap: cap, token: token);
+                // CREATE's calls (the dry run, the dataset's location, the job) fail for the table's or dataset's permissions as often as
+                // for jobs.create, which the connect probe already proved; Google's own text names the one that is missing.
+                : BigQueryErrors.Map(error, project, verb == "create" ? null : "bigquery.tables.get", cap: cap, token: token);
             var (code, message) = mapped is RequestException request ? (request.Code, request.Message) : ("SQL_ERROR", "BigQuery refused the request.");
             return Failure(code switch
             {
