@@ -70,7 +70,23 @@ internal static partial class AgentSql
     /// <summary>A job's steps, for Start Job at Step (AG-2; every Agent role may read them).</summary>
     public static readonly AgentStatement JobSteps = new("jobSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name"], [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps];
+    private static readonly string[] ActivityColumns = [.. JobColumns, "has_step", "has_schedule", "current_retry_attempt"];
+
+    /// <summary>Job Activity Monitor's list (AG-3): every job the login may see with the columns its grid and tiles need.</summary>
+    public static readonly AgentStatement JobActivity = new("jobActivity", "EXEC msdb.dbo.sp_help_job;", ActivityColumns, [], "listRows");
+
+    /// <summary>One watched job's row for the status bar (AG-3), with its step count.</summary>
+    public static readonly AgentStatement WatchedJob = new("watchedJob", "EXEC msdb.dbo.sp_help_job @job_id = @job_id, @job_aspect = N'JOB';", ActivityColumns,
+        [new("@job_id", SqlDbType.UniqueIdentifier)], "listRows");
+
+    /// <summary>Every job's activity row in the Agent's current session (sp_help_jobactivity defaults to the newest syssessions row),
+    /// which carries a running job's start for every Agent role.</summary>
+    public static readonly AgentStatement Activities = new("activities", "EXEC msdb.dbo.sp_help_jobactivity;", ["job_id", "start_execution_date", "stop_execution_date"], [], "listRows");
+
+    /// <summary>The server's clock in its local time, which msdb's dates use, for a running job's elapsed time.</summary>
+    public static readonly AgentStatement Clock = new("clock", "SELECT CONVERT(datetime, SYSDATETIME()) AS server_now;", ["server_now"], [], "listRows");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, JobActivity, WatchedJob, Activities, Clock];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

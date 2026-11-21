@@ -5,12 +5,13 @@ import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntri
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
+import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 import { bothProviders, providerAllows, providersOf, type ProviderContext, type ProviderId } from '../providers.ts'
 import type { BackendMethod } from '../contracts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Table Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Table Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help' | 'SQL Server Agent'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -483,6 +484,8 @@ export const commandCatalog = {
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
   // from src/shared/ssis/operations.ts.
   ...operationsCommandEntries(),
+  // SQL Server Agent's Job Activity Monitor (AG-3): the monitor and its verbs, generated from src/shared/agent/jobs.ts.
+  ...jobActivityCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
