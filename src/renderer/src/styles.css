@@ -1243,6 +1243,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-statistics { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); }
 .profile-statistics .profile-strip-action[aria-pressed='true'] { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .profile-card-title .profile-key { margin-left: 4px; color: var(--varia-warningForeground); }
+/* The key mark is a glyph of the column header's kind, drawn by CSS (its name is the card's "key column"). */
+.profile-card-title .profile-key::before { content: "B7" / ""; }
 .profile-changes { display: flex; height: 6px; margin: 5px 0 3px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-resultsGrid-gridlines); }
 .profile-changes > i { display: block; height: 100%; }
 .profile-changes > .changed { background: var(--varia-resultsGrid-diffChangedBackground); }

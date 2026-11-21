@@ -48,7 +48,7 @@ const ProfileCard = memo(function ProfileCard({ column, name, type, profile, row
   const histogram = statistics ? profile?.histogram : undefined
   return <section ref={cardRef} className={'profile-card' + (selected ? ' selected' : '') + (current ? ' current' : '')} aria-label={isKey ? `${name}, key column` : name}
     aria-current={current || undefined} aria-describedby={hint} data-column={column} tabIndex={tabStop ? 0 : -1} onClick={() => onPick(column)}>
-    <div className="profile-card-title"><b>{name}{isKey && <span className="profile-key" aria-hidden="true" title="Key column">⚷</span>}</b>{selected && <span className="visually-hidden">Selected</span>}<span>{type}</span></div>
+    <div className="profile-card-title"><b>{name}{isKey && <span className="profile-key" aria-hidden="true" title="Key column" />}</b>{selected && <span className="visually-hidden">Selected</span>}<span>{type}</span></div>
     {changes && <>
       <div className="profile-changes" aria-hidden="true">
         {columnChangeShares(changes).map(({ kind, share }) => <i key={kind} className={kind} style={{ width: share + '%' }} />)}

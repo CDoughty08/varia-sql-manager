@@ -355,7 +355,7 @@ describe('column profile panel', () => {
     const key = view.card('c0, key column')!, other = view.card('c1')!
     expect(key.querySelector('.profile-change-counts')?.textContent).toBe('0 changed · 1 added · 0 removed · 12 same')
     expect(other.querySelector('.profile-change-counts')?.textContent).toBe('1 changed · 1 differs only by collation · 1 added · 0 removed · 10 same')
-    expect(key.querySelector('.profile-key')?.textContent).toBe('⚷')
+    expect(key.querySelector('.profile-key')?.getAttribute('title')).toBe('Key column')
     // The bar is drawn for the eye; the line says it.
     const bar = other.querySelector('.profile-changes')!
     expect(bar.getAttribute('aria-hidden')).toBe('true')

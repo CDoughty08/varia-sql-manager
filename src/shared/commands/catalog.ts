@@ -1226,7 +1226,7 @@ export const commandCatalog = {
     menus: [{ menu: 'output.tools', group: '5_compare', order: 2, mnemonic: 'e', when: 'resultsGridComparison' }]
   },
   'output.compareOneRow': {
-    title: 'One Row per Entry', category: 'Query', icon: 'git-compare', keywords: ['compare', 'diff', 'layout', 'one', 'row', 'entry', 'unified', 'two', 'rows'], toggled: 'comparisonOneRow', providers: both, methods: ['results.diff'],
+    title: 'One Row per Entry', category: 'Query', icon: 'git-compare', keywords: ['compare', 'diff', 'one', 'row', 'entry', 'unified', 'two', 'rows'], toggled: 'comparisonOneRow', providers: both, methods: ['results.diff'],
     menus: [{ menu: 'output.tools', group: '5_compare', order: 3, mnemonic: 'n', when: 'resultsGridComparison' }]
   },
   'output.compareExactText': {
