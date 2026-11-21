@@ -891,7 +891,9 @@ internal static partial class ViewSorter
                         continue;
                     }
                     if (truncated) Volatile.Write(ref inexact, 1);
-                    key.Set(row, span, scratch);
+                    // A float or real whose display text reads back as another value sorts by its exact value.
+                    if (kind == Kind.Approximate && view.TryExact(column, r, out var exact)) ((NumberKey)key).SetExact(row, exact);
+                    else key.Set(row, span, scratch);
                 }
                 key.EndPage(scratch, index);
             }, token);
@@ -1167,7 +1169,7 @@ internal static partial class ViewSorter
         public PageView View(int index)
         {
             var body = bodies[index] ?? throw new InvalidOperationException("A packed page is read through a room.");
-            return PageView.At(body, blobStarts[index], layouts[index]!, pages[index].FirstRow, pages[index].Rows, columns);
+            return PageView.At(body, blobStarts[index], layouts[index]!, pages[index].FirstRow, pages[index].Rows, columns).With(pages[index].Lengths);
         }
 
         /// <summary>A page for a reader on one thread: in place when held as sealed; a packed one unpacked into the reader's
@@ -1178,7 +1180,7 @@ internal static partial class ViewSorter
             if (room is null) throw new InvalidOperationException("A packed page is read through a room.");
             var page = pages[index];
             var body = page.Set!.Read(page, room.Bytes);
-            return PageView.Parse(body.AsSpan(0, page.Length), columns, room.Layout);
+            return PageView.Parse(body.AsSpan(0, page.Length), columns, room.Layout).With(page.Lengths);
         }
 
         private int IndexOf(int row)
@@ -1209,7 +1211,7 @@ internal static partial class ViewSorter
             return bodies[index] is not null ? View(index) : Unpacked(index);
         }
 
-        private PageView Unpacked(int index) => PageView.Parse(pages[index].Body(), columns);
+        private PageView Unpacked(int index) => PageView.Parse(pages[index].Body(), columns).With(pages[index].Lengths);
 
         /// <summary>Rows, ascending, as their pages show them, each page read once: on this thread when every page is held as
         /// sealed, otherwise page by page on the workers, each with its own room and state.</summary>
@@ -1293,7 +1295,7 @@ internal static partial class ViewSorter
                     for (var i = start; i < end; i++)
                     {
                         if (bodies[i] is not null) read(i, pages[i], View(i));
-                        else read(i, pages[i], PageView.Parse(bytes[half][i - start].AsSpan(0, pages[i].Length), columns, held[half, i - start]!.Layout));
+                        else read(i, pages[i], PageView.Parse(bytes[half][i - start].AsSpan(0, pages[i].Length), columns, held[half, i - start]!.Layout).With(pages[i].Lengths));
                     }
                     ahead?.GetAwaiter().GetResult();
                     ahead = null;
@@ -1489,6 +1491,8 @@ internal static partial class ViewSorter
             values[row] = parsed ? value : double.NaN;
             if (!parsed || cell.Length > DoubleDigits) textTies = true;
         }
+        /// <summary>A float or real cell's exact value, kept beside its page because its text reads back as another value.</summary>
+        public void SetExact(int row, double value) => values[row] = value;
         public override int Compare(int a, int b)
         {
             var compared = values[a].CompareTo(values[b]);
@@ -2040,6 +2044,21 @@ internal static class ViewPages
                         var group = new List<int> { index };
                         var seen = new HashSet<int> { index };
                         var horizon = Math.Min(end, position + 1 + (long)UnpackTogether * PageBuilder.MaxRows);
+                        // A read lets its group go with each output page, so it looks no further than the rows this output
+                        // page can still take, by count and by its rows' bytes (each base page's average): a page of wide
+                        // rows holds a row or two, and a group of 64 ahead unpacked about 48 pages a row that it then dropped.
+                        // Copy and Save keep the group across output pages.
+                        if (endOnRelease)
+                        {
+                            var limit = Math.Min(horizon, position + PageBuilder.MaxRows - builder.RowCount);
+                            var room = PageBuilder.SealBytes - builder.ByteCount - page.Length / Math.Max(1, page.Rows);
+                            // The row that fills the page is its last, so it is taken too.
+                            for (horizon = position + 1; horizon < limit && room > 0; horizon++)
+                            {
+                                var next = pages[IndexOf(view.Order[horizon])];
+                                room -= next.Length / Math.Max(1, next.Rows);
+                            }
+                        }
                         for (var ahead = position + 1; ahead < horizon && group.Count < UnpackTogether; ahead++)
                             if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
                         if (group.Count > 1)

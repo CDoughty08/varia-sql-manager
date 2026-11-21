@@ -50,7 +50,8 @@ internal sealed class PageBuilder
     private long rowData;
     private readonly List<CellLength> cells = [];
     private readonly List<(int Row, long Bytes)> large = [];
-    private int openCells;
+    private readonly List<ExactValue> exacts = [];
+    private int openCells, openExacts;
     // The cell Measure applies to: the last one appended, until it is measured.
     private int lastCell = -1;
     private bool lastTruncated;
@@ -80,14 +81,14 @@ internal sealed class PageBuilder
     /// <summary>Cell bytes the open row has added so far.</summary>
     public long OpenRowBytes => next < 0 ? 0 : rowBytes;
     /// <summary>What the open row adds to the lengths sidecar: its uint32 and its sparse entries (and a large row's entry).</summary>
-    public long OpenRowLengthBytes => next < 0 ? 0 : 4L + (long)PageLengths.CellBytes * openCells + (rowData >= uint.MaxValue ? PageLengths.LargeBytes : 0);
+    public long OpenRowLengthBytes => next < 0 ? 0 : 4L + (long)PageLengths.CellBytes * openCells + (long)PageLengths.ExactBytes * openExacts + (rowData >= uint.MaxValue ? PageLengths.LargeBytes : 0);
     /// <summary>Bytes held by the builder's buffers, for memory accounting.</summary>
     public long WorkingBytes
     {
         get
         {
             // Every committed row reads it (ResultSetBuffer.TryCommitRow), so it sums in a plain loop: no enumerator or closure a row.
-            var total = 4L * rowLengths.Length + (long)PageLengths.CellBytes * cells.Capacity + (long)PageLengths.LargeBytes * large.Capacity;
+            var total = 4L * rowLengths.Length + (long)PageLengths.CellBytes * cells.Capacity + (long)PageLengths.LargeBytes * large.Capacity + (long)PageLengths.ExactBytes * exacts.Capacity;
             for (var i = 0; i < columns.Length; i++)
             {
                 var column = columns[i];
@@ -108,6 +109,7 @@ internal sealed class PageBuilder
         reserved = 0;
         rowData = 0;
         openCells = 0;
+        openExacts = 0;
         lastCell = -1;
     }
 
@@ -212,6 +214,44 @@ internal sealed class PageBuilder
 
     public void EndFormatted(int written) => Commit(Text(), written, false);
 
+    /// <summary>A float as its display text (<see cref="CellFormat.WriteFloat"/>), its exact value kept beside the page
+    /// when that text reads back as another value (<see cref="ExactValue"/>).</summary>
+    public void AppendFloat(double value)
+    {
+        var span = BeginFormatted();
+        var written = CellFormat.WriteFloat(span, value);
+        var exact = !ReadsBack(span[..written], value);
+        EndFormatted(written);
+        if (exact) KeepExact(value);
+    }
+
+    /// <summary>Whether a float's display text reads back as the value itself, so it needs no exact value beside it.</summary>
+    private static bool ReadsBack(ReadOnlySpan<byte> text, double value) =>
+        double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
+
+    /// <summary>Whether a real's display text reads back as the value itself.</summary>
+    private static bool ReadsBack(ReadOnlySpan<byte> text, float value) =>
+        float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
+
+    /// <summary>A real as its display text (<see cref="CellFormat.WriteReal"/>), its exact value kept beside the page when
+    /// that text reads back as another real.</summary>
+    public void AppendReal(float value)
+    {
+        var span = BeginFormatted();
+        var written = CellFormat.WriteReal(span, value);
+        var exact = !ReadsBack(span[..written], value);
+        EndFormatted(written);
+        if (exact) KeepExact(value);
+    }
+
+    /// <summary>Keeps the exact value of the text cell just appended (a float or real whose text does not read back as it).</summary>
+    public void KeepExact(double value)
+    {
+        if (next <= 0) throw new InvalidOperationException("KeepExact follows the cell it describes.");
+        exacts.Add(new ExactValue(rows, next - 1, value));
+        openExacts++;
+    }
+
     public void AppendBinary(ReadOnlySpan<byte> bytes, bool truncated = false)
     {
         var column = Cell();
@@ -263,7 +303,9 @@ internal sealed class PageBuilder
             Clear(column.Errors, rows);
         }
         cells.RemoveRange(cells.Count - openCells, openCells);
+        exacts.RemoveRange(exacts.Count - openExacts, openExacts);
         openCells = 0;
+        openExacts = 0;
         rowData = 0;
         next = -1;
         lastCell = -1;
@@ -352,7 +394,7 @@ internal sealed class PageBuilder
                 }
             }
         }
-        lengths = new PageLengths(rowLengths.AsSpan(0, rows).ToArray(), [.. cells], [.. large]);
+        lengths = new PageLengths(rowLengths.AsSpan(0, rows).ToArray(), [.. cells], [.. large], exacts.Count == 0 ? null : [.. exacts]);
         Reset();
         return page;
     }
@@ -381,5 +423,6 @@ internal sealed class PageBuilder
         dataBytes = 0;
         cells.Clear();
         large.Clear();
+        exacts.Clear();
     }
 }

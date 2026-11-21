@@ -93,7 +93,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
     '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.discard-status-button .codicon', '.memory-nerd-toggle > .codicon', '.memory-group-aside > .codicon', '.update-status .codicon', '.oe-active > .codicon',
-    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon',
+    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon', '.agent-job-status .codicon, .agent-stopped-status .codicon',
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
@@ -145,7 +145,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   header: ['.title-bar', '.dialog-titlebar:not([data-platform="darwin"])'],
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   documentTab: ['.query-shelf-more'],
-  control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],
+  control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side'],
   row: ['.explorer-row', '.column-filter-action', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }

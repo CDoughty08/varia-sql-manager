@@ -154,23 +154,23 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
         segments={[{ value: 'all', label: 'All' }, { value: 'keyboard', label: 'Keyboard' }, { value: 'mouse', label: 'Mouse' }]} />
     </div>
     {salvaged !== undefined && showSalvage && <div className="shortcuts-banner" data-kind="info" role="status"><Icon name="info" /><div>{salvaged || salvageText}</div>
-      <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setShowSalvage(false)}><Icon name="close" /></button></div>}
+      <button type="button" className="ui-button icon-button" aria-label="Dismiss" onClick={() => setShowSalvage(false)}><Icon name="close" /></button></div>}
     {problems.length > 0 && <div className="shortcuts-banner" data-kind="warning" role="status"><Icon name="warning" /><div>
       <strong>{problems.length === 1 ? '1 shortcut no longer applies.' : `${problems.length} shortcuts no longer apply.`}</strong> They stay in the file until you remove them.
       <ul>{problems.slice(0, 5).map(problem => <li key={problem.index}>{problem.label ? <KeyCaps label={problem.label} /> : <code>{problem.binding.key}</code>} for {problem.binding.command}: {problem.message}</li>)}</ul>
-    </div><button type="button" onClick={() => onChange(removeEntries(draft, problems.map(problem => problem.index), platform))}>Remove</button></div>}
+    </div><button type="button" className="ui-button" onClick={() => onChange(removeEntries(draft, problems.map(problem => problem.index), platform))}>Remove</button></div>}
     {notice && <div className="shortcuts-banner" data-kind={notice.kind} role={notice.kind === 'error' ? 'alert' : 'status'}><Icon name={notice.kind === 'error' ? 'error' : 'pass'} /><div>{notice.text}</div>
-      <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}><Icon name="close" /></button></div>}
+      <button type="button" className="ui-button icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}><Icon name="close" /></button></div>}
     <div className="shortcuts-scheme">
       <label htmlFor="shortcuts-scheme">Mapping scheme:</label>
-      <select id="shortcuts-scheme" value={draft.scheme} onChange={event => onChange({ ...draft, scheme: event.target.value })}>
+      <select id="shortcuts-scheme" className="ui-field" value={draft.scheme} onChange={event => onChange({ ...draft, scheme: event.target.value })}>
         {shortcutSchemes.map(scheme => <option key={scheme.id} value={scheme.id}>{scheme.title}</option>)}
         {!shortcutSchemes.some(scheme => scheme.id === draft.scheme) && <option value={draft.scheme}>{draft.scheme} (not in this version)</option>}
       </select>
       <span />
-      <button type="button" disabled={busy} onClick={() => void startImport()}><Icon name="folder-opened" />Import…</button>
-      <button type="button" disabled={busy} onClick={() => void startExport()}><Icon name="export" />Export…</button>
-      <button type="button" disabled={!reset.here && !reset.elsewhere && !reset.gestures} onClick={() => setSheet({ kind: 'resetAll', everywhere: false })}><Icon name="discard" />Reset All…</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" disabled={busy} onClick={() => void startImport()}><Icon name="folder-opened" />Import…</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" disabled={busy} onClick={() => void startExport()}><Icon name="export" />Export…</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" disabled={!reset.here && !reset.elsewhere && !reset.gestures} onClick={() => setSheet({ kind: 'resetAll', everywhere: false })}><Icon name="discard" />Reset All…</button>
     </div>
     <div className="shortcuts-toolbar">
       <div className="shortcuts-search" data-recording={recording || undefined}>
@@ -178,10 +178,10 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
         {recording
           ? <CaptureField id="shortcuts-record" platform={platform} value={record} onChange={setRecord} capture={capture} label="Record keys" autoFocus className="shortcuts-search-input"
             placeholder="Press a shortcut… (Escape and Enter are recorded too; Tab leaves)" />
-          : <input type="search" className="shortcuts-search-input" aria-label="Search shortcuts" maxLength={shortcutSearchChars} value={query}
+          : <input type="search" className="ui-field shortcuts-search-input" aria-label="Search shortcuts" maxLength={shortcutSearchChars} value={query}
             placeholder="Search shortcuts: try @modified, @scope:editor, @source:user" onChange={event => setQuery(event.target.value)} onKeyDown={searchKeyDown} />}
       </div>
-      <button type="button" aria-pressed={recording} title="Record Keys: filter by the exact shortcut you press" onClick={() => { setRecording(!recording); setRecord([]) }}><Icon name="record-keys" />Record Keys</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" aria-pressed={recording} title="Record Keys: filter by the exact shortcut you press" onClick={() => { setRecording(!recording); setRecord([]) }}><Icon name="record-keys" />Record Keys</button>
     </div>
     {view !== 'mouse' && <div className="shortcuts-toolbar">
       <ChipGroup label="Filters">
@@ -207,14 +207,14 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
       {reset.elsewhere > 0 && <label className="shortcuts-check"><input type="checkbox" checked={sheet.everywhere} onChange={event => setSheet({ kind: 'resetAll', everywhere: event.target.checked })} />Also remove entries for other platforms</label>}
       <p className="shortcuts-muted">Nothing changes until you choose OK in Options.</p>
       <div className="shortcuts-sheet-actions">
-        <button type="button" className="primary" autoFocus onClick={() => { onChange(resetAll(draft, platform, sheet.everywhere)); setSheet(undefined) }}>Reset All</button>
-        <button type="button" onClick={() => setSheet(undefined)}>Cancel</button>
+        <button type="button" className="ui-button primary" autoFocus onClick={() => { onChange(resetAll(draft, platform, sheet.everywhere)); setSheet(undefined) }}>Reset All</button>
+        <button type="button" className="ui-button" data-control-variant="secondary" onClick={() => setSheet(undefined)}>Cancel</button>
       </div>
     </Sheet>}
     {sheet?.kind === 'import' && <ImportPreview summary={sheet.summary} problems={sheet.problems} onImport={mode => finishImport(sheet.file, mode)} onCancel={() => setSheet(undefined)} />}
     {sheet?.kind === 'refused' && <Sheet title="This file cannot be imported" onCancel={() => setSheet(undefined)}>
       <p className="shortcuts-message" data-kind="refused"><Icon name="error" /><span>{sheet.message} Nothing was changed.</span></p>
-      <div className="shortcuts-sheet-actions"><button type="button" className="primary" autoFocus onClick={() => setSheet(undefined)}>OK</button></div>
+      <div className="shortcuts-sheet-actions"><button type="button" className="ui-button primary" autoFocus onClick={() => setSheet(undefined)}>OK</button></div>
     </Sheet>}
   </div>
 }

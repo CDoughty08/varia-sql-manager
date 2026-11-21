@@ -300,6 +300,8 @@ internal sealed class CellHasher
     private readonly Kind[] kinds;
     private readonly (CompareInfo Info, CompareOptions Options)?[] cultures;
     private readonly bool[] hidden;
+    // Columns whose cells may keep an exact value beside their text (float and real).
+    private readonly bool[] exacts;
     private char[] chars = new char[256];
     private byte[] sortKey = new byte[512];
     private const ulong Offset = 14695981039346656037UL, Prime = 1099511628211UL;
@@ -311,6 +313,7 @@ internal sealed class CellHasher
         kinds = other.kinds;
         cultures = other.cultures;
         hidden = other.hidden;
+        exacts = other.exacts;
     }
 
     /// <summary>A hasher of the same columns with buffers of its own, for another thread.</summary>
@@ -322,10 +325,12 @@ internal sealed class CellHasher
         kinds = new Kind[Count];
         cultures = new (CompareInfo, CompareOptions)?[Count];
         hidden = new bool[Count];
+        exacts = new bool[Count];
         for (var c = 0; c < Count; c++)
         {
             var column = columns[c];
             hidden[c] = ResultTextWriter.Hidden(column);
+            exacts[c] = ColumnTypes.HoldsExact(column);
             if (wires[c] == WireKind.Binary) { kinds[c] = Kind.Bytes; continue; }
             if (column.Collation is not null && column.SortKind == ColumnTypes.Text)
             {
@@ -345,6 +350,10 @@ internal sealed class CellHasher
     /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
     public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;
 
+    /// <summary>Whether a column's cells are read with their exact values (float and real, by this hasher's types: a second
+    /// result's columns take the first's).</summary>
+    public bool ReadsExact(int column) => exacts[column];
+
     /// <summary>Whether a non-NULL cell's characters count beyond its value, as <see cref="Same"/>'s <c>text</c> says: a
     /// character column's, or in an exact numeric column (a second result's text column compares by the first's kind) a
     /// cell with trailing spaces or that is not a number. Exact text compares such cells character for character.</summary>
@@ -353,11 +362,21 @@ internal sealed class CellHasher
 
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(Value(view.Span(column, row), column, Offset));
+        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
 
     /// <summary>A cell's hash, and whether the cell is NULL or unreadable: what the diff compares per cell.</summary>
     public ulong CellValue(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? NullHash : Finish(Value(view.Span(column, row), column, Offset));
+        view.IsNull(column, row) ? NullHash : Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
+
+    /// <summary>A float or real cell's exact value after its text, when the text reads back as another value: 1E0 and
+    /// 1.0000000000000002E0 both show as 1, and are different values.</summary>
+    private ulong WithExact(PageView view, int column, int row, ulong hash)
+    {
+        if (!exacts[column] || !view.TryExact(column, row, out var exact)) return hash;
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, BitConverter.DoubleToInt64Bits(exact));
+        return Bytes(Step(hash, 0xfe), bytes);
+    }
 
     /// <summary>Whether two non-NULL cells hold the same value by this column's rules (<paramref name="other"/> hashes its
     /// column the same way, and is another hasher, whose buffers it decodes into): what a diff checks rather than trusting
@@ -373,6 +392,13 @@ internal sealed class CellHasher
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
         text = IsText(column);
+        // A float or real whose display text reads back as another value is the same only as a cell of the same text and
+        // exact value, as its hash says (its text, then its exact value).
+        var exactX = 0d;
+        var exactY = 0d;
+        var exactA = exacts[column] && view.TryExact(column, row, out exactX);
+        var exactB = other.exacts[otherColumn] && otherView.TryExact(otherColumn, otherRow, out exactY);
+        if (exactA || exactB) return exactA && exactB && exactX == exactY && a.SequenceEqual(b);
         switch (kinds[column])
         {
             case Kind.Collated:
@@ -429,7 +455,7 @@ internal sealed class CellHasher
         {
             if (view.IsTruncated(c, row)) approximate = true;
             hash = Step(hash, 1);
-            hash = Value(view.Span(c, row), c, hash);
+            hash = WithExact(view, c, row, Value(view.Span(c, row), c, hash));
         }
         return Step(hash, 0xff);
     }

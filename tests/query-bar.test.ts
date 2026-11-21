@@ -141,15 +141,15 @@ describe('query bar', () => {
     // data-query-bar gives queryBarFocus, so F5, which Execute shows, runs the query from the bar too.
     expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="">/)
     // Execute is the bar's only filled button and names its key; Cancel waits for a running query.
-    expect(html).toMatch(/<button type="button" class="query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts="F5" title="Execute \(F5\)">.*<kbd aria-hidden="true">F5<\/kbd><\/button>/)
-    expect(html).toMatch(/<button type="button" class="query-bar-action" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" disabled="" title="Cancel Executing Query \(Alt\+Pause\)">/)
+    expect(html).toMatch(/<button type="button" class="ui-button query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts="F5" title="Execute \(F5\)">.*<kbd aria-hidden="true">F5<\/kbd><\/button>/)
+    expect(html).toMatch(/<button type="button" class="ui-button query-bar-action" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" disabled="" title="Cancel Executing Query \(Alt\+Pause\)">/)
     const pill = html.slice(html.indexOf('<div class="query-connection"'))
     expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
     expect(pill).toContain('<span class="query-bar-environment"><span class="visually-hidden">Environment: </span><span class="environment-tag" data-place="query" data-tone="critical">')
     expect(pill).toContain('title="Orders (prod.example): Production environment"')
     // The tag is no control: the server list, which the toolbar's keys reach, describes the environment.
-    expect(pill).toMatch(/<select id="query-server" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
-    expect(pill).toMatch(/<select id="query-database" aria-label="Query database" title="Database: AppData"><option value="AppData" selected="">AppData<\/option><\/select>/)
+    expect(pill).toMatch(/<select id="query-server" class="ui-field" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
+    expect(pill).toMatch(/<select id="query-database" class="ui-field" aria-label="Query database" title="Database: AppData"><option value="AppData" selected="">AppData<\/option><\/select>/)
   })
   it('gives each database its exact name as the option\'s value, spaces and all', () => {
     const { connections, documents, render } = fixture()
@@ -188,7 +188,7 @@ describe('query bar', () => {
     const disconnected = render(createElement(QueryBar))
     expect(disconnected).not.toContain('connection-swatch')
     expect(disconnected).not.toContain('environment-tag')
-    expect(disconnected).toMatch(/<select id="query-database" aria-label="Query database" title="Database: master" disabled="">/)
+    expect(disconnected).toMatch(/<select id="query-database" class="ui-field" aria-label="Query database" title="Database: master" disabled="">/)
     expect(disconnected).toContain('title="This query is not connected"')
   })
   it('leaves the header\'s Standard toolbar the file commands; the classic toolbar keeps the global lists', () => {
@@ -199,13 +199,13 @@ describe('query bar', () => {
     expect([...header.matchAll(/aria-label="([^"]+)"/g)].map(match => match[1])).toEqual(['Standard', 'Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
     expect(header).not.toContain('<select')
     const classic = render(createElement(StandardToolbar, { variant: 'classic' }))
-    expect(classic).toContain('<label class="context-field" for="query-server">Server</label><select id="query-server" aria-label="Query server"')
-    expect(classic).toContain('<label class="context-field" for="query-database">Database</label><select id="query-database" aria-label="Query database"')
+    expect(classic).toContain('<label class="context-field" for="query-server">Server</label><select id="query-server" class="ui-field" aria-label="Query server"')
+    expect(classic).toContain('<label class="context-field" for="query-database">Database</label><select id="query-database" class="ui-field" aria-label="Query database"')
     expect(classic).toMatch(/>Execute<kbd>F5<\/kbd><\/button>/)
   })
   it('sizes the bar and its controls from the density tokens, and gives way at narrow widths without wrapping', () => {
     expect(densityUse.bar).toContain('.query-bar')
-    expect(densityUse.control).toEqual(expect.arrayContaining(['.query-bar-action', '.query-connection']))
+    expect(densityUse.control).toContain('.query-connection')
     const rules = stylesheetRules()
     const value = (selector: string, property: string, at: string[] = []) => rules.find(rule => rule.selector === selector && rule.at.join(' ') === at.join(' ') && rule.declarations.some(item => item.property === property))
       ?.declarations.find(item => item.property === property)?.value
@@ -216,13 +216,15 @@ describe('query bar', () => {
     // rather than running under the server list, and the lists give way first, by weight, down to their minimum.
     expect(value('.query-bar', 'font-size')).toBe('var(--varia-size-sm)')
     expect(value('.environment-tag[data-place="query"]', 'flex')).toBe('0 1 auto')
-    expect([value('.query-connection select', 'flex'), value('.query-connection select', 'min-width')]).toEqual(['0 1000 auto', '64px'])
+    expect([value('.query-connection select.ui-field', 'flex'), value('.query-connection select.ui-field', 'min-width')]).toEqual(['0 1000 auto', '64px'])
+    expect(value('.ui-field', 'height')).toBe('var(--ui-control-height)')
+    expect(value('.ui-button', 'min-height')).toBe('var(--ui-control-height)')
   })
   it('gives every list an opaque fill: Chromium draws an open list on its background, white for a transparent one', () => {
     // In Dark the options keep the list's light text, which on white is all but invisible.
     const targetsSelect = (selector: string) => selector.split(',').some(part => /(^|[\s>+~])select(?![\w-])[^\s>+~]*$/.test(part.trim()))
     const clear = stylesheetRules().filter(rule => targetsSelect(rule.selector) && rule.declarations.some(item => /^background(-color)?$/.test(item.property) && /^(transparent|none)\b|rgba\([^)]*,\s*0\)/.test(item.value)))
     expect(clear.map(rule => rule.selector)).toEqual([])
-    expect(stylesheetRules().find(rule => rule.selector === '.query-connection select')?.declarations.find(item => item.property === 'background')?.value).toBe('var(--varia-input-background)')
+    expect(stylesheetRules().find(rule => rule.selector === '.ui-field' && rule.declarations.some(item => item.property === 'background'))?.declarations.find(item => item.property === 'background')?.value).toBe('var(--varia-input-background)')
   })
 })

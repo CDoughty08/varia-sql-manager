@@ -50,6 +50,10 @@ internal static class ColumnTypes
     /// <summary>money and smallmoney, whose values have 4 decimals whatever the descriptor's scale says.</summary>
     public static bool IsMoney(ResultColumn column) => column.SortKind == Decimal && BaseName(column.DataType) is "money" or "smallmoney";
 
+    /// <summary>float and real: the columns whose cells may keep an exact value beside their display text
+    /// (<see cref="ExactValue"/>). A sql_variant sorts and groups by its text, so it keeps none.</summary>
+    public static bool HoldsExact(ResultColumn column) => column.SortKind == Float;
+
     /// <summary>text and ntext, the deprecated large character types Auto never tries as a row key.</summary>
     public static bool IsLargeText(ResultColumn column) => column.SortKind == Text && BaseName(column.DataType) is "text" or "ntext";
 }

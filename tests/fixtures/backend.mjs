@@ -442,7 +442,11 @@ async function explorerChildren({ node, subtype }) {
   // A folder lists its rows; an object whose kind lists rows (the SSIS catalog's folders) lists them after its folders.
   const list = node.type === 'folder' ? node.folder : kindSpecs[node.object.kind].list
   const extra = node.type === 'folder' && explorerExtras[node.folder] && await controlled(join('extra', node.folder)) ? [explorerExtras[node.folder](owner)] : []
-  const nodes = [...statics, ...(list ? explorerRows[list]?.(owner) ?? [] : []), ...extra]
+  // With the control file agent-node: SQL Server Agent's node after the server's folders, and Job Activity Monitor after its
+  // Jobs folder, as SingletonNode lists them (the agent-jobs suite; other suites keep the tree they check).
+  const singleton = kind => explorerObject({ kind }, kindSpecs[kind].title, { hasChildren: kind === 'agent' })
+  const agent = node.type !== 'object' || !await controlled('agent-node') ? [] : node.object.kind === 'server' ? [singleton('agent')] : node.object.kind === 'agent' ? [singleton('agentJobActivity')] : []
+  const nodes = [...node.type === 'object' && node.object.kind === 'agent' ? [...statics.slice(0, 1), ...agent, ...statics.slice(1)] : [...statics, ...agent], ...(list ? explorerRows[list]?.(owner) ?? [] : []), ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
@@ -1303,9 +1307,9 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
-  const operations = params.source === 'ssis.operations'
-  if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs'
+  if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations && !agent) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === 'agent.jobs' : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   // A CANCEL that came while the request was logged or held: SqlService registers the request before it reads the next
@@ -1645,6 +1649,7 @@ function wakeLive(live) {
     else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })
     else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
+    else if (live.source === 'agent.jobs') samples.push({ ...sample, ...agentJobsSample(live, probe) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -1755,13 +1760,92 @@ function liveUpdate(id, params) {
     if (patch.sort !== undefined) probe.sort = patch.sort
     if (patch.clear?.includes('sort')) probe.sort = undefined
     if (patch.sort !== undefined || patch.clear?.includes('sort')) probe.resort = true
+    if (patch.view !== undefined) probe.view = patch.view
+    if (patch.clear?.includes('view')) probe.view = undefined
+    // A view or filter change reads again at once, as the backend's Reread does (within the gap the fake has none of).
+    if ((patch.view !== undefined || patch.filter !== undefined || patch.clear?.some(item => item === 'view' || item === 'filter')) && !probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
-  if (params.args) live.args = live.source === 'ssis.operations' ? { ...params.args } : { ...live.args, ...params.args }
+  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' ? { ...params.args } : { ...live.args, ...params.args }
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
   if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
   wakeLive(live)
+}
+
+// SQL Server Agent's jobs on every fake server (agent.jobs): Nightly (its last run failed), Backup and the disabled Purge.
+// A job Start Job starts runs for two samples of the list or watched probe, then succeeds; Stop Job ends it Canceled. Rows
+// follow the catalogue's columns; the views, the tiles' counts, the expanded job's last run and the watched slots are built
+// as AgentJobsReader builds them.
+const agentTextColumns = table => liveProbes['agent.jobs.list'].tables[table].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
+const agentJobs = [
+  { id: 'a1b2c3d4-0000-4000-8000-000000000001', name: 'Nightly', enabled: true, created: '2026-01-02T03:04:05', outcome: 0, lastRun: '2026-11-15 02:30:00', steps: 3, category: 'Database Maintenance' },
+  { id: 'a1b2c3d4-0000-4000-8000-000000000002', name: 'Backup', enabled: true, created: '2026-01-03T03:04:05', outcome: 1, lastRun: '2026-11-15 01:00:00', steps: 2, category: 'Database Maintenance' },
+  { id: 'a1b2c3d4-0000-4000-8000-000000000003', name: 'Purge', enabled: false, created: '2026-01-04T03:04:05', outcome: 1, lastRun: '2026-11-01 06:00:00', steps: 1, category: '[Uncategorized (Local)]' }
+]
+const agentRuns = new Map()
+const agentOutcomes = { 0: 'Failed', 1: 'Succeeded', 3: 'Canceled' }
+const agentStamp = text => Number(text.replace(/\D/g, ''))
+const agentRunning = job => agentRuns.has(job.id)
+/** Each list or watched sample moves a started run on; after two it ends (Succeeded, or Canceled when stopped). */
+function agentAdvance() {
+  for (const [id, run] of agentRuns) {
+    if (run.samples++ < 2) continue
+    Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
+    agentRuns.delete(id)
+  }
+}
+function agentJobsSample(live, probe) {
+  if (probe.probe === 'agent.jobs.service') return { status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, { id: 'startupType', value: 2 }] }
+  agentAdvance()
+  if (probe.probe === 'agent.jobs.watched') {
+    const metrics = liveProbes['agent.jobs.watched'].series.map(() => null)
+    ;(live.args.watch ?? []).forEach((id, slot) => {
+      const job = agentJobs.find(item => item.id === id.toLowerCase())
+      const run = job && agentRuns.get(job.id)
+      if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? 1 : null, job.steps, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
+    })
+    // The server's clock, on the same clock as a run's start.
+    metrics[metrics.length - 1] = agentStamp(new Date().toISOString().slice(0, 19).replace('T', ' '))
+    return { metrics }
+  }
+  const tone = job => agentRunning(job) ? 'running' : job.outcome === 0 ? 'error' : job.enabled ? null : 'muted'
+  const row = job => [job.name, job.enabled ? 'Yes' : 'No', agentRunning(job) ? 'Executing' : 'Idle', agentRunning(job) ? `1 (Step 1) of ${job.steps}` : null, agentOutcomes[job.outcome] ?? 'Unknown',
+    job.lastRun, agentRunning(job) ? '00:00:05' : null, job.enabled ? '2026-11-16 02:30:00' : null, job.category, 'Yes', job.enabled ? 'Yes' : 'No', 'sa', job.id.toUpperCase(), job.created, tone(job)]
+  const kept = { running: agentRunning, failed: job => job.outcome === 0, disabled: job => !job.enabled }[probe.view] ?? (() => true)
+  const jobs = storeResult({ columns: agentTextColumns(0), rows: agentJobs.filter(kept).map(row) }, 0)
+  const expanded = agentJobs.find(job => job.id === live.args.expand?.toLowerCase())
+  const outcome = expanded && (agentOutcomes[expanded.outcome] ?? 'Unknown'), runTone = expanded?.outcome === 0 ? 'error' : null
+  const runs = storeResult({ columns: agentTextColumns(1), rows: expanded ? [['2', '1', 'Step 1', outcome, expanded.lastRun, '00:00:02', 'Executed as user: sa.', runTone], ['1', '0', '(Job outcome)', outcome, expanded.lastRun, '00:00:02', 'The job finished.', runTone]] : [] }, 0)
+  live.revisions.push(jobs.resultId, runs.resultId)
+  const retired = live.revisions.length > 4 ? live.revisions.splice(0, live.revisions.length - 4) : []
+  for (const resultId of retired) stored.delete(resultId)
+  const n = probe.samples
+  // Where the rows the grid follows (by Job ID) are in this revision, so its selection stays on the same jobs.
+  const shown = agentJobs.filter(kept), track = probe.tracks.get(0)
+  const tracked = track && { seq: track.seq, rows: track.keys.map(key => shown.findIndex(job => job.id.toUpperCase() === key.toUpperCase())) }
+  return {
+    metrics: [agentJobs.filter(agentRunning).length, agentJobs.filter(job => job.outcome === 0).length, 0, agentJobs.filter(job => !job.enabled).length],
+    tables: [{ table: 0, descriptor: describe(jobs), revision: n, ...(retired.length ? { retired } : {}), ...(tracked ? { tracked } : {}) }, { table: 1, descriptor: describe(runs), revision: n }]
+  }
+}
+/** A job verb (AG-2's actions.execute on an agentJob) against the fake jobs: one result per job, JOB_STATE when there is nothing to do. */
+function agentJobVerb(params) {
+  const job = agentJobs.find(item => item.name === params.target.name)
+  const refused = (code, message) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false } })
+  if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
+  if (params.agentIdentity?.created !== job.created) return refused('CHANGED', `The job ${job.name} was replaced since it was listed.`)
+  if (params.action === 'startJob') {
+    if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
+    agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+  }
+  if (params.action === 'stopJob') {
+    const run = agentRuns.get(job.id)
+    if (!run) return refused('JOB_STATE', `${job.name} is not running.`)
+    Object.assign(run, { stopped: true, samples: 2 })
+  }
+  if (params.action === 'enable' || params.action === 'disable') job.enabled = params.action === 'enable'
+  return { steps: [{ status: 'done', title: { startJob: 'Start the job', stopJob: 'Stop the job', enable: 'Enable the job', disable: 'Disable the job' }[params.action] ?? 'Done' }], messages: [], elapsedMs: 1 }
 }
 
 // The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
@@ -2174,6 +2258,7 @@ async function workbench(id, method, params, credit) {
     // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
     // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
+      if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })

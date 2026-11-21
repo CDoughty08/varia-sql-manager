@@ -216,23 +216,55 @@ internal readonly struct CellLength(int row, int column, long chars, long bytes,
     public override string ToString() => $"({Row}, {Column}, {Chars}, {Bytes}{(Exact ? "" : ", estimated")})";
 }
 
+/// <summary>The exact value of a float or real cell whose display text (15 or 7 significant digits) reads back as another
+/// value, kept beside its page: 1E0 and 1.0000000000000002E0 both show as 1, and sorts, filters, distinct values,
+/// comparisons and aggregates must still tell them apart. A real is kept widened to double, which is exact.</summary>
+internal readonly record struct ExactValue(int Row, int Column, double Value);
+
 /// <summary>The lengths sidecar of a sealed page: every row's bytes (the sum of DATALENGTH over its cells, NULL counting
-/// 0) as a uint32, a row of 4 GiB or more stored as uint.MaxValue with its exact figure in <see cref="Large"/>, and the
-/// sparse <see cref="CellLength"/> entries in row and column order.</summary>
-internal sealed class PageLengths(uint[] rowBytes, CellLength[] cells, (int Row, long Bytes)[] large)
+/// 0) as a uint32, a row of 4 GiB or more stored as uint.MaxValue with its exact figure in <see cref="Large"/>, the
+/// sparse <see cref="CellLength"/> entries in row and column order, and the float and real cells' exact values whose
+/// text does not read back as them (<see cref="ExactValue"/>), in the same order.</summary>
+internal sealed class PageLengths(uint[] rowBytes, CellLength[] cells, (int Row, long Bytes)[] large, ExactValue[]? exacts = null)
 {
     /// <summary>Bookkeeping charged per page on top of the arrays: three array headers and this object.</summary>
     public const long Overhead = 96;
     /// <summary>What one sparse entry costs.</summary>
     public const int CellBytes = 24;
     public const int LargeBytes = 16;
+    /// <summary>What one exact value costs.</summary>
+    public const int ExactBytes = 16;
     public static readonly PageLengths Empty = new([], [], []);
+    private readonly ExactValue[] exacts = exacts ?? [];
 
     public int Rows => rowBytes.Length;
     public IReadOnlyList<CellLength> Cells => cells;
     public IReadOnlyList<(int Row, long Bytes)> Large => large;
+    public IReadOnlyList<ExactValue> Exacts => exacts;
+    /// <summary>Whether any cell of the page has an exact value apart from its text.</summary>
+    public bool HasExacts => exacts.Length > 0;
     /// <summary>The memory the sidecar holds, as charged to the query's budget.</summary>
-    public long MemoryBytes => Overhead + 4L * rowBytes.Length + (long)CellBytes * cells.Length + (long)LargeBytes * large.Length;
+    public long MemoryBytes => Overhead + 4L * rowBytes.Length + (long)CellBytes * cells.Length + (long)LargeBytes * large.Length + (long)ExactBytes * exacts.Length;
+
+    /// <summary>A float or real cell's exact value, when its text does not read back as it; false for any other cell.</summary>
+    public bool TryExact(int row, int column, out double value)
+    {
+        int low = 0, high = exacts.Length;
+        while (low < high)
+        {
+            var middle = (low + high) >>> 1;
+            var probe = exacts[middle];
+            if (probe.Row < row || (probe.Row == row && probe.Column < column)) low = middle + 1;
+            else high = middle;
+        }
+        if (low < exacts.Length && exacts[low].Row == row && exacts[low].Column == column)
+        {
+            value = exacts[low].Value;
+            return true;
+        }
+        value = 0;
+        return false;
+    }
 
     public long RowBytes(int row)
     {

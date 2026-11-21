@@ -71,7 +71,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
         onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
     </span>
     {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
-    <span className="results-search-count" title={search.error ?? (search.skipped ? skippedText : undefined)}>{count}</span>
+    <span className="results-search-count" title={search.error || (search.skipped ? [count, skippedText].filter(Boolean).join('. ') : count) || undefined}>{count}</span>
     <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
     <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
     <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>

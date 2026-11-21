@@ -27,8 +27,10 @@ internal static partial class PageCodec
 
     /// <summary>A typed text column's head in the form (its kind, parameters and the length of its values) and its values,
     /// which go to the page's values apart from the form. Returns the head's length, or -1 when the column has no one shape
-    /// or its head and values would not be shorter than its offsets and data together.</summary>
-    private static int WriteTyped(ReadOnlySpan<byte> offsetBytes, ReadOnlySpan<byte> data, ReadOnlySpan<byte> validity, int rows, Span<byte> form, Span<byte> values, out int valuesLength)
+    /// or its head and values would not be shorter than its offsets and data together. The values go at <paramref name="valuesAt"/>
+    /// in <paramref name="valuesRoom"/>, rented from the shared pool at <paramref name="roomLength"/> bytes once a column has a
+    /// shape, so a page with none rents no room for them.</summary>
+    private static int WriteTyped(ReadOnlySpan<byte> offsetBytes, ReadOnlySpan<byte> data, ReadOnlySpan<byte> validity, int rows, Span<byte> form, ref byte[]? valuesRoom, int valuesAt, int roomLength, out int valuesLength)
     {
         valuesLength = 0;
         var offsets = MemoryMarshal.Cast<byte, uint>(offsetBytes)[..(rows + 1)];
@@ -65,10 +67,11 @@ internal static partial class PageCodec
         var headLength = 1;
         if (kind is TypedMoment or TypedDecimal) { head[headLength++] = (byte)a; head[headLength++] = (byte)b; }
         else if (kind is TypedTime or TypedGuid) head[headLength++] = (byte)a;
-        limit = Math.Min(limit - headLength - 13, values.Length);
+        limit = Math.Min(limit - headLength - 13, roomLength - valuesAt);
         if (kind == TypedGuid)
         {
             head[0] = kind;
+            var values = (valuesRoom ??= Rent(Math.Max(1, roomLength))).AsSpan(valuesAt);
             var at = 0;
             for (var row = 0; row < rows; row++)
             {
@@ -112,6 +115,8 @@ internal static partial class PageCodec
             var ranged = rangeBytes < deltaBytes;
             head[0] = (byte)(kind | (ranged ? Ranged : 0));
             if (ranged) WriteLeb64(head, ref headLength, Zigzag(least));
+            // Rented only now that every cell parsed: a column a cell rules out (text that only looked like a number) rents none.
+            var values = (valuesRoom ??= Rent(Math.Max(1, roomLength))).AsSpan(valuesAt);
             var at = 0;
             previous = 0;
             for (var i = 0; i < count; i++)
@@ -222,12 +227,12 @@ internal static partial class PageCodec
             var kinds = new byte[columns];
             var blob = page[blobStart..];
             var form = new byte[64];
-            var values = new byte[page.Length];
+            byte[]? values = new byte[page.Length];
             for (var c = 0; c < columns; c++)
             {
                 if (layout[c * Stride] != (int)WireKind.Text) continue;
                 var validity = layout[c * Stride + 2] == 0 ? default : blob.Slice(layout[c * Stride + 1], layout[c * Stride + 2]);
-                if (WriteTyped(blob.Slice(layout[c * Stride + 3], layout[c * Stride + 4]), blob.Slice(layout[c * Stride + 5], layout[c * Stride + 6]), validity, rows, form, values, out _) >= 0)
+                if (WriteTyped(blob.Slice(layout[c * Stride + 3], layout[c * Stride + 4]), blob.Slice(layout[c * Stride + 5], layout[c * Stride + 6]), validity, rows, form, ref values, 0, page.Length, out _) >= 0)
                     kinds[c] = (byte)(form[0] & ~Ranged);
             }
             return kinds;

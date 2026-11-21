@@ -157,7 +157,7 @@ internal sealed class RowAccess
             var first = PageView.Parse(body, columns);
             Volatile.Write(ref parsed[page], layout = new Parsed(body, first.Layout, first.BlobStart));
         }
-        return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
+        return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns).With(stored.Lengths);
     }
 
     /// <summary>Reads the packed pages behind <paramref name="rows"/> (negative ones skipped) together
@@ -888,7 +888,13 @@ internal static class ResultDiffer
                 continue;
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
-            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r))) continue;
+            // Equal text is the same value unless a float or real's exact value, kept apart from its text, differs: read only
+            // where the hashers read it (by the first result's types), so the cells compare as they hash.
+            var x = 0d;
+            var y = 0d;
+            var leftExact = leftHasher.ReadsExact(lc) && leftView.TryExact(lc, l, out x);
+            var rightExact = rightHasher.ReadsExact(rc) && rightView.TryExact(rc, r, out y);
+            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r)) && leftExact == rightExact && (!leftExact || x == y)) continue;
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
             // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
             var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r, out var text);
@@ -1184,15 +1190,18 @@ internal static class UnifiedDiff
     }
 
     /// <summary>At most what one row of the unified result stores: its cells' bytes, the marker, row numbers and tone, each
-    /// cell's offset and a lengths entry for each.</summary>
+    /// cell's offset and a lengths entry for each, and its floats' exact values.</summary>
     private static long RowBound(Side side, int row, string tone)
     {
-        var view = side.Access.At(row, out var at);
+        var view = side.Access.At(row, out var at, out var lengths);
         long bytes = 3 + 2 * CellFormat.MaxFixedBytes + 3L * tone.Length;
         for (var p = 0; p < side.Pairs.Length; p++)
         {
             var c = side.Column(p);
-            if (!view.IsNull(c, at)) bytes += view.Span(c, at).Length;
+            if (view.IsNull(c, at)) continue;
+            bytes += view.Span(c, at).Length;
+            // A float or real's exact value, kept beside the unified result's page.
+            if (lengths.TryExact(at, c, out _)) bytes += PageLengths.ExactBytes;
         }
         return bytes + (4L + PageLengths.CellBytes) * (side.Pairs.Length + 4) + 4;
     }
@@ -1227,6 +1236,8 @@ internal static class UnifiedDiff
             var span = view.Span(c, at);
             if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
             else builder.AppendUtf8(span, cut);
+            // A float or real's exact value goes with its text, so the comparison sorts and filters as its inputs do.
+            if (ColumnTypes.HoldsExact(set.Columns[p]) && lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
             var rule = side.Rules[c];
             CellSize size;
             if (lengths.TryCell(at, c, out var kept)) size = new CellSize(kept.Chars, kept.Bytes, kept.Exact && !rule.Estimated);
@@ -1238,7 +1249,7 @@ internal static class UnifiedDiff
             // Kept beside the page when the unified column's own rule would not give the source's size again.
             builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
-        if (old is not null) truncated += Previous(builder, old, side.Pairs.Length);
+        if (old is not null) truncated += Previous(set, builder, old, side.Pairs.Length);
         builder.ReserveRowBytes(0);
         builder.AppendText(marker);
         Number(builder, leftRow);
@@ -1251,12 +1262,13 @@ internal static class UnifiedDiff
     /// <summary>Appends a row's previous values: the first result's value in each changed (not soft) pair, NULL in the
     /// others; returns how many were stored truncated (by the source's cap, or by the row limit, which they meet before
     /// the data does since they come after it).</summary>
-    private static int Previous(PageBuilder builder, Old old, int pairs)
+    private static int Previous(ResultSetBuffer set, PageBuilder builder, Old old, int pairs)
     {
         var truncated = 0;
         PageView view = default;
         var at = 0;
-        if (old.Row >= 0) view = old.Left.Access.At(old.Row, out at);
+        var lengths = PageLengths.Empty;
+        if (old.Row >= 0) view = old.Left.Access.At(old.Row, out at, out lengths);
         var next = 0;
         for (var p = 0; p < pairs; p++)
         {
@@ -1269,6 +1281,7 @@ internal static class UnifiedDiff
             var cut = view.IsTruncated(c, at);
             if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
             else builder.AppendUtf8(span, cut);
+            if (ColumnTypes.HoldsExact(set.Columns[pairs + p]) && lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
             if (builder.LastTruncated) truncated++;
         }
         return truncated;

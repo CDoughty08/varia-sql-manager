@@ -1237,6 +1237,7 @@ app.whenReady().then(async () => {
   })
   handle('varia:files-check', () => files.check())
   handle('varia:files-reload', value => files.reload(z.uuid().parse(value)))
+  handle('varia:files-keep', value => { files.keep(z.uuid().parse(value)) })
   // Visual Studio's question, naming the file by main's registration; the "All" answers apply to the rest of one check.
   handle('varia:confirm-reload', async value => {
     const { fileId, dirty, more } = reloadPromptSchema.parse(value), path = files.get(fileId).path

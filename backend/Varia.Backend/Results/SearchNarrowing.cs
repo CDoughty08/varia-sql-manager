@@ -126,7 +126,8 @@ internal sealed class SearchMemo(string text, uint viewId, long rows, SearchNarr
 /// (<see cref="Skip"/>: with the same text, every row that did not match; with a text that extends the last one under
 /// <see cref="SearchNarrowing.Extends"/>, every row that neither matched nor needs a recheck; positions past the memo's are
 /// always read), and the memo it builds for the next search (<see cref="Mark"/>), from room reserved as spare before it
-/// starts (none, and nothing kept, when there is no room). Written by the search's threads (<see cref="Mark"/> sets bits
+/// starts (none, and nothing kept, when there is no room or the search's own working memory takes it back,
+/// <see cref="YieldMemo"/>). Written by the search's threads (<see cref="Mark"/> sets bits
 /// atomically), finished on one.</summary>
 internal sealed class Narrowing
 {
@@ -139,8 +140,14 @@ internal sealed class Narrowing
     private readonly SearchMemo? from;
     private readonly bool approximate;
     // Read: the last search's matches and (extending) rechecks. Kept: this search's.
-    private readonly ulong[]? matched, recheck, keepMatched, keepRecheck;
+    private readonly ulong[]? matched, recheck;
+    // Let go when the memo's room goes back (YieldMemo), so memory the budget counts as free is free.
+    private ulong[]? keepMatched, keepRecheck;
     private bool kept;
+    // 1 once the memo's room went back for the search's own working memory (YieldMemo): set only after it has, under the
+    // lock, so a run told the room went back finds it free when it asks again.
+    private int yielded;
+    private readonly Lock yielding = new();
 
     /// <summary>Whether visited rows record their rechecks: this search keeps a memo.</summary>
     public bool Rechecks { get; }
@@ -238,9 +245,11 @@ internal sealed class Narrowing
     /// <summary>Records a position this search read: matched, or holding a cell a narrowed search must look at again.</summary>
     public void Mark(long position, bool match, bool recheckRow)
     {
-        if (keepMatched is null || (!match && !recheckRow)) return;
-        var bit = 1UL << (int)(position & 63);
-        Interlocked.Or(ref (match ? keepMatched : keepRecheck!)[position >> 6], bit);
+        if (!match && !recheckRow) return;
+        // Read once: a memo given up (YieldMemo) has let its arrays go and keeps nothing.
+        var keep = match ? Volatile.Read(ref keepMatched) : Volatile.Read(ref keepRecheck);
+        if (keep is null) return;
+        Interlocked.Or(ref keep[position >> 6], 1UL << (int)(position & 63));
     }
 
     /// <summary>The outcome with what the rows passed over answer (a truncated cell that did not match), and this search's
@@ -248,20 +257,47 @@ internal sealed class Narrowing
     public SearchOutcome Finish(ResultSetBuffer set, SearchOutcome found)
     {
         var outcome = approximate && !found.Approximate ? found with { Approximate = true } : found;
-        if (keepMatched is not null)
+        var (keepMatches, keepRechecks) = (Volatile.Read(ref keepMatched), Volatile.Read(ref keepRecheck));
+        if (keepMatches is not null && keepRechecks is not null && Volatile.Read(ref yielded) == 0)
         {
             // The rows passed over stay ruled out under the last memo's rules, so what they need carries on.
             var needs = new SearchNarrowing.Needs[matchers.Length];
             for (var c = 0; c < needs.Length; c++) needs[c] = (matchers[c]?.Needs ?? 0) | (from?.Needs[c] ?? 0);
-            set.KeepSearchMemo(new SearchMemo(text, viewId, rows, kinds, needs, folds, keepMatched, keepRecheck!, outcome.Approximate, Elsewhere, reserved));
+            set.KeepSearchMemo(new SearchMemo(text, viewId, rows, kinds, needs, folds, keepMatches, keepRechecks, outcome.Approximate, Elsewhere, reserved));
             kept = true;
         }
         return outcome;
     }
 
+    /// <summary>Gives back the room reserved for this search's memo, which it then does not keep: the search's own working
+    /// memory (a view's inverse, the rooms it unpacks pages into) comes before a memo that only makes the next search
+    /// faster, so a search is never refused for the memo it would keep. True when the room has gone back, by this call or
+    /// another run's, so every refused run asks again. Called by the search's threads before its runs end, never after
+    /// <see cref="Finish"/>.</summary>
+    public bool YieldMemo(ResultSetBuffer set)
+    {
+        if (reserved == 0) return false;
+        if (Volatile.Read(ref yielded) != 0) return true;
+        lock (yielding)
+        {
+            if (yielded != 0) return true;
+            Volatile.Write(ref keepMatched, null);
+            Volatile.Write(ref keepRecheck, null);
+            set.ReturnWork(reserved);
+            Volatile.Write(ref yielded, 1);
+        }
+        return true;
+    }
+
+    /// <summary>Whether the memo's room went back to the search's own working memory (the checks).</summary>
+    public bool Yielded => Volatile.Read(ref yielded) != 0;
+
+    /// <summary>Whether the search still holds arrays for a memo (the checks).</summary>
+    public bool HoldsMemo => Volatile.Read(ref keepMatched) is not null || Volatile.Read(ref keepRecheck) is not null;
+
     /// <summary>Returns the room reserved for a memo that was not kept (the search stopped or failed).</summary>
     public void Dispose(ResultSetBuffer set)
     {
-        if (reserved > 0 && !kept) set.ReturnWork(reserved);
+        if (reserved > 0 && !kept && Volatile.Read(ref yielded) == 0) set.ReturnWork(reserved);
     }
 }

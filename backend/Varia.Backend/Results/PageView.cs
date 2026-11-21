@@ -14,12 +14,14 @@ internal readonly ref struct PageView
     private readonly ReadOnlySpan<byte> blob;
     private readonly int[] layout;
     private readonly int blobStart;
+    private readonly PageLengths? lengths;
 
-    private PageView(ReadOnlySpan<byte> blob, int blobStart, int[] layout, long firstRow, int rows, int columns)
+    private PageView(ReadOnlySpan<byte> blob, int blobStart, int[] layout, long firstRow, int rows, int columns, PageLengths? lengths = null)
     {
         this.blob = blob;
         this.blobStart = blobStart;
         this.layout = layout;
+        this.lengths = lengths;
         FirstRow = firstRow;
         Rows = rows;
         Columns = columns;
@@ -54,6 +56,19 @@ internal readonly ref struct PageView
     /// reading its header again: views read scattered rows of many pages, and a wide page's header is O(columns).</summary>
     public static PageView At(ReadOnlySpan<byte> page, int blobStart, int[] layout, long firstRow, int rows, int columns) =>
         new(page[blobStart..], blobStart, layout, firstRow, rows, columns);
+
+    /// <summary>The same view with its page's lengths sidecar, whose exact float and real values <see cref="TryExact"/>
+    /// reads: a stored page's readers attach it, so that value operations tell apart values whose text is the same.</summary>
+    public PageView With(PageLengths lengths) => new(blob, blobStart, layout, FirstRow, Rows, Columns, lengths);
+
+    /// <summary>A float or real cell's exact value when its display text reads back as another value (<see cref="ExactValue"/>);
+    /// false for any other cell, and on a view without its sidecar. Value operations use it in place of the text.</summary>
+    public bool TryExact(int column, int row, out double value)
+    {
+        if (lengths is { HasExacts: true } held) return held.TryExact(row, column, out value);
+        value = 0;
+        return false;
+    }
 
     /// <summary>The column layout this view reads, for <see cref="At"/>: the scratch array when one was passed, so a caller
     /// that keeps it parses without one.</summary>
