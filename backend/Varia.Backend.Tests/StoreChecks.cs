@@ -707,10 +707,23 @@ internal static class StoreChecks
         var last = pool.TryAcquire("dbo.Payments");
         service.ReportIndexMemory();
         check(service.Search.DetailWalks == grown + 1, "once the interval has passed, a growing budget walks the index again");
+        // A fall that stays at or above the last walk's figure is brought up to date; one below it waits for the next walk, so
+        // the parts never claim more than the budget holds.
+        var extra = pool.TryAcquire("dbo.Credits");
+        service.ReportIndexMemory();
+        pool.Release([extra]);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 1 && details[^1] == (3, StringPool.Cost("dbo.Customers") + StringPool.Cost("dbo.Invoices") + StringPool.Cost("dbo.Payments"), 0L), "a fall back to the last walk's figure is reported without walking");
+        var reported = reports.Count;
         pool.Release([read, more, last]);
         service.ReportIndexMemory();
         lock (reports)
-            check(service.Search.DetailWalks == grown + 2 && details[^1] == (0, 0L, 0L), "a fall in the budget walks the index at once");
+            check(service.Search.DetailWalks == grown + 1 && reports.Count == reported, "a fall below the last walk's figure waits for the next walk");
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 2 && details[^1] == (0, 0L, 0L) && reports[^1].Used == 0, "the next walk reports the fall");
         // A build stopped or failed part way keeps no time, but its end walks the index again so no read is left showing as running.
         var held = pool.TryAcquire("dbo.Refunds");
         service.ReportIndexMemory();
@@ -721,8 +734,16 @@ internal static class StoreChecks
         lock (reports)
             check(stopped == grown + 2 && service.Search.DetailWalks == grown + 3 && service.Search.Builds == builds + 1 && sent[^1] is { LastBuildMs: 30 },
                 "a stopped build's end walks the index again, though the budget is unchanged, and keeps the last finished build's time");
+        // A disconnect drops its index and walks at once, within the interval and below the last walk's figure.
+        var connectionId = Guid.NewGuid().ToString();
+        service.Search.Held(connectionId).Put(new DatabaseIndex("Gone", Array.Empty<IndexedObject>(), 0, 0, 0));
+        var forgets = service.Search.Forgets;
         pool.Release([held]);
+        service.Search.Forget(connectionId);
         service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.Forgets == forgets + 1 && service.Search.DetailWalks == grown + 4 && reports[^1].Used == 0,
+                "a disconnect walks the index at once, though the walk interval has not passed");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

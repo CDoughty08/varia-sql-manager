@@ -92,12 +92,14 @@ internal sealed class ObjectSearchService : IDisposable
     internal StringPool Pool => pool;
     /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
     /// that the budget's figure does not show.</summary>
-    private long lastBuildMs = -1, lastSearchMs = -1, finished, builds;
+    private long lastBuildMs = -1, lastSearchMs = -1, finished, builds, forgets;
     private int detailWalks;
     public long Finished => Interlocked.Read(ref finished);
     /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
     /// only after a build ends (or the budget moves).</summary>
     public long Builds => Interlocked.Read(ref builds);
+    /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
+    public long Forgets => Interlocked.Read(ref forgets);
     /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
     internal int DetailWalks => Volatile.Read(ref detailWalks);
 
@@ -240,11 +242,16 @@ internal sealed class ObjectSearchService : IDisposable
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
 
+    /// <summary>A connection's index, made if it has none (the checks hold reads in it).</summary>
+    internal ConnectionIndex Held(string connectionId) => states.GetOrAdd(connectionId, _ => new State(pool, resources)).Index;
+
     /// <summary>Stops a disconnected connection's build and drops its index.</summary>
     public void Forget(string connectionId)
     {
         running.Forget(connectionId);
-        if (states.TryRemove(connectionId, out var state)) state.Index.Dispose();
+        if (!states.TryRemove(connectionId, out var state)) return;
+        state.Index.Dispose();
+        Interlocked.Increment(ref forgets);
     }
 
     public void Dispose()

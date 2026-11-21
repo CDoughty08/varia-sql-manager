@@ -119,8 +119,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long reportedIndexFinished = -1;
     /// <summary>The detail worked out for an index report the control lane refused, with the figures it was for: the retry at the
     /// next check reuses it while they are unchanged, rather than walking the index again.</summary>
-    private (long Used, long Builds, IndexMemoryDetail Detail, long WalkedAt)? walkedIndexDetail;
-    /// <summary>While a build only adds to the budget, the index detail is walked at most this often (milliseconds).</summary>
+    private (long Used, long Builds, long Forgets, IndexMemoryDetail Detail, long WalkedAt, long WalkedUsed)? walkedIndexDetail;
+    /// <summary>While the budget moves with no build ending, the index detail is walked at most this often (milliseconds).</summary>
     internal const long IndexDetailWalkMs = 5000;
     /// <summary>The clock (milliseconds) that spaces index detail walks; the checks replace it.</summary>
     internal Func<long> IndexDetailClock { get; set; } = () => Environment.TickCount64;
@@ -2832,7 +2832,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index; also after a build or
     /// search finished, whose time the detail shows. The detail (the Memory panel's Nerd metrics) walks the held indexes, so it is
-    /// read only when an event goes out, never by a search, and walked again only when the budget's use changed or a build finished. The timer's check
+    /// read only when an event goes out, never by a search, and walked again at once after a build ends or a disconnect, else at most every few seconds. The timer's check
     /// (<paramref name="wait"/> false) skips a tick while another report is still walking, so slow walks never pile up threads.</summary>
     internal void ReportIndexMemory(bool wait = true)
     {
@@ -2843,27 +2843,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var used = search.MemoryUsed;
             var finished = search.Finished;
             if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
-            // The last walk still holds while the budget's use is the same and no build finished since: a search, or a refused
-            // event's retry, only refreshes the times. While a running build only adds to the budget, it is walked at most every
-            // few seconds and the growth between shows as reading; a fall (a disconnect, a credited rebuild) or a finished build
-            // walks at once.
+            // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
+            // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
+            // above the last walk's is brought up to date without walking (the parts still add up, the change showing as reading);
+            // one below it waits for the next walk. A build's end or a disconnect walks at once.
             var builds = search.Builds;
+            var forgets = search.Forgets;
             var (build, searched) = search.Times();
             var now = IndexDetailClock();
             IndexMemoryDetail detail;
-            var walkedAt = now;
-            if (walkedIndexDetail is { } kept && kept.Used == used && kept.Builds == builds)
+            var (walkedAt, walkedUsed) = (now, used);
+            if (walkedIndexDetail is { } kept && kept.Builds == builds && kept.Forgets == forgets && (kept.Used == used || now - kept.WalkedAt < IndexDetailWalkMs))
             {
-                detail = kept.Detail.LastBuildMs == build && kept.Detail.LastSearchMs == searched ? kept.Detail : kept.Detail with { LastBuildMs = build, LastSearchMs = searched };
-                walkedAt = kept.WalkedAt;
-            }
-            else if (walkedIndexDetail is { } grown && grown.Builds == builds && used > grown.Used && now - grown.WalkedAt < IndexDetailWalkMs)
-            {
-                detail = search.Refresh(grown.Detail, used);
-                walkedAt = grown.WalkedAt;
+                if (kept.Used == used)
+                    detail = kept.Detail.LastBuildMs == build && kept.Detail.LastSearchMs == searched ? kept.Detail : kept.Detail with { LastBuildMs = build, LastSearchMs = searched };
+                else if (used >= kept.WalkedUsed) detail = search.Refresh(kept.Detail, used);
+                else return;
+                (walkedAt, walkedUsed) = (kept.WalkedAt, kept.WalkedUsed);
             }
             else detail = search.MemoryDetail(used);
-            walkedIndexDetail = (used, builds, detail, walkedAt);
+            walkedIndexDetail = (used, builds, forgets, detail, walkedAt, walkedUsed);
             if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
