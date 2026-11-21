@@ -271,6 +271,7 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
     first.resolve({ ok: true, value: { agentProperties: model({ serverNow: '2026-03-31T10:01:00' }), elapsedMs: 1 } as ActionDescribeResult })
     await settle()
     expect(dialogs.current?.model).toMatchObject({ serverNow: '2026-03-31T10:02:00' })
+    expect(api.cancelObjectActions.mock.calls.flatMap(call => call[0])).toContain(api.describeObject.mock.calls[1]![0].requestId)
   })
   it('shows a failed purge as a value and stays open', async () => {
     const { dialogs, api, settle } = setup(model())

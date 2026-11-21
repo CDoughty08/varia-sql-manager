@@ -511,7 +511,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private async readAgain(open: OpenObjectDialog): Promise<void> {
     const requestId = this.newId()
     this.extra.add(requestId)
-    // Only the latest read lands: an earlier one, slower on a large msdb, counted rows a later run has since deleted.
+    // Only the latest read lands: an earlier one, slower on a large msdb, counted rows a later run has since deleted, so it is cancelled.
+    if (this.reread && this.extra.delete(this.reread)) this.cancel([this.reread])
     this.reread = requestId
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     this.extra.delete(requestId)
