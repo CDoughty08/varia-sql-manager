@@ -383,6 +383,11 @@ describe('IPC validation', () => {
     expect(names(both[1])).toEqual(main.sort())
     // BigQuery's own methods (Providers.BigQueryMethods), and no other combination.
     expect(names(bigQueryOnly[1])).toEqual(methods.filter(method => methodProviders(method).join() === 'bigquery').sort())
+    // docs/ipc.md's Providers paragraph names each of them.
+    const docs = readFileSync('docs/ipc.md', 'utf8')
+    const paragraph = docs.slice(docs.indexOf('serve BigQuery alone (`Providers.BigQueryMethods`)') - 400, docs.indexOf('serve BigQuery alone (`Providers.BigQueryMethods`)'))
+    expect(paragraph.length).toBe(400)
+    expect(names(bigQueryOnly[1]).filter(method => !paragraph.includes('`' + method + '`') && !paragraph.includes('`' + method.replace(/^connections/, '') + '`'))).toEqual([])
     expect(methods.filter(method => !['sqlserver', 'sqlserver,bigquery', 'bigquery'].includes(methodProviders(method).join()))).toEqual([])
     expect(names(parameters[1])).toEqual([...providerParamMethods].sort())
     // Connect and disconnect serve both (connect by its options' provider); the pre-connect methods are BigQuery's alone.

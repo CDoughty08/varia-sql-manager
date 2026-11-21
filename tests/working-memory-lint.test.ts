@@ -126,6 +126,11 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)
+  // Each where it belongs, under the gate: after a read drops its holds, and after a fetch settles.
+  expect(remote).toMatch(/DropIfIdleLocked\(block\);\n\s*\}\n\s*TrimLocked\(\);\n\s*\}\n\s*\}\n\s*\}/)
+  expect(remote).toMatch(/DropIfIdleLocked\(block\);\n\s*TrimLocked\(\);\n\s*\}\n\s*stop\.Dispose\(\);/)
+  // A block that lands after the cache was disposed or the block replaced gives back what it cost.
+  expect(fetch).toMatch(/cached != block\)\n\s*\{\n\s*store\.ReturnCache\(ref held, cost\);\n\s*return;/)
   // A trim evicts only what Reserve may: blocks no read waits for and no fetch is filling.
   const trim = between('private void TrimLocked(', 'private void Reserve(')
   expect(trim).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)

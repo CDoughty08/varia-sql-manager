@@ -705,14 +705,14 @@ only. `connections.connect`, `.databases` and `.preview` take an optional `provi
 absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.connect` and `.disconnect` serve both engines:
 a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
 (BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `bigquery.account`,
-`bigquery.projects` and `bigquery.dryRun` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`bigquery.projects`, `bigquery.dryRun` and `results.remoteQuery` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), and one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
 whether the entry holds it). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
 with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
-`query.session.close`, `query.session.state` and every `results.*` method name no connection and are declared for both
-engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
+`query.session.close`, `query.session.state` and every other `results.*` method name no connection and are declared for
+both engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
 again first thing (`Providers.BothMethods`, compared with the policies by `tests/validation.test.ts`).
 
 ## Streams and credits
