@@ -150,6 +150,18 @@ internal static class SearchLookupChecks
             && !arrays.Named("Nothing").Any() && !arrays.Children(-1).Any(),
             "the arrays find every name, child and referencing key as a scan of the table does, in entry order");
 
+        // A lookup that comes while another builds the arrays scans rather than building (and charging) them a second time.
+        var racing = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: true), false, CancellationToken.None))!;
+        var racingBudget = new IndexBudget(1 << 24);
+        TableLookup? during = null;
+        long chargedDuring = 0;
+        racing.LookupBuilding = () => { during = racing.Lookup(racingBudget); chargedDuring = racingBudget.Used; };
+        var first = racing.Lookup(racingBudget);
+        check(first is not null && during is null && chargedDuring == TableLookup.BytesFor(racing.Table) && racingBudget.Used == chargedDuring && racing.LookupBuilds == 1,
+            "a lookup during another's build of the arrays scans instead, so they are built and charged once");
+        racing.Dropped(racingBudget);
+        check(racingBudget.Used == 0, "and dropping the read gives that one charge back");
+
         // A replacement read gives back the old read's arrays with it; a dropped read builds none.
         var again = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: true), false, CancellationToken.None))!;
         connection.Put(again);

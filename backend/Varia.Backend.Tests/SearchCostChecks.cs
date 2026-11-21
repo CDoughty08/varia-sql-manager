@@ -133,10 +133,9 @@ internal static class SearchCostChecks
         return table;
     }
 
-    /// <summary>A database batch without children and with definitions: <paramref name="count"/> procedures, each with one
-    /// (<paramref name="text"/>'s, or its own), after plan guides with their names and statements.</summary>
-    /// <summary>A batch of <paramref name="count"/> procedures; without <paramref name="definitions"/> it has no definitions set, as the
-    /// real batch then has none (the collation's case set, which the read does not need here, is left out either way).</summary>
+    /// <summary>A database batch without children: <paramref name="count"/> procedures after plan guides with their names and
+    /// statements, then each procedure's definition (<paramref name="text"/>'s, or its own). Without <paramref name="definitions"/>
+    /// it has no definitions set, as the real batch then has none; the collation's case set is left out either way.</summary>
     private static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null, bool definitions = true)
     {
         var at = DateTime.UnixEpoch;

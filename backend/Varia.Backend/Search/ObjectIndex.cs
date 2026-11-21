@@ -70,40 +70,50 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
     public long LookupBytes { get { lock (gate) return lookupBytes; } }
 
-    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
-    /// <paramref name="built"/> is told when this call built them. Null once it is dropped, or when the budget cannot take them:
-    /// the lookup then scans the table.</summary>
     private int lookupBuilds;
+    private bool lookupBuilding;
 
     /// <summary>How many times this read's lookup arrays were built (a check's view: at most once, and never when refused).</summary>
     internal int LookupBuilds => Volatile.Read(ref lookupBuilds);
 
+    /// <summary>A check's hook: called once the build is claimed, before the arrays are built.</summary>
+    internal Action? LookupBuilding { get; set; }
+
+    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
+    /// <paramref name="built"/> is told when this call built them. Null once it is dropped, while another call is building them, or
+    /// when the budget cannot take them: the lookup then scans the table.</summary>
     public TableLookup? Lookup(IndexBudget budget, Action? built = null)
     {
         if (Volatile.Read(ref lookup) is { } held) return held;
-        lock (gate)
-            if (lookup is not null || dropped) return lookup;
-        // Charged before it is built, so a budget that refuses costs no build (the caller scans instead), and built outside the
-        // gate, which Put, Keep and Dispose take; a build that throws, or loses the race to another or to a drop, gives it back.
         var bytes = TableLookup.BytesFor(Table);
-        if (!budget.TryTake(bytes)) return null;
+        // Claimed and charged under the gate, so one call builds and a budget that refuses costs no build; built outside it,
+        // since Put, Keep and Dispose take it. A build that throws, or finds the read dropped, gives the charge back.
+        lock (gate)
+        {
+            if (lookup is not null || dropped || lookupBuilding) return lookup;
+            if (!budget.TryTake(bytes)) return null;
+            lookupBuilding = true;
+        }
         TableLookup made;
         try
         {
+            LookupBuilding?.Invoke();
             made = TableLookup.Build(Table);
             Interlocked.Increment(ref lookupBuilds);
         }
         catch
         {
+            lock (gate) lookupBuilding = false;
             budget.Release(bytes);
             throw;
         }
         lock (gate)
         {
-            if (lookup is not null || dropped)
+            lookupBuilding = false;
+            if (dropped)
             {
                 budget.Release(bytes);
-                return lookup;
+                return null;
             }
             lookupBytes = bytes;
             Volatile.Write(ref lookup, made);

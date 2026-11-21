@@ -82,7 +82,7 @@ internal static class ObjectSearchSql
     /// metadata: each index's columns in key order, which index each primary or unique key is, and each foreign key's column
     /// pairs and referenced table, each by its object's id;</item>
     /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id;</item>
-    /// <item>whether the database's catalog collation is case sensitive (<see cref="CaseSensitive"/>).</item>
+    /// <item>whether the database's catalog collation is case sensitive and whether it tells i from I (<see cref="CaseSensitive"/>).</item>
     /// </list>
     /// Every object of the database's own catalog is listed, Microsoft-shipped ones too (master's spt_ tables, msdb's procedures).
     /// The resource database's sys and INFORMATION_SCHEMA objects, the same in every database, are not in sys.objects: the
