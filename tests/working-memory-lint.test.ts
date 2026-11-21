@@ -118,10 +118,11 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   const residence = files.find(({ file }) => file === 'SqlService.BigQueryResidence.cs')!.code
   expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
   // ...and that Create is the only one: no second cache with a delegate of its own.
-  expect(uses(/\bRemoteResult\.Create\(/g)).toEqual(['SqlService.BigQueryResidence.cs'])
+  expect(uses(/\bRemoteResult\s*\.\s*Create\b/g)).toEqual(['SqlService.BigQueryResidence.cs'])
+  // (Bare names throughout: a method group or a space before the parenthesis is a call all the same.)
   // A job's results are read where a query's own rows are (its first page, a script's statements, its pages under the
   // budget) and by Load into memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
-  expect(uses(/\bQueryResultsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
+  expect(uses(/\bQueryResultsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
   const load = residence.indexOf('private async Task<QueryResult> RemoteQueryAsync(')
   expect(load).toBeGreaterThan(0)
   expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeGreaterThan(load)
@@ -158,7 +159,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   }
   // A query's rows through jobs.query, and a session's streams however their request is spelled, are read nowhere else.
   expect(codeUses(/\bJobs\s*\.\s*Query\b/g)).toEqual([])
-  expect(codeUses(/\bReadRowsAsync\s*\(/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
+  // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
+  // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
+  expect(codeUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs', 'Ssis/SsisActionService.cs', 'Ssis/SsisCreate.cs'])
+  expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
   expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
@@ -169,10 +173,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(tableRowsBody.includes('service.Tabledata.List(')).toBe(true)
   // Every page of rows is read by SendRawAsync, called only for a job's results, for TableRowsAsync and by Preview Rows (its
   // table's metadata and its tabledata.list): no request of another shape (a table's data endpoint by hand) reaches it.
-  expect(uses(/\bSendRawAsync\(/g).sort()).toEqual([...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
+  expect(uses(/\bSendRawAsync\b/g).sort()).toEqual([...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
   expect(count(tableRowsBody, /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
   expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
-  expect(uses(/\bTableRowsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
+  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Each page it reads is written into the block's writer and disposed there: none is kept for a later block, and the
@@ -227,7 +231,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const reserveBody = between('private bool Reserve(', 'private void EvictLocked(')
   // Its limit is the cache's own, less (for a block only read ahead) the estimates of read blocks that have not reserved yet:
   // never more than CacheLimit.
-  expect(reserveBody).toMatch(/\{\n\s*lock \(gate\)\n\s*\{\n\s*var ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*var limit = CacheLimit;\n\s*if \(ahead\)\n\s*\{\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*var evictable = lru\.Where\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !OnScreenLocked\(block\)\)\.Sum\(block => block\.Bytes\);\n\s*if \(CachedBytes - evictable \+ bytes > limit\) return false;\n\s*\}\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)\n\s*\{\n\s*if \(ahead && !full\) return false;\n\s*var victim = VictimLocked\(keep, ahead\);\n\s*if \(victim is null\) return full \? false : throw BudgetFull\(\);\n\s*EvictLocked\(victim\);\n\s*\}\n\s*keep\.Holding = true;\n\s*\}\n\s*NotePeak\(\);\n\s*return true;/)
+  expect(reserveBody).toMatch(/\{\n\s*lock \(gate\)\n\s*\{\n\s*var ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*var limit = CacheLimit;\n\s*if \(ahead\)\n\s*\{\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*var evictable = lru\.Where\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !OnScreenLocked\(block\)\)\.Sum\(block => block\.Bytes\);\n\s*if \(CachedBytes - evictable \+ bytes > limit\) return false;\n\s*\}\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)\n\s*\{\n\s*if \(ahead && !full\) return false;\n\s*if \(!full && store\.IsSystemMemoryLow\(\)\) throw BudgetFull\(\);\n\s*var victim = VictimLocked\(keep, ahead\);\n\s*if \(victim is null\) return full \? false : throw BudgetFull\(\);\n\s*EvictLocked\(victim\);\n\s*\}\n\s*keep\.Holding = true;\n\s*\}\n\s*NotePeak\(\);\n\s*return true;/)
   // A block's room and its Holding mark change together under the gate, on both reservations: no read-ahead counts it twice.
   expect(fetch).toMatch(/lock \(gate\)\n\s*\{\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*block\.Holding = true;\n\s*\}/)
   expect(count(remote, /\.Holding = true/g)).toBe(2)
@@ -237,7 +241,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // The store refuses past the limit it is given, and past the global budget, before it counts anything.
   const storeCode = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'ResultStore.cs'), 'utf8'))
   const tryCache = storeCode.slice(storeCode.indexOf('public bool TryReserveCache(ref long held, long limit, long bytes, out bool overLimit)'))
-  expect(tryCache.slice(0, tryCache.indexOf('\n    }\n'))).toMatch(/overLimit = false;\n\s*if \(bytes <= 0\) return true;\n\s*if \(Interlocked\.Add\(ref held, bytes\) > limit\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*overLimit = true;\n\s*return false;\n\s*\}\n\s*var global = Volatile\.Read\(ref figures\)\.Global;\n\s*for \(var current = Interlocked\.Read\(ref used\); ; current = Interlocked\.Read\(ref used\)\)\n\s*\{\n\s*if \(current \+ bytes > global\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*return false;\n\s*\}\n\s*if \(Interlocked\.CompareExchange\(ref used, current \+ bytes, current\) == current\) break;\n\s*\}\n\s*Interlocked\.Add\(ref windowCacheUsed, bytes\);\n\s*return true;$/)
+  expect(tryCache.slice(0, tryCache.indexOf('\n    }\n'))).toMatch(/overLimit = false;\n\s*if \(bytes <= 0\) return true;\n\s*if \(IsSystemMemoryLow\(\)\) return false;\n\s*if \(Interlocked\.Add\(ref held, bytes\) > limit\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*overLimit = true;\n\s*return false;\n\s*\}\n\s*var global = Volatile\.Read\(ref figures\)\.Global;\n\s*for \(var current = Interlocked\.Read\(ref used\); ; current = Interlocked\.Read\(ref used\)\)\n\s*\{\n\s*if \(current \+ bytes > global\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*return false;\n\s*\}\n\s*if \(Interlocked\.CompareExchange\(ref used, current \+ bytes, current\) == current\) break;\n\s*\}\n\s*Interlocked\.Add\(ref windowCacheUsed, bytes\);\n\s*return true;$/)
   expect(reserveBody).toMatch(/if \(victim is null\) return full \? false : throw BudgetFull\(\);/)
   // A block's estimate the cache's own limit refuses: read ahead only, it stops with nothing fetched; one a read waits for
   // passes the limit, up to twice it (OverLimit, through the global budget), else TOO_LARGE naming the cache.
@@ -329,7 +333,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const reserve = between('private bool Reserve(', 'private void EvictLocked(')
   expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)/)
   expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
-  expect(reserve).toMatch(/private static RequestException BudgetFull\(\) =>\n\s*new\("TOO_LARGE", /)
+  expect(reserve).toMatch(/private RequestException BudgetFull\(\) => new\("TOO_LARGE", store\.IsSystemMemoryLow\(\) \? SqlService\.LowMemory\n/)
   const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeGreaterThan(0)
   // A refused reservation keeps no page.
