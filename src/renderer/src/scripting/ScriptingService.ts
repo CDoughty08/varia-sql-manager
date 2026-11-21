@@ -31,7 +31,7 @@ export interface ScriptingServiceOptions {
   readonly schedule?: (callback: () => void) => void
   readonly newId?: () => string
   /** BigQuery's cost prompts before Script As › CREATE runs its billed INFORMATION_SCHEMA query (BigQueryCostService.beforeScript). */
-  readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
+  readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult, signal: AbortSignal) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
 }
 
 export const scriptingMessages = {
@@ -53,7 +53,8 @@ export function scriptFileName(object: ObjectRef): string {
   return [...parts, object.name ?? 'Script'].join('.') + '.sql'
 }
 
-interface Job { id: string; readonly key: string; readonly label: string; readonly connectionId: string; visible: boolean; cancelled: boolean; disconnected: boolean; timer?: unknown }
+/** `prompt`: a BigQuery CREATE's cost prompts, closed when the job is cancelled, disconnected or disposed. */
+interface Job { id: string; readonly key: string; readonly label: string; readonly connectionId: string; visible: boolean; cancelled: boolean; disconnected: boolean; timer?: unknown; prompt?: AbortController }
 class FlagStore extends SnapshotStore<boolean> {
   set(value: boolean) { if (value !== this.getSnapshot()) this.publish(value) }
   clear() { this.clearListeners() }
@@ -117,10 +118,15 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
         const estimated = unwrap(await this.options.api.scriptObjects({ ...request, requestId: job.id, estimateOnly: true }))
         if (job.cancelled || this.disposed) return
         if (estimated.error) throw new Error(estimated.error.message)
-        const answer = estimated.estimate && this.options.billedGate ? await this.options.billedGate(connectionId, estimated.estimate) : { run: true }
+        job.prompt = new AbortController()
+        const answer = estimated.estimate && this.options.billedGate ? await this.options.billedGate(connectionId, estimated.estimate, job.prompt.signal) : { run: true }
+        job.prompt = undefined
+        if (job.disconnected) throw new Error(scriptingMessages.disconnected)
         if (!answer.run || job.cancelled || this.disposed) return
         billed = answer.maximumBytesBilled === undefined ? {} : { maximumBytesBilled: answer.maximumBytesBilled }
+        // The run is a new request: its id is what Cancel sends, so the status bar learns it now.
         job.id = this.newId()
+        this.changed()
       }
       result = await this.options.api.scriptObjects({ ...request, requestId: job.id, ...billed })
     } catch (error) {
@@ -146,7 +152,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
   cancel(ids: readonly string[]): void {
     const wanted = new Set(ids), cancelled = this.jobs.filter(job => wanted.has(job.id))
     if (!cancelled.length) return
-    for (const job of cancelled) { job.cancelled = true; this.remove(job, false); this.queueCancel(job.id) }
+    for (const job of cancelled) { job.cancelled = true; job.prompt?.abort(); this.remove(job, false); this.queueCancel(job.id) }
     this.notify({ text: scriptingMessages.cancelled, kind: 'info' }, scriptLimits.noticeMs)
   }
   cancelAll(): void { this.cancel(this.jobs.map(job => job.id)) }
@@ -158,7 +164,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
 
   dispose(): void {
     if (this.disposed) return
-    for (const job of this.jobs) { job.cancelled = true; this.timers.clearTimeout(job.timer); this.queueCancel(job.id) }
+    for (const job of this.jobs) { job.cancelled = true; job.prompt?.abort(); this.timers.clearTimeout(job.timer); this.queueCancel(job.id) }
     this.jobs = []
     this.flushCancels()
     this.disposed = true
@@ -176,7 +182,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
   private connectionsChanged(): void {
     const gone = this.jobs.filter(job => !this.isLive(job.connectionId))
     if (!gone.length) return
-    for (const job of gone) { job.disconnected = true; this.remove(job, false); this.queueCancel(job.id) }
+    for (const job of gone) { job.disconnected = true; job.prompt?.abort(); this.remove(job, false); this.queueCancel(job.id) }
     this.changed()
   }
   private remove(job: Job, publish = true): void {

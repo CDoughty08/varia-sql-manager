@@ -104,6 +104,9 @@ internal static class BigQueryExplorerChecks
         var dml = new[] { "SNAPSHOT", "VIEW", "MATERIALIZED_VIEW", "EXTERNAL" }.SelectMany(type => new[] { "insert", "update", "delete" }.Select(verb => BigQueryService.Template(verb, type, Fields(), path)));
         check(dml.All(text => text is null), "only a TABLE has INSERT, UPDATE and DELETE templates");
         var drops = new[] { "TABLE", "SNAPSHOT", "VIEW", "MATERIALIZED_VIEW", "EXTERNAL" }.Select(type => BigQueryService.Template("drop", type, [], path)).ToArray();
+        var comments = BigQueryService.Template("insert", "TABLE", [new() { Name = "a#b", Type = "STRING" }, new() { Name = "c--d", Type = "STRING" }], path);
+        check(comments == "INSERT INTO " + path + " (`a#b`, `c--d`)\nVALUES (<a_b, STRING,>, <c__d, STRING,>);",
+            "a placeholder never holds # or --, which would start a GoogleSQL comment: " + comments);
         check(drops.SequenceEqual(["DROP TABLE IF EXISTS " + path + ";", "DROP SNAPSHOT TABLE IF EXISTS " + path + ";", "DROP VIEW IF EXISTS " + path + ";",
             "DROP MATERIALIZED VIEW IF EXISTS " + path + ";", "DROP EXTERNAL TABLE IF EXISTS " + path + ";"]), "DROP names the object's type: " + string.Join(" | ", drops));
     }
@@ -167,7 +170,7 @@ internal static class BigQueryExplorerChecks
         public SqlService Service { get; }
         public string ConnectionId { get; private set; } = "";
 
-        public Harness()
+        public Harness(Varia.Backend.Results.ResultStore? store = null)
         {
             Fake = BigQueryFake.Google()
                 .On("GET", Base + "/datasets/sales/tables", BigQueryFake.Fixture("tables"))
@@ -177,7 +180,7 @@ internal static class BigQueryExplorerChecks
                 .On("GET", Sales + "/routines", BigQueryFake.Fixture("routines"))
                 .On("GET", Sales + "/routines/refresh_totals", BigQueryFake.Fixture("routine-procedure"))
                 .On("GET", Sales + "/models", BigQueryFake.Fixture("models"));
-            Service = new SqlService(bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
+            Service = new SqlService(store, bigQuery: new BigQueryEnvironment(null, Fake.Factory, new SubjectTokens([])));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 
@@ -360,6 +363,35 @@ internal static class BigQueryExplorerChecks
             $"a view is refused with Script As › SELECT offered; row access policies answer ROW_ACCESS: {view} {rows?.Status} {rows?.Error?.Code}");
         var (hostile, _, _) = await harness.Call("query.execute", Query("pre`view"));
         check(hostile == "INVALID_PARAMS", "a preview of a name its rule refuses is refused: " + hostile);
+
+        // The tab keeps its own dataset (here the connection's), not the previewed table's, which may be another project's.
+        harness.Fake.On("GET", Base + "/datasets/staging/tables/preview", BigQueryFake.Fixture("table-preview"));
+        harness.Fake.On("GET", Base + "/datasets/staging/tables/preview/data", BigQueryFake.Fixture("tabledata"));
+        var elsewhere = Query("preview");
+        elsewhere["preview"]!["dataset"] = "staging";
+        var (_, otherResult, _) = await harness.Call("query.execute", elsewhere);
+        check(otherResult is QueryResult { Status: "completed", Database: "sales" }, "Preview Rows reports the tab's dataset, not the table's: " + (otherResult as QueryResult)?.Database);
+
+        // A full result budget stops the reading: no page after the one the budget refused.
+        using var small = new Harness(new Varia.Backend.Results.ResultStore(256 * 1024, 128 * 1024));
+        await small.ConnectAsync(key);
+        var wide = new string('w', 2000);
+        small.Fake.On("GET", Sales + "/tables/preview/data", request =>
+        {
+            var page = request.Uri.Query.Contains("pageToken=", StringComparison.Ordinal) ? int.Parse(System.Web.HttpUtility.ParseQueryString(request.Uri.Query)["pageToken"]!, System.Globalization.CultureInfo.InvariantCulture) : 0;
+            var rows = string.Join(",", Enumerable.Range(0, 50).Select(i => "{\"f\":[{\"v\":\"" + (page * 50 + i) + "\"},{\"v\":\"" + wide + "\"}]}"));
+            return new BigQueryFake.Reply(200, "{\"totalRows\":\"1000\",\"rows\":[" + rows + "]" + (page < 19 ? ",\"pageToken\":\"" + (page + 1) + "\"" : "") + "}");
+        });
+        JsonObject SmallQuery() => new()
+        {
+            ["connectionId"] = small.ConnectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1",
+            ["maxRows"] = 0, ["timeoutSeconds"] = 0, ["preview"] = new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["table"] = "preview" }
+        };
+        var (_, fullResult, _) = await small.Call("query.execute", SmallQuery());
+        var full = fullResult as QueryResult;
+        var pages = small.Fake.To(Sales + "/tables/preview/data").Count();
+        check(full is { Status: "completed" } && full.ResultSets.Single() is { Truncated: "queryBudget" or "globalBudget" } && pages < 20,
+            $"a preview the result budget stops completes without reading the table's other pages: {full?.Status} {full?.ResultSets.FirstOrDefault()?.Truncated} {pages} pages");
     }
 
     static async Task PropertiesAsync(Action<bool, string> check, JsonObject key)

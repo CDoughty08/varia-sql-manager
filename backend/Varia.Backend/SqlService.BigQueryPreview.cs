@@ -33,6 +33,13 @@ internal sealed partial class SqlService
             queries.TryRemove(new(args.QueryId, running));
             throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
         }
+        // A disconnect that came between finding the handle and registering cancelled nothing of this preview's: refuse it.
+        if (bigQuery.Find(args.ConnectionId) != connection)
+        {
+            bigQueryTabs.TryRemove(args.SessionId, out _);
+            queries.TryRemove(new(args.QueryId, running));
+            throw new RequestException("NOT_CONNECTED", "The connection was closed.");
+        }
         using var cancelled = context?.Token.Register(() => { if (context.Reason == CancelReason.Deadline) TryCancel(cancellation); else running.Cancel(); });
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         var messages = new QueryMessages(events.Message);
@@ -106,7 +113,8 @@ internal sealed partial class SqlService
             output.Add(new("Preview Rows stopped early because the result memory budget is full; close other query results to free memory.", QueryMessages.Info));
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
-        return new(descriptors, 0, output, -1, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1, args.Dataset, messages.Truncated,
+        // The tab's dataset as Execute reports it (its own, else the connection's): the previewed table may be in another project.
+        return new(descriptors, 0, output, -1, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1, query.Dataset ?? connection.Options.Dataset ?? "", messages.Truncated,
             SummaryBudget(budget?.StoppedBytes), completedAt);
     }
 
@@ -119,6 +127,8 @@ internal sealed partial class SqlService
     {
         string? pageToken = null;
         long stored = 0, counted = 0, total = 0;
+        // Set when the set stops taking rows (a row limit or the result budget): no further page is read.
+        var stopping = false;
         var roomWaited = new RoomWaited();
         do
         {
@@ -136,6 +146,7 @@ internal sealed partial class SqlService
             {
                 set.Skip(refusal);
                 budget.Stop(refusal);
+                stopping = true;
                 break;
             }
             try
@@ -147,13 +158,13 @@ internal sealed partial class SqlService
                     set.CountRow();
                     counted++;
                     var builder = set.BeginRow();
-                    if (builder is null) { pageToken = null; break; }
+                    if (builder is null) { stopping = true; break; }
                     int truncatedCells;
                     try { truncatedCells = plan.ReadRow(row, builder, warn); }
                     catch { set.AbortRow(); throw; }
                     var committed = set.TryCommitRow(truncatedCells, mayWait: true);
                     if (!committed && set.RoomWanted > 0) committed = await WaitAndCommitAsync(store, set, truncatedCells, roomWaited, token);
-                    if (!committed) { pageToken = null; break; }
+                    if (!committed) { stopping = true; break; }
                     stored++;
                 }
             }
@@ -164,7 +175,7 @@ internal sealed partial class SqlService
                 set.Seal();
                 events.Sealed(set);
             }
-            pageToken = stored < BigQueryPreviewRows ? page.PageToken : null;
+            pageToken = !stopping && stored < BigQueryPreviewRows ? page.PageToken : null;
         } while (pageToken is not null);
         if (stored >= BigQueryPreviewRows && total > counted) set.Skip(TruncationReason.RowLimit);
         if (total > counted) set.CountRows(total - counted);

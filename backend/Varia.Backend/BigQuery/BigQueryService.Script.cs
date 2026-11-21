@@ -51,6 +51,7 @@ internal sealed partial class BigQueryService
                 var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
                 var ddl = await DdlAsync(connection, sql, name, dataset, project, cap, budget.Token);
                 if (ddl is null) return Failure("NOT_FOUND", (routine ? "Routine " : "Table ") + project + "." + dataset + "." + name + " no longer exists.");
+                if (ddl.Length == 0) return Failure("NOT_SUPPORTED", "BigQuery has no CREATE statement for " + project + "." + dataset + "." + name + ".");
                 return new(Terminate(ddl), home, [], 1, watch.ElapsedMilliseconds);
             }
             var text = target.Kind == "bqRoutine"
@@ -101,7 +102,11 @@ internal sealed partial class BigQueryService
         return Estimate(await MetadataAsync(connection, t => connection.Client.Service.Jobs.Insert(job, connection.Options.Project).ExecuteAsync(t), token));
     }
 
-    /// <summary>Runs the CREATE query in the dataset's location under the cap, then reads its one cell; null when no row matched.</summary>
+    /// <summary>Waits between polls of a CREATE query whose results are not ready (the emulator answers at once).</summary>
+    internal TimeSpan DdlPoll { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>Runs the CREATE query in the dataset's location under the cap, then reads its one cell: null when no row matched,
+    /// empty when the row's ddl is NULL. A budget or cancel that ends it first cancels the job (best effort).</summary>
     async Task<string?> DdlAsync(BigQueryConnection connection, string sql, string name, string dataset, string project, long? cap, CancellationToken token)
     {
         var location = connection.DatasetLocations.TryGetValue(project + ":" + dataset, out var known) ? known
@@ -110,15 +115,36 @@ internal sealed partial class BigQueryService
         var job = await InsertJobAsync(connection, CreateJob(connection, sql, name, location, cap, dryRun: false), null, token);
         if (BigQueryJobException.Of(job) is { } refused) throw refused;
         var reference = job.JobReference;
-        while (true)
+        try
         {
-            using var page = await QueryResultsAsync(connection, reference.ProjectId, reference.JobId, reference.Location ?? location, null, 1, 10_000, token);
-            if (!page.JobComplete) continue;
-            if (page.RowCount == 0) return null;
-            var row = page.Rows[0];
-            return row.TryGetProperty("f", out var cells) && cells.ValueKind == System.Text.Json.JsonValueKind.Array && cells.GetArrayLength() > 0
-                && cells[0].TryGetProperty("v", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : null;
+            while (true)
+            {
+                using var page = await QueryResultsAsync(connection, reference.ProjectId, reference.JobId, reference.Location ?? location, null, 1, 10_000, token);
+                if (!page.JobComplete) { await Task.Delay(DdlPoll, token); continue; }
+                if (page.RowCount == 0) return null;
+                var row = page.Rows[0];
+                return row.TryGetProperty("f", out var cells) && cells.ValueKind == System.Text.Json.JsonValueKind.Array && cells.GetArrayLength() > 0
+                    && cells[0].TryGetProperty("v", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : "";
+            }
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            _ = CancelDdlAsync(connection, reference);
+            throw;
+        }
+    }
+
+    /// <summary>Cancels a CREATE query its budget or Stop abandoned, so it bills nothing more; failures are ignored.</summary>
+    async Task CancelDdlAsync(BigQueryConnection connection, JobReference reference)
+    {
+        try
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var call = connection.Client.Service.Jobs.Cancel(reference.ProjectId, reference.JobId);
+            call.Location = reference.Location;
+            await call.ExecuteAsync(limit.Token);
+        }
+        catch (Exception) { }
     }
 
     async Task<string?> RoutineDropAsync(BigQueryConnection connection, string project, string dataset, string name, CancellationToken token)
@@ -187,7 +213,7 @@ internal sealed partial class BigQueryService
         }
     }
 
-    /// <summary>&lt;name, type,&gt; as SSMS's templates write it; no column name holds a comma, angle bracket or line break that
-    /// could split it but the flexible set's &lt; and &gt;, which become _.</summary>
-    static string Placeholder(TableFieldSchema field) => "<" + field.Name.Replace('<', '_').Replace('>', '_') + ", " + TypeText(field).Replace(", required", "").Replace('<', '(').Replace('>', ')') + ",>";
+    /// <summary>&lt;name, type,&gt; as SSMS's templates write it; no column name holds a comma or line break that could split it.
+    /// The flexible set's &lt; and &gt; would end it, and its # and -- would start a GoogleSQL comment, so they become _.</summary>
+    static string Placeholder(TableFieldSchema field) => "<" + field.Name.Replace('<', '_').Replace('>', '_').Replace('#', '_').Replace("--", "__") + ", " + TypeText(field).Replace(", required", "").Replace('<', '(').Replace('>', ')') + ",>";
 }

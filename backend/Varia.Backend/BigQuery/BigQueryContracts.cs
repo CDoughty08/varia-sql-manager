@@ -57,9 +57,10 @@ internal static partial class BigQueryLimits
 
     [GeneratedRegex(@"^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]\z")]
     public static partial Regex ProjectId();
-    [GeneratedRegex(@"^[A-Za-z\d_]+\z")]
+    // ASCII digits only, as zod's \w (.NET's \d matches every Unicode digit).
+    [GeneratedRegex(@"^[A-Za-z0-9_]+\z")]
     public static partial Regex DatasetId();
-    [GeneratedRegex(@"^[A-Za-z\d-]+\z")]
+    [GeneratedRegex(@"^[A-Za-z0-9-]+\z")]
     public static partial Regex LocationId();
     [GeneratedRegex(@"^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$", RegexOptions.IgnoreCase)]
     public static partial Regex Uuid();
