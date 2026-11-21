@@ -232,7 +232,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `Released`); `Demote` marks the set windowed before it drops views and snapshots, so a hold finished meanwhile is refused
   or dropped, and searches and operations stop on any revision change, even one loaded back
   (`tests/result-page-access.test.ts`). The cache reserves each block's estimate before it fetches and any overrun after,
-  within its own limit, never forcing a charge, and never builds a block past that limit
+  within its own limit (past it by one block at most only while reads hold every other block, trimmed back after), always
+  through the global budget, never forcing a charge, and never builds a block past that limit
   (`tests/working-memory-lint.test.ts`).
 - **Column types are classified once.** A result column's `sortKind` is set by one factory (`ColumnTypes.SortKindOf`,
   mirrored by `sortKindOf` in `src/shared/results/sort-kind.ts`); sort, filter, pivot, profiles, row identity, Copy and

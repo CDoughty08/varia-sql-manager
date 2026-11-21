@@ -56,11 +56,13 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         bytes += page.Cost;
     }
 
-    /// <summary>The pages written, the last one sealed.</summary>
+    /// <summary>The pages written, the last one sealed: a block whose last page takes it past <c>maxBytes</c> is refused too, so
+    /// no block costs more than its cache holds.</summary>
     public List<RemotePage> Finish()
     {
         AbortRow();
         if (builder.HasRows) Seal();
+        if (bytes > maxBytes) throw BlockTooLarge();
         return pages;
     }
 }
@@ -312,6 +314,7 @@ internal sealed class RemoteResult : IDisposable
         finally
         {
             lock (gate)
+            {
                 foreach (var block in targets)
                 {
                     // A fetch this read asked for that no read now waits for (the read was cancelled or answered short)
@@ -319,6 +322,8 @@ internal sealed class RemoteResult : IDisposable
                     if (--block.Waiters == 0 && block.Fetching is not null && block.AheadOf == 0) block.AheadOf = viewer == 0 ? uint.MaxValue : viewer;
                     DropIfIdleLocked(block);
                 }
+                TrimLocked();
+            }
         }
     }
 
@@ -392,6 +397,7 @@ internal sealed class RemoteResult : IDisposable
                 {
                     if (block.Fetching == done) { block.Fetching = null; block.Stop = null; block.AheadOf = 0; block.Holding = block.Settling = false; }
                     DropIfIdleLocked(block);
+                    TrimLocked();
                 }
                 stop.Dispose();
                 // Observed here: a failure reaches the reads awaiting it, and a read-ahead's has no one to tell.
@@ -471,9 +477,10 @@ internal sealed class RemoteResult : IDisposable
     }
 
     /// <summary>A block's overrun (rows wider than measured). Refused by the cache's own limit while other fetches of this result
-    /// hold its room, it stops read-ahead no read waits for, waits once for the rest, then evicts as usual; when the read's own
-    /// blocks still cannot fit together, the read answers with the rows it has (<see cref="RemoteRetryException"/>), never
-    /// TOO_LARGE, which stays for a full global budget.</summary>
+    /// hold its room, it stops read-ahead no read waits for, waits once for the rest, then evicts as usual. When reads still
+    /// hold every other block (a read's own blocks that do not fit the cache together), the overrun passes the cache's limit,
+    /// by one block at most, for the global budget alone to refuse (TOO_LARGE): answering short instead would read the same
+    /// block again on every read. The cache trims back to its limit once no read holds those blocks (<see cref="TrimLocked"/>).</summary>
     private async Task ReserveOverrunAsync(long bytes, Block keep, CancellationToken token)
     {
         for (var round = 0; ; round++)
@@ -493,11 +500,30 @@ internal sealed class RemoteResult : IDisposable
                     foreach (var block in holding) if (block.Waiters == 0 && block.AheadOf != 0) block.Stop?.Cancel();
                     others = [.. holding.Select(block => block.Fetching!)];
                 }
-                if (others.Length == 0 || round > 0) throw new RemoteRetryException(error);
+                if (others.Length == 0 || round > 0)
+                {
+                    if (store.TryReserveCache(ref held, OverLimit, bytes)) return;
+                    throw;
+                }
                 // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
                 try { await Task.WhenAll(others).WaitAsync(token); }
                 catch (Exception) when (!token.IsCancellationRequested) { }
             }
+        }
+    }
+
+    /// <summary>What the cache may hold while a read's own blocks pass its limit: one more block's worth.</summary>
+    private long OverLimit => CacheLimit * 2;
+
+    /// <summary>Evicts the least recent blocks no read waits for while the cache is past its limit (after an overrun took room
+    /// past it for a read's own blocks).</summary>
+    private void TrimLocked()
+    {
+        while (Interlocked.Read(ref held) > CacheLimit)
+        {
+            var victim = lru.FirstOrDefault(block => block.Waiters == 0 && block.Fetching is null && block.Bytes > 0);
+            if (victim is null) return;
+            EvictLocked(victim);
         }
     }
 

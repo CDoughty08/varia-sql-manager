@@ -309,8 +309,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   allowing the estimate's 25% margin, holds fewer), read with `tabledata.list` from the destination
   table, at most two at a time per result and four per connection, backing off on rate limits. The cache keeps the
   most recently used blocks within the window cache, reserving each block from the global result budget before it fetches
-  (and any overrun after, never past the window cache: rows too wide for it answer that they are too wide; an overrun
-  waits for the result's other fetches to settle, and a read whose blocks cannot all fit shows the rows it has), and
+  (and any overrun after: a block too wide for the window cache answers that its rows are too wide; an overrun
+  waits for the result's other fetches to settle, and a read whose own blocks do not fit together may pass the window
+  cache by one block until it is done), and
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
   way it is scrolling (fewer when the cache holds few blocks); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, or stops
   where the cache is full, then the grid shows the rows it has and asks again.

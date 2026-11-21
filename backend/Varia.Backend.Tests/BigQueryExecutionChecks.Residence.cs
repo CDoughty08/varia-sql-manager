@@ -117,6 +117,8 @@ internal static partial class BigQueryExecutionChecks
         public readonly ConcurrentQueue<(long First, int Rows)> Calls = new();
         public TaskCompletionSource? Gate;
         public int Pad;
+        /// <summary>A row's padding by row, when rows differ in width (else <see cref="Pad"/>).</summary>
+        public Func<long, int>? PadOf;
         public volatile bool Expire;
         int running;
         public int MaxRunning;
@@ -142,7 +144,7 @@ internal static partial class BigQueryExecutionChecks
                 if (Expire) throw new RemoteExpiredException();
                 for (var row = first; row < first + rows; row++)
                 {
-                    Write(writer, row, Pad);
+                    Write(writer, row, PadOf?.Invoke(row) ?? Pad);
                     Interlocked.Increment(ref Written);
                 }
             }
@@ -880,9 +882,38 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // A block whose last, partly filled page takes it just past the cache (419 rows of 10,000 characters in 4 MiB): refused
+        // as too wide, never read again and again for nothing.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 10_000 };
+            using var remote = Remote(store, blocks, rows: 419, rowBytes: 16, cache: 4L << 20);
+            string outcome;
+            try { outcome = "next " + (await ReadRemote(remote, 0, 10, viewer: 1)).Next; }
+            catch (RequestException error) { outcome = error.Code + (error.Message.Contains("too wide", StringComparison.Ordinal) ? " too wide" : ""); }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(outcome == "TOO_LARGE too wide" && store.WindowCacheBytes == 0, $"a block just past its cache is refused as too wide: {outcome}, {store.WindowCacheBytes} held");
+        }
+
+        // A read across two blocks that do not fit the cache together (rows about 0.7 and 0.4 of it): the overrun passes the
+        // cache's limit for the read's own blocks rather than answering short, so the first read sends every row, the block
+        // is fetched once (no read loop fetching it again), and the cache trims back to its limit once the read is done.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 50_000, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.PadOf = row => row < size ? (int)(0.7 * (16L << 20) / size) : (int)(0.4 * (16L << 20) / size);
+            var first = size - 10L;
+            var (next, rows) = await ReadRemote(remote, first, 128);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var zero = blocks.Calls.Count(call => call.First == 0);
+            check(next >= first + 128 && Consecutive(rows.Where(row => row >= first && row < first + 128).ToList(), first, 128) && zero == 1 && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
+                $"a read's own blocks past the cache are read once and the cache trims back: next {next - first} of 128, block 0 fetched {zero}x, cached {remote.CachedBytes} of {remote.CacheLimit}");
+        }
+
         // Rows 1.3x wider than measured: a block's overrun finds the other block's fetch holding the cache's room. The read
-        // waits for it (or stops read-ahead) and never answers TOO_LARGE while the budget is nearly empty; a read whose own two
-        // blocks cannot fit together answers with the rows it has, and reading on from there reaches the rest.
+        // waits for it (or stops read-ahead) and never answers TOO_LARGE while the budget is nearly empty.
         {
             var failures = new List<string>();
             foreach (var (first, count) in new[] { (0L, 10), (30L, 10) })

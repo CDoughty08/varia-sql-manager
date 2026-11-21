@@ -117,10 +117,15 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
-  // An overrun reserves through Reserve too; only the cache's own limit (never the global budget) turns into a short answer.
+  // An overrun reserves through Reserve too; only when reads hold every other block may it pass the cache's own limit, by one
+  // block at most (OverLimit), and the global budget still refuses it.
   const overrun = between('private async Task ReserveOverrunAsync(', 'private void Reserve(')
   expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
   expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
+  expect(overrun).toMatch(/if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n\s*throw;/)
+  expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
+  // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
+  expect(count(remote, /TrimLocked\(\);/g)).toBe(2)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
   // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
   const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')
@@ -128,7 +133,10 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
   expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
   expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
-  expect(count(remote, /TryReserveCache\(/g)).toBe(count(remote, /TryReserveCache\(ref held, CacheLimit, /g))
+  expect(count(remote, /TryReserveCache\(/g)).toBe(count(remote, /TryReserveCache\(ref held, CacheLimit, /g) + count(overrun, /TryReserveCache\(ref held, OverLimit, /g))
+  expect(count(remote, /TryReserveCache\(ref held, OverLimit, /g)).toBe(1)
+  // The last page is checked too: no block costs more than its cache.
+  expect(remote).toMatch(/if \(builder\.HasRows\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
   // A block's rows fit half its cache with the estimate's own margin, so a block and one read ahead fit it even a little wider.
   expect(remote).toMatch(/var floor = \(int\)Math\.Clamp\(cacheLimit \/ 2 \/ \(bytes \* EstimateMargin\), 1, MinBlockRows\);/)
   expect(remote).toMatch(/private const double EstimateMargin = 1\.25;/)
