@@ -103,6 +103,16 @@ internal static class SearchChecks
         check(Make("ord*s").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's * stands for any characters");
         check(Make("*Orders*").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's outer *s change nothing, since it matches anywhere");
         check(Make("Cust*", wholeWord: true).Find("dbo.Customers x", 0, out at, out length) && at == 4 && length == 9, "under Whole Word an outer * matches the rest of the identifier");
+        var bounded = Make("Order*Id", wholeWord: true);
+        const string names = "OrderIdArchiveId,OrderId #OrderId OrderId";
+        check(bounded.Find(names, 0, out at, out length) && at == 0 && length == 16
+            && bounded.Find(names, 16, out at, out length) && at == 17 && length == 7
+            && bounded.Find(names, 24, out at, out length) && at == 34 && length == 7,
+            "a wildcard tries the later suffix of the same word, shares separators across hits and respects identifier prefixes");
+        check(Make("**", wholeWord: true).Find("...two", 0, out at, out length) && at == 3 && length == 3
+            && !bounded.Find("noseOrderId x\nId", 0, out _, out _)
+            && Make("?x?", wholeWord: true).Find("!x!", 0, out at, out length) && at == 0 && length == 3,
+            "whole-word wildcards support all stars, punctuation, question marks and both ends of the input");
         check(Make("a?c").Find("xabcx", 0, out at, out length) && at == 1 && length == 3 && !Make("a?c").Find("ac", 0, out _, out _), "a plain search's ? stands for one character");
         check(Make("a+b*c").Find("a+bXc", 0, out at, out _) && at == 0 && Make("[x]?").Find("[x]1", 0, out at, out _) && at == 0, "a wildcard search keeps every other character literal");
         check(SearchMatcher.Wildcard("a**b?c") == "a.*?b.c" && SearchMatcher.Wildcard("*ab*") == "[\\p{L}\\p{Nd}_@#$]*ab[\\p{L}\\p{Nd}_@#$]*", "wildcards become a NonBacktracking pattern");

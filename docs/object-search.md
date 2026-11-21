@@ -187,7 +187,7 @@ the reads held when it is made:
 - **Match Case.** Off by default; matching is ordinal and ignores case.
 - **Wildcards.** Without regex, `*` is any characters on one line and `?` one character; the rest is literal. A search
   matches anywhere in a name, so `Cust*` and `Cust` find the same; under Match Whole Word an outer `*` matches the rest of
-  the identifier (`Cust*` finds `Customers`).
+  the identifier (`Cust*` finds `Customers`). An internal star can stretch to the word boundary, so `Order*Id` finds `OrderIdArchiveId`.
 - **Dots.** A name search with a dot matches the qualified name `database.schema.name` (a child's
   `database.schema.parent.name`) with a dot at each end. `.Sales` and `Sales.` find schema `Sales` and its contents
   (`.Sales` also finds names starting `Sales`, such as `dbo.SalesOrders`); `AppData.dbo.Orders` finds that table in
