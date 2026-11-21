@@ -21,6 +21,8 @@ describe('the truncation strip\'s budget figure', () => {
     const text = truncationText({ truncated: 'rowLimit', rowsStored: 0, rowsRead: 3_000_000_000, residence: 'remote', rowsAvailable: 2_147_483_647 })
     expect(text).toBe('Only the first 2,147,483,647 of 3,000,000,000 rows can be shown: a grid reads at most 2,147,483,647 rows of a result windowed in BigQuery.')
     expect(truncationText({ rowsStored: 0, rowsRead: 500, residence: 'remote', rowsAvailable: 500 })).toBeUndefined()
+    // A windowed result of exactly the cap that is not truncated (the backend truncates only past it) says nothing either.
+    expect(truncationText({ rowsStored: 0, rowsRead: 2_147_483_647, residence: 'remote', rowsAvailable: 2_147_483_647 })).toBeUndefined()
     // Capped by Rows kept per execution instead: the strip names that limit, with the rows the grid can read.
     expect(truncationText({ truncated: 'rowLimit', rowsStored: 0, rowsRead: 1_000_000, residence: 'remote', rowsAvailable: 1000 }))
       .toBe('Only the first 1,000 of 1,000,000 rows are shown: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.')
