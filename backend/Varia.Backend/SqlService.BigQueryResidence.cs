@@ -264,6 +264,12 @@ internal sealed partial class SqlService
     internal static RequestException Expired() =>
         new("REMOTE_EXPIRED", "BigQuery no longer has this result: its temporary result table expired. Run the query again to see the rest of the rows.");
 
+    /// <summary>Checks only: called as a load is about to promote its set, after its checks.</summary>
+    internal Action? LoadPromoting { get; set; }
+
+    /// <summary>Checks only: runs after a load finds its connection, before it registers.</summary>
+    internal Action? LoadRegistering { get; set; }
+
     /// <summary>
     /// results.remoteQuery (docs/ipc.md): a query over a windowed result's rows, run like query.execute (unary with EVENTs,
     /// its own queryId for query.cancel). Only the load kind exists so far: Load into memory reads the destination table into
@@ -271,12 +277,6 @@ internal sealed partial class SqlService
     /// A refusal part way switches it back to windowed, as an Automatic query's read would, and so does Stop: the result stays
     /// whole either way. The answer is a query summary.
     /// </summary>
-    /// <summary>Checks only: called as a load is about to promote its set, after its checks.</summary>
-    internal Action? LoadPromoting { get; set; }
-
-    /// <summary>Checks only: runs after a load finds its connection, before it registers.</summary>
-    internal Action? LoadRegistering { get; set; }
-
     private async Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context)
     {
         if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load")
