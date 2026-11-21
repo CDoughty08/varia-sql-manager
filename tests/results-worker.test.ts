@@ -226,6 +226,14 @@ describe('results worker core', () => {
     expect(result?.type === 'window' && [result.first, result.count, result.text[0]]).toEqual([60, 50, '60'])
     // The longer page replaced the shorter one it overlaps: one page, and rows on either side of row 50 read without a gap.
     expect(core.cachedPages).toBe(1)
+    // ...and its bytes are all the cache counts: the shorter page left the result's index too, so none is kept uncounted
+    // by an eviction that never sees it.
+    const alone = fixture()
+    alone.window(0, 200)
+    alone.core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 200) })
+    alone.core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 200, rowsAvailable: 10_000, complete: false, pages: 1, rows: 200 } })
+    expect(alone.core.cachedPages).toBe(1)
+    expect(core.cachedBytes).toBe(alone.core.cachedBytes)
     const across = window(40, 20)
     expect(reads()).toHaveLength(2)
     expect(answer(across)?.type === 'window' && (answer(across) as { count: number }).count).toBe(20)

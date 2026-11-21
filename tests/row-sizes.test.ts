@@ -40,6 +40,16 @@ describe('row sizes', () => {
     expect(sizes.get(5)).toBeUndefined()
     expect(reads).toHaveLength(2)
   })
+  it('gives up the reads of an older revision, so the new one reads at once rather than behind them', () => {
+    const { sizes, reads, snapshot } = fixture(100_000)
+    snapshot.residence = 'remote'
+    sizes.ensure(0, 400)
+    expect(reads.map(read => read.first)).toEqual([0, 256])
+    snapshot.revision = 1
+    sizes.ensure(0, 400)
+    expect(reads.slice(0, 2).map(read => read.signal?.aborted)).toEqual([true, true])
+    expect(reads.slice(2).map(read => read.first)).toEqual([0, 256])
+  })
   it('keeps no answer of an older revision that lands after the new one was seen', async () => {
     const { sizes, reads, answer, settle, snapshot } = fixture()
     sizes.ensure(0, 10)
