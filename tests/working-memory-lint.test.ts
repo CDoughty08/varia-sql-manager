@@ -167,7 +167,10 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(overrun).toMatch(/\{\n\s*if \(Reserve\(bytes, keep\)\) return;\n/)
   // A block only read ahead stops there instead: only blocks reads wait for pass the limit.
   expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool ahead;\n\s*lock \(gate\) ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*if \(ahead\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes, out var full\)\) \{ NotePeak\(\); return; \}\n(\s*\/\/[^\n]*\n)*\s*throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);/)
-  // The cache's bytes are read in two places only, neither deciding a refusal: CachedBytes, and the trim's loop.
+  // The cache's bytes are read in two places only: CachedBytes, and the trim's loop. Only read-ahead's reach check refuses
+  // by CachedBytes (a stale figure skips one read-ahead or wastes one eviction); every other refusal is the store's.
+  expect(count(remote, /\bCachedBytes\b/g)).toBe(3)
+  expect(between('private bool Reserve(', 'private void EvictLocked(')).toMatch(/if \(CachedBytes - evictable \+ bytes > limit\) return false;/)
   expect(count(remote, /Interlocked\.Read\(ref held\)/g)).toBe(2)
   expect(remote).toMatch(/public long CachedBytes => Interlocked\.Read\(ref held\);/)
   expect(remote).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)
@@ -180,7 +183,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const reserveBody = between('private bool Reserve(', 'private void EvictLocked(')
   // Its limit is the cache's own, less (for a block only read ahead) the estimates of read blocks that have not reserved yet:
   // never more than CacheLimit.
-  expect(reserveBody).toMatch(/var limit = CacheLimit;\n\s*lock \(gate\)\n\s*if \(keep\.Waiters == 0 && keep\.AheadOf != 0\)\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)/)
+  expect(reserveBody).toMatch(/var limit = CacheLimit;\n\s*lock \(gate\)\n\s*if \(keep\.Waiters == 0 && keep\.AheadOf != 0\)\n\s*\{\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*var evictable = lru\.Where\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !OnScreenLocked\(block\)\)\.Sum\(block => block\.Bytes\);\n\s*if \(CachedBytes - evictable \+ bytes > limit\) return false;\n\s*\}\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)/)
   expect(count(reserveBody, /\blimit\s*(?:[-+*/%&|^]|<<|>>>?|\?\?)?=(?!=)|(?:\+\+|--)\s*limit\b|\blimit\s*(?:\+\+|--)|\b(?:ref|out|in)\s+limit\b/g)).toBe(2)
   // What it subtracts is a sum of estimates (each at least the page overhead), never negative, so the limit only falls.
   expect(reserveBody.includes('limit -= blocks.Values.Where(block => block != keep && block.Waiters > 0 && block.Fetching is not null && !block.Holding).Sum(block => Math.Min(EstimateOf((int)(block.End - block.Filled)), CacheLimit / 2));')).toBe(true)

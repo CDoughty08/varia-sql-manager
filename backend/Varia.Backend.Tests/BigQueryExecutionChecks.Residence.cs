@@ -445,6 +445,8 @@ internal static partial class BigQueryExecutionChecks
             var store = new ResultStore(1L << 30, 1L << 29);
             var blocks = new Blocks { Pad = 32_000 };
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            // Block 1 is read ahead once block 0, the read's own, is cached.
+            remote.Reserving = index => { if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000); };
             await ReadRemote(remote, 0, 10, viewer: 1);
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
@@ -462,6 +464,47 @@ internal static partial class BigQueryExecutionChecks
             var after = remote.CachedBlocks();
             check(before.SequenceEqual(new long[] { 0, 1 }) && after.Contains(0) && after.Contains(20) && !after.Contains(1),
                 $"the least recently used block goes first, and a read-ahead never takes the room of the read it follows: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
+        // A read-ahead block that cannot fit even with every block it may evict gone evicts none: the other grids' blocks stay
+        // cached while the cache is nearly empty, rather than being thrown away for a refusal.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            remote.Reserving = index =>
+            {
+                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+            };
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            var evicted = remote.Evictions;
+            var aheadTried = 0;
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
+            await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.SequenceEqual(new long[] { 0, 1, 50, 51 }) && new long[] { 0, 1, 20, 50, 51 }.All(after.Contains) && remote.Evictions == evicted,
+                $"a read-ahead that cannot fit evicts nothing for it: before [{string.Join(",", before)}], after [{string.Join(",", after)}], {remote.Evictions - evicted} evicted");
+        }
+
+        // The rows on screen are every block a viewer's last read covered, not only its first.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            await ReadRemote(remote, 2 * remote.BlockRows - 5, 2 * remote.BlockRows, viewer: 1);
+            var covered = new[] { 1L, 2, 3, 4 }.Select(remote.OnScreenForChecks).ToArray();
+            await ReadRemote(remote, 40 * remote.BlockRows, 10, viewer: 1);
+            check(covered.SequenceEqual(new[] { true, true, true, false }) && !remote.OnScreenForChecks(2) && remote.OnScreenForChecks(40),
+                $"the rows on screen are every block the last read covered: {string.Join(",", covered)}");
         }
 
         // Viewer ids come from the untrusted renderer: the read-ahead state of a few hundred at most is remembered.
@@ -744,6 +787,10 @@ internal static partial class BigQueryExecutionChecks
             check(read is { NextRow: 3000, Complete: true, Rows: 100 } && Covers(rows, 2900, 100), "a read to the end is complete");
             var (viewerCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: 0);
             check(viewerCode == "INVALID_PARAMS", "a viewer id of 0 is refused");
+            // Past 2^31 - 1 too (docs/ipc.md): uint.MaxValue marks a read that names no viewer.
+            var (overCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: 1u << 31);
+            var (maxCode, _, _, _) = await ReadRows(harness, id, 0, 10, viewer: uint.MaxValue);
+            check(overCode == "INVALID_PARAMS" && maxCode == "INVALID_PARAMS", $"a viewer id past 2^31 - 1 is refused: {overCode} {maxCode}");
 
             // Every reader of stored pages refuses a windowed result before doing any work.
             var refusals = new List<string>();

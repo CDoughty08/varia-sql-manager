@@ -601,7 +601,14 @@ internal sealed class RemoteResult : IDisposable
         var limit = CacheLimit;
         lock (gate)
             if (keep.Waiters == 0 && keep.AheadOf != 0)
+            {
                 limit -= blocks.Values.Where(block => block != keep && block.Waiters > 0 && block.Fetching is not null && !block.Holding).Sum(block => Math.Min(EstimateOf((int)(block.End - block.Filled)), CacheLimit / 2));
+                // Nor does it evict for room it cannot reach: with every block it may evict gone it would still not fit, so
+                // it stops before evicting any. (A figure gone stale meanwhile costs one read-ahead skipped or one eviction
+                // wasted; the reservation below still decides.)
+                var evictable = lru.Where(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !OnScreenLocked(block)).Sum(block => block.Bytes);
+                if (CachedBytes - evictable + bytes > limit) return false;
+            }
         while (!store.TryReserveCache(ref held, limit, bytes, out var full))
         {
             Block? victim;
@@ -617,6 +624,9 @@ internal sealed class RemoteResult : IDisposable
         NotePeak();
         return true;
     }
+
+    /// <summary>Checks only: whether a viewer's last read covered the block.</summary>
+    internal bool OnScreenForChecks(long index) { lock (gate) return OnScreenLocked(new Block(index, 0, 0)); }
 
     private bool OnScreenLocked(Block block) => viewers.Values.Any(viewer => viewer.First >= 0 && block.Index >= viewer.First && block.Index <= viewer.Last);
 
