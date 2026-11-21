@@ -357,6 +357,9 @@ if (liveGroup is null)
         "a bare GO line ends with its line break, so a scripted module comes back without a leading blank line");
     Check(SqlScript.Parse("GO\n-- empty\nGO\nSELECT 1;\nGO\nGO").Count == 1, "ignore empty batches");
     Check(SqlScript.Parse("-- GO\n/* GO */\n").Count == 0, "ignore comments only");
+    var maskedLines = SqlScript.Parse("SELECT 1234567890;\n-- EXECUTE hidden\nGO /* repeat */ 2\n\n-- SELECT 0\nSELECT 'GO';");
+    Check(maskedLines is [{ RepeatCount: 2, SourceLinesSafe: true }, { StartLine: 4, SourceLinesSafe: true }]
+        && maskedLines[1].Sql == "\n-- SELECT 0\nSELECT 'GO';", "masked characters and shorter lines never inherit a prior line's tokens");
     foreach (var literal in new[] { "'first\nGO\nlast'", "N'it''s\nGO 3\ntext'", "[name\nGO\n]]end]", "\"name\nGO\n\"\"end\"" })
         Check(SqlScript.Parse("SELECT " + literal + ";\nGO\nSELECT 2;").Count == 2, "quoted GO is not a separator: " + literal[0]);
     Check(SqlScript.Parse("SELECT 1;\n/* nested /* GO */\nGO\n*/\nGO\nSELECT 2;").Count == 2, "nested block comments");
