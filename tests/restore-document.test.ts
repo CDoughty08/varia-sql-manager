@@ -4,7 +4,7 @@ import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServ
 import type { RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
-import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
+import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
 import { coverage, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
@@ -181,6 +181,33 @@ describe('Restore Database as a document', () => {
     // A point at the full's own finish needs no log.
     restore.updateDraft(id, { manual: [uuid(1)], stopAt: '2026-10-29T21:05:40' })
     expect(draftPlan(state().draft!, state().facts)).toEqual({ ids: [uuid(1)], manual: true })
+  })
+  it('gives the Backup Timeline the points the document will accept, and the last backup taken whatever point is set', async () => {
+    const { restore, id, state } = opened()
+    await settled()
+    const at = (second: number) => `2026-10-29T21:05:${String(second).padStart(2, '0')}`
+    // A point already set no longer makes Last backup taken that point's plan's last log: the planner's last is log3 at :46.
+    restore.updateDraft(id, { stopAt: at(43) })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(46))
+    restore.updateDraft(id, { manual: [uuid(1), uuid(2), uuid(3)] })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(44))
+    // Under Manual Selection the band is the stretch the checked sets' last log stops in, and only it (or a last base's finish) is allowed.
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([{ from: at(41), to: at(44) }])
+    expect([40, 41, 43, 44, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, true, true, false, false])
+    restore.updateDraft(id, { manual: [uuid(1), uuid(4)] })
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([])
+    expect([40, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, false])
+    // OK is allowed exactly where draftPlan then has no problem, for every valid selection and the planner alike.
+    for (const manual of [undefined, [], [1], [1, 2], [1, 2, 3], [1, 2, 3, 5], [1, 4], [1, 4, 5]]) {
+      restore.updateDraft(id, { manual: manual?.map(uuid), stopAt: undefined })
+      const draft = state().draft!, facts = state().facts, covered = timelineCoverage(draft, facts)
+      for (let second = 35; second <= 50; second++) {
+        const plan = draftPlan({ ...draft, stopAt: at(second) }, facts), label = `${manual?.join() ?? 'planner'} @${second}`
+        const accepted = plan.ids.length > 0 && !plan.problem
+        expect(timelinePointAllowed(draft, facts, at(second), covered), label).toBe(accepted)
+        if (covered.some(stretch => stretch.from <= at(second) && at(second) <= stretch.to)) expect(accepted, label).toBe(true)
+      }
+    }
   })
   it('disables the checkboxes of sets the planner never uses, with the reason', () => {
     const draft = { manual: [] } as unknown as RestoreDraft

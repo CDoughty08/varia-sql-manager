@@ -126,6 +126,22 @@ export function reachesPoint(sets: readonly BackupSetRow[], ids: readonly string
   return last?.type === 'log' && last.finish >= point && !!before && before.finish <= point
 }
 
+/**
+ * How a Manual Selection, in restore order, restores to a point: at its last set's finish when that is a full or differential
+ * (no STOPAT), or with STOPAT on its last log (reachesPoint); undefined when it cannot.
+ */
+export function selectionReaches(sets: readonly BackupSetRow[], ids: readonly string[], point: string): 'base' | 'log' | undefined {
+  const last = sets.find(set => set.id === ids.at(-1))
+  if (last && last.type !== 'log' && last.finish === point) return 'base'
+  return reachesPoint(sets, ids, point) ? 'log' : undefined
+}
+/** The stretch a Manual Selection's last log stops in (reachesPoint's points): from the set before it to the log's finish. */
+export function selectionCoverage(sets: readonly BackupSetRow[], ids: readonly string[]): Coverage[] {
+  const byId = new Map(sets.map(set => [set.id, set]))
+  const last = byId.get(ids.at(-1) ?? ''), before = byId.get(ids.at(-2) ?? '')
+  return last?.type === 'log' && before && before.finish <= last.finish ? [{ from: before.finish, to: last.finish }] : []
+}
+
 /** The sets that depend on one in a plan: every set after it, which SSMS unchecks with it. */
 export function dependants(ids: readonly string[], id: string): string[] {
   const at = ids.indexOf(id)
