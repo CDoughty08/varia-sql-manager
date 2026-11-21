@@ -194,6 +194,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   may still bill work done before the job stopped); the execution timeout does the same. A tab runs one query at a time
   (`SESSION_BUSY`).
 
+In-memory BOOL columns sort false before true. Saving as JSON writes Boolean values; CSV and tab-delimited text keep the displayed words.
+
 ### Scripts
 
 A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend

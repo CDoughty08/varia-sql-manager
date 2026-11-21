@@ -32,6 +32,12 @@ const utf8 = (text: string) => new TextEncoder().encode(text)
 const shown = (data: Uint8Array) => JSON.stringify(new TextDecoder('utf-8', { ignoreBOM: true }).decode(data))
 
 describe('fake backend Copy and Save text', () => {
+  it('keeps BigQuery BOOL as a JSON boolean including false and NULL', async () => {
+    const columns = [{ name: 'flag', dataType: 'BOOL', wire: 'text' as const, sortKind: 'boolean' as const }]
+    const page = decodePage(encodePage({ resultId: 1, firstRow: 0, columns, rows: [['false'], ['true'], [null]] }), columns)
+    const saved = await exportText({ columns, pageAt: () => page, rows: 3, format: 'json', headers: false, nullText: 'empty' })
+    expect(JSON.parse(new TextDecoder().decode(saved.out.bytes()))).toEqual([{ flag: false }, { flag: true }, { flag: null }])
+  })
   for (const item of fixture.cases) {
     for (const copy of item.copy) {
       it(`copies ${item.name.split(':')[0]}: ${copy.name}`, async () => {
