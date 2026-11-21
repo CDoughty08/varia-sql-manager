@@ -166,8 +166,14 @@ internal static class DesignerChecks
     {
         var results = DesignerSql.Lint(Catalog).ToList();
         var failing = results.Where(result => result.Problems.Count > 0).Select(result => result.Name + ": " + string.Join("; ", result.Problems)).ToList();
-        check(failing.Count == 0 && results.Count == 6 + 2 * (ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1) + 1,
+        check(failing.Count == 0 && results.Count == 6 + 2 * (ExplorerCatalog.MaxBand - ExplorerCatalog.MinBand + 1) + 2,
             "every table designer builder (run and dry run) and catalog statement passes its lint: " + string.Join(" | ", failing.Take(3)));
+        // The preflight's duplicate check reads each name from a 128-unit slot: padding keeps a full-length name and a
+        // surrogate pair whole, and the check compares under the catalog collation, as the catalog keeps column names unique.
+        var padded = DesignerSql.PaddedNames([new string('x', 128), "😀", "a"]);
+        check(padded.Length == 3 * 128 && padded[128..130] == "😀" && padded[256] == 'a' && DesignerSql.Preflight.EndsWith(DesignerSql.DuplicateName, StringComparison.Ordinal)
+            && DesignerSql.DuplicateName.Contains("COLLATE CATALOG_DEFAULT AS column_name", StringComparison.Ordinal) && DesignerSql.Declarations.EndsWith(", @names nvarchar(max)", StringComparison.Ordinal),
+            "the designer's preflight checks column names in 128-unit slots under the catalog collation");
         var good = DesignerSql.Builder(Catalog, DesignerPart.CreateTable);
         var rules = new DesignBuilderRules(DesignerSql.Messages, Catalog.Types.Select(type => type.Name).ToHashSet(StringComparer.Ordinal));
         var mutations = new (string Name, string Text)[]

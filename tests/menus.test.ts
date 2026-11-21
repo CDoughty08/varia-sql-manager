@@ -395,6 +395,8 @@ describe('menu state', () => {
       'explorer.groupBySchema',
       // Reordering servers: the server's menu, Alt+Up/Down in the tree, dragging and the palette.
       'explorer.moveServerUp', 'explorer.moveServerDown',
+      // BigQuery's Preview Rows and Properties: Object Explorer's menu on its tables and views, and the palette.
+      'explorer.previewRows', 'explorer.bigQueryProperties',
       // Focusing editor groups: keys in editor text and the palette.
       'editor.focusNextGroup', 'editor.focusPreviousGroup',
       // Tab stack height: the query tab menu and palette equivalent of Control+wheel.

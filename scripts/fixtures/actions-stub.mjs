@@ -715,7 +715,7 @@ GO
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'actions.describe':
         switch (params.dialog) {
-          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
+          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           case 'loginFacts': return loginFacts(params)
           case 'unlockLogin': return unlockFacts(params)
