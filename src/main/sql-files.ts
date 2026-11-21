@@ -155,7 +155,7 @@ export class SqlFileStore {
   private conflicts = new Set<string>()
   /** What each file's last reload replaced, kept while its registration is still the one that reload made, so `keep` can
    *  put it back when the page does not put the text it read in its tab. */
-  private reloaded = new Map<string, { readonly before: RegisteredFile; readonly conflict: boolean; readonly after: RegisteredFile }>()
+  private reloaded = new Map<string, { readonly before: RegisteredFile; readonly conflict: boolean; readonly stamp?: Stamp; readonly after: RegisteredFile }>()
   /** Change-check comparisons not settled yet, including ones a check stopped waiting for. */
   private comparing = new Map<string, Promise<Comparison>>()
   /** The last registration a read started (`serially`). */
@@ -314,12 +314,12 @@ export class SqlFileStore {
 
   /** Reads a registered file again (Yes in File changed), keeping its id; what it sees becomes the file's stamp. */
   async reload(fileId: string): Promise<OpenSqlFile> {
-    const before = this.registered(fileId), conflict = this.conflicts.has(fileId), { file, kind } = before
+    const before = this.registered(fileId), conflict = this.conflicts.has(fileId), stamp = this.stamps.get(fileId), { file, kind } = before
     this.reloaded.delete(fileId)
     const opened = await this.read(file.path, { kind, reload: true })
     if (opened.id !== fileId) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
     const after = this.files.get(fileId)
-    if (after) this.reloaded.set(fileId, { before, conflict, after })
+    if (after) this.reloaded.set(fileId, { before, conflict, stamp, after })
     return opened
   }
 
@@ -334,6 +334,8 @@ export class SqlFileStore {
     if (!reloaded || this.files.get(fileId) !== reloaded.after) return
     this.files.set(fileId, reloaded.before)
     if (reloaded.conflict) this.conflicts.add(fileId)
+    // What the last check saw, so a change made since (before or during the read) is still reported by the next one.
+    if (reloaded.stamp) this.stamps.set(fileId, reloaded.stamp)
   }
 
   /**

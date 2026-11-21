@@ -847,6 +847,19 @@ describe('changes made outside', () => {
     await store.reload(opened.id)
     store.keep(opened.id)
     expect(await store.changedOnDisk(opened.id)).toBe(true)
+    // A second change after the check, read by the reload and then kept: the next check still reports it, as it would
+    // have without the reload. Without a second change there is nothing more to report.
+    await writeFile(path, 'SELECT outside a fourth time')
+    await utimes(path, later(50), later(50))
+    expect(await store.check(roomy)).toHaveLength(1)
+    await writeFile(path, 'SELECT outside a fifth time')
+    await utimes(path, later(60), later(60))
+    await store.reload(opened.id)
+    store.keep(opened.id)
+    expect(await store.check(roomy)).toEqual([{ fileId: opened.id, change: 'modified' }])
+    await store.reload(opened.id)
+    store.keep(opened.id)
+    expect(await store.check(roomy)).toEqual([])
   })
   it('does not hide a change behind a second Open of the same file', async () => {
     const store = new SqlFileStore()

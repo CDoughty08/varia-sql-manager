@@ -912,7 +912,8 @@ describe('files main opened, Recent Files and changes made outside', () => {
     const filling = documents.openText({ name: 'big.sql', text: big, file: registered('f1', 'big.sql') })
     expect(documents.isFilling(filling.id)).toBe(true)
     api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f1', change: 'modified' }] })
-    // A chunk appended while main reads the file is not an edit: the clean query reloads without asking.
+    // A clean query still filling reloads without asking, though a chunk is appended while main reads the file (with
+    // unsaved typing, below, the chunk is not counted as an edit either).
     const read = deferred<Awaited<ReturnType<VariaApi['reloadSqlFile']>>>()
     api.reloadSqlFile.mockImplementationOnce(() => read.promise)
     const checking = files.checkExternalChanges()
