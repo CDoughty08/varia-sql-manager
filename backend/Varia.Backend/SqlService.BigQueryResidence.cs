@@ -81,10 +81,11 @@ internal sealed partial class SqlService
         var remote = Window(context, set);
         // The first page stays readable at once: rebuilt per block, so each page lies inside one.
         var seed = new List<RemotePage>();
-        for (long from = 0; from < measured.Rows; from += remote.BlockRows)
+        // Only the rows the result keeps (Maximum rows may cap it inside the first page): a page past its last block is refused.
+        for (long from = 0; from < Math.Min(measured.Rows, remote.Rows); from += remote.BlockRows)
         {
             var writer = new RemoteBlockWriter(set.ResultId, set.Wires, from);
-            WriteRows(first, plan, writer, remote.BlockRows, skip: (int)from);
+            WriteRows(first, plan, writer, (int)Math.Min(remote.BlockRows, remote.Rows - from), skip: (int)from);
             seed.AddRange(writer.Finish());
         }
         remote.Seed(seed);

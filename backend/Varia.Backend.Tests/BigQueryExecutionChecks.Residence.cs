@@ -977,6 +977,48 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task RemoteReadsAsync(Action<bool, string> check)
     {
+        // Always windowed under a Maximum rows smaller than the first page: the first page's rows within the cap are still
+        // cached, so reading them asks BigQuery nothing (docs/ipc.md, Choosing: "the first page kept in the cache").
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", args => { Windowed(args); args["maxRows"] = 300; });
+            var set = result!.ResultSets.Single();
+            var remote = harness.Service.Results.Find(set.ResultId)?.Remote;
+            var (code, read, rows, message) = await ReadRows(harness, set.ResultId, 0, 100);
+            check(set is { Residence: "remote", RowsAvailable: 300 } && remote?.CachedBlocks().SequenceEqual([0L]) == true && code == "ok" && read is { Rows: 100 } && Covers(rows, 0, 100)
+                && harness.Jobs.TableReads.IsEmpty,
+                $"a windowed result capped below its first page keeps the capped rows cached: {set.Residence} {set.RowsAvailable} {string.Join(",", remote?.CachedBlocks() ?? [])} {code} {message} {harness.Jobs.TableReads.Count}");
+        }
+        // A load of a result whose query's budget has stopped (another of its sets filled it) is refused BUDGET_STOPPED before
+        // any work, the result still windowed (docs/ipc.md, results.remoteQuery).
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            var buffer = harness.Service.Results.Find(id)!;
+            buffer.Budget.Stop(TruncationReason.QueryBudget);
+            var (code, _, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            check(code == "BUDGET_STOPPED" && buffer is { IsRemote: true, Revision: 0 } && events.Count == 0 && harness.Jobs.TableReads.IsEmpty,
+                $"a load of a result whose query budget stopped is refused BUDGET_STOPPED, still windowed: {code} {message} {buffer.IsRemote} {buffer.Revision} {events.Count}");
+        }
+        // Released while a read sends its pages (Close Results as the rows arrive): the read stops sending and answers
+        // RESULT_RELEASED, never the rest of the rows of a result no one holds (docs/ipc.md, Reading).
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            var sent = 0;
+            using var context = new RequestContext(1, "results.read", RequestLane.Results, 60_000, 64L << 20,
+                sendData: (owner, _, body) => { if (Interlocked.Increment(ref sent) == 1) harness.Service.Results.Release([id]); owner.Grant((uint)body.Length); });
+            using var document = JsonDocument.Parse(new JsonObject { ["resultId"] = id, ["firstRow"] = 0, ["maxRows"] = 2000 }.ToJsonString());
+            string code;
+            try { await harness.Service.DispatchAsync("results.read", document.RootElement.Clone(), Wire, context); code = "ok"; }
+            catch (RequestException error) { code = error.Code; }
+            check(code == "RESULT_RELEASED" && sent == 1, $"a read whose result is released as it sends stops there with RESULT_RELEASED: {code} {sent}");
+        }
         using (var harness = new Harness(Lines(3000)))
         {
             await harness.ConnectAsync();
