@@ -209,6 +209,8 @@ internal static class AgentLiveChecks
             await AgentJobsChecks.LiveAsync(check, service, info, json, job, id);
             // SQL Server Agent Properties (AG-8a) purges only rows it plants on this job, so it runs while the job exists.
             await AgentPropertiesLiveChecks.RunAsync(check, service, info, json, scratch, id, connection, sql);
+            // The Log File Viewer (AG-5a) reads the run, then Delete History deletes it with a second scratch job's (none).
+            await AgentHistoryLiveChecks.RunAsync(check, service, info, json, job, id, sql);
             // AG-2's job verbs end with Delete, so the finally below finds nothing left to drop.
             await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
         }
