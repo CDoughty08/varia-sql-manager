@@ -316,4 +316,43 @@ describe('a comparison\'s toolbar', () => {
     expect(notice()).toBeNull()
     act(() => { root.unmount(); host.remove() })
   })
+
+  it('keeps the focus in the results toolbar when its Show changes only goes with its notice and the run fails', async () => {
+    const view = await fixture()
+    const diff = vi.mocked(view.results.getSnapshot().t1.sets[1].handle.diff)
+    diff.mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    await act(async () => { await view.compare.comparePair('t1', view.keys[1], view.keys[2], { exact: false }) })
+    const bar = document.createElement('div'), tab = document.createElement('button'), host = document.createElement('div')
+    bar.className = 'output-toolbar'
+    tab.setAttribute('role', 'tab')
+    tab.tabIndex = 0
+    bar.append(tab, host)
+    document.body.append(bar)
+    const root = createRoot(host)
+    act(() => { root.render(createElement(WorkbenchProvider, { workbench: view.workbench, children: createElement(CompareNotice, { tabId: 't1' }) })) })
+    const show = [...host.querySelectorAll('button')].find(button => button.textContent === 'Show changes only')!
+    diff.mockRejectedValueOnce(new ResultError('BACKEND_ERROR', 'Failed.'))
+    show.focus()
+    await act(async () => { show.click(); for (let i = 0; i < 12; i++) await Promise.resolve() })
+    expect(host.querySelector('[role="group"][aria-label="Comparison notice"]')).toBeNull()
+    expect(document.activeElement).toBe(tab)
+    act(() => { root.unmount(); bar.remove() })
+  })
+
+  it('moves the focus on when a refused change\'s Show changes only takes its notice away', async () => {
+    const view = await fixture()
+    view.replace.mockRestore()
+    const key = view.slot().key
+    const diff = vi.mocked(view.results.getSnapshot().t1.sets[0].handle.diff)
+    diff.mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    await act(async () => { await view.compare.replace('t1', key, { exact: true }) })
+    view.draw()
+    const show = view.container.querySelector<HTMLButtonElement>('button[data-action="changesOnly"]')!
+    act(() => { show.focus(); show.click() })
+    view.draw()
+    expect(view.container.querySelector('button[data-action="changesOnly"]')).toBeNull()
+    expect(document.activeElement).not.toBe(document.body)
+    expect(view.container.contains(document.activeElement)).toBe(true)
+    await act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve() })
+  })
 })

@@ -20,7 +20,14 @@ export default function CompareNotice({ tabId }: { readonly tabId: string }) {
     <Icon name="warning" />
     <span>Compare {notice.names[0]} with {notice.names[1]}: {notice.text}</span>
     <button type="button" {...reason ? { 'aria-disabled': true, title: `${action}: unavailable because ${reason}` } : { title: 'Compare them again with Changes only: only changed, added and removed rows' }}
-      onClick={event => { if (reason) return; const owner = event.currentTarget.ownerDocument; void compare.runActionable(tabId).then(key => { if (key !== undefined) focusResultGrid(owner, tabId, key) }) }}>{action}</button>
+      onClick={event => {
+        if (reason) return
+        // The notice goes as it runs: the focus waits on the selected view tab, then moves to the comparison once shown.
+        const owner = event.currentTarget.ownerDocument, view = event.currentTarget.closest('.output-toolbar')?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]')
+        const run = compare.runActionable(tabId)
+        view?.focus({ preventScroll: true })
+        void run.then(key => { if (key !== undefined) focusResultGrid(owner, tabId, key) })
+      }}>{action}</button>
     <button type="button" className="icon-button" aria-label="Dismiss comparison notice" title="Dismiss" onClick={event => {
       // The notice goes with its buttons: the focus moves to the results toolbar's selected view tab.
       const view = event.currentTarget.closest('.output-toolbar')?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]')

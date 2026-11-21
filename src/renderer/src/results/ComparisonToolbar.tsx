@@ -183,10 +183,14 @@ function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar, opener }:
     next?.focus({ preventScroll: true })
   })
   if (notices.length === 0) return null
-  const act = (action: NoticeAction, button: HTMLElement) => {
+  const act = (action: NoticeAction, button: HTMLElement, index: number) => {
     if (reason) return
-    // Show changes only asks the refused change again with Changes only (a refused first run is the popover's).
-    if (action === 'changesOnly') change(compare.refusedChange(entryKey) ?? { context: 0 })
+    // Show changes only asks the refused change again with Changes only (a refused first run is the popover's); its notice
+    // goes as the change starts, so the focus moves on as a Dismiss's does.
+    if (action === 'changesOnly') {
+      if (strip.current?.contains(button.ownerDocument.activeElement)) dismissed.current = index
+      change(compare.refusedChange(entryKey) ?? { context: 0 })
+    }
     else if (action === 'byPosition') change({ match: { mode: 'position' } })
     else { opener.current = button; compare.openMatchMenu(tabId, entryKey, 'notice') }
   }
@@ -195,7 +199,7 @@ function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar, opener }:
       <Icon name={notice.tone === 'warning' ? 'warning' : 'info'} />
       <span className="rg-compare-notice-text" title={notice.text}>{notice.text}</span>
       {notice.actions?.map(action => <button key={action} type="button" className="rg-compare-notice-action" data-action={action} data-control={`notice-${action}`}
-        {...reason ? { 'aria-disabled': true, title: `${actionLabels[action]}: unavailable because ${reason}` } : {}} onClick={event => act(action, event.currentTarget)}>{actionLabels[action]}</button>)}
+        {...reason ? { 'aria-disabled': true, title: `${actionLabels[action]}: unavailable because ${reason}` } : {}} onClick={event => act(action, event.currentTarget, index)}>{actionLabels[action]}</button>)}
       <button type="button" className="icon-button rg-compare-notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={event => { if (strip.current?.contains(event.currentTarget.ownerDocument.activeElement)) dismissed.current = index; compare.dismiss(entryKey, notice) }}><Icon name="close" /></button>
     </div>)}
   </div>
