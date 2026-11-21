@@ -32,6 +32,7 @@ internal static class BigQueryExplorerChecks
         var key = BigQueryCredentialChecks.Key(rsa.ExportPkcs8PrivateKeyPem());
         await ListersAsync(check, key);
         await ScriptAsync(check, key);
+        await CreateAsync(check, key);
         await PreviewAsync(check, key);
         await PropertiesAsync(check, key);
     }
@@ -184,7 +185,7 @@ internal static class BigQueryExplorerChecks
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
         }
 
-        public async Task ConnectAsync(JsonObject key)
+        public async Task ConnectAsync(JsonObject key, long? cap = null)
         {
             var options = new JsonObject
             {
@@ -192,6 +193,7 @@ internal static class BigQueryExplorerChecks
                 ["extraProjects"] = new JsonArray("varia-beta", "varia-alpha"),
                 ["credential"] = new JsonObject { ["source"] = "file", ["json"] = key.ToJsonString() }, ["keyFile"] = Guid.NewGuid().ToString()
             };
+            if (cap is { } bytes) options["maximumBytesBilled"] = bytes;
             var (code, result, message) = await Call("connections.connect", options);
             if (code != "ok") throw new InvalidOperationException("connect: " + code + " " + message);
             ConnectionId = ((ConnectionInfo)result!).Id;
@@ -212,7 +214,7 @@ internal static class BigQueryExplorerChecks
             return code == "ok" ? result as ExplorerChildrenResult : throw new InvalidOperationException(code + " " + message);
         }
 
-        public async Task<(string Code, ScriptResult? Result)> Script(string verb, JsonObject target, bool? estimateOnly = null)
+        public async Task<(string Code, ScriptResult? Result)> Script(string verb, JsonObject target, bool? estimateOnly = null, long? cap = null)
         {
             var args = new JsonObject
             {
@@ -220,6 +222,7 @@ internal static class BigQueryExplorerChecks
                 ["options"] = JsonSerializer.SerializeToNode(ScriptingLiveChecks.Defaults(Wire), Wire)
             };
             if (estimateOnly is { } estimate) args["estimateOnly"] = estimate;
+            if (cap is { } bytes) args["maximumBytesBilled"] = bytes;
             var (code, result, _) = await Call("scripting.script", args);
             return (code, result as ScriptResult);
         }
@@ -336,6 +339,102 @@ internal static class BigQueryExplorerChecks
         check(estimateDrop.Code == "INVALID_PARAMS" && gone.Result?.Error?.Code == "NOT_FOUND", $"only CREATE has an estimate, and a vanished table is the script's NOT_FOUND: {estimateDrop.Code} {gone.Result?.Error?.Code}");
     }
 
+    /// <summary>The billed CREATE run: the job's query, parameter, location and cap; polling until its results are ready; zero rows
+    /// and a NULL ddl; a script past 4,000,000 characters; and the job cancelled when the budget abandons it.</summary>
+    static async Task CreateAsync(Action<bool, string> check, JsonObject key)
+    {
+        var inserts = new System.Collections.Concurrent.ConcurrentQueue<JsonNode>();
+        var cancels = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var polls = 0;
+        JsonNode? ddl = "CREATE TABLE `varia-alpha.sales.orders`\n(\n  id INT64 NOT NULL\n)";
+        var rows = 1;
+        var hold = false;
+        BigQueryFake Routes(BigQueryFake fake) => fake
+            .On("POST", BigQueryFake.Jobs, request =>
+            {
+                var body = JsonNode.Parse(request.Body)!;
+                if (body["configuration"]?["dryRun"]?.GetValue<bool>() == true) return BigQueryFake.Fixture("dry-run");
+                inserts.Enqueue(body);
+                var id = body["jobReference"]!["jobId"]!.GetValue<string>();
+                return new BigQueryFake.Reply(200, new JsonObject
+                {
+                    ["kind"] = "bigquery#job", ["jobReference"] = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = id, ["location"] = "EU" },
+                    ["status"] = new JsonObject { ["state"] = "RUNNING" }, ["configuration"] = new JsonObject { ["jobType"] = "QUERY" }
+                }.ToJsonString());
+            })
+            .On("GET", Base + "/queries/[^/]+", request =>
+            {
+                var id = request.Url[(request.Url.LastIndexOf('/') + 1)..];
+                var reference = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = id, ["location"] = "EU" };
+                if (hold || Interlocked.Increment(ref polls) == 1)
+                    return new BigQueryFake.Reply(200, new JsonObject { ["jobReference"] = reference, ["jobComplete"] = false }.ToJsonString());
+                var answer = new JsonObject
+                {
+                    ["jobReference"] = reference, ["jobComplete"] = true, ["totalRows"] = rows.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["schema"] = new JsonObject { ["fields"] = new JsonArray(new JsonObject { ["name"] = "ddl", ["type"] = "STRING" }) }
+                };
+                if (rows > 0) answer["rows"] = new JsonArray(new JsonObject { ["f"] = new JsonArray(new JsonObject { ["v"] = ddl?.DeepClone() }) });
+                return new BigQueryFake.Reply(200, answer.ToJsonString());
+            })
+            .On("POST", Base + "/jobs/[^/]+/cancel", request =>
+            {
+                var id = request.Url[..request.Url.LastIndexOf('/')];
+                cancels.Enqueue(id[(id.LastIndexOf('/') + 1)..]);
+                return new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#jobCancelResponse\",\"job\":{\"jobReference\":{\"projectId\":\"varia-alpha\",\"jobId\":\"x\"},\"status\":{\"state\":\"DONE\"}}}");
+            });
+        var orders = Object("bqTable", "orders")["object"]!.AsObject();
+
+        using (var harness = new Harness())
+        {
+            Routes(harness.Fake);
+            harness.Service.BigQuery.DdlPoll = TimeSpan.FromMilliseconds(5);
+            await harness.ConnectAsync(key);
+            var created = await harness.Script("create", (JsonObject)orders.DeepClone(), cap: 50_000_000);
+            var body = inserts.LastOrDefault();
+            var query = body?["configuration"]?["query"];
+            check(created is { Code: "ok", Result: { Error: null, Commands: 1, Database: "sales" } } && created.Result.Text == "CREATE TABLE `varia-alpha.sales.orders`\n(\n  id INT64 NOT NULL\n);"
+                && polls == 2 && body?["configuration"]?["dryRun"]?.GetValue<bool>() != true && query?["query"]?.GetValue<string>() == BigQueryService.CreateSql("varia-alpha", "sales", false)
+                && query?["queryParameters"]?[0]?["parameterValue"]?["value"]?.GetValue<string>() == "orders" && query?["maximumBytesBilled"]?.ToString() == "50000000"
+                && body?["jobReference"]?["location"]?.GetValue<string>() is { Length: > 0 } && cancels.IsEmpty,
+                $"Script As › CREATE runs its INFORMATION_SCHEMA query under the cap in the dataset's location, polls until ready, and ends the script: {created.Code} {created.Result?.Error?.Message} {created.Result?.Text} polls {polls} {body?.ToJsonString()}");
+            rows = 0;
+            var missing = await harness.Script("create", (JsonObject)orders.DeepClone());
+            rows = 1;
+            ddl = null;
+            var empty = await harness.Script("create", (JsonObject)orders.DeepClone());
+            check(missing.Result?.Error?.Code == "NOT_FOUND" && empty.Result?.Error?.Code == "NOT_SUPPORTED" && cancels.IsEmpty,
+                $"no row is NOT_FOUND and a NULL ddl NOT_SUPPORTED, and a read job is not cancelled: {missing.Result?.Error?.Code} {empty.Result?.Error?.Code} {cancels.Count}");
+
+            // The budget abandons a job that never finishes: TIMEOUT, and jobs.cancel for that job.
+            hold = true;
+            harness.Service.BigQuery.ScriptLimit = TimeSpan.FromMilliseconds(300);
+            var abandoned = await harness.Script("create", (JsonObject)orders.DeepClone());
+            var abandonedId = inserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
+            var cancelled = await BigQuerySessionChecks.Poll(() => cancels.Contains(abandonedId));
+            check(abandoned.Result?.Error?.Code == "TIMEOUT" && cancelled, $"a CREATE its budget abandons is TIMEOUT, and its job is cancelled: {abandoned.Result?.Error?.Code} {string.Join(",", cancels)}");
+        }
+
+        using (var capped = new Harness())
+        {
+            Routes(capped.Fake);
+            hold = false;
+            ddl = "CREATE VIEW v AS SELECT 1";
+            capped.Service.BigQuery.DdlPoll = TimeSpan.FromMilliseconds(5);
+            await capped.ConnectAsync(key, cap: 1_048_576);
+            var run = await capped.Script("create", (JsonObject)orders.DeepClone(), cap: 50_000_000);
+            check(run.Result?.Error is null && inserts.Last()["configuration"]!["query"]!["maximumBytesBilled"]!.ToString() == "1048576",
+                "the connection's own cap wins over the one the prompts set: " + inserts.Last()["configuration"]!["query"]!["maximumBytesBilled"]);
+
+            // A 10,000-column table's INSERT template passes 4,000,000 characters: TOO_LARGE, not an unbounded answer.
+            var fields = new JsonArray([.. Enumerable.Range(0, 10_000).Select(i => (JsonNode)new JsonObject { ["name"] = "c" + i.ToString("D5", System.Globalization.CultureInfo.InvariantCulture) + new string('x', 290), ["type"] = "STRING" })]);
+            capped.Fake.On("GET", Sales + "/tables/wide", new BigQueryFake.Reply(200, new JsonObject { ["type"] = "TABLE", ["schema"] = new JsonObject { ["fields"] = fields } }.ToJsonString()));
+            var wide = await capped.Script("insert", (JsonObject)Object("bqTable", "wide")["object"]!.DeepClone());
+            var narrow = await capped.Script("select", (JsonObject)Object("bqTable", "wide")["object"]!.DeepClone());
+            check(wide.Result is { Text: null, Error.Code: "TOO_LARGE" } && narrow.Result?.Text is { Length: > 3_000_000 and <= 4_000_000 },
+                $"a script past 4,000,000 characters is TOO_LARGE: {wide.Result?.Error?.Code} {narrow.Result?.Text?.Length}");
+        }
+    }
+
     static async Task PreviewAsync(Action<bool, string> check, JsonObject key)
     {
         using var harness = new Harness();
@@ -362,7 +461,14 @@ internal static class BigQueryExplorerChecks
         check(view is not null && view.Contains("Script As", StringComparison.Ordinal) && rows is { Status: "failed", Error.Code: "ROW_ACCESS" },
             $"a view is refused with Script As › SELECT offered; row access policies answer ROW_ACCESS: {view} {rows?.Status} {rows?.Error?.Code}");
         var (hostile, _, _) = await harness.Call("query.execute", Query("pre`view"));
-        check(hostile == "INVALID_PARAMS", "a preview of a name its rule refuses is refused: " + hostile);
+        var badDataset = Query("preview");
+        badDataset["dataset"] = "sa`les";
+        var (datasetCode, _, _) = await harness.Call("query.execute", badDataset);
+        var plan = Query("preview");
+        plan["includeActualPlan"] = true;
+        var (planCode, _, _) = await harness.Call("query.execute", plan);
+        check(hostile == "INVALID_PARAMS" && datasetCode == "INVALID_PARAMS" && planCode == "UNSUPPORTED_PROVIDER",
+            $"a preview of a refused name, with a refused tab dataset, or with SQL Server's options is refused: {hostile} {datasetCode} {planCode}");
 
         // The tab keeps its own dataset (here the connection's), not the previewed table's, which may be another project's.
         harness.Fake.On("GET", Base + "/datasets/staging/tables/preview", BigQueryFake.Fixture("table-preview"));

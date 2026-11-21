@@ -52,12 +52,12 @@ internal sealed partial class BigQueryService
                 var ddl = await DdlAsync(connection, sql, name, dataset, project, cap, budget.Token);
                 if (ddl is null) return Failure("NOT_FOUND", (routine ? "Routine " : "Table ") + project + "." + dataset + "." + name + " no longer exists.");
                 if (ddl.Length == 0) return Failure("NOT_SUPPORTED", "BigQuery has no CREATE statement for " + project + "." + dataset + "." + name + ".");
-                return new(Terminate(ddl), home, [], 1, watch.ElapsedMilliseconds);
+                return Bounded(Terminate(ddl), 1);
             }
             var text = target.Kind == "bqRoutine"
                 ? await RoutineDropAsync(connection, project, dataset, name, budget.Token)
                 : await TableTemplateAsync(connection, target.Kind, verb, project, dataset, name, budget.Token);
-            return text is null ? Failure("NOT_SUPPORTED", "This object has no " + verb.ToUpperInvariant() + " script.") : new(text, home, [], 0, watch.ElapsedMilliseconds);
+            return text is null ? Failure("NOT_SUPPORTED", "This object has no " + verb.ToUpperInvariant() + " script.") : Bounded(text, 0);
         }
         catch (OperationCanceledException) when (budget.IsCancellationRequested && !token.IsCancellationRequested)
         {
@@ -73,6 +73,11 @@ internal sealed partial class BigQueryService
                 _ => "SQL_ERROR"
             }, message);
         }
+
+        // A script past the catalogue's 4,000,000 characters (a 10,000-column table's INSERT, a long DDL) is TOO_LARGE, as SQL Server's is.
+        ScriptResult Bounded(string text, int commands) => text.Length > Varia.Backend.Scripting.ScriptingCatalog.Current.Limit("maxScriptChars")
+            ? Failure("TOO_LARGE", "The script for " + project + "." + dataset + "." + name + " is longer than 4,000,000 characters, which Varia cannot open.")
+            : new(text, home, [], commands, watch.ElapsedMilliseconds);
 
         ScriptResult Failure(string code, string message) =>
             new(null, home, [], 0, watch.ElapsedMilliseconds, new(code, message.Length > 2048 ? message[..2047] + "…" : message, code is "TIMEOUT" or "CONNECTION_LOST" or "QUOTA" or "SQL_ERROR"));
@@ -106,31 +111,35 @@ internal sealed partial class BigQueryService
     internal TimeSpan DdlPoll { get; set; } = TimeSpan.FromMilliseconds(200);
 
     /// <summary>Runs the CREATE query in the dataset's location under the cap, then reads its one cell: null when no row matched,
-    /// empty when the row's ddl is NULL. A budget or cancel that ends it first cancels the job (best effort).</summary>
+    /// empty when the row's ddl is NULL. Any exit before its cell is read (Stop, the budget, a failure) cancels the job (best effort),
+    /// including one that ends while jobs.insert is in flight, since the job id is Varia's own.</summary>
     async Task<string?> DdlAsync(BigQueryConnection connection, string sql, string name, string dataset, string project, long? cap, CancellationToken token)
     {
         var location = connection.DatasetLocations.TryGetValue(project + ":" + dataset, out var known) ? known
             : await MetadataAsync(connection, t => DatasetLocationAsync(connection.Client, project, dataset, t), token);
         connection.DatasetLocations[project + ":" + dataset] = location;
-        var job = await InsertJobAsync(connection, CreateJob(connection, sql, name, location, cap, dryRun: false), null, token);
-        if (BigQueryJobException.Of(job) is { } refused) throw refused;
-        var reference = job.JobReference;
+        var request = CreateJob(connection, sql, name, location, cap, dryRun: false);
+        var reference = request.JobReference;
+        var read = false;
         try
         {
+            var job = await InsertJobAsync(connection, request, null, token);
+            if (BigQueryJobException.Of(job) is { } refused) { read = true; throw refused; }
+            reference = job.JobReference ?? reference;
             while (true)
             {
                 using var page = await QueryResultsAsync(connection, reference.ProjectId, reference.JobId, reference.Location ?? location, null, 1, 10_000, token);
                 if (!page.JobComplete) { await Task.Delay(DdlPoll, token); continue; }
+                read = true;
                 if (page.RowCount == 0) return null;
                 var row = page.Rows[0];
                 return row.TryGetProperty("f", out var cells) && cells.ValueKind == System.Text.Json.JsonValueKind.Array && cells.GetArrayLength() > 0
                     && cells[0].TryGetProperty("v", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : "";
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        finally
         {
-            _ = CancelDdlAsync(connection, reference);
-            throw;
+            if (!read) _ = CancelDdlAsync(connection, reference);
         }
     }
 

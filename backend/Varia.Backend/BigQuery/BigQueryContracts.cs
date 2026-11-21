@@ -55,7 +55,7 @@ internal static partial class BigQueryLimits
     public const long MaxSafeInteger = 9_007_199_254_740_991;
     public static readonly string[] Modes = ["gcloud", "serviceAccountKey", "externalAccount"];
 
-    [GeneratedRegex(@"^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]\z")]
+    [GeneratedRegex(@"^(?:[a-z0-9][a-z0-9.-]{0,61}[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]\z")]
     public static partial Regex ProjectId();
     // ASCII digits only, as zod's \w (.NET's \d matches every Unicode digit).
     [GeneratedRegex(@"^[A-Za-z0-9_]+\z")]

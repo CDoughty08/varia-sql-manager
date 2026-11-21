@@ -24,6 +24,11 @@ internal sealed partial class SqlService
     {
         if (!Guid.TryParse(query.QueryId, out _) || !Guid.TryParse(query.SessionId, out _) || !BqNames.IsProject(target.Project) || !BqNames.IsDataset(target.Dataset) || !BqNames.IsTable(target.Table))
             throw new RequestException("INVALID_PARAMS", "The table, query or session is invalid.");
+        // As Execute: SQL Server's options have no BigQuery meaning, and the tab's dataset is echoed back only when it is one.
+        if (query.StopOnError || query.IncludeActualPlan || query.IncludeLivePlan || query.IncludeClientStatistics)
+            throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error, actual and live plans and client statistics are not available for BigQuery connections.");
+        if (query.Dataset is { } tabDataset && !BqNames.IsDataset(tabDataset))
+            throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         var args = new PreviewRequest(query.ConnectionId, query.SessionId, query.QueryId, target.Project, target.Dataset, target.Table);
         using var cancellation = new CancellationTokenSource(BigQueryPreviewLimit);
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
