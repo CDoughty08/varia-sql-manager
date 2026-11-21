@@ -55,7 +55,7 @@ const active = (entry: WatchedEntry) => entry.phase.phase === 'starting' || entr
 export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot> implements Disposable {
   private readonly newId: () => string
   /** Each connection's view and the job keys its slots name, in order. */
-  private readonly views = new Map<string, { readonly handle: LiveHandle; readonly slots: readonly string[]; readonly stop: () => void }>()
+  private readonly views = new Map<string, { readonly handle: LiveHandle; readonly slots: readonly string[]; readonly waiting: boolean; readonly stop: () => void }>()
   private readonly services = new Map<string, AgentServiceSample>()
   private readonly stopConnections: () => void
   private disposed = false
@@ -108,18 +108,26 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     if (!failure) this.views.get(entry.connectionId)?.handle.refresh()
   }
 
+  /** A job here ended because Agent stopped or its XPs went off, and still shows. */
+  private agentEnded(connectionId: string): boolean {
+    return this.getSnapshot().jobs.some(entry => entry.connectionId === connectionId && entry.phase.phase === 'unknown' && (entry.phase.reason === 'agentStopped' || entry.phase.reason === 'xpsOff'))
+  }
+
+  /**
+   * The connection's view: the watched and service probes for its followed jobs; or, with none followed while a job Agent's
+   * stop ended still shows, the service probe alone until Agent reads usable again, so "Agent stopped" never outlives it.
+   */
   private follow(connectionId: string): void {
     const slots = this.getSnapshot().jobs.filter(entry => entry.connectionId === connectionId && active(entry)).slice(0, agentLimits.watchedJobs).map(entry => entry.key)
+    const waiting = !slots.length && this.isLive(connectionId) && this.agentEnded(connectionId) && agentAvailability(this.services.get(connectionId)) !== 'running'
     const current = this.views.get(connectionId)
-    if (current && current.slots.length === slots.length && current.slots.every((key, at) => key === slots[at])) return
+    if (current && current.waiting === waiting && current.slots.length === slots.length && current.slots.every((key, at) => key === slots[at])) return
     current?.stop()
     this.views.delete(connectionId)
-    if (!slots.length) {
-      // Agent's last state stays while a job ended on it (Agent stopped or its XPs off) still shows, on a live connection.
-      if (!this.isLive(connectionId) || !this.getSnapshot().jobs.some(entry => entry.connectionId === connectionId && entry.phase.phase === 'unknown' && (entry.phase.reason === 'agentStopped' || entry.phase.reason === 'xpsOff'))) this.services.delete(connectionId)
-      this.publishAgent()
-      return
-    }
+    // A new view reads Agent's state afresh: a sample from an earlier one may be long out of date.
+    this.services.delete(connectionId)
+    this.publishAgent()
+    if (!slots.length && !waiting) return
     const ids = slots.map(key => this.getSnapshot().jobs.find(entry => entry.key === key)!.id)
     let ended = false
     const owner = {
@@ -129,10 +137,10 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
       closed: () => ended,
       subscribe: (listener: () => void) => this.options.connections.subscribe(listener)
     }
-    const handle = this.options.live.open({
-      connectionId, source: agentJobsSource, args: { watch: ids }, whileHidden: 'statusOnly',
-      probes: [{ probe: agentWatchedProbe, intervalMs: liveProbes[agentWatchedProbe].intervalMs.default }, { probe: agentServiceProbe, intervalMs: liveProbes[agentServiceProbe].intervalMs.default }]
-    }, owner)
+    const serviceProbe = { probe: agentServiceProbe, intervalMs: liveProbes[agentServiceProbe].intervalMs.default }
+    const handle = this.options.live.open(waiting
+      ? { connectionId, source: agentJobsSource, args: {}, whileHidden: 'statusOnly', probes: [serviceProbe] }
+      : { connectionId, source: agentJobsSource, args: { watch: ids }, whileHidden: 'statusOnly', probes: [{ probe: agentWatchedProbe, intervalMs: liveProbes[agentWatchedProbe].intervalMs.default }, serviceProbe] }, owner)
     const ticks = handle.onTick(({ tick }) => {
       const service = tick.samples.find(sample => sample.probe === agentServiceProbe && sample.status)
       if (service?.status) {
@@ -140,6 +148,8 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
         this.services.set(connectionId, { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType') })
         this.publishAgent()
       }
+      // Agent usable again: the service-only view has done its work.
+      if (waiting) { if (agentAvailability(this.services.get(connectionId)) === 'running') queueMicrotask(() => this.follow(connectionId)); return }
       const watched = tick.samples.find(sample => sample.probe === agentWatchedProbe && sample.metrics)
       if (!watched && !service) return
       const availability = agentAvailability(this.services.get(connectionId))
@@ -161,7 +171,23 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
       // A job that ended frees its slot.
       if (slots.some(key => { const entry = jobs.find(item => item.key === key); return !entry || !active(entry) })) queueMicrotask(() => this.follow(connectionId))
     })
-    this.views.set(connectionId, { handle, slots, stop: () => { ended = true; ticks.dispose(); handle.dispose() } })
+    // A view that ends on its own (refused, BUSY at the server's view limit) samples no more: its jobs' outcomes are unknown.
+    const stopStatus = handle.subscribe(() => {
+      if (ended || handle.getSnapshot().status !== 'ended') return
+      queueMicrotask(() => this.viewEnded(connectionId, handle))
+    })
+    this.views.set(connectionId, { handle, slots, waiting, stop: () => { ended = true; stopStatus(); ticks.dispose(); handle.dispose() } })
+  }
+
+  private viewEnded(connectionId: string, handle: LiveHandle): void {
+    const view = this.views.get(connectionId)
+    if (this.disposed || view?.handle !== handle) return
+    view.stop()
+    this.views.delete(connectionId)
+    if (view.waiting) { this.services.delete(connectionId); this.publishAgent(); return }
+    const ended = new Set(view.slots)
+    this.publish({ ...this.getSnapshot(), jobs: this.getSnapshot().jobs.map(entry => ended.has(entry.key) && active(entry) ? { ...entry, phase: { phase: 'unknown', reason: 'gone' } } : entry) })
+    this.follow(connectionId)
   }
 
   private connectionsChanged(): void {

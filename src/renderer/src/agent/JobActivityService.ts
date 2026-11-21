@@ -18,7 +18,7 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import { blockRange, type GridSelection } from '../grid/selection'
 import type { LiveGrid, LiveGridState } from '../live/LiveGrid'
-import { documentOwner, type LiveHandle, type LiveService } from '../live/LiveService'
+import { documentOwner, type LiveHandle, type LiveProbeSnapshot, type LiveService } from '../live/LiveService'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
@@ -101,6 +101,15 @@ export function jobActivityArgs(state: Pick<JobActivityState, 'expanded' | 'colu
 }
 /** How many filters Clear filters clears: the view chip, the filter box and each column's. */
 export const activeFilters = (state: Pick<JobActivityState, 'view' | 'text' | 'columnFilters'>): number => (state.view === 'all' ? 0 : 1) + (state.text.trim() ? 1 : 0) + state.columnFilters.length
+
+/** What the list probe's state says about the document: a failure of the list itself (not an error that names only another
+ *  table, or AGENT_DISABLED, which the banner explains), whether the rows are stale, and why the last run could not be read. */
+export function listProblems(probe: LiveProbeSnapshot | undefined): { readonly failure?: { readonly code?: string; readonly message: string }; readonly stale: boolean; readonly lastRun?: string } {
+  const error = probe?.error
+  const list = !!error && (!error.tables || error.tables.includes(0))
+  const failure = list && error.code !== 'AGENT_DISABLED' && (probe.state === 'failing' || probe.state === 'stale') ? { code: error.code, message: error.message } : undefined
+  return { ...failure ? { failure } : {}, stale: probe?.state === 'stale' || (probe?.state === 'failing' && list), ...error?.tables?.includes(1) ? { lastRun: error.message } : {} }
+}
 
 /** A result line's words for one job's verb. */
 export function bulkLine(verb: AgentBulkVerb, result: ApiResult<ActionExecuteResult> | undefined, thrown?: unknown): Pick<BulkLine, 'state' | 'message'> {
@@ -221,6 +230,9 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   /** How the view ended, when it failed: the document then says why in place of its rows. */
   ended(id: string): JobActivityEnd | undefined {
     const snapshot = this.handles.get(id)?.getSnapshot()
+    // msdb refusing the list stops only that probe (the service probe needs no permission), so the view itself stays live.
+    const list = snapshot?.probes[agentJobsProbe]?.error
+    if (snapshot?.status !== 'ended' && list?.code === 'PERMISSION_DENIED' && !list.tables) return { code: list.code, message: jobActivityText.denied, denied: true }
     if (snapshot?.status !== 'ended' || (snapshot.ended ? snapshot.ended.ended !== 'failed' : !snapshot.error)) return undefined
     const code = snapshot.ended?.code ?? snapshot.error?.code
     const denied = code === 'PERMISSION_DENIED'

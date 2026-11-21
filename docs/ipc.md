@@ -2030,7 +2030,7 @@ behaviour.
   applies to views already hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) cancels
   (`dormant`, the backend releasing what it held); shown again it subscribes with a new id and the last resume token, its
   history continuing after a gap. `liveData.pauseWhenHidden` off keeps hidden views running. A source allowing
-  `hidden: 'statusOnly'` (none does yet; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
+  `hidden: 'statusOnly'` (agent.jobs does; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
   table-less probes at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never going dormant, with
   their table probes paused; the rest pause, and a view that ends, is lost, closes or shows hands its slot to the oldest
   view that paused only for want of one.

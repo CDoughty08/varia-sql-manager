@@ -20,7 +20,7 @@ import { LiveGridPane, type LiveFilters } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
-import { activeFilters, type BulkLine, type JobActivityState } from './JobActivityService'
+import { activeFilters, listProblems, type BulkLine, type JobActivityState } from './JobActivityService'
 
 const listSpec = liveProbes[agentJobsProbe]
 const noSubscribe = () => () => {}
@@ -97,9 +97,10 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const availability = service.availability(documentId)
   const banner = agentBanner(availability, state.service, false, state.linux)
   const override = agentStatusOverride(availability)
-  const failure = !end && probe?.state === 'failing' && probe.error?.code !== 'AGENT_DISABLED' ? probe.error?.message : undefined
+  const problems = listProblems(probe)
+  const failure = !end ? problems.failure : undefined
   const unavailable = probe?.state === 'unavailable' ? probe.note ?? 'Job Activity Monitor is not available on this server.' : undefined
-  const stale = !end && (probe?.state === 'stale' || probe?.state === 'failing') ? { since: probe.lastSampleAt ?? Date.now() } : undefined
+  const stale = !end && problems.stale ? { since: probe?.lastSampleAt ?? Date.now() } : undefined
   const filtersOn = activeFilters(state)
   const selected = state.selected
   const bulkWhy = service.bulkUnavailable(documentId)
@@ -129,7 +130,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
         {end.denied ? <div role="status"><EmptyState icon="lock" title="No access to SQL Server Agent" detail={end.message} /></div>
           : <InlineError role="status" message={end.message} code={end.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />}
       </div> : <>
-        {failure && <InlineError role="status" message={failure} code={probe?.error?.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />}
+        {failure && <InlineError role="status" message={failure.message} code={failure.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />}
         <div className="agent-tiles" role="group" aria-label="Job counts">
           {agentJobTiles.map(tile => {
             const raw = tileValue(tile, state.counts?.[tile.series], availability)
@@ -174,7 +175,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             <strong>Last run: {state.expanded.name}</strong>
             <button type="button" aria-label="Hide the last run" onClick={() => service.toggleExpanded(documentId, undefined)}><Icon name="close" /></button>
           </div>
-          {lastRun && lastRun.descriptor.rowsAvailable === 0 ? <p className="agent-last-run-empty">This job has no finished run in its history.</p>
+          {problems.lastRun ? <InlineError role="status" message={problems.lastRun} code={probe?.error?.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />
+            : lastRun && lastRun.descriptor.rowsAvailable === 0 ? <p className="agent-last-run-empty">This job has no finished run in its history.</p>
             : <LiveGridPane live={handle} probe={agentJobsProbe} table={1} label={`Last run of ${state.expanded.name}`} toneLabel={tone => tone === 'error' ? 'failed' : tone === 'running' ? 'in progress' : undefined} />}
         </section>}
       </>}

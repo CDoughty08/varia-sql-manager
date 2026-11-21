@@ -10,7 +10,7 @@ import { liveArgsSchemas } from '../src/shared/live/schema'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { stampOf } from '../src/renderer/src/agent/AgentJobStatusService'
-import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, selectionRows } from '../src/renderer/src/agent/JobActivityService'
+import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, listProblems, selectionRows } from '../src/renderer/src/agent/JobActivityService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
@@ -92,6 +92,14 @@ describe("agent.jobs' shared rules", () => {
     expect(jobActivityArgs({ columnFilters: [{ column: 'status', exclude: true, blanks: true }, { column: 'category', values: ['ETL'], exclude: true, blanks: true }] }))
       .toEqual({ filters: [{ column: 'category', values: ['ETL'], exclude: true, blanks: true }] })
     expect(activeFilters({ view: 'failed', text: ' x ', columnFilters: [{ column: 'status', values: ['Idle'] }] })).toBe(3)
+  })
+  it('fails the list only for an error of the list itself; a refused elapsed time or last run leaves the rows fresh', () => {
+    const probe = (error?: object, state = 'failing') => ({ state, intervalMs: 5000, effectiveIntervalMs: 5000, lastSampleAt: 1, ...error ? { error: { probe: 'agent.jobs.list', ...error } } : {} }) as never
+    expect(listProblems(probe({ code: 'BLOCKED', message: 'History blocked.', tables: [1] }))).toEqual({ stale: false, lastRun: 'History blocked.' })
+    expect(listProblems(probe({ code: 'PERMISSION_DENIED', message: 'No elapsed.', tables: [0] }))).toEqual({ failure: { code: 'PERMISSION_DENIED', message: 'No elapsed.' }, stale: true })
+    expect(listProblems(probe({ code: 'TIMEOUT', message: 'Timed out.' }))).toEqual({ failure: { code: 'TIMEOUT', message: 'Timed out.' }, stale: true })
+    expect(listProblems(probe({ code: 'AGENT_DISABLED', message: 'XPs off.' }))).toEqual({ stale: true })
+    expect(listProblems(probe(undefined, 'fresh'))).toEqual({ stale: false })
   })
   it('follows a started job: Starting… until it runs or a newer run ends, then its outcome; unknown when it never shows', () => {
     const start: WatchedJob = { before: 20261115023000, idleSamples: 0, seenRunning: false }
@@ -208,6 +216,9 @@ describe('Job Activity Monitor', () => {
   it('says why when msdb refuses the login, in place of the rows', () => {
     const { jobActivity, handle } = monitor()
     const id = jobActivity.open('c1')
+    // msdb refuses the list but the service probe still reads: the view stays live, the list probe alone stopped.
+    handle().set({ status: 'live', probes: { 'agent.jobs.list': { state: 'failing', intervalMs: 5000, effectiveIntervalMs: 5000, error: { probe: 'agent.jobs.list', code: 'PERMISSION_DENIED', message: 'denied', terminal: true } } } } as never)
+    expect(jobActivity.ended(id)).toEqual({ code: 'PERMISSION_DENIED', message: jobActivityText.denied, denied: true })
     handle().set({ status: 'ended', ended: { ended: 'failed', code: 'PERMISSION_DENIED', message: 'denied', ticks: 0, elapsedMs: 1 }, error: { code: 'PERMISSION_DENIED', message: 'denied' } } as never)
     expect(jobActivity.ended(id)).toEqual({ code: 'PERMISSION_DENIED', message: jobActivityText.denied, denied: true })
     // New args on a view that ended subscribe again with them.
@@ -290,11 +301,30 @@ describe("The status bar's running job", () => {
     await agentJobs.stop(key)
     expect(api.executeObjectAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'stopJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }))
     handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] })
+    const watchedView = handles().at(-1)!
     await settled()
-    // The view closes with nothing left to follow, but Agent's state stays while the job it ended shows; Dismiss clears it.
+    // Nothing left to follow: the watched view closes, and the service probe alone reads Agent's state while the job it ended
+    // shows, until Agent is usable again.
+    expect(watchedView.disposed).toBe(true)
+    const serviceView = handles().at(-1)!
+    expect(serviceView.spec).toMatchObject({ source: 'agent.jobs', args: {}, whileHidden: 'statusOnly', probes: [{ probe: 'agent.jobs.service' }] })
+    serviceView.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] })
     expect(agentJobs.getSnapshot()).toMatchObject({ jobs: [{ phase: { phase: 'unknown', reason: 'agentStopped' } }], agent: { c1: 'stopped' } })
-    expect(handles().at(-1)!.disposed).toBe(true)
+    serviceView.deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] })
+    await settled()
+    expect(serviceView.disposed).toBe(true)
+    expect(agentJobs.getSnapshot()).toMatchObject({ jobs: [{ phase: { phase: 'unknown', reason: 'agentStopped' } }], agent: {} })
     agentJobs.dismiss(key)
     expect(agentJobs.getSnapshot()).toEqual({ jobs: [], agent: {} })
+  })
+  it("a view that ends on its own (BUSY at the server's limit) leaves its jobs' outcome unknown and frees the slots", async () => {
+    const { agentJobs, handles } = monitor()
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
+    const view = handles().at(-1)!
+    view.set({ status: 'ended', ended: { ended: 'failed', code: 'BUSY', message: 'Too many live views.', ticks: 0, elapsedMs: 1 } } as never)
+    await settled()
+    expect(view.disposed).toBe(true)
+    expect(agentJobs.getSnapshot().jobs).toMatchObject([{ phase: { phase: 'unknown', reason: 'gone' } }])
+    expect(handles().at(-1)).toBe(view)
   })
 })
