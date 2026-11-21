@@ -7,7 +7,7 @@ import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
-import { coverage, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
+import { coverage, followPoint, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
 import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -327,6 +327,12 @@ describe('the Backup Timeline', () => {
     // A point before the interval (a Manual Selection's older sets) ends the window there, so it still shows; one inside keeps the last backup's end.
     expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T19:00:00')).to)).toBe('2026-10-29T19:00:00')
     expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T20:30:00')).to)).toBe('2026-10-29T21:05:46')
+    // Once open, the window stays while the point moves inside it, and slides only as far as the point leaves it, either way.
+    const open = { from: timeMs('2026-10-29T20:00:00')!, to: timeMs('2026-10-29T21:00:00')! }, text = (window: { from: number, to: number }) => [timeText(window.from), timeText(window.to)]
+    expect(followPoint(open, timeMs('2026-10-29T20:30:00')!)).toEqual(open)
+    expect(followPoint(open, open.from)).toEqual(open)
+    expect(text(followPoint(open, timeMs('2026-10-29T19:59:00')!))).toEqual(['2026-10-29T19:59:00', '2026-10-29T20:59:00'])
+    expect(text(followPoint(open, timeMs('2026-10-29T21:01:00')!))).toEqual(['2026-10-29T20:01:00', '2026-10-29T21:01:00'])
     // The logs cover from the full backup's finish to the last log's, as one stretch at the end of an hour's window.
     const stretches = coverage(history, span)
     expect(stretches).toHaveLength(1)

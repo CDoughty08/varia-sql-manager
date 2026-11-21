@@ -5,7 +5,7 @@ import SubDialog from '../dialogs/SubDialog'
 import { useForcedColors } from '../live/LiveChart'
 import { lastBackupOf, sourceSets, timelineCoverage, timelinePointAllowed } from './model'
 import type { SectionProps } from './fields'
-import { coverage, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
+import { coverage, followPoint, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
 
 const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`
 
@@ -57,7 +57,9 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
   const [specific, setSpecific] = useState(draft.stopAt !== undefined)
   // Without a point, start at the last backup taken (the checked sets' under Manual Selection), where OK is allowed.
   const [point, setPoint] = useState(timeMs(draft.stopAt ?? lastBackup ?? '') ?? lastFinish)
-  const [interval, chooseInterval] = useState<TimelineInterval>('day')
+  const [interval, pickInterval] = useState<TimelineInterval>('day')
+  // The window opens around the point and then stays put until the point leaves it (followPoint); an interval change opens it afresh.
+  const [span, setSpan] = useState(() => timelineWindow(sets, 'day', point))
   const [width, setWidth] = useState<number>(track.fallbackWidth)
   const box = useRef<HTMLDivElement>(null)
   const forced = useForcedColors()
@@ -71,13 +73,13 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const span = timelineWindow(sets, interval, point)
   const text = timeText(point), allowed = timelinePointAllowed(draft, facts, text, covered)
   const id = (key: string) => fieldId(state.id, `timeline-${key}`)
   // Inset by half the widest glyph, so marks at the window's ends show whole.
   const scale = width - 2 * track.inset, at = (fraction: number) => track.inset + fraction * scale
   const fill = (mark: Mark): CSSProperties | undefined => forced ? undefined : { fill: `var(${cssVariable(marks[mark].key)})` }
-  const move = (ms: number) => { setSpecific(true); setPoint(Math.round(ms / 1000) * 1000) }
+  const move = (ms: number) => { const next = Math.round(ms / 1000) * 1000; setSpecific(true); setPoint(next); setSpan(current => followPoint(current, next)) }
+  const chooseInterval = (value: TimelineInterval) => { pickInterval(value); setSpan(timelineWindow(sets, value, point)) }
   const keyDown = (event: KeyboardEvent<SVGSVGElement>) => {
     const next = stepPoint(event.key, event.shiftKey, point, span)
     if (next === undefined) return

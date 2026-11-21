@@ -30,6 +30,14 @@ export function timelineWindow(sets: readonly BackupSetRow[], interval: Timeline
   const to = point !== undefined && (point > last || point < last - ms) ? point : last
   return { from: to - ms, to }
 }
+/**
+ * The window after the point moves: unchanged while the point stays inside it, so a click lands where it was clicked and Home
+ * and End reach the window's ends; otherwise slid just far enough to show the point at the edge it crossed.
+ */
+export function followPoint(window: TimelineWindow, point: number): TimelineWindow {
+  const ms = window.to - window.from, to = point > window.to ? point : point < window.from ? point + ms : window.to
+  return { from: to - ms, to }
+}
 /** Where a key moves the point: a minute with the arrows, an hour with Shift, the window's ends with Home and End. */
 export function stepPoint(key: string, shift: boolean, point: number, window: TimelineWindow): number | undefined {
   const step = shift ? 3_600_000 : 60_000
