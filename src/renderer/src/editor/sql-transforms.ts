@@ -30,6 +30,8 @@ const typeKeywordAfter = new Set(['CREATE', 'ALTER', 'DROP', 'UNIQUE', 'CLUSTERE
 /** Join hints, which follow a join type (INNER LOOP JOIN, LEFT OUTER HASH JOIN). */
 const joinHints = new Set(['LOOP', 'HASH', 'REMOTE'])
 const joinTypes = new Set(['INNER', 'OUTER', 'LEFT', 'RIGHT', 'FULL'])
+/** The JSON functions whose arguments end with `{ NULL | ABSENT } ON NULL` or `RETURNING type` (Azure SQL's JSON_VALUE), words that are not reserved. */
+const jsonClauseFunctions = new Set(['JSON_OBJECT', 'JSON_ARRAY', 'JSON_OBJECTAGG', 'JSON_ARRAYAGG', 'JSON_VALUE'])
 /** Clauses that end a table hint or option list that has no parentheses (FROM t WITH NOLOCK WHERE …). */
 const optionListEnds = new Set(['WHERE', 'GROUP', 'ORDER', 'HAVING', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'UNION', 'EXCEPT', 'INTERSECT'])
 /** Statements about servers, databases and security, by their first word or by the object after CREATE, ALTER or DROP. */
@@ -183,8 +185,9 @@ function bracketableWords(text: string, tokens: readonly SqlToken[]): Set<SqlTok
     if (joinHints.has(name) && word(index + 1) === 'JOIN' && joinTypes.has(before ?? '')) continue
     if ((name === 'AT' && word(index + 1) === 'TIME' && word(index + 2) === 'ZONE') || (name === 'TIME' && before === 'AT' && word(index + 1) === 'ZONE') || (name === 'ZONE' && before === 'TIME' && beforeThat === 'AT')) continue
     if (previous?.kind === 'open' && datePartFunctions.has(beforeThat ?? '') && next?.kind === 'comma') continue
+    if (jsonClauseFunctions.has(callerAt[index] ?? '') && ((name === 'ABSENT' && word(index + 1) === 'ON' && word(index + 2) === 'NULL') || name === 'RETURNING')) continue
     if (systemTypeNames.has(name)) {
-      if (previous?.kind === 'variable' || before === 'RETURNS') continue
+      if (previous?.kind === 'variable' || before === 'RETURNS' || before === 'RETURNING') continue
       if (before === 'AS' && (sig[index - 2]?.kind === 'variable' || callerAt[index] === 'CAST' || callerAt[index] === 'TRY_CAST')) continue
       if (previous?.kind === 'open' && (beforeThat === 'CONVERT' || beforeThat === 'TRY_CONVERT')) continue
     }
