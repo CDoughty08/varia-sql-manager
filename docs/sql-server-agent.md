@@ -77,15 +77,17 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
   document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
   job the login may see, with All jobs; at most `historyJobs` may be checked unless all are. The runs grid (newest first) reads
-  `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id or for all, with
+  `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id (a multi-server job, which msdb answers by id with its target servers, from the every-job read) or for all, with
   `@start_run_date` for the window (24 h, Last 7 days, 30 days, All; the server's clock, read in the same sample), at most
-  `historyRows` rows in all (checked jobs not yet read once the cap is reached are left out); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
+  `historyRows` rows in all (checked jobs not yet read once the cap is reached are left out, and the note says how many); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
   groups rows into runs by each job's outcome rows: the steps after one outcome row and up to the next belong to the next
   run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
   or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read
-  as stopped. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
+  as stopped (the Unknown and In progress filters keep those). In a window, an idle job's steps with no outcome row in it are left
+  out, since their run's outcome row is older than the window; steps of a run that spans a daylight-saving fall-back can read as
+  an Unknown run, as msdb stores local times. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
   sources and the window read msdb again. Selecting a run shows its steps (outcome row first) and the selected row's message in
-  **Message details** with Copy; the grids cut messages at `historyMessageChars`, so the details pane reads the whole message
+  **Message details** with Copy; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
   with `agent.historyMessage` (`sysjobhistory` by instance in msdb, or, when msdb refuses that table, the job's
   `sp_help_jobhistory` rows). **Delete History…** deletes the checked jobs' history, all of it or only rows older than a number
   of days, weeks or months counted back from the server's clock, after a confirmation naming the jobs. It is the `deleteJobHistory` object action: one

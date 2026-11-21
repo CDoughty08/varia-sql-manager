@@ -69,6 +69,10 @@ internal static class AgentHistoryChecks
         check(stale.Single(run => run.Key == 6).OutcomeId == "unknown" && unread.Single(run => run.Key == 6).OutcomeId == "inProgress",
             "a running job's steps that started before its current start are an unfinished older run (Unknown); with the start unreadable they all read In progress");
         var bounded = AgentHistoryReader.Group([Row(Backup, 20, 2, 1, 0), Row(Backup, 21, 0, 1, 1), Row(Backup, 22, 1, 1, 6), Row(Backup, 23, 0, 1, 6)], states, AgentOrphanLabel.Unknown, bounded: true);
+        var windowIdle = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], states, AgentOrphanLabel.Unknown, bounded: true);
+        var windowRunning = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day) }, AgentOrphanLabel.Unknown, bounded: true);
+        check(windowIdle.Count == 0 && windowRunning is [{ OutcomeId: "inProgress" }],
+            "in a date window an idle job's steps with no outcome row are a run whose outcome row is older than the window (left out); a running job's are In progress");
         check(bounded.Select(run => run.Key).SequenceEqual([21, 23]),
             "a date-window read drops step rows older than the job's first outcome row read: their outcome row may be before the window");
         var running = AgentHistoryReader.Group([Row(Backup, 30, 0, 1, 1), Row(Backup, 31, 1, 1, 2), Row(Backup, 32, 2, 1, 3)],
@@ -223,11 +227,26 @@ internal static class AgentHistoryChecks
             TestService = () => (1, 4)
         };
         var stopped = await cappedJobs.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
-        check(full.Count(id => id == "history") == 1 && stopped.Tables[0].More == 1 && stopped.Tables[0].Rows.Count == rowsCap,
+        check(full.Count(id => id == "history") == 1 && stopped.Tables[0].More == 1 && stopped.Tables[0].Rows.Count == rowsCap
+            && stopped.Status?.Any(status => status.Id == "historySkippedJobs" && Equals(status.Value, 1L)) == true,
             "once the checked jobs' rows reach historyRows the jobs not yet read are left out and the runs say they were cut: " + string.Join(", ", full));
         reader.Apply(new AgentHistoryLiveArgs([]));
         ran.Clear();
         var none = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        // A multi-server job by @job_id: msdb answers its target servers (NULL instance and step), so its history comes from the every-job read.
+        var msx = new List<string>();
+        var msxReader = new AgentHistoryReader(new([Nightly.ToString()])) { Reader = Fake(msx, statement => statement.Id == "history"
+            ? new(statement.Columns, [[null, Nightly, null, null, null, null, null, 1, 20261115, 20000, 5, null]], false) : null), TestService = () => (1, 4) };
+        var msxSample = await msxReader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(msx.SequenceEqual(["jobActivity", "properties", "history", "historyAll"]) && msxSample.Tables[0].Rows.Count == 2 && msxSample.Tables[0].Rows.All(row => row.Cells[1].Text == "Nightly")
+            && msxSample.Tables[0].Rows.All(row => !row.Cells[6].Text!.EndsWith(":0", StringComparison.Ordinal)),
+            "a multi-server job's target-server rows by @job_id are dropped and its history read from every job's, keeping only its rows: " + string.Join(", ", msx));
+        // sp_help_jobactivity's start keeps milliseconds; run_time is whole seconds, so the running job's first step must still be In progress.
+        var ms = new AgentHistoryReader(new()) { Reader = Fake([], statement => statement.Id == "activities" ? new(statement.Columns, [[Backup, Day.AddHours(9).AddMilliseconds(437), null]], false) : null), TestService = () => (1, 4) };
+        var msSample = await ms.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(msSample.Tables[0].Rows.Count(row => row.Cells[1].Text == "Backup" && row.Cells[2].Text == AgentHistoryReader.InProgressLabel) == 1
+            && msSample.Tables[0].Rows.All(row => row.Cells[2].Text != AgentHistoryReader.UnknownLabel || row.Cells[1].Text != "Backup" || !row.Cells[6].Text!.EndsWith(":12", StringComparison.Ordinal)),
+            "a running job whose start has milliseconds keeps the step that started in the same second in its In progress run");
         check(ran.SequenceEqual(["jobActivity"]) && none.Tables[0].Rows.Count == 0 && none.Tables[2].Rows.Count == 2, "no checked job reads no history, only the jobs: " + string.Join(", ", ran));
         var offReader = new AgentHistoryReader(new([Backup.ToString()])) { Reader = Fake([], statement => statement.Id == "jobActivity" ? new(statement.Columns, [JobRow(statement, Backup, "Backup", 4)], false) : null), TestService = () => (0, 4) };
         var off = await offReader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);

@@ -121,8 +121,14 @@ internal sealed partial class ActionService
         if (errors.FirstOrDefault() is { Code: not "PERMISSION_DENIED" } failed) return new(null, 0, HistoryReadError(failed));
         (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.History], (_, _) => jobId, token);
         if (!results.TryGetValue(AgentSql.History.Id, out var history)) return new(null, 0, HistoryReadError(errors[0]));
-        foreach (var row in history.Rows)
-            if (Convert.ToInt32(history.Value(row, "instance_id"), CultureInfo.InvariantCulture) == instance) return new(history.Value(row, "message") as string, 0);
+        // By @job_id msdb answers a multi-server job with its target servers; its history rows come from the every-job read.
+        if (AgentHistoryReader.Distributed(history))
+        {
+            (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.HistoryAll], (_, _) => null, token);
+            if (!results.TryGetValue(AgentSql.HistoryAll.Id, out history)) return new(null, 0, HistoryReadError(errors[0]));
+        }
+        foreach (var row in AgentHistoryReader.Rows(history))
+            if (row.Job == jobId && row.Instance == instance) return new(row.Message, 0);
         return new(null, 0, Error("NOT_FOUND", history.Truncated ? HistoryMessageBeyond : HistoryMessageGone));
     }
 

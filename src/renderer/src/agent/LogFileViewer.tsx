@@ -19,7 +19,7 @@ import { LiveGridPane } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
-import type { LogViewerState } from './LogViewerService'
+import type { HistoryStep, LogViewerState } from './LogViewerService'
 
 const historySpec = liveProbes[agentHistoryProbe]
 const noSubscribe = () => () => {}
@@ -27,6 +27,8 @@ const noLive: LiveSnapshot = { status: 'connecting', probes: {}, connectionId: '
 const noLiveSnapshot = () => noLive
 const toneWords: Partial<Record<LiveTone, string>> = { error: 'failed', running: 'in progress', warning: 'retry or unknown', muted: 'canceled' }
 const toneLabel = (tone: LiveTone): string | undefined => toneWords[tone]
+/** The details pane's heading: the step whose message shows (the run's first row with none selected). */
+const detailsHeading = (step: HistoryStep | undefined): string => !step ? 'Message' : step.stepId === '0' ? 'Job outcome' : `Step ${step.stepId}: ${step.name}`
 
 /** The message filter: sent when typing pauses, on Enter, or on leaving it; Escape puts back what was sent. */
 function TextBox({ id, value, onCommit }: { readonly id: string; readonly value: string; readonly onCommit: (text: string) => void }) {
@@ -187,7 +189,9 @@ export default function LogFileViewer({ documentId }: { readonly documentId: str
                   actions={filtersOn ? [{ label: 'Clear filters', run: () => service.clearFilters(documentId), primary: true }] : []} />}
               </>}
           </div>
-          {runs?.descriptor.truncated && <p className="agent-history-note" role="note">Only the newest {formatCount(agentLimits.historyRows)} history rows were read: narrow the window or check fewer jobs to see older runs.</p>}
+          {runs?.descriptor.truncated && <p className="agent-history-note" role="note">{state.skipped
+            ? `The checked jobs read first filled the ${formatCount(agentLimits.historyRows)}-row limit, so ${formatCount(state.skipped)} checked ${state.skipped === 1 ? 'job was' : 'jobs were'} not read: check fewer jobs or narrow the window.`
+            : `Only the newest ${formatCount(agentLimits.historyRows)} history rows were read: narrow the window or check fewer jobs to see older runs.`}</p>}
           {(maxRows !== undefined || perJob !== undefined) && <p className="agent-history-caps" role="note">
             SQL Server Agent keeps {maxRows === undefined || maxRows < 0 ? 'every history row' : `at most ${formatCount(maxRows)} history ${plural(maxRows, 'row')}`}{perJob !== undefined && maxRows !== undefined && maxRows >= 0 ? `, ${formatCount(perJob)} per job` : ''}.
           </p>}
@@ -195,7 +199,7 @@ export default function LogFileViewer({ documentId }: { readonly documentId: str
             <LiveGridPane live={handle} probe={agentHistoryProbe} table={1} label="Run steps" toneLabel={toneLabel} state={service.gridState(documentId, 1)} onGrid={grid => service.attachSteps(documentId, grid)} />
             <div className="agent-history-details" role="region" aria-label="Message details">
               <div className="agent-history-details-head">
-                <strong>{state.selectedStep ? `Step ${state.selectedStep.stepId}: ${state.selectedStep.name}` : 'Job outcome'}</strong>
+                <strong>{detailsHeading(state.selectedStep ?? state.headStep)}</strong>
                 {state.selectedStep && <span>{[state.selectedStep.outcome, state.selectedStep.started, state.selectedStep.duration].filter(Boolean).join(' · ')}</span>}
                 <button type="button" disabled={message?.state !== 'ready'} onClick={copy} aria-label="Copy the message" title="Copy the message">
                   <Icon name={copied ? 'check' : 'copy'} />{copied ? 'Copied' : 'Copy'}

@@ -91,7 +91,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
 
     /// <summary>One read of the server: the jobs, their states, the history rows, whether the read was cut, and when.</summary>
     private sealed record Read(string Key, List<Job> Jobs, Dictionary<Guid, AgentHistoryJobState> States, List<AgentHistoryRow>? Rows, bool Truncated, AgentReadError? HistoryError,
-        DateTime? ServerNow, AgentOrphanLabel Label, List<LiveProbeError> Errors);
+        DateTime? ServerNow, AgentOrphanLabel Label, List<LiveProbeError> Errors, int Skipped = 0);
 
     public async Task<(int Spid, bool ServerState)> SessionAsync(SqlConnection connection, string prologue, string permission, CancellationToken token)
     {
@@ -175,7 +175,8 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             if (clock.TryGetValue(AgentSql.Activities.Id, out var activity))
                 foreach (var row in activity.Rows)
                     if (activity.Value(row, "job_id") is Guid id && activity.Value(row, "start_execution_date") is DateTime start && activity.Value(row, "stop_execution_date") is null && states.TryGetValue(id, out var state))
-                        states[id] = state with { Start = start };
+                        // run_date/run_time are whole seconds: a start with milliseconds would put the run's first step before it.
+                        states[id] = state with { Start = start.AddTicks(-(start.Ticks % TimeSpan.TicksPerSecond)) };
             if (clock.TryGetValue(AgentSql.ServerClock.Id, out var time) && time.Rows.Count > 0 && time.Value(time.Rows[0], "server_now") is DateTime stamp) serverNow = stamp;
         }
         // The history caps change rarely: read once per connection (every Agent role may run sp_get_sqlagent_properties; 15281 while Agent XPs
@@ -188,6 +189,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         }
         List<AgentHistoryRow>? rows = null;
         var truncated = false;
+        var skipped = 0;
         AgentReadError? historyError = null;
         if (checkedJobs is null)
         {
@@ -195,7 +197,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement], (_, parameter) => parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
             if (history.TryGetValue(statement.Id, out var result))
             {
-                rows = [.. result.Rows.Select(row => Row(result, row))];
+                rows = [.. Rows(result)];
                 truncated = result.Truncated;
             }
             else historyError = refused[0];
@@ -203,18 +205,34 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         else if (checkedJobs.Count > 0)
         {
             // Each checked job is read by its id, so other jobs' rows never use up the cap; once the checked jobs' rows reach it, the
-            // jobs not yet read are left out and the read says it was cut.
+            // jobs not yet read are left out and counted. By @job_id msdb answers a multi-server job with its target servers (NULL
+            // instance and step), so those jobs' history comes from the every-job read instead.
             var statement = now.Days is null ? AgentSql.History : AgentSql.HistorySince;
             var cap = catalog.Limit("historyRows");
+            var distributed = new HashSet<Guid>();
+            var ordered = checkedJobs.Order().ToList();
             rows = [];
-            foreach (var one in checkedJobs.Order())
+            for (var index = 0; index < ordered.Count; index++)
             {
-                if (rows.Count >= cap) { truncated = true; break; }
+                var one = ordered[index];
+                if (rows.Count >= cap) { truncated = true; skipped = ordered.Count - index; break; }
                 var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement],
                     (_, parameter) => parameter.Name == "@job_id" ? one : parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
                 if (!history.TryGetValue(statement.Id, out var result)) { historyError = refused[0]; rows = null; break; }
-                rows.AddRange(result.Rows.Select(row => Row(result, row)).Where(row => row.Job == one));
+                if (Distributed(result)) { distributed.Add(one); continue; }
+                rows.AddRange(Rows(result).Where(row => row.Job == one));
                 truncated |= result.Truncated;
+            }
+            if (rows is not null && distributed.Count > 0)
+            {
+                var every = now.Days is null ? AgentSql.HistoryAll : AgentSql.HistoryAllSince;
+                var (history, refused) = await Reader.ReadAsync(connection, prologue, [every], (_, parameter) => parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
+                if (history.TryGetValue(every.Id, out var result))
+                {
+                    rows.AddRange(Rows(result).Where(row => distributed.Contains(row.Job)));
+                    truncated |= result.Truncated;
+                }
+                else { historyError = refused[0]; rows = null; }
             }
         }
         // Step rows with no outcome row of a job that is not running read Unknown, unless Agent XPs is off with the service not read as stopped:
@@ -225,7 +243,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             var (xps, state) = TestService?.Invoke() ?? await ServiceAsync(connection!, prologue, testText, token).ConfigureAwait(false);
             if (xps == 0 && state != 1) label = AgentOrphanLabel.XpsOff;
         }
-        return new(ReadKey(now), jobs, states, rows, truncated, historyError, serverNow, label, errors);
+        return new(ReadKey(now), jobs, states, rows, truncated, historyError, serverNow, label, errors, skipped);
     }
 
     /// <summary>Agent XPs and the service's state (1 stopped), as agent.jobs.service reads them; a failed read is unknown, not an error.</summary>
@@ -257,7 +275,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         if (read.Rows is not { } rows)
         {
             if (read.HistoryError is { } failed) errors.Add(Error(failed) with { Tables = [0, 1] });
-            return new(null, [new(0, []), new(1, []), jobsTable], errors, Status: Status());
+            return new(null, [new(0, []), new(1, []), jobsTable], errors, Status: Status(read));
         }
         var runs = Group(rows, read.States, read.Label, bounded: now.Days is not null);
         var since = now.Days is { } days && read.ServerNow is { } clock ? clock.AddDays(-days) : (DateTime?)null;
@@ -269,16 +287,17 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         var steps = new List<LiveRow>();
         if (now.Run is { } selected && Guid.TryParse(selected.Job, out var job) && runs.FirstOrDefault(run => run.Job == job && run.Key == selected.Instance) is { } chosen)
             steps = [.. chosen.Rows.Select(row => StepRow(row, maxChars))];
-        return new(null, [new(0, runRows, read.Truncated || kept.Count > cap ? 1 : 0), new(1, steps), jobsTable], errors, Status: Status());
+        return new(null, [new(0, runRows, read.Truncated || kept.Count > cap ? 1 : 0), new(1, steps), jobsTable], errors, Status: Status(read));
     }
 
-    private List<LiveStatus> Status()
+    private List<LiveStatus> Status(Read read)
     {
         var status = new List<LiveStatus>();
-        if (caps is { } read)
+        if (read.Skipped > 0) status.Add(new("historySkippedJobs", (long)read.Skipped));
+        if (caps is { } known)
         {
-            if (read.Rows is { } rows) status.Add(new("historyMaxRows", rows));
-            if (read.PerJob is { } perJob) status.Add(new("historyMaxRowsPerJob", perJob));
+            if (known.Rows is { } rows) status.Add(new("historyMaxRows", rows));
+            if (known.PerJob is { } perJob) status.Add(new("historyMaxRowsPerJob", perJob));
         }
         return status;
     }
@@ -358,7 +377,9 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             if (pending.Count == 0) continue;
             var state = states.TryGetValue(job.Key, out var known) ? known : new AgentHistoryJobState(false, null);
             var unknown = label == AgentOrphanLabel.XpsOff ? "xpsOff" : "unknown";
-            // After the job's last outcome row: the running job's current run, the rest left by a run that never wrote one.
+            // After the job's last outcome row: the running job's current run, the rest left by a run that never wrote one. In a date-window
+            // read with no outcome row of an idle job, they are the later steps of a run whose outcome row is before the window: left out.
+            if (bounded && !seenOutcome && !state.Running) continue;
             var tail = pending;
             var current = state.Running ? tail.Where(row => state.Start is not { } start || row.Started is null || row.Started >= start).ToList() : [];
             var before = tail.Except(current).ToList();
@@ -378,7 +399,12 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             Int(result.Value(row, "enabled")) == 1, Running.Contains(Int(result.Value(row, "current_execution_status")) ?? 4));
     }
 
-    internal static AgentHistoryRow Row(AgentResult result, object?[] row) => new(
+    /// <summary>A result's history rows, leaving out rows with no instance or step (a multi-server job's target-server rows).</summary>
+    internal static IEnumerable<AgentHistoryRow> Rows(AgentResult result) => result.Rows.Select(row => Row(result, row)).OfType<AgentHistoryRow>();
+    /// <summary>Whether msdb answered with a multi-server job's target servers: rows with no instance_id.</summary>
+    internal static bool Distributed(AgentResult result) => result.Rows.Any(row => result.Value(row, "instance_id") is null or DBNull);
+
+    internal static AgentHistoryRow? Row(AgentResult result, object?[] row) => result.Value(row, "instance_id") is null or DBNull || result.Value(row, "step_id") is null or DBNull ? null : new(
         Convert.ToInt32(result.Value(row, "instance_id"), CultureInfo.InvariantCulture), (Guid)result.Value(row, "job_id")!, Convert.ToInt32(result.Value(row, "step_id"), CultureInfo.InvariantCulture),
         result.Value(row, "step_name") as string, Int(result.Value(row, "sql_message_id")), Int(result.Value(row, "sql_severity")), result.Value(row, "message") as string,
         Convert.ToInt32(result.Value(row, "run_status"), CultureInfo.InvariantCulture), AgentJobsReader.When(Int(result.Value(row, "run_date")), Int(result.Value(row, "run_time"))),

@@ -61,6 +61,10 @@ export interface LogViewerState extends HistoryFilters {
   readonly service?: AgentServiceSample
   /** SQL Server Agent's history caps, where the login may read them (the probe's status). */
   readonly caps?: { readonly maxRows?: number; readonly perJob?: number }
+  /** Checked jobs the history cap left unread in the last sample (the probe's historySkippedJobs). */
+  readonly skipped?: number
+  /** The selected run's first row (its job outcome row, or its first step of a run with none): the details pane's heading with no step selected. */
+  readonly headStep?: HistoryStep
   readonly confirm?: DeleteConfirm
   /** The last Delete History's outcome line (msdb's messages), until the next one or Close. */
   readonly deleted?: string
@@ -186,11 +190,16 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     const ticks = handle.onTick(({ tick }) => {
       const sample = tick.samples.find(item => item.probe === agentHistoryProbe)
       if (!sample) return
+      const value = (key: string) => { const entry = sample.status?.find(item => item.id === key); return typeof entry?.value === 'number' ? entry.value : undefined }
       if (sample.status?.length) {
-        const value = (key: string) => { const entry = sample.status!.find(item => item.id === key); return typeof entry?.value === 'number' ? entry.value : undefined }
         const caps = { maxRows: value('historyMaxRows'), perJob: value('historyMaxRowsPerJob') }
         const before = this.get(state.id)?.caps
         if (before?.maxRows !== caps.maxRows || before?.perJob !== caps.perJob) this.patch(state.id, { caps })
+      }
+      // Sent only while the cap left checked jobs unread; a sample without it clears it.
+      if (sample.tables?.length || sample.status?.length) {
+        const skipped = value('historySkippedJobs')
+        if (this.get(state.id)?.skipped !== skipped) this.patch(state.id, { skipped })
       }
       void this.readJobs(state.id)
     })
@@ -315,7 +324,7 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     if (!before) return
     const runChanged = 'run' in patch && (patch.run?.job !== before.run?.job || patch.run?.instance !== before.run?.instance)
     const next = { ...before, ...patch, ...extra }
-    this.patch(id, { ...patch, ...extra, ...runChanged ? { selectedStep: undefined, message: undefined } : {} })
+    this.patch(id, { ...patch, ...extra, ...runChanged ? { selectedStep: undefined, headStep: undefined, message: undefined } : {} })
     if (runChanged) void this.readMessage(id)
     if (JSON.stringify(historyArgs(next)) === JSON.stringify(historyArgs(before))) return
     const handle = this.handles.get(id)
@@ -357,25 +366,38 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     const snapshot = entry.grid.getSnapshot()
     const read = ++entry.read
     const table = snapshot.table, row = snapshot.selection?.active.row
+    const columns = historySpec.tables![1].columns.length
     if (!table || row === undefined || row < 0 || row >= table.descriptor.rowsAvailable || snapshot.activeKey === undefined) {
       if (this.get(id)?.selectedStep) { this.patch(id, { selectedStep: undefined }); void this.readMessage(id) }
+      // Row 0 is the row whose message shows with no step selected (the run's key row): its name heads the details pane.
+      if (table && table.descriptor.rowsAvailable > 0) void (async () => {
+        const window = await table.handle.getWindow(0, 1, { colStart: 0, colEnd: columns, display: false })
+        if (this.stepGrids.get(id) !== entry || entry.read !== read || !window.count) return
+        const head = this.stepOf(window.text)
+        if (head && JSON.stringify(this.get(id)?.headStep) !== JSON.stringify(head)) this.patch(id, { headStep: head })
+      })().catch(onUnexpectedError)
       return
     }
-    const columns = historySpec.tables![1].columns.length
     void (async () => {
       const window = await table.handle.getWindow(row, 1, { colStart: 0, colEnd: columns, display: false })
       if (this.stepGrids.get(id) !== entry || entry.read !== read || !window.count) return
-      const cell = (column: string) => window.text[stepColumns[column]] ?? ''
-      const instance = Number(cell('stepInstance'))
-      if (!Number.isInteger(instance) || instance < 1) return
-      const step: HistoryStep = {
-        instance, stepId: cell('stepId'), name: cell('stepName'), outcome: cell('stepOutcome'), started: cell('stepStarted'), duration: cell('stepDuration'),
-        messageId: cell('stepMessageId'), severity: cell('stepSeverity')
-      }
+      const step = this.stepOf(window.text)
+      if (!step) return
       if (JSON.stringify(this.get(id)?.selectedStep) === JSON.stringify(step)) return
       this.patch(id, { selectedStep: step })
       await this.readMessage(id)
     })().catch(onUnexpectedError)
+  }
+
+  /** A steps-table row's cells as a step, or undefined without a valid instance. */
+  private stepOf(text: readonly string[]): HistoryStep | undefined {
+    const cell = (column: string) => text[stepColumns[column]] ?? ''
+    const instance = Number(cell('stepInstance'))
+    if (!Number.isInteger(instance) || instance < 1) return undefined
+    return {
+      instance, stepId: cell('stepId'), name: cell('stepName'), outcome: cell('stepOutcome'), started: cell('stepStarted'), duration: cell('stepDuration'),
+      messageId: cell('stepMessageId'), severity: cell('stepSeverity')
+    }
   }
 
   /** The details pane's whole message: the selected step row's, else the selected run's newest row (its job outcome row). */
@@ -406,7 +428,7 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     if (state.confirm?.running) return 'Delete History is running.'
     const checked = this.checkedJobs(id)
     return deleteHistoryUnavailable({
-      role: this.role(id), purge: state.profile.status === 'ready' ? state.profile.profile.purgeHistory : undefined, checked: checked.length, owners: checked.map(job => job.owner), live: this.live(id)
+      role: this.role(id), purge: state.profile.status === 'ready' ? state.profile.profile.purgeHistory : undefined, checked: checked.length, live: this.live(id)
     })
   }
   canDelete(id: string): boolean { return this.deleteUnavailable(id) === undefined }

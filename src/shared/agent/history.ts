@@ -27,7 +27,7 @@ export const historyMaxDays = 3650
 /** The highest step id the step filter takes (msdb's own steps are numbered from 1). */
 export const historyMaxStep = 1000
 
-/** A run by its job and its newest row's instance_id (the job outcome row's, or the newest step row's of a run with none). */
+/** A run by its job and an instance_id: its job outcome row's, or the first step row's of a run with none. */
 export interface HistoryRunKey { readonly job: string; readonly instance: number }
 export const historyRunKeySchema = z.object({ job: z.guid(), instance: z.number().int().min(1).max(2_147_483_647) }).strict()
 /** The runs table's key column text for a run: `<job id>:<instance>`. */
@@ -129,9 +129,10 @@ export const deleteJobHistoryRequestSchema = z.object({
 }).strict() satisfies z.ZodType<DeleteJobHistoryRequest>
 
 /** Why Delete History is not offered for the checked jobs, or undefined when it is: msdb lets sysadmin and SQLAgentOperatorRole purge any
- *  job's history, and a login with EXECUTE on sp_purge_jobhistory only its own jobs' (14392 otherwise, PERMISSION_DENIED). */
+ *  job's history, and a login with EXECUTE on sp_purge_jobhistory only its own jobs': msdb refuses the others (14392, PERMISSION_DENIED,
+ *  rolled back), which the confirmation shows, since the viewer has no login name to compare owners with. */
 export function deleteHistoryUnavailable(input: {
-  readonly role: AgentRole; readonly purge?: boolean; readonly checked: number; readonly owners?: readonly (string | undefined)[]; readonly login?: string; readonly live: boolean
+  readonly role: AgentRole; readonly purge?: boolean; readonly checked: number; readonly live: boolean
 }): string | undefined {
   if (!input.live) return 'Connect to the server first.'
   if (input.checked === 0) return 'Check one or more jobs in Select logs first.'
@@ -139,8 +140,6 @@ export function deleteHistoryUnavailable(input: {
   if (input.role === 'unknown') return "Reading this login's SQL Server Agent role…"
   if (input.role === 'sysadmin' || input.role === 'operator') return undefined
   if (!input.purge) return 'Only sysadmin and SQLAgentOperatorRole can delete job history (EXECUTE on msdb.dbo.sp_purge_jobhistory).'
-  if (input.login !== undefined && input.owners?.some(owner => owner !== undefined && owner.toLowerCase() !== input.login!.toLowerCase()))
-    return 'This login may delete the history only of the jobs it owns; uncheck the others.'
   return undefined
 }
 
