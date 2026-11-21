@@ -356,3 +356,23 @@ describe('row sizes', () => {
     expect(reads).toHaveLength(1)
   })
 })
+
+describe('row sizes of a windowed result', () => {
+  afterEach(() => vi.useRealTimers())
+  it('arms no wake for a windowed last block read whole (it ends at the rows available)', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const scheduled: { callback: () => void; ms: number }[] = []
+    const timers = { setTimeout: (callback: () => void, ms: number) => scheduled.push({ callback, ms }), clearTimeout: vi.fn() }
+    const { sizes, reads, answer, settle, snapshot, changed } = fixture(300, 'complete', timers)
+    snapshot.residence = 'remote'
+    sizes.ensure(256, 299)
+    expect(reads.map(read => read.first)).toEqual([256])
+    answer(0, () => 7)
+    await settle()
+    expect(sizes.get(299)?.bytes).toBe(7)
+    expect(changed).toHaveBeenCalledTimes(1)
+    // The block holds every row there is: nothing is short, so no wake is armed and nothing repaints later.
+    expect(scheduled).toHaveLength(0)
+    sizes.dispose()
+  })
+})

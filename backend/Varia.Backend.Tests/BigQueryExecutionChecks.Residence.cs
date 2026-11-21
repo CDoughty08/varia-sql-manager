@@ -1387,6 +1387,40 @@ internal static partial class BigQueryExecutionChecks
             check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory"),
                 $"a load during which memory runs low switches back to windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} avail={set?.RowsAvailable} trunc={set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
         }
+        // A load whose own rows push memory low says so, though the switch back freed them by the time it ends.
+        {
+            ResultStore? held = null;
+            var armed = 0;
+            held = new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref armed) == 1 && held!.UsedBytes > (2L << 20) ? (100, 50) : (10, 50));
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), held);
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref armed, 1);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote" } && Says(result, "low on memory, so the result stays windowed") && !Says(result, "did not fit in memory"),
+                $"a load refused for low memory says so even once the switch back relieved it: {code} {message} res={set?.Residence} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A Storage Read load refused for low memory switches back to windowed, whole, as REST's does.
+        {
+            var low = 0;
+            var jobs = Lines(3000);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(i => "row " + i))], chunk.Length)).ToList();
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref low) == 1 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref low, 1);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            var stopped = harness.Service.Results.Find(id)?.Budget.Stopped;
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory") && Says(result, "low on memory, so the result stays windowed")
+                && stopped == TruncationReason.None,
+                $"a Storage Read load refused for low memory leaves the result windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} avail={set?.RowsAvailable} trunc={set?.Truncated} stopped={stopped} msgs={Texts(result?.Messages ?? [])}");
+        }
         using (var harness = new Harness(Lines(3000)))
         {
             await harness.ConnectAsync();

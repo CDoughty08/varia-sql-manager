@@ -220,6 +220,10 @@ internal sealed class ResultSetBuffer
     /// (<see cref="ResultStore.Demote"/>), so a refusal ends only this set's storing, as a derived set's does.</summary>
     public bool SwitchesOnRefusal { get; set; }
 
+    /// <summary>The refusal that last switched this set to windowed (SqlService.SwitchToWindowed), as it was then: the switch
+    /// frees the pages, so the memory load read afterwards would no longer tell why.</summary>
+    public TruncationReason SwitchedFor { get; set; }
+
     /// <summary>Why the budget refused this set's last row when that stopped only this set (a derived set, or one that
     /// switches on a refusal); None otherwise.</summary>
     public TruncationReason Refusal { get { lock (gate) return refused; } }

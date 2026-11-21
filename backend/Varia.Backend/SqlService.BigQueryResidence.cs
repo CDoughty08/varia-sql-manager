@@ -130,8 +130,10 @@ internal sealed partial class SqlService
     /// are released, it gets a new revision, and resultSet.residence tells the grid. Messages says why. False when the set
     /// was released meanwhile.
     /// </summary>
-    private bool SwitchToWindowed(ResultSetBuffer set, BigQueryWindow context, QueryEventSink events, QueryMessages messages)
+    private bool SwitchToWindowed(ResultSetBuffer set, BigQueryWindow context, QueryEventSink events, QueryMessages messages, TruncationReason? reason = null)
     {
+        // Why, before Demote clears the set's refusal: a page or batch refused names its own reason, a row the set's.
+        set.SwitchedFor = reason ?? set.Refusal;
         var remote = Window(context, set);
         if (!store.Demote(set, remote, context.TotalRows)) return false;
         events.Residence(set);
@@ -365,7 +367,7 @@ internal sealed partial class SqlService
             if (set.IsOpen && set.Revision == loaded) set.Complete();
             if (set.IsReleased) throw Unavailable(args.ResultId);
             messages.Add(!set.IsRemote ? "The result was loaded into memory."
-                : store.IsSystemMemoryLow() ? "The computer is low on memory, so the result stays windowed in BigQuery."
+                : set.SwitchedFor == TruncationReason.SystemMemory ? "The computer is low on memory, so the result stays windowed in BigQuery."
                 : "The result did not fit in memory, so it stays windowed in BigQuery.");
         }
         catch (Exception error)

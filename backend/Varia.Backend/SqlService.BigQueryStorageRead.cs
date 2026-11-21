@@ -93,6 +93,7 @@ internal sealed partial class SqlService
         long extra = 0;
         // An Automatic read the budget refused: the set switches to windowed once the read has stopped.
         var switched = false;
+        TruncationReason? switchedFor = null;
         try
         {
             await foreach (var chunk in queue.Reader.ReadAllAsync(stop.Token))
@@ -101,7 +102,7 @@ internal sealed partial class SqlService
                 {
                     if (chunk.Refusal != TruncationReason.None)
                     {
-                        if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; break; }
+                        if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; switchedFor = chunk.Refusal; break; }
                         set.Skip(chunk.Refusal);
                         budget.Stop(chunk.Refusal);
                         storing = false;
@@ -115,7 +116,7 @@ internal sealed partial class SqlService
                     {
                         if (!store.TryReserve(budget, decoded, true, out var refusal))
                         {
-                            if (window is not null && SwitchesOn(set, refusal)) { switched = true; break; }
+                            if (window is not null && SwitchesOn(set, refusal)) { switched = true; switchedFor = refusal; break; }
                             set.Skip(refusal);
                             budget.Stop(refusal);
                             storing = false;
@@ -173,7 +174,7 @@ internal sealed partial class SqlService
             // Batches queued but never read give their charge back.
             while (queue.Reader.TryRead(out var left)) store.Return(budget, left.Charge);
         }
-        if (switched && SwitchToWindowed(set, window!, events, messages!)) return;
+        if (switched && SwitchToWindowed(set, window!, events, messages!, switchedFor)) return;
         if (totalRows > counted) set.CountRows(totalRows - counted);
         events.RowsChanged();
     }
