@@ -52,14 +52,15 @@ internal sealed partial class ActionService
 
     /// <summary>Runs a catalog statement in the database through ModuleCall; a missing wrapper means the database went away.</summary>
     private async Task<(List<List<ScriptPreflight.Row>>? Sets, ActionError? Error)> InsideAsync(SqlConnection connection, string database, string statement, string? schema, string? name, string? other,
-        int take, CancellationToken token)
+        int take, CancellationToken token, string? names = null)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = ActionSql.ModuleCall;
+        command.CommandText = DesignerSql.ModuleCall;
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, database);
         Add(command, "@stmt", SqlDbType.NVarChar, -1, statement);
-        Add(command, "@decl", SqlDbType.NVarChar, -1, ActionSql.Declarations);
+        Add(command, "@decl", SqlDbType.NVarChar, -1, DesignerSql.Declarations);
+        Add(command, "@names", SqlDbType.NVarChar, -1, names);
         Add(command, "@schema", SqlDbType.NVarChar, 128, schema);
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         Add(command, "@new", SqlDbType.NVarChar, 128, other);
@@ -97,7 +98,7 @@ internal sealed partial class ActionService
         var listed = schemas.Where(schema => schema == "dbo" || kept.Contains(schema)).ToList();
         var comparison = sets.Count > 2 && sets[2].Count > 0 ? sets[2][0] : null;
         var model = new TableDesignerModelDto(database, band, listed, schemas.Count > limit, listed.Contains("dbo") ? "dbo" : listed.FirstOrDefault() ?? "dbo", filegroup,
-            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"));
+            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"), comparison?.Bool("turkish_casing") ?? false);
         return new(null, 0, TableDesigner: model);
     }
 
@@ -119,7 +120,8 @@ internal sealed partial class ActionService
             // The builders shred the design with OPENJSON, which needs master at compatibility level 130 (SQL Server 2016) or later.
             if (facts.Int("master_level") < 130) return (null, Error("NOT_SUPPORTED", "Saving a table needs master at compatibility level 130 or later."), warnings);
         }
-        var (sets, missing) = await InsideAsync(connection, database, DesignerSql.Preflight, plan.Schema, plan.Name, plan.PrimaryKeyName, 0, token);
+        var (sets, missing) = await InsideAsync(connection, database, DesignerSql.Preflight, plan.Schema, plan.Name, plan.PrimaryKeyName, plan.Columns.Count, token,
+            DesignerSql.PaddedNames(plan.Columns.Select(column => column.Name)));
         if (sets is null) return (null, missing, warnings);
         var row = sets[0][0];
         var schema = ScriptingErrors.Display(plan.Schema);
@@ -131,6 +133,9 @@ internal sealed partial class ActionService
             if (plan.PrimaryKey.Count > 0 && row.Bool("key_in_use")) problems.Add(("NAME_IN_USE", "An object named " + ScriptingErrors.Display(plan.PrimaryKeyName) + " already exists in schema " + schema + "."));
             if (!row.Bool("can_alter")) problems.Add(("PERMISSION_DENIED", "You do not have permission to create a table in schema " + schema + " (ALTER on it)."));
         }
+        // Column names as the catalog collation compares them, which only SQL Server knows for every collation.
+        if (sets.Count > 1 && sets[1].Count > 0)
+            problems.Add(("NAME_IN_USE", "The column name " + ScriptingErrors.Display(plan.Columns[sets[1][0].Int("duplicate_column")].Name) + " is used twice."));
         if (execute && problems.Count > 0) return (null, Error(problems[0].Code, problems[0].Message), warnings);
         warnings.AddRange(problems.Take(8).Select(problem => problem.Message));
         return (row.Name("filegroup_name") is { Length: > 0 } filegroup ? filegroup : "PRIMARY", null, warnings);

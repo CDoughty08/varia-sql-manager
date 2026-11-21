@@ -41,7 +41,7 @@ describe('custom document reconnect context', () => {
     const f = fixture()
     f.api.describeObject.mockImplementation(async request => ({ ok: true, value: (request.dialog === 'newDatabase' ? {
       newDatabase: { model: databaseModel(), dataPath: 'C:\\Data', logPath: 'C:\\Logs', serverCollation: 'Latin1_General_CI_AS', canCreate: true, masterLevel: 160, linux: false }, elapsedMs: 1
-    } : { tableDesigner: { database: 'AppData', band: 16, schemas: ['dbo'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 }) as ActionDescribeResult }))
+    } : { tableDesigner: { database: 'AppData', band: 16, schemas: ['dbo'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, turkishCasing: false, canCreate: true }, elapsedMs: 1 }) as ActionDescribeResult }))
     const database = f.newDatabase.open(node(f.handle)), table = f.designers.open(node(f.handle, true))
     await expect.poll(() => [f.newDatabase.get(database)?.phase, f.designers.get(table)?.phase]).toEqual(['ready', 'ready'])
     f.newDatabase.setName(database, 'Sales')

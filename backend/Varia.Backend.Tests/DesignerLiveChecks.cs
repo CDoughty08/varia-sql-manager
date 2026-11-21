@@ -77,6 +77,28 @@ internal static class DesignerLiveChecks
             && taken is { Error: null } && taken.Warnings.Any(warning => warning.Contains("already exists", StringComparison.Ordinal)),
             "Generate Change Script returns SSMS's text, creates nothing, and warns about a taken name (" + script.Error?.Message + ")");
 
+        // Column names as the catalog collation compares them: the preflight's duplicate check, under collations whose rules
+        // no client-side fold gets right (Turkish I and ı, Swedish å apart from a, surrogate pairs under _SC).
+        var collisions = new List<string>();
+        foreach (var (collation, names, expected) in new (string, string[], string?)[]
+        {
+            ("Turkish_100_CI_AS", ["I", "i"], null), ("Turkish_100_CI_AS", ["Id", "x", "ıd"], "2"), ("Turkish_100_CI_AS", ["İd", "id"], "1"),
+            ("Turkish_100_CI_AI", ["c", "ç"], null), ("Finnish_Swedish_100_CI_AI", ["a", "å"], null), ("Latin1_General_100_CI_AI", ["café", "x", "cafe", "CAFE"], "2"),
+            ("Latin1_General_100_CS_AS", ["Id", "ID"], null), ("Latin1_General_100_CI_AS", ["I", "i"], "1"), ("Latin1_General_100_CI_AS", [new string('a', 128), "b", new string('A', 127) + "a"], "2"),
+            ("Latin1_General_100_CI_AS_SC", ["\U0001F600a", "\U0001F600b", "\U0001F600A"], "2"), ("Latin1_General_100_CI_AS", ["\U0001F600", "x"], null),
+        })
+        {
+            var run = await Sql("EXEC sys.sp_executesql " + Literal(DesignerSql.DuplicateName.Replace("CATALOG_DEFAULT", collation, StringComparison.Ordinal)) + ", N'@take int, @names nvarchar(max)', @take = "
+                + names.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", @names = " + Literal(DesignerSql.PaddedNames(names)) + ";");
+            var found = run.Status == "completed" && run.Sets.Count == 1 ? run.Sets[0].Count == 0 ? null : run.Sets[0][0][0] : "failed: " + run.Error;
+            if (found != expected) collisions.Add(collation + " " + string.Join("/", names.Select(n => n.Length > 8 ? n[..8] + "…" : n)) + ": " + (found ?? "none"));
+        }
+        check(collisions.Count == 0, "the designer's preflight finds a repeated column name exactly as each catalog collation compares names: " + string.Join("; ", collisions));
+        var twin = await client.Script("master", design with { Columns = [Column("Name", "int"), Column("NAME", "int")], PrimaryKey = [] });
+        var twinWarned = twin.Warnings.Contains("The column name NAME is used twice.");
+        check(twin is { Error: null } && twinWarned == !(described.TableDesigner?.CaseSensitiveNames ?? true),
+            "Generate Change Script warns about column names master's catalog collation finds equal, and only then (" + string.Join("; ", twin.Warnings) + ")");
+
         // SQL Server composes exactly the bracketed statements from @design for every hostile name at the sysname limit, and
         // the dry run creates nothing.
         var mismatches = new List<string>();
@@ -104,11 +126,19 @@ internal static class DesignerLiveChecks
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         var db = await scratch.CreateDesignerAsync();
         // HAS_PERMS_BY_NAME parses its securable: unbracketed, a name holding "." and "]" reads as no database (NULL), and
-        // [x] would read as x. The describe brackets it, so a sysadmin may create tables there; the catalog is CI_AI.
+        // [x] would read as x. The describe brackets it, so a sysadmin may create tables there; the catalog is Turkish_100_CI_AI.
         var odd = await scratch.CreateDesignerOddAsync();
         var oddModel = await client.Describe(odd);
-        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, DefaultSchema: "dbo" } },
-            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents (" + oddModel.Error?.Message + ")");
+        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, TurkishCasing: true, DefaultSchema: "dbo" } },
+            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents with Turkish casing (" + oddModel.Error?.Message + ")");
+        // Turkish: I and i, and c and ç, are different column names; I and ı are the same, refused before any DDL.
+        var legal = await client.Save(odd, new TableDesignDto("dbo", "TurkishLegal", [Column("I", "int"), Column("i", "int"), Column("c", "int"), Column("ç", "int")], []));
+        var clash = await client.Save(odd, new TableDesignDto("dbo", "TurkishClash", [Column("I", "int"), Column("ı", "int")], []));
+        var clashScript = await client.Script(odd, new TableDesignDto("dbo", "TurkishClash", [Column("I", "int"), Column("ı", "int")], []));
+        var clashTable = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.TurkishClash') IS NULL THEN 0 ELSE 1 END;", odd)).Scalar;
+        check(Done(legal) && clash is { Error.Code: "NAME_IN_USE", Steps.Count: 0 } && clash.Error.Message == "The column name ı is used twice." && clashTable == "0"
+            && clashScript is { Error: null } && clashScript.Warnings.Contains("The column name ı is used twice."),
+            "under Turkish_100_CI_AI the designer saves columns I, i, c and ç, and refuses I with ı before any DDL, which its script warns about (" + legal.Error?.Message + "; " + clash.Error?.Message + ")");
         await ScratchAsync(check, client, service, info, json, Sql, db, major);
         await PermissionsAsync(check, service, live, json, Sql, scratch, db);
     }
@@ -313,7 +343,8 @@ internal static class DesignerLiveChecks
         const string probe = "VariaDesignerProbe";
         var statements = "EXECUTE AS USER = N'" + probe + "';\n"
             + "EXEC sys.sp_executesql " + Literal(DesignerSql.MasterFacts) + ", N'@db nvarchar(128)', @db = " + Literal(db) + ";\n"
-            + "EXEC sys.sp_executesql " + Literal(DesignerSql.Preflight) + ", N'@schema nvarchar(128), @name nvarchar(128), @new nvarchar(128)', @schema = N'dbo', @name = N'Denied', @new = N'PK_Denied';\n"
+            + "EXEC sys.sp_executesql " + Literal(DesignerSql.Preflight) + ", N'@schema nvarchar(128), @name nvarchar(128), @new nvarchar(128), @take int, @names nvarchar(max)', @schema = N'dbo', @name = N'Denied', @new = N'PK_Denied', "
+            + "@take = 1, @names = N'a';\n"
             + "REVERT;";
         var user = await Sql("CREATE USER " + probe + " WITHOUT LOGIN;");
         var denied = await Sql(statements);
@@ -322,7 +353,7 @@ internal static class DesignerLiveChecks
         await Sql("GRANT ALTER ON SCHEMA::dbo TO " + probe + ";");
         var allowed = await Sql(statements);
         // MasterFacts' can_create is its fifth column, the preflight's can_alter its second.
-        static string Answers(SqlRun run) => run.Status != "completed" || run.Sets.Count != 2 ? "failed: " + run.Error : run.Sets[0][0][4] + "/" + run.Sets[1][0][1];
+        static string Answers(SqlRun run) => run.Status != "completed" || run.Sets.Count != 3 ? "failed: " + run.Error : run.Sets[0][0][4] + "/" + run.Sets[1][0][1];
         check(user.Status == "completed" && Answers(denied) == "0/0" && Answers(tableOnly) == "1/0" && Answers(allowed) == "1/1",
             "the designer's facts and preflight answer CREATE TABLE and the schema's ALTER as SQL Server grants them (" + Answers(denied) + ", " + Answers(tableOnly) + ", " + Answers(allowed) + ")");
 

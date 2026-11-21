@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { actionDescribeSchema, actionRequestSchema } from '../src/shared/actions/schema'
 import { designerLimits, systemTypes } from '../src/shared/designer/catalog'
-import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, tempTableMessage, type DesignColumn, type TableDesign } from '../src/shared/designer/schema'
+import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, tempTableMessage, type DesignColumn, type NameComparison, type TableDesign } from '../src/shared/designer/schema'
 import { defaultType, formatTypeText, parseTypeText, typeProblem } from '../src/shared/designer/type-text'
 
 const id = { seed: '1', increment: '1' }
@@ -76,12 +76,30 @@ describe('table design schema', () => {
   })
   it('compares column names as the database\'s catalog collation does, and refuses # table names', () => {
     const twins = design(column('Id', 'int'), column('ID', 'int'), column('café', 'int'), column('cafe', 'int'))
-    const twice = (comparison?: { caseSensitive: boolean; accentSensitive: boolean }) => designProblems(twins, 17, comparison).filter(problem => problem.property === 'name').map(problem => problem.column)
-    // Main and the backend know no collation: SQL Server decides (2705) and the save rolls back.
-    expect(twice()).toEqual([])
-    expect(twice({ caseSensitive: true, accentSensitive: true })).toEqual([])
-    expect(twice({ caseSensitive: false, accentSensitive: true })).toEqual([1])
-    expect(twice({ caseSensitive: false, accentSensitive: false })).toEqual([1, 3])
+    const twice = (names: readonly string[], comparison?: NameComparison) => designProblems(design(...names.map(name => column(name, 'int'))), 17, comparison)
+      .filter(problem => problem.property === 'name').map(problem => problem.column)
+    const named = (comparison?: NameComparison) => designProblems(twins, 17, comparison).filter(problem => problem.property === 'name').map(problem => problem.column)
+    // Main and the backend validators know no collation: the backend's preflight asks SQL Server before any DDL.
+    expect(named()).toEqual([])
+    expect(named({ caseSensitive: true })).toEqual([])
+    expect(named({ caseSensitive: false })).toEqual([1])
+    // Accents are never folded here: Turkish_100_CI_AI tells c from ç, Finnish_Swedish_100_CI_AI a from å, as SQL Server 2025 answers.
+    expect(twice(['c', 'ç'], { caseSensitive: false })).toEqual([])
+    expect(twice(['a', 'å'], { caseSensitive: false })).toEqual([])
+    // Turkish_100_CI_AS: I and i are two names, I and ı one, İ and i one (SQL Server 2025's answers).
+    const turkish = { caseSensitive: false, turkishCasing: true }
+    expect(twice(['I', 'i'], turkish)).toEqual([])
+    expect(twice(['Id', 'id'], turkish)).toEqual([])
+    expect(twice(['I', 'ı'], turkish)).toEqual([1])
+    expect(twice(['İd', 'id'], turkish)).toEqual([1])
+    expect(twice(['LIMIT', 'limit'], turkish)).toEqual([])
+    expect(twice(['LıMıT', 'limit'], turkish)).toEqual([])
+    expect(twice(['LIMIT', 'lımıt'], turkish)).toEqual([1])
+    expect(twice(['CODE', 'code'], turkish)).toEqual([1])
+    // Other collations pair I with i and leave ı and İ alone (non-ASCII case is the preflight's).
+    expect(twice(['I', 'i', 'ı', 'İ'], { caseSensitive: false })).toEqual([1])
+    expect(twice(['Ä', 'ä'], { caseSensitive: false })).toEqual([])
+    expect(twice(['a ', 'a'], { caseSensitive: true })).toEqual([1])
     expect(designProblems({ ...good, name: '##Orders' })).toEqual([{ property: 'tableName', message: tempTableMessage }])
     expect(designProblems({ ...good, name: 'Orders#' })).toEqual([])
     expect(designProblems({ ...good, schema: '#s' })).toEqual([])

@@ -36,6 +36,8 @@ export interface TableDesignerModel {
   /** Whether the catalog collation tells Id from ID, and e from é. */
   readonly caseSensitiveNames: boolean
   readonly accentSensitiveNames: boolean
+  /** Whether it ignores case but pairs I with ı and İ with i, not I with i (Turkish and Azeri collations). */
+  readonly turkishCasing: boolean
   /** HAS_PERMS_BY_NAME(CREATE TABLE): advisory; absent when SQL Server could not say. */
   readonly canCreate?: boolean
 }
@@ -60,15 +62,18 @@ const nameProblem = (name: string, what: string): string | undefined =>
 export const tempTableMessage = 'A table name cannot start with #: that would make it a temporary table, which the table designer cannot create.'
 /** Why a table name cannot be saved (Choose Name, Properties and Save), or undefined. */
 export const tableNameProblem = (name: string): string | undefined => nameProblem(name, 'The table name') ?? (name.startsWith('#') ? tempTableMessage : undefined)
-/** How the catalog compares column names. Trailing spaces never count (SQL Server pads); case and accents only as its
- *  collation says. Without the database's answer only trailing spaces are ignored, as main and the backend check, and
- *  SQL Server refuses the rest (2705) inside the save's transaction, which rolls back. */
-export interface NameComparison { readonly caseSensitive: boolean; readonly accentSensitive: boolean }
-export function columnNameKey(name: string, comparison: NameComparison = { caseSensitive: true, accentSensitive: true }): string {
-  let key = name.replace(/ +$/, '')
-  if (!comparison.caseSensitive) key = key.toLowerCase()
-  if (!comparison.accentSensitive) key = key.normalize('NFD').replace(/\p{M}/gu, '')
-  return key
+/** How the catalog compares column names, as far as the renderer can know it for every collation: trailing spaces never
+ *  count (SQL Server pads), and a collation that ignores case pairs the ASCII letters, I with ı and İ with i in Turkish
+ *  and Azeri. Anything further (other letters' case, accents, Swedish å apart from a, contractions) differs between
+ *  collations, so the renderer never guesses: the backend's preflight asks SQL Server under the catalog collation before
+ *  any DDL. Without the database's answer only trailing spaces are ignored, as main and the backend validators check. */
+export interface NameComparison { readonly caseSensitive: boolean; readonly turkishCasing?: boolean }
+export function columnNameKey(name: string, comparison: NameComparison = { caseSensitive: true }): string {
+  const key = name.replace(/ +$/, '')
+  if (comparison.caseSensitive) return key
+  // Turkish: I is ı's capital and İ (U+0130) is i's.
+  if (comparison.turkishCasing) return key.replace(/[A-Z\u0130]/g, letter => letter === 'I' ? '\u0131' : letter === '\u0130' ? 'i' : letter.toLowerCase())
+  return key.replace(/[A-Z]/g, letter => letter.toLowerCase())
 }
 /** Every string of the design together, in UTF-16 units: bounded by `designerLimits.designChars`. */
 export const designChars = (design: TableDesign): number => design.schema.length + design.name.length

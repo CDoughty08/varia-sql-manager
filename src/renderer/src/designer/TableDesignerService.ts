@@ -316,7 +316,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     }
     const rowOf = (column: number | undefined) => column === undefined ? undefined : state.rows.indexOf(rows[column])
     const typeProblems = rows.flatMap((row, column) => row.typeError ? [{ column, property: 'dataType' as const, message: row.typeError }] : [])
-    const comparison = state.model ? { caseSensitive: state.model.caseSensitiveNames, accentSensitive: state.model.accentSensitiveNames } : undefined
+    const comparison = state.model ? { caseSensitive: state.model.caseSensitiveNames, turkishCasing: state.model.turkishCasing } : undefined
     const problems = [...typeProblems, ...designProblems(design, state.model?.band, comparison).filter(problem => !(problem.property === 'dataType' && rows[problem.column ?? -1]?.typeError))]
       .sort((a, b) => (a.column ?? -1) - (b.column ?? -1))
       .map(problem => ({ ...problem, row: rowOf(problem.column) }))

@@ -23,7 +23,7 @@ class FocusableEditor extends TestEditor {
   hasTextFocus(): boolean { return false }
 }
 
-const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }
+const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, turkishCasing: false, canCreate: true }
 const tables = (connectionId: string, database = 'AppData'): ExplorerMenuNode => ({
   id: 5, lost: false, kind: 'folder', folder: 'tables', connectionId, label: 'Tables', ref: { type: 'folder', owner: { kind: 'database', name: database }, folder: 'tables' }
 })
