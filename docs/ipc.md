@@ -1832,8 +1832,8 @@ with `BACKEND_ERROR`.
   budget (`BUDGET` if it does not fit), `diff`, `tracked`, `departed`, no facets, marked `resorted`. No statement runs; a
   table with nothing held waits for its next sample.
 - **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
-  (within its minimum gap and interval), so the rows match without waiting a whole interval; a paused, backing-off or
-  stopped probe keeps its schedule.
+  (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
+  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).

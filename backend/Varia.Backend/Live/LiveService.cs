@@ -272,11 +272,14 @@ internal sealed class LiveSubscription : IDisposable
         probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
 
     /// <summary>A probe's view or filter changed: it reads again as a refresh would (within its minimum gap and interval), so the
-    /// rows match the new view without waiting a whole interval. One paused, backing off or stopped keeps its schedule.</summary>
+    /// rows match the new view without waiting a whole interval, but never sooner than its cost allows under the load guard's
+    /// duty cycle (typing in a filter box must not run a costly probe back to back). One paused, backing off, stopped or slowed
+    /// by the load guard keeps its schedule.</summary>
     public void Reread(LiveProbeState probe, long now)
     {
-        if (probe.Paused || probe.Gated || probe.Stopped is not null || probe.Failures != 0) return;
-        probe.DueAt = Math.Min(probe.DueAt, RefreshDue(probe, now));
+        if (probe.Paused || probe.Gated || probe.Stopped is not null || probe.Failures != 0 || probe.EffectiveIntervalMs > probe.IntervalMs) return;
+        var costFloor = probe.LastSampleAt < 0 ? now : probe.LastSampleAt + (long)Math.Ceiling((probe.CostEwma ?? 0) / probe.Spec.MaxDutyCycle);
+        probe.DueAt = Math.Min(probe.DueAt, Math.Max(RefreshDue(probe, now), costFloor));
     }
 
     /// <summary>Every probe stopped for good: the first one's error, which ends the subscription failed.</summary>

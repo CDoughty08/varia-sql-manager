@@ -490,7 +490,7 @@ internal static class LiveSchedulerChecks
         }
 
         // A view or filter change reads again within the probe's minimum gap and interval, not a whole interval later; a stopped
-        // probe stays stopped.
+        // probe stays stopped, and one the load guard slowed keeps its schedule.
         using (var subscription = Subscription(sql, () => 0, ("fx.b", 5000)))
         {
             var probe = subscription.Probes[0];
@@ -506,8 +506,25 @@ internal static class LiveSchedulerChecks
             probe.Stopped = LiveErrors.Create("fx.b", "NOT_SUPPORTED", "Stopped.");
             probe.DueAt = 99_999;
             subscription.Reread(probe, at + 200);
-            check(scheduled >= at + 5000 && soon < scheduled && soon >= at + 100 && probe.DueAt == 99_999,
-                "a view or filter change brings the probe's next read forward (within its gap), and leaves a stopped probe alone: due " + scheduled + " then " + soon);
+            var stoppedDue = probe.DueAt;
+            probe.Stopped = null;
+            probe.EffectiveIntervalMs = probe.IntervalMs * 2;
+            probe.DueAt = 88_888;
+            subscription.Reread(probe, at + 300);
+            var slowedDue = probe.DueAt;
+            probe.EffectiveIntervalMs = probe.IntervalMs;
+            probe.Failures = 1;
+            subscription.Reread(probe, at + 300);
+            var failingDue = probe.DueAt;
+            probe.Failures = 0;
+            // A costly read (2 s at a 25 % duty cycle) comes again no sooner than 8 s after the last, whatever the gap.
+            var cost = probe.CostEwma;
+            probe.CostEwma = 2000;
+            subscription.Reread(probe, at + 300);
+            var costlyDue = probe.DueAt;
+            probe.CostEwma = cost;
+            check(scheduled >= at + 5000 && soon == at + 1000 && stoppedDue == 99_999 && slowedDue == 88_888 && failingDue == 88_888 && costlyDue == at + 8000,
+                "a view or filter change brings the probe's next read forward (within its gap), and leaves a stopped probe, or one the load guard slowed, alone: due " + scheduled + " then " + soon);
         }
 
         // One probe that fails in two ways beside its sample (a table cut by the budget, a statement that failed) reports both,
