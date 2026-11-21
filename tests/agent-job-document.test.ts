@@ -172,7 +172,8 @@ describe('the job document', () => {
     await settled()
     jobDocuments.updateDraft(id, { description: 'Mine' })
     setModel(model({ job: record({ name: 'Nightly renamed', version: 8 }) }))
-    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    // The save resolves the job by the name it read, so a rename elsewhere refuses it NOT_FOUND (50010): that opens the compare too.
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'gone', retryable: false } } })
     expect(await jobDocuments.save(id)).toBe(false)
     expect(jobDocuments.get(id)?.stale?.rows.map(row => [row.field, row.conflict])).toEqual([['name', false], ['description', false]])
     expect(jobDocuments.get(id)?.stale?.rows[0].server).toBe('Nightly renamed')
@@ -189,6 +190,17 @@ describe('the job document', () => {
     jobDocuments.reload(id)
     await settled()
     expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', target: { name: 'Nightly again' }, error: { code: 'NOT_FOUND' } })
+  })
+  it('sends a name as msdb keeps it, trimmed, and opens the job under that name', async () => {
+    const { jobDocuments, executes, setModel } = opened(model({ job: undefined }))
+    const id = jobDocuments.newJob('c1')
+    await settled()
+    jobDocuments.startBlank(id)
+    jobDocuments.updateDraft(id, { name: '  Weekly  ' })
+    setModel(model({ job: record({ name: 'Weekly' }) }))
+    expect(await jobDocuments.save(id)).toBe(true)
+    expect(executes().at(-1)).toMatchObject({ target: { kind: 'agent' }, agentJob: { name: 'Weekly' } })
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', target: { kind: 'agentJob', name: 'Weekly' } })
   })
   it('lands a refusal on its field and marks its section, and a read-only job cannot be edited', async () => {
     const { jobDocuments, answers } = opened()

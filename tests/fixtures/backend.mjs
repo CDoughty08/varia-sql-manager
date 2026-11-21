@@ -1869,12 +1869,12 @@ async function agentJobSave(params) {
   }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
-  if (params.agentIdentity?.created !== job.created) return refused('CHANGED', `The job ${job.name} was replaced since it was listed.`)
+  if (params.agentIdentity?.created !== job.created) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
   const doc = agentJobDoc(job)
   // Another session's save: its description and version change before this one lands.
   if (await controlled('job-save-race', true)) Object.assign(doc, { description: 'Changed by someone else.', version: doc.version + 1, modified: stamp() })
   if (save.version !== doc.version || save.modified !== doc.modified) return refused('STALE', 'Someone changed this job after it was read. Nothing was saved.')
-  if (save.name !== undefined) job.name = save.name
+  if (save.name !== undefined) job.name = save.name.trim()
   if (save.enabled !== undefined) job.enabled = save.enabled
   if (save.category !== undefined) job.category = save.category
   for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
@@ -2292,7 +2292,8 @@ async function workbench(id, method, params, credit) {
         // The job document: the job's model, or New Job's (with the jobs Copy an existing job picks from).
         case 'agentJob': {
           const value = agentJobDocument(params)
-          return value ? respond(id, value) : fail(id, 'NOT_FOUND', `The job ${params.target.name} no longer exists.`)
+          // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
+          return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
         }
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })

@@ -187,7 +187,8 @@ export function agentJobSave(model: AgentJobDocumentModel, draft: AgentJobDraft)
   if (job && fields.length === 0) return undefined
   for (const field of fields) {
     switch (field) {
-      case 'name': save.name = draft.name; break
+      // msdb trims a job's name (sp_add_job, sp_update_job), so the save sends it as msdb will keep it.
+      case 'name': save.name = draft.name.trim(); break
       case 'owner': if (job || draft.owner !== model.login) save.owner = draft.owner; break
       case 'category': save.category = draft.category; break
       case 'description': save.description = draft.description; break

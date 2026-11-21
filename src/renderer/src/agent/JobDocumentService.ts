@@ -342,14 +342,17 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
       const created = !state.model.job
-      const target: ObjectRef = { kind: 'agentJob', name: state.draft.name }
+      // The name as msdb keeps it: the save trims it, as sp_add_job and sp_update_job do.
+      const target: ObjectRef = { kind: 'agentJob', name: built.agentJob.name ?? state.model.job?.name ?? state.draft.name.trim() }
       this.patch(id, { phase: 'loading', target, changes: 0 })
       this.options.documents.setDirty(id, false)
       this.options.documents.update(id, { name: agentJobTabName(target.name) })
       await this.describe(id, created ? jobDocumentText.created : jobDocumentText.saved)
       return true
     }
-    if (value?.error?.code === 'STALE') { await this.compare(id, value.error); return false }
+    // STALE, or NOT_FOUND (the job is not under the name it was read by: renamed or deleted since): the compare re-reads it, following a
+    // rename by its id, and keeps the draft either way.
+    if (value?.error?.code === 'STALE' || (value?.error?.code === 'NOT_FOUND' && state.model.job)) { await this.compare(id, value.error); return false }
     // One transaction: a refusal rolled every call back, so the job is as it was read.
     if (value?.error) { this.patch(id, { phase: 'ready', error: value.error }); return false }
     const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')

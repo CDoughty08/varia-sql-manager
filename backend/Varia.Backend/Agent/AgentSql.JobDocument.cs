@@ -28,7 +28,9 @@ internal static partial class AgentSql
 
     // --- The save --------------------------------------------------------------------------------------------------------
 
-    internal const string StaleGuard = "IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobs_view AS j WHERE j.job_id = @job_id AND j.version_number = @version AND j.date_modified = @modified) THROW 50011, N'"
+    // UPDLOCK, HOLDLOCK: the guard's read holds the job's row to the end of the transaction, so no other save lands between the check and
+    // this one's sp_update_job (two saves of one version: the second waits, then finds the version moved).
+    internal const string StaleGuard = "IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobs_view AS j WITH (UPDLOCK, HOLDLOCK) WHERE j.job_id = @job_id AND j.version_number = @version AND j.date_modified = @modified) THROW 50011, N'"
         + StaleMessage + "', 1;\n";
     internal const string NewJobHead = "DECLARE @job_id uniqueidentifier, @rc int;\n";
     private const string AlertGuardHead = "IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysalerts AS a WHERE a.id = @alert_id_";
