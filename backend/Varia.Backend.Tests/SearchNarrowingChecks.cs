@@ -259,6 +259,25 @@ internal static class SearchNarrowingChecks
             }
         }
         check(differences.Count == 0 && narrowed > steps / 4, "every keystroke of " + steps + " typed into the value search (" + narrowed + " narrowed) lists what a fresh list's search lists: " + string.Join(" | ", differences.Take(2)));
+
+        // Packed, a narrowed value search reads its candidates in the row order the first search kept: sorting them again at
+        // every key made a key that kept most values slower than a search of every value.
+        var packedStore = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.EveryComplete };
+        var packedSet = Open(packedStore, "packed values");
+        for (var r = 0; r < 2_000; r++)
+        {
+            var row = new string?[Columns.Length - 1];
+            row[2] = "ab" + r.ToString("X4", CultureInfo.InvariantCulture);
+            Add(packedSet, row, truncated: false, binary: null);
+        }
+        packedSet.Complete();
+        var listed = ViewSorter.DistinctValues(packedSet, packedSet.SealedSnapshot(), null, 2, true, CancellationToken.None);
+        var all = listed.Read(DistinctOrder.Value, 0, 10, "a", CancellationToken.None).Total;
+        KeptPages.Sorted = 0;
+        var kept = listed.Read(DistinctOrder.Value, 0, 10, "ab", CancellationToken.None).Total;
+        check(packedSet.HasPacked && listed.LastNarrowed && all == 2_000 && kept == 2_000 && KeptPages.Sorted <= 10,
+            "a packed result's narrowed value search sorts no more than the values it lists: " + packedSet.HasPacked + " " + listed.LastNarrowed + " " + all + " " + kept + " sorted " + KeptPages.Sorted);
+        packedStore.Release(packedSet.ResultId);
     }
 
     /// <summary>A search's memo is charged to the result's budget, replaced (its bytes returned) by the next search's,

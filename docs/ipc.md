@@ -1572,7 +1572,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Find Next) into results of eleven collations, in base order, through a sort and a filter, packed and not, dense and
   one cell a row, and while a result loads, and compares every answer with a search of every row; breaking any rule
   above fails it. The value search narrows its distinct values the same way from the last search's marks, which its
-  snapshot already charges.
+  snapshot already charges; over a packed result it reads them in the row order its first search kept, so a key that
+  keeps most values costs no more than a search of every value.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
