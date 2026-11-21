@@ -61,7 +61,7 @@ internal sealed partial class SqlService
             using var table = await bigQuery.MetadataAsync(connection, t =>
             {
                 var call = connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Table);
-                call.SelectedFields = "schema,type";
+                call.Fields = "schema,type";
                 return bigQuery.SendRawAsync(connection.Client.Service, call, t);
             }, token);
             var type = table.Text("type");
