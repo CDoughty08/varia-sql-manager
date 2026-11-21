@@ -521,7 +521,9 @@ internal static partial class ViewSorter
     /// <summary>A float's (or a real's, widened) shortest exact text, as ASCII: what the distinct list shows for a value
     /// whose display text reads back as another value (1.0000000000000002).</summary>
     internal static int ExactText(double value, bool real, Span<byte> destination) =>
-        (real ? ((float)value).TryFormat(destination, out var written, "R", System.Globalization.CultureInfo.InvariantCulture)
+        // A real column can hold a float's value (a comparison's removed row, where the column changed type): only a value
+        // a real holds is written as a real.
+        (real && (float)value == value ? ((float)value).TryFormat(destination, out var written, "R", System.Globalization.CultureInfo.InvariantCulture)
             : value.TryFormat(destination, out written, "R", System.Globalization.CultureInfo.InvariantCulture)) ? written : 0;
 
     /// <param name="real">For a float or real column, whether it is real: such a column's value whose text reads back as

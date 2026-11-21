@@ -195,6 +195,31 @@ internal static class FloatExactChecks
             ?? throw new InvalidOperationException("The comparison was not kept.");
         UnifiedDiff.Write(typed, was, was.SealedSnapshot(), now, now.SealedSnapshot(), changed, -1, CancellationToken.None);
         check(Exacts(typed).Count == 0, "a removed row's float in a column that is int in the newer result keeps no exact value there");
+
+        // A column that is float on the left and real on the right: a removed row's float lands in the real column with its
+        // exact value, which the funnel writes as the float it is (never rounded to a real, nor overflowing to Infinity).
+        ResultColumn[] reals = [new("Id", "int", "text"), new("F", "real", "text")];
+        var older = FillRows(store, budget, floats, row => { row.AppendText("1"); row.AppendFloat(High); }, row => { row.AppendText("2"); row.AppendFloat(1.0000000000000002E300); });
+        var newer = FillRows(store, budget, reals, row => { row.AppendText("3"); row.AppendReal(1f); });
+        var retyped = ResultDiffer.Compare(older, older.SealedSnapshot(), newer, newer.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [0]));
+        var mixed = store.Open(budget, 92, 1, 1, "diff", UnifiedDiff.Columns(newer, retyped), UnifiedDiff.Wires(newer, retyped), lengths: UnifiedDiff.Lengths(newer, retyped))
+            ?? throw new InvalidOperationException("The comparison was not kept.");
+        UnifiedDiff.Write(mixed, older, older.SealedSnapshot(), newer, newer.SealedSnapshot(), retyped, -1, CancellationToken.None);
+        var listed = Distinct(mixed, 1);
+        check(listed == "1×1,1.0000000000000002×1,1.0000000000000002E+300×1" && Distinct(mixed, 1, "0002") == "1.0000000000000002×1,1.0000000000000002E+300×1",
+            "a real column holding a float's exact value lists and searches it as that float: " + listed);
+
+        // A real and a float of the same exact value but different display text compare as their hashes do: changed, so
+        // a key on that column never pairs rows that a cell comparison would call the same.
+        ResultColumn[] realKey = [new("Id", "int", "text"), new("V", "real", "text")];
+        ResultColumn[] floatKey = [new("Id", "int", "text"), new("V", "float", "text")];
+        var realSide = FillRows(store, budget, realKey, row => { row.AppendText("1"); row.AppendReal(MathF.BitIncrement(1f)); });
+        var floatSide = FillRows(store, budget, floatKey, row => { row.AppendText("1"); row.AppendFloat(MathF.BitIncrement(1f)); });
+        var crossed = ResultDiffer.Compare(realSide, realSide.SealedSnapshot(), floatSide, floatSide.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [0]));
+        var byValue = ResultDiffer.Compare(realSide, realSide.SealedSnapshot(), floatSide, floatSide.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [1]));
+        check(string.Join(",", crossed.Entries.Select(entry => entry.Kind)) == "Changed" && string.Join(",", byValue.Entries.Select(entry => entry.Kind)) == "Removed,Added",
+            "a real and a float that show differently are a change by Id and no match by value, as their hashes say: "
+            + string.Join(",", crossed.Entries.Select(entry => entry.Kind)) + " / " + string.Join(",", byValue.Entries.Select(entry => entry.Kind)));
     }
 
     private static void Comparison(Action<bool, string> check)

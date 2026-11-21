@@ -1187,15 +1187,18 @@ internal static class UnifiedDiff
     }
 
     /// <summary>At most what one row of the unified result stores: its cells' bytes, the marker, row numbers and tone, each
-    /// cell's offset and a lengths entry for each.</summary>
+    /// cell's offset and a lengths entry for each, and its floats' exact values.</summary>
     private static long RowBound(Side side, int row, string tone)
     {
-        var view = side.Access.At(row, out var at);
+        var view = side.Access.At(row, out var at, out var lengths);
         long bytes = 3 + 2 * CellFormat.MaxFixedBytes + 3L * tone.Length;
         for (var p = 0; p < side.Pairs.Length; p++)
         {
             var c = side.Column(p);
-            if (!view.IsNull(c, at)) bytes += view.Span(c, at).Length;
+            if (view.IsNull(c, at)) continue;
+            bytes += view.Span(c, at).Length;
+            // A float or real's exact value, kept beside the unified result's page.
+            if (lengths.TryExact(at, c, out _)) bytes += PageLengths.ExactBytes;
         }
         return bytes + (4L + PageLengths.CellBytes) * (side.Pairs.Length + 4) + 4;
     }

@@ -375,13 +375,13 @@ internal sealed class CellHasher
     {
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
-        // A float or real whose display text reads back as another value compares by its exact value.
+        // A float or real whose display text reads back as another value is the same only as a cell of the same text and
+        // exact value, as its hash says (its text, then its exact value).
         var exactX = 0d;
         var exactY = 0d;
         var exactA = exacts[column] && view.TryExact(column, row, out exactX);
         var exactB = other.exacts[otherColumn] && otherView.TryExact(otherColumn, otherRow, out exactY);
-        if (exactA || exactB)
-            return (exactA || double.TryParse(a, NumberStyles.Float, CultureInfo.InvariantCulture, out exactX)) && (exactB || double.TryParse(b, NumberStyles.Float, CultureInfo.InvariantCulture, out exactY)) && exactX == exactY;
+        if (exactA || exactB) return exactA && exactB && exactX == exactY && a.SequenceEqual(b);
         switch (kinds[column])
         {
             case Kind.Collated:
