@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useSyncExternalStore, type KeyboardEvent, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from 'react'
 import type { DiffLayout } from '../../../shared/contracts'
 import Icon from '../Icon'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -57,7 +57,7 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
   const unavailable = (title: string) => reason ? { 'aria-disabled': true, title: `${title}: unavailable because ${reason}` } : { title }
   // The same sentence twice is read out twice: a live region reads a change of its text, so each announcement alternates a
   // trailing no-break space.
-  const spoken = announcement ? announcement.text + (announcement.at % 2 ? ' ' : '') : ''
+  const spoken = useLiveText(announcement, at => compare.speak(entry.key, at))
   return <div ref={ref} className="rg-compare-bar" role="toolbar" aria-label="Comparison tools" onKeyDown={keyDown}>
     <span className="rg-compare-title" title={entryName(entry)}><Icon name="git-compare" /><span>Differences</span></span>
     <span className="rg-compare-sides" role="group" aria-label="Sides">
@@ -79,6 +79,22 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
       onClick={() => change({ exact: !state.exact })}><Icon name="case-sensitive" /><span>Exact text</span></button>
     <span className="visually-hidden" role="status" aria-live="polite">{spoken}</span>
   </div>
+}
+
+/**
+ * A comparison's live region text: empty on its first render, then each announcement not yet said. A change remounts the
+ * toolbar (it is keyed by the result it shows), and a region inserted with its sentence already in it is not read out;
+ * mounted empty, the sentence that follows is a change screen readers announce. A remount without a new announcement
+ * (another tab shown and back, a popout) says nothing. The same sentence twice is read twice: each alternates a trailing
+ * no-break space, so the region's text changes.
+ */
+export function useLiveText(announcement: { readonly text: string; readonly at: number } | undefined, speak: (at: number) => boolean): string {
+  const [shown, setShown] = useState('')
+  useEffect(() => {
+    if (announcement && speak(announcement.at)) setShown(announcement.text + (announcement.at % 2 ? ' ' : ''))
+    // Only a new announcement is offered: `speak` is a fresh function each render.
+  }, [announcement])
+  return shown
 }
 
 /**

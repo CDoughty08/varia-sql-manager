@@ -67,7 +67,7 @@ const highlightLabel = (highlight: number): string => 'Highlighted ' + highlight
 /** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of
  *  `text` alone; `old`, a one-row comparison's changed cell's previous value as drawn before the new one (null for NULL,
  *  undefined for none: an unchanged cell, or its tile not read yet). */
-interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; old: string | null | undefined; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
+interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; old: string | null | undefined; oldBits: number; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
 /**
  * A pooled row. `header` is its row header for screen readers, inside the row; `mark` draws the number in the sticky
  * row-number column (one composited layer for every row, where a sticky header in each row made a layer per row). The
@@ -1356,7 +1356,7 @@ export class GridView {
     el.style.display = 'none'
     el.append(text)
     parent.append(el)
-    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', old: undefined, mode: 'none', marked: false, label: '', shown: false, left: Number.NaN, width: -1 }
+    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', old: undefined, oldBits: 0, mode: 'none', marked: false, label: '', shown: false, left: Number.NaN, width: -1 }
     this.slots.set(el, { cell, ...row ? { row } : {} })
     return cell
   }
@@ -1730,15 +1730,16 @@ export class GridView {
   }
 
   /** A comparison's changed cell's accessible name, or undefined when the cell is not one (or its previous value is not
-   *  read yet). A NULL is named NULL. */
+   *  read yet). A NULL is named NULL, a value that could not be read says so, and a cut-off previous value is marked. */
   private changedName(cell: CellSlot, row: number, column: number): string | undefined {
     if (!this.diff) return undefined
-    const name = columnTitle(this.descriptor.columns[column]?.name ?? ''), text = (value: string | null) => value === null ? 'NULL' : displayText(value)
-    const value = cell.bits & (NULL | ERR) ? null : cell.value
-    if (cell.old !== undefined) return `${name}, changed from ${text(cell.old)} to ${text(value)}`
+    const name = columnTitle(this.descriptor.columns[column]?.name ?? '')
+    const said = (value: string | null, bits: number) => bits & ERR ? 'a value that could not be read' : (value === null ? 'NULL' : displayText(value)) + (bits & TRUNC ? ' (truncated)' : '')
+    const value = said(cell.bits & (NULL | ERR) ? null : cell.value, cell.bits & ERR)
+    if (cell.old !== undefined) return `${name}, changed from ${said(cell.old, cell.oldBits)} to ${value}`
     const slot = this.pinSlot.shown && this.pinSlot.row === row ? this.pinSlot : this.rowSlots.find(item => item.shown && item.row === row)
     const tone = slot && slot.tone ? rowTones[slot.tone - 1] : undefined
-    return tone === 'changedOld' ? `${name}, old value ${text(value)}` : tone === 'changedNew' ? `${name}, new value ${text(value)}` : undefined
+    return tone === 'changedOld' ? `${name}, old value ${value}` : tone === 'changedNew' ? `${name}, new value ${value}` : undefined
   }
 
   /** The tone label of the active row (the toneLabel option), from the slot that painted it. */
@@ -1912,6 +1913,15 @@ export class GridView {
     return this.hiddenText(row, this.tone, tile) ?? ''
   }
 
+  /** A previous-value cell's text (null for NULL or a value that could not be read) and its ERR and TRUNC bits; undefined
+   *  while its tile is not read. */
+  private previousCell(row: number, column: number, tile: (row: number, column: number) => RowWindow | null): { readonly text: string | null; readonly bits: number } | undefined {
+    const window = tile(row, column)
+    if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return undefined
+    const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart, flags = window.flags[index]
+    return flags & (FLAG_NULL | FLAG_ERROR) ? { text: null, bits: flags & FLAG_ERROR ? ERR : 0 } : { text: window.text[index], bits: flags & FLAG_TRUNCATED ? TRUNC : 0 }
+  }
+
   /** A hidden suffix cell's text: null for NULL, undefined while its tile is not read. */
   private hiddenText(row: number, column: number, tile: (row: number, column: number) => RowWindow | null): string | null | undefined {
     const window = tile(row, column)
@@ -1972,13 +1982,15 @@ export class GridView {
       cell.el.className = classes[bits]
     }
     // A changed cell of a one-row comparison: its previous value, once its tile is read (until then the new value alone).
-    const previous = old >= 0 && bits & CHG && !(bits & LOAD) ? this.hiddenText(sourceRow, old + sourceColumn, tile) : undefined
-    if (value !== cell.value || this.whitespace !== cell.mode || previous !== cell.old) {
+    const read = old >= 0 && bits & CHG && !(bits & LOAD) ? this.previousCell(sourceRow, old + sourceColumn, tile) : undefined
+    const previous = read === undefined ? undefined : read.text, previousBits = read?.bits ?? 0
+    if (value !== cell.value || this.whitespace !== cell.mode || previous !== cell.old || previousBits !== cell.oldBits) {
       cell.value = value
       cell.mode = this.whitespace
       cell.old = previous
+      cell.oldBits = previousBits
       const runs = bits & (NULL | ERR | LOAD) ? undefined : whitespaceRuns(value, this.whitespace)
-      if (previous !== undefined) this.writeChange(cell, previous, displayText(value))
+      if (read !== undefined) this.writeChange(cell, read, displayText(value))
       else if (runs) this.writeMarked(cell, runs)
       else {
         if (cell.marked) { cell.marked = false; cell.el.replaceChildren(cell.text) }
@@ -2011,7 +2023,7 @@ export class GridView {
    * the cell is narrow), an arrow, then the new value (bold), each a Text node in its own span. The arrow is hidden from
    * screen readers, which hear "changed from … to …" in the active cell's label.
    */
-  private writeChange(cell: CellSlot, previous: string | null, value: string): void {
+  private writeChange(cell: CellSlot, previous: { readonly text: string | null; readonly bits: number }, value: string): void {
     const doc = cell.el.ownerDocument
     const run = (className: string, text: string, hidden = false) => {
       const span = doc.createElement('span'), node = doc.createTextNode('')
@@ -2022,7 +2034,9 @@ export class GridView {
       return span
     }
     cell.marked = true
-    cell.el.replaceChildren(run(previous === null ? 'rg-old is-null' : 'rg-old', previous === null ? 'NULL' : displayText(previous)), run('rg-arrow', '→', true), run('rg-new', value))
+    // A previous value that could not be read draws as such a cell does (NULL, in the error colour).
+    const old = previous.bits & ERR ? 'rg-old is-err' : previous.text === null ? 'rg-old is-null' : 'rg-old'
+    cell.el.replaceChildren(run(old, previous.text === null ? 'NULL' : displayText(previous.text)), run('rg-arrow', '→', true), run('rg-new', value))
   }
 
   /** A slot out of use is hidden and forgets its position, so no stale row or column index stays in the DOM. */

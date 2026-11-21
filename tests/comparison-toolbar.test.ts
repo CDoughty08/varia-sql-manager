@@ -9,7 +9,7 @@ import type { ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import ComparisonToolbar from '../src/renderer/src/results/ComparisonToolbar'
+import ComparisonToolbar, { useLiveText } from '../src/renderer/src/results/ComparisonToolbar'
 import { CompareService, compareSources, fallbackText, type CompareInfo } from '../src/renderer/src/results/CompareService'
 import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
@@ -107,6 +107,27 @@ describe('a comparison\'s toolbar', () => {
     expect(view.button('One row')!.title).toBe(fallbackText)
     act(() => { view.button('One row')!.click() })
     expect(view.replace).not.toHaveBeenCalled()
+  })
+
+  it('mounts its live region empty, says each new sentence once, and says nothing again when mounted again', () => {
+    let seen: string[] = []
+    let last = 0
+    const speak = (at: number) => { if (at <= last) return false; last = at; return true }
+    const Probe = ({ said }: { said: { text: string; at: number } }) => { seen.push(useLiveText(said, speak)); return null }
+    const mountProbe = (said: { text: string; at: number }) => {
+      seen = []
+      const root = createRoot(document.createElement('div'))
+      act(() => { root.render(createElement(Probe, { said })) })
+      act(() => { root.unmount() })
+      return seen
+    }
+    // A toolbar remounted by a change: empty first, then the sentence (a change of the region's text).
+    const ready = { text: 'Comparison updated: matched by Id.', at: 2 }
+    expect(mountProbe(ready)).toEqual(['', ready.text])
+    // Mounted again (another tab shown and back) with nothing new: it stays empty.
+    expect(mountProbe(ready)).toEqual([''])
+    // A new announcement is said.
+    expect(mountProbe({ text: 'The change was cancelled.', at: 3 }).at(-1)).toBe('The change was cancelled.\u00a0')
   })
 
   it('reads each announcement in its live region, the same sentence again too', async () => {

@@ -454,4 +454,15 @@ describe('the comparison keys', () => {
     expect(state()).toEqual([false, false])
     expect(results.comparing.getSnapshot()).toEqual({})
   })
+
+  it('are off for a comparison lost with the backend, which can no longer be changed', async () => {
+    const { context, resultClient, results, tab } = await ran()
+    const comparison = results.getSnapshot()[tab.id].sets.find(set => set.descriptor.kind === 'diff')!.key
+    results.focusEntry(tab.id, comparison)
+    expect(context.getState().resultsGridComparison).toBe(true)
+    resultClient.lose()
+    await settle()
+    expect(results.comparing.getSnapshot()).toEqual({})
+    expect([context.getState().resultsGridComparison, context.getState().comparisonInputsOpen]).toEqual([false, false])
+  })
 })

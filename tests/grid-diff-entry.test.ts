@@ -11,8 +11,8 @@ import type { GridViewState } from '../src/renderer/src/results/ResultsService'
 
 const column = (name: string, role?: ResultColumn['role']): ResultColumn => ({ name, dataType: 'nvarchar', wire: 'text', nullable: true, ...role ? { role } : {} })
 const suffix = [column('Change', 'mark'), column('Old row', 'leftRow'), column('New row', 'rightRow'), column('', 'tone')]
-/** A cell: its text, or null for NULL. */
-type Cell = string | null
+/** A cell: its text, null for NULL, or its text with the worker's flags (truncated 2, could not be read 4). */
+type Cell = string | null | { readonly text: string; readonly flags: number }
 
 /** A diff of `cells` rows (each row's every column, the suffix included) over `columns`. */
 function source(columns: readonly ResultColumn[], cells: readonly (readonly Cell[])[]) {
@@ -29,8 +29,9 @@ function source(columns: readonly ResultColumn[], cells: readonly (readonly Cell
       const text: string[] = [], flags = new Uint8Array(held * width)
       for (let r = 0; r < held; r++) for (let c = colStart; c < colEnd; c++) {
         const value = cells[first + r][c]
-        text.push(value ?? '')
+        text.push(typeof value === 'object' && value !== null ? value.text : value ?? '')
         if (value === null) flags[r * width + c - colStart] = 1
+        else if (typeof value === 'object') flags[r * width + c - colStart] = value.flags
       }
       const window: RowWindow = { first, count: held, colStart, colEnd, text, flags }
       cache.set(keyOf(first, count, { colStart, colEnd }), window)
@@ -103,6 +104,22 @@ describe('a comparison\'s grid', () => {
       await frame()
       await frame()
       expect(cellAt(row, 1)!.getAttribute('aria-label')).toBe(label)
+      view.dispose()
+    }
+  })
+
+  it('says a previous or new value could not be read, and marks a cut-off previous value', async () => {
+    const rows: Cell[][] = [
+      ['1', '10.00', '1', { text: '', flags: 4 }, '~', '1', '1', 'changed 1'],
+      ['2', { text: '', flags: 4 }, '2', '5.00', '~', '2', '2', 'changed 1'],
+      ['3', '7.00', '3', { text: '6.0', flags: 2 }, '~', '3', '3', 'changed 1']
+    ]
+    for (const [row, label] of [[0, 'Price, changed from a value that could not be read to 10.00'], [1, 'Price, changed from 5.00 to a value that could not be read'], [2, 'Price, changed from 6.0 (truncated) to 7.00']] as const) {
+      const { view, frame, cellAt } = mount(entryColumns, rows, { diffChanged: [false, true], active: [row, 1] })
+      await frame()
+      await frame()
+      expect(cellAt(row, 1)!.getAttribute('aria-label')).toBe(label)
+      if (row === 0) expect(cellAt(row, 1)!.querySelector('.rg-old')?.className).toBe('rg-old is-err')
       view.dispose()
     }
   })

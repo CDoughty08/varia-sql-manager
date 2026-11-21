@@ -2057,7 +2057,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     let changed = false
     for (const tabId of this.runs.keys()) {
       const tab = snapshot[tabId], focused = this.focusedEntry(tabId), slot = focused && slotOf(tab, focused.key)
-      if (!focused || slot?.view !== 'comparison') continue
+      // A comparison lost with the backend, or in closed results, can no longer be changed: no keys for it.
+      if (!focused || slot?.view !== 'comparison' || tab?.status === 'closed' || !held(slot.entry)) continue
       const inputsOpen = comparisonInputsOpen(tab, slot.sources), was = current[tabId]
       next[tabId] = was && was.entry === focused.key && was.inputsOpen === inputsOpen ? was : { entry: focused.key, inputsOpen }
       if (next[tabId] !== was) changed = true

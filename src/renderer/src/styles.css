@@ -1209,6 +1209,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row:is(.tone-changed, .tone-changedOld, .tone-changedNew) .rg-c:not(.is-chg, .is-sel, .is-null, .is-link, .is-err) { color: var(--varia-resultsGrid-diffContextForeground); }
 .rg-old { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-resultsGrid-diffOldForeground); text-decoration-line: line-through; }
 .rg-old.is-null { font-style: italic; }
+.rg-old.is-err { font-style: italic; color: var(--varia-errorForeground); }
 .rg-arrow { flex: none; color: var(--varia-resultsGrid-diffContextForeground); font-family: var(--varia-font-ui); }
 .rg-new { flex: none; font-weight: 600; }
 .rg-c.is-sel .rg-old, .rg-c.is-sel .rg-arrow { color: inherit; }

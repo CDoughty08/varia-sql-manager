@@ -163,6 +163,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   private readonly carry: CarryHighlights | undefined
   /** The announcements' counter. */
   private announced = 0
+  /** The last announcement each comparison's live region said, so a toolbar mounted again does not say it again. */
+  private readonly spoken = new Map<EntryKey, number>()
 
   constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number; layout?: () => DiffLayout; carry?: CarryHighlights } = {}) {
     super({ info: new Map(), pickers: {}, running: {}, notices: new Map(), announcements: new Map() })
@@ -199,8 +201,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const info = this.getSnapshot().info, kept = info.size ? this.shown(info) : info
     if (kept.size !== info.size) this.publish({ ...this.getSnapshot(), info: kept })
     const { notices, announcements } = this.getSnapshot()
-    if (notices.size || announcements.size) {
+    if (notices.size || announcements.size || this.spoken.size) {
       const keys = new Set(Object.values(snapshot).flatMap(run => run.comparisons.map(slot => slot.key)))
+      for (const key of this.spoken.keys()) if (!keys.has(key)) this.spoken.delete(key)
       const nextNotices = shownOnly(notices, keys), nextAnnouncements = shownOnly(announcements, keys)
       if (nextNotices !== notices || nextAnnouncements !== announcements) this.publish({ ...this.getSnapshot(), notices: nextNotices, announcements: nextAnnouncements })
     }
@@ -593,6 +596,14 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()
     }
+  }
+
+  /** Whether a comparison's live region is to say its announcement `at`: once per announcement, so a toolbar mounted again
+   *  (another tab shown and back, a popout) does not say it again. */
+  speak(key: EntryKey, at: number): boolean {
+    if ((this.spoken.get(key) ?? 0) >= at) return false
+    this.spoken.set(key, at)
+    return true
   }
 
   /** Sets a comparison's notice (when `notice` is given) and announces `text`, by default the notice, in its live region. */
