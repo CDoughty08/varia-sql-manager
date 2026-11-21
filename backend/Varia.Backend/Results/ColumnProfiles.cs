@@ -295,7 +295,8 @@ internal static class ColumnProfiler
             var truncated = view.IsTruncated(column, row);
             if (truncated) approximate = true;
             // A float or real whose display text reads back as another value counts by its exact value.
-            var hasExact = lengths.TryExact(row, column, out var exact);
+            var exact = 0d;
+            var hasExact = kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out exact);
             var normal = hasExact ? Ordered(exact) : Normalize(cell);
             Distinct(normal);
             if (minLength < 0 || Compare(normal, minKey.AsSpan(0, minLength)) < 0) { minLength = Hold(normal, ref minKey); minCut = Keep(cell, truncated, ref minCell); }
@@ -359,7 +360,7 @@ internal static class ColumnProfiler
             {
                 Basis.Chars => Size(lengths, row, cell, view.IsTruncated(column, row)).Chars,
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
-                _ => lengths.TryExact(row, column, out var exact) ? exact : Measure(cell)
+                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? exact : Measure(cell)
             };
             if (measure is not { } value) return -1;
             var (from, to) = Range();

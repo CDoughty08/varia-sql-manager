@@ -300,6 +300,8 @@ internal sealed class CellHasher
     private readonly Kind[] kinds;
     private readonly (CompareInfo Info, CompareOptions Options)?[] cultures;
     private readonly bool[] hidden;
+    // Columns whose cells may keep an exact value beside their text (float, real, sql_variant).
+    private readonly bool[] exacts;
     private char[] chars = new char[256];
     private byte[] sortKey = new byte[512];
     private const ulong Offset = 14695981039346656037UL, Prime = 1099511628211UL;
@@ -311,6 +313,7 @@ internal sealed class CellHasher
         kinds = other.kinds;
         cultures = other.cultures;
         hidden = other.hidden;
+        exacts = other.exacts;
     }
 
     /// <summary>A hasher of the same columns with buffers of its own, for another thread.</summary>
@@ -322,10 +325,12 @@ internal sealed class CellHasher
         kinds = new Kind[Count];
         cultures = new (CompareInfo, CompareOptions)?[Count];
         hidden = new bool[Count];
+        exacts = new bool[Count];
         for (var c = 0; c < Count; c++)
         {
             var column = columns[c];
             hidden[c] = ResultTextWriter.Hidden(column);
+            exacts[c] = ColumnTypes.HoldsExact(column);
             if (wires[c] == WireKind.Binary) { kinds[c] = Kind.Bytes; continue; }
             if (column.Collation is not null && column.SortKind == ColumnTypes.Text)
             {
@@ -355,9 +360,9 @@ internal sealed class CellHasher
 
     /// <summary>A float or real cell's exact value after its text, when the text reads back as another value: 1E0 and
     /// 1.0000000000000002E0 both show as 1, and are different values.</summary>
-    private static ulong WithExact(PageView view, int column, int row, ulong hash)
+    private ulong WithExact(PageView view, int column, int row, ulong hash)
     {
-        if (!view.TryExact(column, row, out var exact)) return hash;
+        if (!exacts[column] || !view.TryExact(column, row, out var exact)) return hash;
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteInt64LittleEndian(bytes, BitConverter.DoubleToInt64Bits(exact));
         return Bytes(Step(hash, 0xfe), bytes);
@@ -371,8 +376,10 @@ internal sealed class CellHasher
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
         // A float or real whose display text reads back as another value compares by its exact value.
-        var exactA = view.TryExact(column, row, out var exactX);
-        var exactB = otherView.TryExact(otherColumn, otherRow, out var exactY);
+        var exactX = 0d;
+        var exactY = 0d;
+        var exactA = exacts[column] && view.TryExact(column, row, out exactX);
+        var exactB = other.exacts[otherColumn] && otherView.TryExact(otherColumn, otherRow, out exactY);
         if (exactA || exactB)
             return (exactA || double.TryParse(a, NumberStyles.Float, CultureInfo.InvariantCulture, out exactX)) && (exactB || double.TryParse(b, NumberStyles.Float, CultureInfo.InvariantCulture, out exactY)) && exactX == exactY;
         switch (kinds[column])

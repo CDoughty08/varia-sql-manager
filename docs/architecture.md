@@ -230,7 +230,9 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   (`PageBuilder.AppendFloat`/`AppendReal`) keeps its exact value in the page's lengths sidecar (`PageLengths.Exacts`,
   charged with it, never sent to main). Stored pages' readers attach the sidecar (`PageView.With`), and every value
   operation (sort keys, filters, distinct values, duplicates, profiles, Pivot, row identity and comparisons) reads
-  `PageView.TryExact` before parsing the text. A new reader of stored pages attaches it too.
+  `PageView.TryExact` before parsing the text, only for columns that may hold one (`ColumnTypes.HoldsExact`: float,
+  real, sql_variant). A new reader of stored pages attaches it too, and a result built from another (Pivot, comparison)
+  carries a copied cell's exact value with `KeepExact` when its own column holds exact values.
 - **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
   names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
   `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker

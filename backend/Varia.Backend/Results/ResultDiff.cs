@@ -1231,7 +1231,7 @@ internal static class UnifiedDiff
             if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
             else builder.AppendUtf8(span, cut);
             // A float or real's exact value goes with its text, so the comparison sorts and filters as its inputs do.
-            if (lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
+            if (ColumnTypes.HoldsExact(set.Columns[p]) && lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
             var rule = side.Rules[c];
             CellSize size;
             if (lengths.TryCell(at, c, out var kept)) size = new CellSize(kept.Chars, kept.Bytes, kept.Exact && !rule.Estimated);
@@ -1243,7 +1243,7 @@ internal static class UnifiedDiff
             // Kept beside the page when the unified column's own rule would not give the source's size again.
             builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
-        if (old is not null) truncated += Previous(builder, old, side.Pairs.Length);
+        if (old is not null) truncated += Previous(set, builder, old, side.Pairs.Length);
         builder.ReserveRowBytes(0);
         builder.AppendText(marker);
         Number(builder, leftRow);
@@ -1256,12 +1256,13 @@ internal static class UnifiedDiff
     /// <summary>Appends a row's previous values: the first result's value in each changed (not soft) pair, NULL in the
     /// others; returns how many were stored truncated (by the source's cap, or by the row limit, which they meet before
     /// the data does since they come after it).</summary>
-    private static int Previous(PageBuilder builder, Old old, int pairs)
+    private static int Previous(ResultSetBuffer set, PageBuilder builder, Old old, int pairs)
     {
         var truncated = 0;
         PageView view = default;
         var at = 0;
-        if (old.Row >= 0) view = old.Left.Access.At(old.Row, out at);
+        var lengths = PageLengths.Empty;
+        if (old.Row >= 0) view = old.Left.Access.At(old.Row, out at, out lengths);
         var next = 0;
         for (var p = 0; p < pairs; p++)
         {
@@ -1274,6 +1275,7 @@ internal static class UnifiedDiff
             var cut = view.IsTruncated(c, at);
             if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
             else builder.AppendUtf8(span, cut);
+            if (ColumnTypes.HoldsExact(set.Columns[pairs + p]) && lengths.TryExact(at, c, out var exact)) builder.KeepExact(exact);
             if (builder.LastTruncated) truncated++;
         }
         return truncated;

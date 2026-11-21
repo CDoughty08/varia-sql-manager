@@ -220,10 +220,18 @@ internal sealed class PageBuilder
     {
         var span = BeginFormatted();
         var written = CellFormat.WriteFloat(span, value);
-        var exact = !double.TryParse(span[..written], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) || shown != value;
+        var exact = !ReadsBack(span[..written], value);
         EndFormatted(written);
         if (exact) KeepExact(value);
     }
+
+    /// <summary>Whether a float's display text reads back as the value itself, so it needs no exact value beside it.</summary>
+    public static bool ReadsBack(ReadOnlySpan<byte> text, double value) =>
+        double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
+
+    /// <summary>Whether a real's display text reads back as the value itself.</summary>
+    public static bool ReadsBack(ReadOnlySpan<byte> text, float value) =>
+        float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
 
     /// <summary>A real as its display text (<see cref="CellFormat.WriteReal"/>), its exact value kept beside the page when
     /// that text reads back as another real.</summary>
@@ -231,7 +239,7 @@ internal sealed class PageBuilder
     {
         var span = BeginFormatted();
         var written = CellFormat.WriteReal(span, value);
-        var exact = !float.TryParse(span[..written], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) || shown != value;
+        var exact = !ReadsBack(span[..written], value);
         EndFormatted(written);
         if (exact) KeepExact(value);
     }

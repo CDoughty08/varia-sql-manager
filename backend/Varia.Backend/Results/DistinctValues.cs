@@ -81,7 +81,8 @@ internal sealed class DistinctSnapshot
         var take = Math.Max(0, Math.Min(count, total - offset));
         var values = new DistinctValue[take];
         var wire = Set.Wires[Column];
-        var real = string.Equals(Set.Columns[Column].DataType, "real", StringComparison.OrdinalIgnoreCase);
+        var shown = Set.Columns[Column];
+        bool? real = shown.SortKind == ColumnTypes.Float ? ColumnTypes.BaseName(shown.DataType) == "real" : null;
         var texts = new string[take];
         int GroupAt(int i) => list?[offset + i] ?? offset + i;
         // The display texts read the pages, which only the search lock's holders also read.
@@ -230,6 +231,9 @@ internal sealed class DistinctSnapshot
             var kind = matcher?.Kind ?? SearchNarrowing.Kind.None;
             var fold = (matcher as ResultSearcher.CultureMatcher)?.Folded;
             var scratch = new ResultSearcher.Scratch();
+            var shown = Set.Columns[Column];
+            bool? real = shown.SortKind == ColumnTypes.Float ? ColumnTypes.BaseName(shown.DataType) == "real" : null;
+            var exactText = new byte[ViewSorter.ExactTextBytes];
             var marks = new byte[reps.Length];
             var found = 0;
             LastNarrowed = false;
@@ -238,7 +242,9 @@ internal sealed class DistinctSnapshot
             {
                 void Visit(int group, PageView view, int local)
                 {
-                    if (matcher.Matches(view.Span(Column, local), scratch, out var recheck)) { marks[group] = 1; found++; }
+                    // A value listed by its exact text (Display) is searched by that text.
+                    var cell = real is { } isReal && view.TryExact(Column, local, out var exact) ? exactText.AsSpan(0, ViewSorter.ExactText(exact, isReal, exactText)) : view.Span(Column, local);
+                    if (matcher.Matches(cell, scratch, out var recheck)) { marks[group] = 1; found++; }
                     else if (recheck) marks[group] = 2;
                 }
                 if (lastSearch is { } previous && SearchNarrowing.Extends(previous.Text, [previous.Kind], [previous.Needs], [previous.Fold], search, [kind], [fold]))
@@ -509,14 +515,28 @@ internal static partial class ViewSorter
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and
     /// a truncated stored value marked too.</summary>
-    internal static string Display(PageView view, int local, int column, WireKind wire, bool real = false)
+    /// <summary>Room for <see cref="ExactText"/>.</summary>
+    internal const int ExactTextBytes = 32;
+
+    /// <summary>A float's (or a real's, widened) shortest exact text, as ASCII: what the distinct list shows for a value
+    /// whose display text reads back as another value (1.0000000000000002).</summary>
+    internal static int ExactText(double value, bool real, Span<byte> destination) =>
+        (real ? ((float)value).TryFormat(destination, out var written, "R", System.Globalization.CultureInfo.InvariantCulture)
+            : value.TryFormat(destination, out written, "R", System.Globalization.CultureInfo.InvariantCulture)) ? written : 0;
+
+    /// <param name="real">For a float or real column, whether it is real: such a column's value whose text reads back as
+    /// another value shows its exact text. Null for any other column.</param>
+    internal static string Display(PageView view, int local, int column, WireKind wire, bool? real = null)
     {
         var cell = view.Span(column, local);
         var cut = view.IsTruncated(column, local);
         // A float or real whose display text reads back as another value shows its shortest exact text, so the values
         // the list tells apart (1 and 1.0000000000000002) read apart.
-        if (view.TryExact(column, local, out var exact))
-            return real ? ((float)exact).ToString("R", System.Globalization.CultureInfo.InvariantCulture) : exact.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        if (real is { } isReal && view.TryExact(column, local, out var exact))
+        {
+            Span<byte> bytes = stackalloc byte[ExactTextBytes];
+            return Encoding.ASCII.GetString(bytes[..ExactText(exact, isReal, bytes)]);
+        }
         string text;
         if (wire == WireKind.Binary)
         {
