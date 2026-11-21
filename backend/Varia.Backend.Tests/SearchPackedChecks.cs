@@ -346,8 +346,16 @@ internal static class SearchPackedChecks
         // Sales: two long modules, a short one and the long plan guide; Archive: the shared module, the same short text and guide.
         var sales = Read("Sales", ("usp_Shared", shared), ("usp_Own", Module("usp_Own", 90)), ("usp_Short", "SELECT 1"));
         var archive = Read("Archive", ("usp_Shared", shared), ("usp_Also", "SELECT 1"));
-        first.Put(sales);
-        second.Put(archive);
+        ObjectSearchService.Holding(first, children: true)(sales);
+        // Archive goes through the fallback: too large with its children, held without them.
+        var fallback = await ObjectSearchService.WithFallbackAsync("Archive", children =>
+        {
+            if (children) return Task.FromResult<ObjectIndexSkip?>(new("Archive", "TOO_LARGE", "too large"));
+            ObjectSearchService.Holding(second, children)(archive);
+            return Task.FromResult<ObjectIndexSkip?>(null);
+        });
+        check(fallback is { Code: ObjectSearchService.ChildrenLeftOut } && archive.ChildrenLeftOut && !sales.ChildrenLeftOut,
+            "a database held by the fallback without its children says so, and one read whole does not");
         var key = new ResourceKey("16.0.4135.4", 3, 2, DateTime.UnixEpoch, 42, true);
         ObjectTable System() => ObjectTable.Of([
             new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_long", Definition: Module("sp_long"), System: true),
@@ -355,7 +363,6 @@ internal static class SearchPackedChecks
         var set = await catalog.AcquireAsync(key, _ => Task.FromResult(System()));
         first.PutResource(set);
         second.PutResource(await catalog.AcquireAsync(key, _ => Task.FromResult(System())));
-        archive.ChildrenLeftOut = true;
         // A connection whose build read nothing holds no index, and is not counted.
         var none = new ConnectionIndex(budget, catalog, pool);
         var detail = IndexMemoryReport.Detail(budget, pool, [first, second, none], catalog.Held, 12, 3);
@@ -370,6 +377,9 @@ internal static class SearchPackedChecks
         check(detail.RecordBytes == sales.Bytes + archive.Bytes + set.Bytes && detail.DefinitionBytes == held.Sum(text => StringPool.Cost(text))
             && detail.RecordBytes + detail.NameBytes + detail.DefinitionBytes == budget.Used && detail.ReadingBytes == 0,
             "records, names and definitions add up to the index budget's use");
+        var sent = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held, used: budget.Used + 4096);
+        check(sent.ReadingBytes == 4096 && sent.RecordBytes + sent.NameBytes + sent.DefinitionBytes + sent.ReadingBytes == budget.Used + 4096,
+            "the parts add up to the budget's use the event carries, read before the walk, not to a later reading");
         check(detail.Texts == pool.Count && detail.References == sales.Pooled.Length + archive.Pooled.Length + set.Table.Texts.Count(text => text is not null),
             "the pool's distinct texts and references are reported, a shared set's once");
         var late = Read("Late", ("usp_Late", Module("usp_Late")));

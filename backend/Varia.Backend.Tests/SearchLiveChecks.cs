@@ -64,6 +64,7 @@ internal static class SearchLiveChecks
         // The Memory panel's index detail: a real build and search record their times, and the server's long modules show as packed.
         var memoryDetail = service.Search.MemoryDetail();
         check(memoryDetail is { Connections: >= 1, LastBuildMs: not null, LastSearchMs: not null, PackedTexts: > 0 } && memoryDetail.Objects >= built.Status.Objects
+            && memoryDetail.ChildrenLeftOut == built.Status.Skipped.Count(skip => skip.Code == ObjectSearchService.ChildrenLeftOut)
             && memoryDetail.DefinitionTexts >= memoryDetail.PackedTexts && memoryDetail.PackedTextBytes > memoryDetail.PackedBytes,
             "the index detail carries the last build's and search's times and the server's packed definitions: " + memoryDetail);
         var memoryBefore = service.Search.MemoryUsed;

@@ -8,14 +8,19 @@ namespace Varia.Backend.Search;
 /// for a row it then left out (a child whose parent the login cannot see) still counts as one, and that row's name stays a name.
 /// Names are the held tables' other texts. A running read's records and the texts it has pooled are in no held table yet, so they
 /// are what is left of the budget's use, shown as reading; with no read running, records, names and definitions add up to it.
+/// The used figure, when given, is the budget's use the event carries, so the parts add up to the figure sent beside them.
 /// </summary>
 internal static class IndexMemoryReport
 {
+    /// <summary>Each held table's split of its texts into definitions and names: tables never change, so a walk during a build
+    /// works it out only for tables read since the last.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectTable, bool[]> Kinds = [];
+
     public static IndexMemoryDetail Detail(IndexBudget budget, StringPool pool, IEnumerable<ConnectionIndex> connections, IEnumerable<ResourceSet> resources,
-        long? lastBuildMs = null, long? lastSearchMs = null)
+        long? lastBuildMs = null, long? lastSearchMs = null, long? used = null)
     {
-        var used = budget.Used;
-        var (texts, references, poolBytes) = pool.Stats;
+        var budgetUsed = used ?? budget.Used;
+        var (texts, references, _) = pool.Stats;
         var tables = new List<ObjectTable>();
         long recordBytes = 0, cut = 0;
         int holding = 0, childrenLeftOut = 0;
@@ -34,7 +39,7 @@ internal static class IndexMemoryReport
         }
         foreach (var set in resources) { tables.Add(set.Table); recordBytes += set.Bytes; cut += set.Cut; }
         // Pooled tables share the pool's copy of a text, so one reference is one distinct text.
-        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var seen = new HashSet<object>(texts, ReferenceEqualityComparer.Instance);
         long objects = 0, definitions = 0, packedDefinitions = 0, definitionTexts = 0, packedTexts = 0, packedBytes = 0, packedTextBytes = 0, definitionBytes = 0, nameBytes = 0;
         var kinds = new List<bool[]>(tables.Count);
         foreach (var table in tables)
@@ -46,7 +51,7 @@ internal static class IndexMemoryReport
                 definitions++;
                 if (stored is PackedText) packedDefinitions++;
             }
-            var defined = table.DefinitionTexts();
+            var defined = Kinds.GetValue(table, held => held.DefinitionTexts());
             kinds.Add(defined);
             for (var id = 0; id < defined.Length; id++)
             {
@@ -69,6 +74,6 @@ internal static class IndexMemoryReport
         }
         // The figures are read one after another while reads may run, so reading is not allowed below zero.
         return new(holding, objects, texts, references, definitions, packedDefinitions, definitionTexts, packedTexts, packedBytes, packedTextBytes, cut, childrenLeftOut,
-            recordBytes, nameBytes, definitionBytes, Math.Max(0, used - recordBytes - nameBytes - definitionBytes), lastBuildMs, lastSearchMs);
+            recordBytes, nameBytes, definitionBytes, Math.Max(0, budgetUsed - recordBytes - nameBytes - definitionBytes), lastBuildMs, lastSearchMs);
     }
 }

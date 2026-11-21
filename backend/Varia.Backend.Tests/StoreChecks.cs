@@ -666,13 +666,16 @@ internal static class StoreChecks
         lock (reports)
             check(ReferenceEquals(sent[0], sent[1]) && !ReferenceEquals(sent[1], sent[2]),
                 "a refused index report's detail is kept for its retry rather than walking the index again");
-        // A finished search (or build) changes no byte, yet its time goes out with the next check.
+        // A finished search (or build) changes no byte, yet its time goes out with the next check; a search changes nothing the
+        // index holds, so its report reuses the last walk.
+        var walks = service.Search.DetailWalks;
         service.Search.Finish(build: false, 7);
         service.ReportIndexMemory();
         service.ReportIndexMemory(); // Nothing more to report.
         lock (reports)
-            check(reports.Count == 5 && reports[^1] == (0L, limit, 4L) && details.Count == 5 && sent[^1] is { LastSearchMs: 7, LastBuildMs: null },
-                "a finished search sends an index report with its time though the budget is unchanged");
+            check(reports.Count == 5 && reports[^1] == (0L, limit, 4L) && details.Count == 5 && sent[^1] is { LastSearchMs: 7, LastBuildMs: null }
+                && service.Search.DetailWalks == walks,
+                "a finished search sends an index report with its time though the budget is unchanged, without walking the index again");
         // While one report is walking (here, inside its publish), the timer's check skips its tick instead of queueing behind it.
         // The hook is set before the build finishes, so whichever thread sends the report (this one or the timer's) runs it.
         var skipped = false;
@@ -685,8 +688,8 @@ internal static class StoreChecks
         service.Search.Finish(build: true, 30);
         service.ReportIndexMemory();
         lock (reports)
-            check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 },
-                "the timer's index report skips a tick while another report holds the walk, and never queues behind it");
+            check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 } && service.Search.DetailWalks == walks + 1,
+                "the timer's index report skips a tick while another report holds the walk, and never queues behind it; a finished build walks again");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

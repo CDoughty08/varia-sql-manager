@@ -92,22 +92,37 @@ internal sealed class ObjectSearchService : IDisposable
     internal StringPool Pool => pool;
     /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
     /// that the budget's figure does not show.</summary>
-    private long lastBuildMs = -1, lastSearchMs = -1, finished;
+    private long lastBuildMs = -1, lastSearchMs = -1, finished, builds;
+    private int detailWalks;
     public long Finished => Interlocked.Read(ref finished);
+    /// <summary>Finished builds: a search changes nothing the index holds, so the memory report walks again only after a build.</summary>
+    public long Builds => Interlocked.Read(ref builds);
+    /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
+    internal int DetailWalks => Volatile.Read(ref detailWalks);
 
-    /// <summary>What every connection's index holds (<see cref="IndexMemoryReport"/>), for the Memory panel's Nerd metrics: read
-    /// only when an explorer.index.memory event goes out.</summary>
-    internal IndexMemoryDetail MemoryDetail()
+    /// <summary>The last finished build's and search's times, absent before the first.</summary>
+    internal (long? Build, long? Search) Times()
     {
         var build = Interlocked.Read(ref lastBuildMs);
         var search = Interlocked.Read(ref lastSearchMs);
-        return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build < 0 ? null : build, search < 0 ? null : search);
+        return (build < 0 ? null : build, search < 0 ? null : search);
+    }
+
+    /// <summary>What every connection's index holds (<see cref="IndexMemoryReport"/>), for the Memory panel's Nerd metrics: read
+    /// only when an explorer.index.memory event goes out, against the <paramref name="used"/> that event carries.</summary>
+    internal IndexMemoryDetail MemoryDetail(long? used = null)
+    {
+        Interlocked.Increment(ref detailWalks);
+        var (build, search) = Times();
+        return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used);
     }
 
     /// <summary>Records a finished build's (<paramref name="build"/>) or search's time, which the next memory report carries.</summary>
     internal void Finish(bool build, long ms)
     {
         Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
+        // Builds before finished: a report that sees the finish sees the build.
+        if (build) Interlocked.Increment(ref builds);
         Interlocked.Increment(ref finished);
     }
 
@@ -348,12 +363,7 @@ internal sealed class ObjectSearchService : IDisposable
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
-        // A read without children is the fallback for a database too large with them (WithFallbackAsync): the index it holds says so.
-        void Put(DatabaseIndex index)
-        {
-            index.ChildrenLeftOut = !children;
-            state.Index.Put(index);
-        }
+        var Put = Holding(state.Index, children);
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
@@ -393,6 +403,14 @@ internal sealed class ObjectSearchService : IDisposable
         }
         finally { total.Release(); }
     }
+
+    /// <summary>Puts a read into <paramref name="index"/>. A read without children is the fallback for a database too large with them
+    /// (<see cref="WithFallbackAsync"/>), so the index it holds says so.</summary>
+    internal static Action<DatabaseIndex> Holding(ConnectionIndex index, bool children) => read =>
+    {
+        read.ChildrenLeftOut = !children;
+        index.Put(read);
+    };
 
     /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
     internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)

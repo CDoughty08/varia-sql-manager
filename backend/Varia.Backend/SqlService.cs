@@ -119,7 +119,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long reportedIndexFinished = -1;
     /// <summary>The detail worked out for an index report the control lane refused, with the figures it was for: the retry at the
     /// next check reuses it while they are unchanged, rather than walking the index again.</summary>
-    private (long Used, long Finished, IndexMemoryDetail Detail)? refusedIndexDetail;
+    private (long Used, long Builds, IndexMemoryDetail Detail)? walkedIndexDetail;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -2828,7 +2828,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index; also after a build or
     /// search finished, whose time the detail shows. The detail (the Memory panel's Nerd metrics) walks the held indexes, so it is
-    /// read only when an event goes out, never by a search; a refused event's detail is kept for its retry. The timer's check
+    /// read only when an event goes out, never by a search, and walked again only when the budget's use changed or a build finished. The timer's check
     /// (<paramref name="wait"/> false) skips a tick while another report is still walking, so slow walks never pile up threads.</summary>
     internal void ReportIndexMemory(bool wait = true)
     {
@@ -2839,13 +2839,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var used = search.MemoryUsed;
             var finished = search.Finished;
             if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
-            var detail = refusedIndexDetail is { } kept && kept.Used == used && kept.Finished == finished ? kept.Detail : search.MemoryDetail();
-            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail)))
-            {
-                refusedIndexDetail = (used, finished, detail);
-                return;
-            }
-            refusedIndexDetail = null;
+            // The last walk still holds while the budget's use is the same and no build finished since: a search, or a refused
+            // event's retry, only refreshes the times.
+            var builds = search.Builds;
+            var (build, searched) = search.Times();
+            IndexMemoryDetail detail;
+            if (walkedIndexDetail is { } kept && kept.Used == used && kept.Builds == builds)
+                detail = kept.Detail.LastBuildMs == build && kept.Detail.LastSearchMs == searched ? kept.Detail : kept.Detail with { LastBuildMs = build, LastSearchMs = searched };
+            else detail = search.MemoryDetail(used);
+            walkedIndexDetail = (used, builds, detail);
+            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
             reportedIndexFinished = finished;
