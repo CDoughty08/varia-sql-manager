@@ -70,6 +70,16 @@ internal static class RestoreLiveChecks
             Console.WriteLine("Restore Database scratch checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database and its backup files on a disposable development server.");
             return;
         }
+        if (sysadmin)
+        {
+            // The scratch principal exists only inside the transaction. Closing the session also rolls it back on error.
+            var user = "VariaScratch_" + Guid.NewGuid().ToString("N") + "_restore";
+            var asUser = "EXECUTE AS USER = N'" + user + "'; " + RestoreSql.Facts + " REVERT; ";
+            var permission = await Sql("BEGIN TRANSACTION; CREATE USER [" + user + "] WITHOUT LOGIN; " + asUser
+                + "GRANT CREATE DATABASE TO [" + user + "]; " + asUser + "ROLLBACK TRANSACTION;");
+            check(permission.Status == "completed" && permission.Sets is [[[_, _, _, "0" or "False"]], [[_, _, _, "1" or "True"]]],
+                "the same master user can create a restore destination only after its CREATE DATABASE grant: " + permission.Error);
+        }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         var folder = await scratch.CreateRestoreSourceAsync();
         var db = scratch.RestoreSource;
