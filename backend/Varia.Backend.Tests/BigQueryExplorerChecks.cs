@@ -23,6 +23,7 @@ internal static class BigQueryExplorerChecks
 
     public static async Task RunAsync(Action<bool, string> check)
     {
+        Catalog(check);
         Names(check);
         Templates(check);
         Facts(check);
@@ -33,6 +34,18 @@ internal static class BigQueryExplorerChecks
         await ScriptAsync(check, key);
         await PreviewAsync(check, key);
         await PropertiesAsync(check, key);
+    }
+
+    /// <summary>The embedded catalogue's BigQuery kinds serve BigQuery alone, list through BigQueryService's listers, and the
+    /// connection node serves both engines.</summary>
+    static void Catalog(Action<bool, string> check)
+    {
+        var catalog = Varia.Backend.Explorer.ExplorerCatalog.Current;
+        var kinds = catalog.Kinds.Where(kind => kind.BigQuery).ToList();
+        check(kinds.Count == 9 && kinds.All(kind => kind.Serves(Providers.BigQuery) && !kind.Serves(Providers.SqlServer)) && catalog.KindOf("server").Serves(Providers.BigQuery)
+            && catalog.KindOf("server").Serves(Providers.SqlServer) && !catalog.KindOf("database").Serves(Providers.BigQuery)
+            && kinds.Where(kind => kind.List is not null).All(kind => BigQueryService.Lists.Contains(kind.List!)),
+            "BigQuery's Explorer kinds serve BigQuery alone and list through its REST listers; the connection node serves both engines");
     }
 
     static readonly string[] Hostile = ["a`b", "a\\b", "a;DROP TABLE x", "a\nb", "a'b", "a\"b", "a/*b", "a.b", "", new string('a', 1025)];
@@ -312,6 +325,8 @@ internal static class BigQueryExplorerChecks
             && dryRun[0]["configuration"]!["query"]!["query"]!.GetValue<string>() == BigQueryService.CreateSql("varia-alpha", "sales", false)
             && dryRun[0]["configuration"]!["query"]!["queryParameters"]![0]!["parameterValue"]!["value"]!.GetValue<string>() == "orders",
             "Script As › CREATE first asks for a dry run of its INFORMATION_SCHEMA query, the name a parameter: " + estimate.Code);
+        var sqlServerKind = await harness.Script("select", new JsonObject { ["kind"] = "table", ["database"] = "sales", ["schema"] = "dbo", ["name"] = "orders" });
+        check(sqlServerKind.Code == "INVALID_PARAMS", "a SQL Server kind cannot be scripted on a BigQuery connection: " + sqlServerKind.Code);
         var estimateDrop = await harness.Script("drop", (JsonObject)orders.DeepClone(), estimateOnly: true);
         harness.Fake.On("GET", Sales + "/tables/orders", BigQueryFake.Fixture("error-not-found", 404));
         var gone = await harness.Script("select", (JsonObject)orders.DeepClone());

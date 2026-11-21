@@ -17,6 +17,8 @@ internal static class ExplorerRefs
     /// <summary>The longest name any kind may declare (a BigQuery column's field path); SQL Server's kinds keep 128 but an
     /// SSIS package's 260.</summary>
     public const int MaxName = BigQuery.BqNames.FieldPath;
+    /// <summary>The longest name a SQL Server kind may declare (an SSIS package's nvarchar(260)).</summary>
+    public const int MaxSqlServerName = 260;
     public const int MaxPageSize = 2000;
     private static readonly string[] TextOps = ["contains", "equals", "notContains"];
     private static readonly string[] DateOps = ["equals", "lessThan", "lessOrEqual", "greaterThan", "greaterOrEqual", "between", "notBetween"];

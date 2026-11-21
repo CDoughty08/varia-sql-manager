@@ -115,7 +115,8 @@ internal sealed class ExplorerCatalog
             folder.Engines, folder.List, folder.Rows ?? [], folder.Filter, folder.SchemaPlacement, folder.Platforms, folder.AfterRows), StringComparer.Ordinal);
         kinds = json.Kinds.ToDictionary(kind => kind.Kind, kind => new CatalogKind(kind.Kind, kind.Title, kind.Scope, kind.Icon, kind.Subtypes, kind.SubtypeIcons, kind.VariantIcons,
             kind.Folders, kind.SubtypeFolders.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value), kind.HistoryLookup, kind.Parents, kind.List, kind.Rows,
-            kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range."),
+            kind.MaxName >= ExplorerRefs.MaxIdentifier && kind.MaxName <= (kind.Scope.StartsWith("bq", StringComparison.Ordinal) ? ExplorerRefs.MaxName : ExplorerRefs.MaxSqlServerName)
+                ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range."),
             kind.Singletons is { Count: > 0 } singletons ? [.. singletons.Select(item => new CatalogSingleton(item.Kind, item.Order, item.Platforms))] : null, kind.Opens, kind.Platforms,
             kind.Providers),
             StringComparer.Ordinal);

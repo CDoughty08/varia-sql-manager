@@ -21,6 +21,8 @@ internal sealed partial class BigQueryService
     public const int ExplorerPageMax = 1000;
 
     static readonly ExplorerProfile Profile = new(ExplorerCatalog.MaxBand, false);
+    /// <summary>The catalogue's BigQuery list ids: REST listers here, not SQL (ExplorerChecks holds the catalogue to them).</summary>
+    internal static readonly string[] Lists = ["bqDatasets", "bqTables", "bqViews", "bqMaterializedViews", "bqExternalTables", "bqRoutines", "bqModels", "bqColumns", "bqFields"];
 
     public async Task<ExplorerChildrenResult> ChildrenAsync(ExplorerChildrenArgs args, ExplorerCatalog catalog, CancellationToken token)
     {

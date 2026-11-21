@@ -552,7 +552,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
         "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
-            ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
+            ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs, Providers.BigQuery).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).

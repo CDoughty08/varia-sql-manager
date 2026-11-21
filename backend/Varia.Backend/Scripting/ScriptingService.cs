@@ -74,14 +74,16 @@ internal sealed class ScriptingService : IDisposable
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid scripting request: " + detail);
 
     /// <summary>Re-validates what main's zod schema (src/shared/scripting/schema.ts) accepts: ids, one target of a
-    /// scriptable kind, a verb some row of that kind enables, and every option's value.</summary>
-    public (ObjectRefDto Target, ScriptVerbRow Verb) Validate(ScriptArgs args)
+    /// scriptable kind the connection's engine serves (BigQuery's kinds only on a BigQuery handle, SQL Server's elsewhere), a verb
+    /// some row of that kind enables, and every option's value.</summary>
+    public (ObjectRefDto Target, ScriptVerbRow Verb) Validate(ScriptArgs args, string provider = Providers.SqlServer)
     {
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
         if (args.Targets is not { Count: 1 } || args.Targets[0] is not { } target) throw Invalid("exactly one target is required.");
         try { ExplorerRefs.Object(target, explorer); }
         catch (RequestException) { throw Invalid("target."); }
+        if (!explorer.KindOf(target.Kind).Serves(provider)) throw Invalid("this object cannot be scripted on this connection.");
         var verb = (args.Verb is null ? null : catalog.Verb(args.Verb)) ?? throw Invalid("verb.");
         if (!catalog.Targets.Any(row => row.Kind == target.Kind && row.Scriptable && row.Enabled.Contains(verb.Id) && (row.Parents.Count == 0) == (target.Parent is null)
             && (target.Parent is null || row.Parents.Contains(target.Parent.Kind))))
