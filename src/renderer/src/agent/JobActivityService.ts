@@ -102,13 +102,20 @@ export function jobActivityArgs(state: Pick<JobActivityState, 'expanded' | 'colu
 /** How many filters Clear filters clears: the view chip, the filter box and each column's. */
 export const activeFilters = (state: Pick<JobActivityState, 'view' | 'text' | 'columnFilters'>): number => (state.view === 'all' ? 0 : 1) + (state.text.trim() ? 1 : 0) + state.columnFilters.length
 
-/** What the list probe's state says about the document: a failure of the list itself (not an error that names only another
- *  table, or AGENT_DISABLED, which the banner explains), whether the rows are stale, and why the last run could not be read. */
+/** What the list probe's state says about the document: a failure of the list itself (an error naming no table: one beside a
+ *  sample names the part it left empty, the elapsed times or the last run; AGENT_DISABLED the banner explains), whether the rows
+ *  are stale, and why the last run could not be read. */
 export function listProblems(probe: LiveProbeSnapshot | undefined): { readonly failure?: { readonly code?: string; readonly message: string }; readonly stale: boolean; readonly lastRun?: string } {
   const error = probe?.error
-  const list = !!error && (!error.tables || error.tables.includes(0))
+  const list = !!error && !error.tables
   const failure = list && error.code !== 'AGENT_DISABLED' && (probe.state === 'failing' || probe.state === 'stale') ? { code: error.code, message: error.message } : undefined
   return { ...failure ? { failure } : {}, stale: probe?.state === 'stale' || (probe?.state === 'failing' && list), ...error?.tables?.includes(1) ? { lastRun: error.message } : {} }
+}
+
+/** What the header's pill says in place of the interval while the rows are not current: no access, or Agent unusable. */
+export function pillNote(availability: AgentAvailability, end: JobActivityEnd | undefined): string | undefined {
+  if (end?.denied) return 'No access'
+  return availability === 'stopped' || availability === 'xpsOff' || availability === 'unknown' ? 'Agent unavailable' : undefined
 }
 
 /** A result line's words for one job's verb. */

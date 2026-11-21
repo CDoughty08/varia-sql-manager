@@ -20,7 +20,7 @@ import { LiveGridPane, type LiveFilters } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
 import { probePillStatus } from '../live/status'
 import { formatCount, plural } from '../results/status'
-import { activeFilters, listProblems, type BulkLine, type JobActivityState } from './JobActivityService'
+import { activeFilters, listProblems, pillNote, type BulkLine, type JobActivityState } from './JobActivityService'
 
 const listSpec = liveProbes[agentJobsProbe]
 const noSubscribe = () => () => {}
@@ -117,8 +117,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const verbs = [{ command: 'agent.refreshJobs' as const, args: { tabId: documentId }, label: 'Refresh' }]
   const pillProbe = live.probes[agentJobsProbe] ? agentJobsProbe : agentServiceProbe
   // While Agent cannot run jobs the pill says so in place of the interval: the list's rows are msdb's last reading.
-  const agentDown = availability === 'stopped' || availability === 'xpsOff' || availability === 'unknown'
-  const pill = agentDown ? <span className="live-pill" data-state="paused"><Icon name="warning" /><span>Agent unavailable</span></span>
+  const note = pillNote(availability, end)
+  const pill = note ? <span className="live-pill" data-state="paused"><Icon name={end?.denied ? 'lock' : 'warning'} /><span>{note}</span></span>
     : <LivePill {...probePillStatus(live, pillProbe, listSpec.intervalMs.default)} />
   return <DocumentFrame id={`agent-jobs-${documentId}`} title={jobActivityTitle} subtitle="SQL Server Agent"
     crumbs={[{ label: state.label }, { label: 'SQL Server Agent' }]}

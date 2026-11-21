@@ -10,7 +10,7 @@ import { liveArgsSchemas } from '../src/shared/live/schema'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { stampOf } from '../src/renderer/src/agent/AgentJobStatusService'
-import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, listProblems, selectionRows } from '../src/renderer/src/agent/JobActivityService'
+import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, listProblems, pillNote, selectionRows } from '../src/renderer/src/agent/JobActivityService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
@@ -96,10 +96,14 @@ describe("agent.jobs' shared rules", () => {
   it('fails the list only for an error of the list itself; a refused elapsed time or last run leaves the rows fresh', () => {
     const probe = (error?: object, state = 'failing') => ({ state, intervalMs: 5000, effectiveIntervalMs: 5000, lastSampleAt: 1, ...error ? { error: { probe: 'agent.jobs.list', ...error } } : {} }) as never
     expect(listProblems(probe({ code: 'BLOCKED', message: 'History blocked.', tables: [1] }))).toEqual({ stale: false, lastRun: 'History blocked.' })
-    expect(listProblems(probe({ code: 'PERMISSION_DENIED', message: 'No elapsed.', tables: [0] }))).toEqual({ failure: { code: 'PERMISSION_DENIED', message: 'No elapsed.' }, stale: true })
+    expect(listProblems(probe({ code: 'PERMISSION_DENIED', message: 'No elapsed.', tables: [0] }))).toEqual({ stale: false })
     expect(listProblems(probe({ code: 'TIMEOUT', message: 'Timed out.' }))).toEqual({ failure: { code: 'TIMEOUT', message: 'Timed out.' }, stale: true })
     expect(listProblems(probe({ code: 'AGENT_DISABLED', message: 'XPs off.' }))).toEqual({ stale: true })
     expect(listProblems(probe(undefined, 'fresh'))).toEqual({ stale: false })
+    // The pill says why the rows are not current.
+    expect(pillNote('running', { code: 'PERMISSION_DENIED', message: 'denied', denied: true })).toBe('No access')
+    expect(pillNote('stopped', undefined)).toBe('Agent unavailable')
+    expect(pillNote('running', undefined)).toBeUndefined()
   })
   it('follows a started job: Starting… until it runs or a newer run ends, then its outcome; unknown when it never shows', () => {
     const start: WatchedJob = { before: 20261115023000, idleSamples: 0, seenRunning: false }
@@ -314,6 +318,12 @@ describe("The status bar's running job", () => {
     await settled()
     expect(serviceView.disposed).toBe(true)
     expect(agentJobs.getSnapshot()).toMatchObject({ jobs: [{ phase: { phase: 'unknown', reason: 'agentStopped' } }], agent: {} })
+    // With Agent read running since, a later follow opens no service-only view again.
+    const views = handles().length
+    agentJobs.watch('c1', { id: backup, name: 'Backup', created: '2026-01-03T03:04:05', lastRun: '' })
+    agentJobs.dismiss(agentJobs.getSnapshot().jobs[0].key)
+    expect(handles().length).toBe(views + 1)
+    expect(handles().at(-1)!.disposed).toBe(true)
     agentJobs.dismiss(key)
     expect(agentJobs.getSnapshot()).toEqual({ jobs: [], agent: {} })
   })

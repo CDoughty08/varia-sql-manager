@@ -57,6 +57,8 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
   /** Each connection's view and the job keys its slots name, in order. */
   private readonly views = new Map<string, { readonly handle: LiveHandle; readonly slots: readonly string[]; readonly waiting: boolean; readonly stop: () => void }>()
   private readonly services = new Map<string, AgentServiceSample>()
+  /** Agent's last read state per connection, kept across views (services is cleared when a view reopens). */
+  private readonly lastKnown = new Map<string, AgentAvailability>()
   private readonly stopConnections: () => void
   private disposed = false
 
@@ -119,7 +121,9 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
    */
   private follow(connectionId: string): void {
     const slots = this.getSnapshot().jobs.filter(entry => entry.connectionId === connectionId && active(entry)).slice(0, agentLimits.watchedJobs).map(entry => entry.key)
-    const waiting = !slots.length && this.isLive(connectionId) && this.agentEnded(connectionId) && agentAvailability(this.services.get(connectionId)) !== 'running'
+    const last = this.lastKnown.get(connectionId)
+    const waiting = !slots.length && this.isLive(connectionId) && this.agentEnded(connectionId) && (last === 'stopped' || last === 'xpsOff')
+    if (!this.isLive(connectionId)) this.lastKnown.delete(connectionId)
     const current = this.views.get(connectionId)
     if (current && current.waiting === waiting && current.slots.length === slots.length && current.slots.every((key, at) => key === slots[at])) return
     current?.stop()
@@ -146,6 +150,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
       if (service?.status) {
         const value = (id: string) => { const entry = service.status!.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
         this.services.set(connectionId, { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType') })
+        this.lastKnown.set(connectionId, agentAvailability(this.services.get(connectionId)))
         this.publishAgent()
       }
       // Agent usable again: the service-only view has done its work.
