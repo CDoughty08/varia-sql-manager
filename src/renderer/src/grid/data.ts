@@ -24,7 +24,9 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * even when the cell is scrolled out of view, so its label has its text. A live table's row tone (a hidden last column,
  * `tone`) is read with the rows it colours: each row tile of the frame also reads the tile column that holds it. A
  * comparison's whole hidden suffix (its marker, row numbers and tone, which the row header draws) is read the same way: the
- * tile columns from the suffix's first column to the tone, which can be two.
+ * tile columns from the suffix's first column to the tone, which can be two. A comparison of one row per entry also reads
+ * the previous values of the columns in view (`previous`: pair c's at `previous + c`), which, p + c not aligning to the
+ * tiles' columns, can be two tile columns for one tile of visible columns.
  * A tile is read again only from where its rows end: when its rows' pages do not fit the worker's cache together (large
  * XML or JSON values), the worker answers with the rows it holds, and the tile's next part starts after them at once.
  */
@@ -44,6 +46,8 @@ export class GridData {
   private readonly tone: number
   /** The first column of the hidden suffix read with every row tile (a comparison's marker), or the tone column. */
   private readonly suffix: number
+  /** One row per entry: the first previous-value column (pair c's old value is at `previous + c`), else -1. */
+  private readonly previous: number
   /** A column whose tile is read with every row tile of the frame, wherever the view's columns are (as the tone column's
    *  is): a transposed grid's header column. */
   also: number | undefined
@@ -71,11 +75,12 @@ export class GridData {
   private prefetched = ''
   private disposed = false
 
-  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; suffix?: number; shape?: TileShape; also?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
+  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; suffix?: number; previous?: number; shape?: TileShape; also?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
     this.handle = o.handle
     this.columns = o.columns
     this.tone = o.tone ?? -1
     this.suffix = Math.min(o.suffix ?? this.tone, this.tone)
+    this.previous = this.tone >= 0 && o.previous !== undefined && o.previous >= 0 ? o.previous : -1
     this.shape = o.shape ?? tableTiles
     this.also = o.also
     this.clientInflight = o.clientInflight
@@ -139,7 +144,8 @@ export class GridData {
     if (active && active.row >= 0 && active.row < rows && active.column >= 0 && active.column < this.columns) {
       // The active row's suffix too: a pinned active row out of view draws its tone and names its gutter.
       const tileRow = Math.floor(active.row / this.shape.rows)
-      for (const key of [tileKey(tileRow, Math.floor(active.column / this.shape.columns)), ...this.suffixTiles(tileRow)]) if (!plan.includes(key)) plan.push(key)
+      const activeTile = tileKey(tileRow, Math.floor(active.column / this.shape.columns))
+      for (const key of [activeTile, ...this.suffixTiles(tileRow), ...this.previousTiles(activeTile)]) if (!plan.includes(key)) plan.push(key)
     }
     const ring = prefetchTiles(range, rows, this.columns, this.shape)
     const wanted = new Set([...plan, ...ring])
@@ -202,7 +208,9 @@ export class GridData {
    *  marker and row numbers too). */
   plan(range: VisibleRange, rows: number): number[] {
     const plan = planTiles(range, rows, this.columns, this.shape)
-    for (const key of [...plan]) for (const tile of this.suffixTiles(tileRowOf(key))) if (!plan.includes(tile)) plan.push(tile)
+    const visible = [...plan]
+    for (const key of visible) for (const tile of this.suffixTiles(tileRowOf(key))) if (!plan.includes(tile)) plan.push(tile)
+    for (const key of visible) for (const tile of this.previousTiles(key)) if (!plan.includes(tile)) plan.push(tile)
     if (this.also !== undefined && this.also >= 0 && this.also < this.columns) {
       const columnTile = Math.floor(this.also / this.shape.columns)
       for (const key of [...plan]) { const also = tileKey(tileRowOf(key), columnTile); if (!plan.includes(also)) plan.push(also) }
@@ -214,6 +222,15 @@ export class GridData {
     if (this.tone < 0) return []
     const tiles: number[] = []
     for (let column = Math.floor(this.suffix / this.shape.columns); column <= Math.floor(this.tone / this.shape.columns); column++) tiles.push(tileKey(tileRow, column))
+    return tiles
+  }
+  /** One row per entry: the tiles holding the previous values of a tile of visible columns (the old values of its pairs, at
+   *  `previous + c`), none in two rows or for a tile of the suffix itself. */
+  private previousTiles(key: number): number[] {
+    const first = tileColumnOf(key) * this.shape.columns
+    if (this.previous < 0 || first >= this.columns) return []
+    const last = Math.min(first + this.shape.columns, this.columns) - 1, tiles: number[] = []
+    for (let column = Math.floor((this.previous + first) / this.shape.columns); column <= Math.floor((this.previous + last) / this.shape.columns); column++) tiles.push(tileKey(tileRowOf(key), column))
     return tiles
   }
   /** Reads a tile into the client's window cache as a frame would, outside this grid's own reads (a live swap's prepare). */

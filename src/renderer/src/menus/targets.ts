@@ -82,6 +82,8 @@ export interface OutputTarget {
   readonly bare?: true
   /** The grid is drawn transposed: `column` and `row` are still the result's own. */
   readonly transposed?: boolean
+  /** A comparison's grid whose inputs are both still open (`comparisonInputsOpen`). */
+  readonly inputsOpen?: boolean
   readonly selectedText: string
   readonly element: HTMLElement
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
@@ -195,6 +197,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,
+    outputGridComparison: target?.kind === 'output' && target.view === 'grid' && target.resultKind === 'diff',
     outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
     outputLiveFilterable: target?.kind === 'output' && !!target.live?.filterable,
     outputLiveRows: target?.kind === 'output' ? target.live?.rows?.kind ?? '' : '',
@@ -215,7 +218,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
+  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed, resultsGridComparison: target.resultKind === 'diff', comparisonInputsOpen: target.resultKind === 'diff' && !!target.inputsOpen } : undefined
   return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
@@ -326,8 +329,9 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
   const bare = kind === 'grid' && view.hasAttribute('data-result-bare')
   const transposed = kind === 'grid' && view.getAttribute('data-orientation') === 'transposed'
+  const inputsOpen = kind === 'grid' && view.getAttribute('data-comparison-inputs') === 'open'
   return { kind: 'output', tabId, view: kind as OutputView, ...(kind === 'grid' ? { entry } : {}), selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(transposed ? { transposed } : {}), ...(bare ? { bare: true as const } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(transposed ? { transposed } : {}), ...(inputsOpen ? { inputsOpen } : {}), ...(bare ? { bare: true as const } : {}) }
 }
 
 /**

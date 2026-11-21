@@ -941,7 +941,7 @@ it to the page as the report's `index`.
 | `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
 | `definitionTexts`, `packedTexts` | The distinct definitions the held tables hold (modules, constraint and computed column expressions, plan guides: texts an object names as its definition, and packed ones, including one pooled for a row a read then left out), and how many are zstd frames (`PackedText`) |
 | `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
-| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and what reads still running have added (their records and pooled texts; a rebuild's records count against the table they replace until it is swapped in, so only growth beyond it shows). They add up to `usedBytes`. The walk behind them runs at once after a build's end (finished, stopped or failed) or a disconnect, else at the first check 5 s after the last: between walks a budget at or above the last walk's counts the change as reading, and a fall below it is sent with the next walk. A walk that still shows reading is repeated at the first check 5 s after it, though nothing moved (holding a read changes no byte), and sends an event only when the detail changed |
+| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts, and the column types, keys and index columns the editor reads), names, definitions, and what reads still running have added (their records and pooled texts; a rebuild's records count against the table they replace until it is swapped in, so only growth beyond it shows). They add up to `usedBytes`. The walk behind them runs at once after a build's end (finished, stopped or failed) or a disconnect, else at the first check 5 s after the last: between walks a budget at or above the last walk's counts the change as reading, and a fall below it is sent with the next walk. A walk that still shows reading is repeated at the first check 5 s after it, though nothing moved (holding a read changes no byte), and sends an event only when the detail changed |
 | `cut`, `childrenLeftOut` | Definitions left out or cut short; held databases read without their children (`CHILDREN_LEFT_OUT`), whatever later builds reported |
 | `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 
@@ -1462,8 +1462,11 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   either is released. It must be a comparison of the same query and the same two inputs, in either order
   (`INVALID_PARAMS`; released: `RESULT_RELEASED`). Main forwards it only for a comparison its port owns whose recorded
   inputs are the request's, either way round (`RESULT_UNAVAILABLE` for a result that is not a comparison it owns, `INVALID_REQUEST` for other
-  inputs). The caller releases the old comparison once the new one is shown.
-- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
+  inputs); the record belongs to the page that made the comparison, so the next page load cannot replace it, while a
+  port reopened within the page (popped-out panes use the window's port) still can. The caller releases the old
+  comparison once the new one is shown.
+- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"); a change of it
+  (Layout, Exact text, swapped sides) replaces it in place under the same entry (`replaceComparison`). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
   colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): its kind is the row's tone (the

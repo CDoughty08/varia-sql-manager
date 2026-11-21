@@ -10,6 +10,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareDetails, compareSources, compareText, type CompareInfo } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
+import ComparisonToolbar from '../results/ComparisonToolbar'
 import { pivotStrip } from '../results/pivot'
 import { formatBytes, formatCount } from '../results/status'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridShellBusy, type GridSpec, type StripLead } from './GridShell'
@@ -94,6 +95,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().info.get(setKey(entry.descriptor)))
+  // What its last change that did not publish said (a failure, a cancel, an input closed), until its next change.
+  const notice = useSyncExternalStore(compare.subscribe, () => compared ? compare.getSnapshot().notices.get(entry.key) : undefined)
   // A comparison's inputs, each the entry its link goes to while that exact result is open (else it reads closed), as a
   // string so the grid renders again only when one closes.
   const sourceKeys = useSyncExternalStore(results.subscribe, () => {
@@ -147,7 +150,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
       entry: key, resultNumber: entry.number, ...queryName(entry) ? { resultName: queryName(entry) } : {}, ...label ? { label } : {}, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
-      ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []) } : {},
+      ...compared ? { diffSides: diffSidesOf(compared, results.getSnapshot()[tabId]?.sets ?? []), diffChanged: compared.columnChanges.map(column => column.changed > 0) } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, visibleColumnCount(entry.descriptor)))
@@ -227,7 +230,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget, residence: snapshot.residence, rowsAvailable: snapshot.rowsAvailable })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
-  const compareNote = compared ? compareText(compared, sources) : undefined
+  // A comparison's strip says what it found, with what its highlights or last change say after it.
+  const compareNote = compared ? [compareText(compared, sources, notice), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined
   const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked), outOfDate) : highlightText(marked)) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
@@ -255,7 +259,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     focusResultGrid(rootEl.current?.ownerDocument, tabId, target)
   }, [results, tabId])
   const lead: StripLead | undefined = compared && sources?.length === 2 && note === compareNote
-    ? { links: sources.map(source => source.entry === undefined ? { label: source.name, closed: true, title: `${source.name} was closed after it was compared` } : { label: source.name, title: `Go to ${source.name}`, run: () => goTo(source.entry!) }), detail: compareDetails(compared) }
+    ? { links: sources.map(source => source.entry === undefined ? { label: source.name, closed: true, title: `${source.name} was closed after it was compared` } : { label: source.name, title: `Go to ${source.name}`, run: () => goTo(source.entry!) }), detail: [compareDetails(compared, notice), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') }
     : undefined
   // While the query that filled the budget still runs, the strip can stop it: the catalogue's Cancel Executing Query, for this
   // grid's tab, whose running state stands in for the active tab's in the command's precondition.
@@ -271,7 +275,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind,
       // A Pivot's or comparison's grid is named for itself, so its number ("Result 4" in a save's name) is kept here.
       ...derivedGridName(entry) ? { 'data-result-number': entry.number } : {}, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
-      ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
+      ...bare ? { 'data-result-bare': '' } : {}, ...compared ? { 'data-comparison-inputs': sources?.every(source => source.entry !== undefined) ? 'open' : 'closed' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
       // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
       // menus' toggle and the pivot builder follow.
       onFocus: () => { hadFocus.current = true; onFocus(key) },
@@ -279,7 +283,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels} busy={busy} onHeld={() => results.operations.refused(tabId, key)}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note, ...stop ? { action: stop } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl} />
+    strip={note ? { text: note, ...stop ? { action: stop } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl}
+    head={compared && !bare && !lost ? <ComparisonToolbar tabId={tabId} entry={entry} info={compared} sources={sources} goTo={goTo} /> : undefined} />
 }
 
 /** Gives the keyboard focus to a result's grid in `owner` (a popped-out pane has its own document). A grid just added, or

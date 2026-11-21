@@ -1328,8 +1328,18 @@
         },
         "resultsGrid.diffChangedBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. Default $blue/26 (Dark #6ea4ea42, Light #2563a842).",
-          "markdownDescription": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. Default `$blue/26` (Dark `#6ea4ea42`, Light `#2563a842`)."
+          "description": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Translucent: a highlight, a search match and the selection lie over it. Default $blue/26 (Dark #6ea4ea42, Light #2563a842).",
+          "markdownDescription": "(Varia) A changed value in a comparison that shows one row per entry, drawn as old → new. Translucent: a highlight, a search match and the selection lie over it. Default `$blue/26` (Dark `#6ea4ea42`, Light `#2563a842`)."
+        },
+        "resultsGrid.diffOldForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) The previous value in a changed cell of a comparison that shows one row per entry, struck through before the arrow and the new value. Default $errorSurfaceText (Dark #f6bcc1, Light #8f1d24).",
+          "markdownDescription": "(Varia) The previous value in a changed cell of a comparison that shows one row per entry, struck through before the arrow and the new value. Default `$errorSurfaceText` (Dark `#f6bcc1`, Light `#8f1d24`)."
+        },
+        "resultsGrid.diffContextForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) The unchanged values of a changed row in a comparison (one row per entry, or the old and new rows of a changed row in two rows), so its changed values stand out. Default $textSecondary (Dark #bcc1cb, Light #3a404b).",
+          "markdownDescription": "(Varia) The unchanged values of a changed row in a comparison (one row per entry, or the old and new rows of a changed row in two rows), so its changed values stand out. Default `$textSecondary` (Dark `#bcc1cb`, Light `#3a404b`)."
         },
         "resultsGrid.diffSoftUnderline": {
           "$ref": "#/definitions/value",

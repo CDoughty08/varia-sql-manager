@@ -237,7 +237,7 @@ _No settings yet._
 
 ### Query Results › SQL Server › Results to Grid
 
-Sections: **Grid display** (How results look in the grid), **Copy and save**, **Limits and memory** (Rows past a limit are still read and counted, but not kept), **Execution plan** (The panes beside a graphical execution plan).
+Sections: **Grid display** (How results look in the grid), **Copy and save**, **Limits and memory** (Rows past a limit are still read and counted, but not kept), **Execution plan** (The panes beside a graphical execution plan), **Comparisons** (How Compare shows the differences between two results).
 
 | Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -262,6 +262,7 @@ Sections: **Grid display** (How results look in the grid), **Copy and save**, **
 | Execution plan | `queryResults.plan.rowFlow` | Show row flow | Boolean | True |  | All | At once | Label edges with actual, estimated, unavailable or partial live rows. Named "Show execution plan row flow" outside its section. Not in SSMS. |
 | Execution plan | `queryResults.plan.outlineWidth` | Outline width | Integer 120–600 px | 220 px |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Named "Execution plan outline width" outside its section. Not in SSMS. |
 | Execution plan | `queryResults.plan.propertiesWidth` | Properties width | Integer 140–600 px | 260 px |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Named "Execution plan properties width" outside its section. Not in SSMS. |
+| Comparisons | `queryResults.compare.layout` | Show a comparison as | One of `entry` (One row per entry), `unified` (Two rows (−/+)) | One row per entry |  | All | At once | How a new comparison draws its rows. One row per entry, the default, shows a changed row once, each changed value as old → new. Two rows shows a changed row as its old row (−) and its new row (+), with the changed values coloured. A comparison too wide for one row per entry (more than 2,046 compared columns) shows two rows. The Layout button in a comparison toolbar changes that comparison only. Named "Comparison layout" outside its section. Not in SSMS. |
 
 ### Query Results › BigQuery › Results
 
@@ -393,4 +394,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (131 today).
+A patch holds at most one entry per setting (132 today).
