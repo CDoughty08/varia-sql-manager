@@ -33,6 +33,9 @@ export class RowSizes {
   private revision: number | undefined
   /** One repaint once a windowed short block has waited: nothing else paints a grid whose cells have all arrived. */
   private wakeTimer: unknown
+  /** The rows each windowed short block answered when it last armed the wake: it arms again only once it has grown, so a
+   *  block that never fits the cache stops asking rather than polling. */
+  private readonly woken = new Map<number, number>()
 
   constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void, private readonly timers: Timers = browserTimers) {}
 
@@ -50,6 +53,7 @@ export class RowSizes {
       this.pending.clear()
       this.blocks.clear()
       this.failed.clear()
+      this.woken.clear()
     }
     // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
     // rows again for every page, and compete with the reads that paint its first rows.
@@ -106,12 +110,20 @@ export class RowSizes {
       const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
       if (short && this.handle.getSnapshot().residence === 'remote') {
         this.failed.set(block, performance.now())
-        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again.
-        this.wakeTimer ??= this.timers.setTimeout(() => {
-          this.wakeTimer = undefined
-          if (!this.disposed) this.changed()
-        }, rowSizeLimits.retryMs + 1)
-      } else this.failed.delete(block)
+        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again, while the
+        // block keeps growing.
+        const last = this.woken.get(block)
+        if (last === undefined || result.bytes.length > last) {
+          this.woken.set(block, result.bytes.length)
+          this.wakeTimer ??= this.timers.setTimeout(() => {
+            this.wakeTimer = undefined
+            if (!this.disposed) this.changed()
+          }, rowSizeLimits.retryMs + 1)
+        }
+      } else {
+        this.failed.delete(block)
+        this.woken.delete(block)
+      }
       if (result.bytes.length > 0) this.changed()
     }, () => {
       // A failed read leaves the block's bars empty; the grid asks again as it scrolls, once the block has waited.

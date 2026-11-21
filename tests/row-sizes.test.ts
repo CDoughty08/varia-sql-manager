@@ -46,12 +46,22 @@ describe('row sizes', () => {
     // The paint it wakes asks again.
     sizes.ensure(0, 40)
     expect(reads).toHaveLength(2)
+    // A block that never grows (its rows never fit the cache) arms no further wake: no polling.
+    reads[1].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    expect(scheduled).toHaveLength(1)
+    // One that grew wakes once more.
+    vi.advanceTimersByTime(rowSizeLimits.retryMs + 1)
+    sizes.ensure(0, 40)
+    reads[2].resolve({ firstRow: 0, bytes: [10, 20], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    expect(scheduled).toHaveLength(2)
     sizes.dispose()
   })
 
   it('asks a windowed result for a block its cache does not hold yet once per wait, not on every paint', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
-    const { sizes, reads, settle, snapshot, changed } = fixture(100_000)
+    const { sizes, reads, settle, snapshot, changed } = fixture(100_000, 'complete', { setTimeout: () => 0, clearTimeout: () => {} })
     snapshot.residence = 'remote'
     for (let paint = 0; paint < 10; paint++) {
       sizes.ensure(0, 40)
