@@ -115,6 +115,24 @@ describe('grid data', () => {
     data.ensure(range(0, 30), 10_000, 0, 30)
     expect(reads).toHaveLength(1)
   })
+  it('looks again shortly when other grids hold all the client\'s reads as a tile answered short is to be read on', async () => {
+    const inflight = { value: 0 }
+    const { data, reads, settle, changed, advance } = fixture(8, inflight)
+    data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    // A windowed result answers short (its cache full, or its wait ended): no rows yet.
+    inflight.value = 16
+    reads[0].resolve(0)
+    await settle()
+    changed.mockClear()
+    advance(1000)
+    for (let frame = 0; frame < 5; frame++) data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    expect(reads).toHaveLength(1)
+    inflight.value = 0
+    advance(1000)
+    expect(changed).toHaveBeenCalled()
+    data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    expect(reads).toHaveLength(2)
+  })
   it('tries a read again shortly when main\'s results port is full, without marking the tile', async () => {
     const { data, reads, settle, advance, changed } = fixture()
     data.ensure(range(0, 30), 10_000, 0, 30)

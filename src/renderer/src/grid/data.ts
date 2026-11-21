@@ -180,7 +180,9 @@ export class GridData {
           // Rows that arrived since are read at most 10 times a second; rows the worker could not hold with the rest at once.
           const shortened = this.shortened.has(key)
           if (!shortened && !this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
-          if (!this.capacity()) continue
+          // Other grids hold the client's reads, and their answers wake only them: look again shortly (a windowed result
+          // answers short often, and sends no more events once complete).
+          if (!this.capacity()) { if (this.inflight.size === 0) this.wake(g.settleMs); continue }
           if (!shortened) this.refetches.push(now)
           this.read(key, window.first + window.count)
           issued++
