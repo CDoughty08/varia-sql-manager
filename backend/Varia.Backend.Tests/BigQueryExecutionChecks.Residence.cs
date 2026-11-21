@@ -55,6 +55,8 @@ internal static partial class BigQueryExecutionChecks
         await LoadAfterDisconnectAsync(check);
         Trace("LoadReleased");
         await LoadReleasedAsync(check);
+        Trace("LoadDuplicateQueryId");
+        await LoadDuplicateQueryIdAsync(check);
         Trace("LoadFailed");
         await LoadFailedAsync(check);
         Trace("LoadWhileRunning");
@@ -1450,6 +1452,7 @@ internal static partial class BigQueryExecutionChecks
             check(code == "ok" && set is { Residence: "remote", Revision: 2, RowsAvailable: 3000 } && OfType(events, "resultSet.residence").Count() == 2 && Says(result, "stays windowed")
                 && !Says(result, "larger than estimated") && Pages(harness) < 4096,
                 $"a load that does not fit goes back to windowed under another revision: {code} {message} {set?.Residence} {set?.Revision} {Texts(result?.Messages ?? [])}");
+            check(Says(result, "did not fit in memory, so it stays windowed") && !Says(result, "low on memory"), $"a load the budget refused says it did not fit, not that memory is low: {Texts(result?.Messages ?? [])}");
         }
         // Automatic decides by the rows the result will show: one too large for memory whole fits once Maximum rows caps it.
         // A small cap on a small budget stays in memory with its rows: only the rows it stores are charged, not whole pages.
@@ -1550,6 +1553,34 @@ internal static partial class BigQueryExecutionChecks
         var set = harness.Service.Results.Find(id);
         check(code == "NOT_CONNECTED" && result is null && !OfType(events, "resultSet.residence").Any() && set is { IsRemote: true, Revision: 0 },
             $"a load that a disconnect overtakes before it registers is refused, the set still windowed: {code} {message} {result?.Status} {set?.IsRemote} {set?.Revision}");
+    }
+
+    /// <summary>A load whose query id is already running (another load's) is refused DUPLICATE_QUERY before any
+    /// work, its set still windowed at its revision.</summary>
+    static async Task LoadDuplicateQueryIdAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, first, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var (_, second, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var a = first!.ResultSets.Single().ResultId;
+        var b = second!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var queryId = Guid.NewGuid().ToString();
+        var loading = Run(harness, "results.remoteQuery", Load(a, queryId));
+        var held = await Task.WhenAny(harness.Jobs.Polling.Task, Task.Delay(15_000)) == harness.Jobs.Polling.Task;
+        var duplicate = Run(harness, "results.remoteQuery", Load(b, queryId));
+        var answered = await Task.WhenAny(duplicate, Task.Delay(10_000)) == duplicate;
+        var setB = harness.Service.Results.Find(b);
+        var stillWindowed = setB is { IsRemote: true, Revision: 0 };
+        if (!answered) await harness.Call("results.close", new JsonObject { ["resultIds"] = new JsonArray(b) });
+        var (code, result, events, message) = await duplicate;
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = queryId });
+        await loading;
+        harness.Jobs.HangPages = false;
+        check(held && answered && code == "DUPLICATE_QUERY" && result is null && !OfType(events, "resultSet.residence").Any() && stillWindowed,
+            $"a load with a query id already running is refused DUPLICATE_QUERY, still windowed: {held} {answered} {code} {message} {stillWindowed}");
     }
 
     /// <summary>A result closed while it loads into memory: the load stops at once and says the result was closed, never
