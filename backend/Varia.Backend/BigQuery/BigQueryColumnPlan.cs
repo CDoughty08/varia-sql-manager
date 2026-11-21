@@ -223,7 +223,7 @@ internal sealed class BigQueryColumnPlan
     }
 
     /// <summary>The same columns with working buffers of its own: a plan decodes on one thread at a time, so each concurrent
-    /// reader of a result (a windowed result's block fetches, Load into memory) takes a fork.</summary>
+    /// reader of a result (a windowed result's block fetches, and Load into memory through tabledata.list beside them) takes a fork.</summary>
     internal BigQueryColumnPlan Fork() => new(this);
 
     public IReadOnlyList<ResultColumn> Columns { get; }

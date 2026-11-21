@@ -499,15 +499,19 @@ internal sealed class RemoteResult : IDisposable
             if (expired || disposed.IsCancellationRequested) return;
             var jump = viewer.First >= 0 && (first > viewer.Last + 2 || last < viewer.First - 2);
             if (viewer.First >= 0) viewer.Direction = first > viewer.First ? 1 : first < viewer.First ? -1 : viewer.Direction;
-            if (jump)
-                foreach (var block in blocks.Values.Where(block => block.AheadOf == key && block.Waiters == 0 && block.Fetching is not null)) block.Stop?.Cancel();
             viewer.First = first;
             viewer.Last = last;
             var maxBlock = (Rows - 1) / BlockRows;
             // Only as many blocks as the cache holds beside the read's own: more would evict the rows on screen.
             var room = CacheLimit / BlockEstimate - (last - first + 1);
+            var chosen = new List<long>();
             foreach (var index in new[] { first - 1, last + 1, viewer.Direction > 0 ? last + 2 : first - 2 })
-                if (index >= 0 && index <= maxBlock && ahead.Count < room) ahead.Add(BlockLocked(index));
+                if (index >= 0 && index <= maxBlock && chosen.Count < room) chosen.Add(index);
+            // A jump stops the earlier read-ahead, except blocks the new one wants: a cancelled fetch still running would be
+            // joined by the new read-ahead and never fetch its block.
+            if (jump)
+                foreach (var block in blocks.Values.Where(block => block.AheadOf == key && block.Waiters == 0 && block.Fetching is not null && !chosen.Contains(block.Index))) block.Stop?.Cancel();
+            foreach (var index in chosen) ahead.Add(BlockLocked(index));
         }
         foreach (var block in ahead)
         {

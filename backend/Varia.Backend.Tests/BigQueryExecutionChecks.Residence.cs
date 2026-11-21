@@ -256,6 +256,18 @@ internal static partial class BigQueryExecutionChecks
             // Another viewer's read-ahead is its own: viewer 8 jumping does not cancel viewer 7's.
         }
 
+        // A jump of three blocks keeps the earlier read-ahead block the new one wants (12, now behind it): it is fetched.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 10 * 256, 10, viewer: 7, waitMs: 50);
+            await ReadRemote(remote, 13 * 256, 10, viewer: 7, waitMs: 50);
+            blocks.Gate.SetResult();
+            var kept = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 12, 13, 14, 15 }.All(cached.Contains), 15_000);
+            check(kept, "a jump keeps fetching the earlier read-ahead block its new read-ahead wants: " + string.Join(",", remote.CachedBlocks()));
+        }
+
         // A cancelled read hands the fetch it started to its viewer: the viewer's next read of those rows joins it (nothing
         // fetched twice), and a jump stops it with the rest of the viewer's read-ahead.
         {
@@ -557,6 +569,24 @@ internal static partial class BigQueryExecutionChecks
             lock (harness.Jobs.TableDataReplies) { harness.Jobs.TableDataReplies.Enqueue(429); harness.Jobs.TableDataReplies.Enqueue(429); }
             var (code, read, rows, message) = await ReadRows(harness, id, 2500, 100);
             check(code == "ok" && Covers(rows, 2500, 100) && harness.Jobs.TableReads.Count >= 3, $"rateLimitExceeded backs off and reads the block again: {code} {message} {harness.Jobs.TableReads.Count}");
+        }
+
+        // Backing off stops once no read can still be waiting (its wait has passed), freeing the connection's lane slot.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(200);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(500);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            var (code, read, _, _) = await ReadRows(harness, id, 2500, 100);
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            // Unbounded, twelve attempts back off for about 22 seconds in all.
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && read is { Rows: 0 } && stopped, $"a rate-limited block stops backing off once its reads have given up: {code} {read?.Rows} {remote.FetchingBlocks()}");
         }
 
         // A read whose block is slow answers short within its wait; the grid reads again.

@@ -48,11 +48,18 @@ describe('result page access', () => {
     // Whatever a store is called (store, _store, Results, resultStore), and its partial files' own bare calls.
     const service = sources.filter(file => file.startsWith('backend/Varia.Backend/'))
     // Null-conditional and null-forgiving calls, and a method group (no parenthesis), count too.
-    const anyStore = /\b\w*(?:[sS]tore|[rR]esults)[?!]?\.Find\b/
-    const finds = (file: string) => /\/ResultStore(?:\.[^/]+)?\.cs$/.test(file) ? new RegExp(`(?:^|[^\\w.]|\\bthis\\.)Find\\(|${anyStore.source}`) : anyStore
-    const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
-      .filter(([file, , line]) => !/^\s*\/\//.test(line) && finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line) && !/public ResultSetBuffer\? Find\(/.test(line))
-      .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
+    const anyStore = /\b\w*(?:[sS]tore|[rR]esults)[?!]?\.Find\b/g
+    const finds = (file: string) => /\/ResultStore(?:\.[^/]+)?\.cs$/.test(file) ? new RegExp(`(?:^|[^\\w.]|\\bthis\\.)Find\\(|${anyStore.source}`, 'g') : anyStore
+    // Each call is counted, not each line (a guarded Find does not excuse another on its line), and a call split before
+    // its .Find is joined to its receiver's line first.
+    const unguardedIn = (file: string, text: string) => text.replace(/\s*\r?\n\s*(?=[?!]?\.Find\b)/g, '').split('\n')
+      .filter(line => !/^\s*\/\//.test(line) && !/public ResultSetBuffer\? Find\(/.test(line)
+        && (line.match(finds(file)) ?? []).length > (line.match(/\bStored\(store\.Find\(/g) ?? []).length)
+      .map(line => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var left = Stored(store.Find(a) ?? throw U(a)); var right = store.Find(b)!;')).toHaveLength(1)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = store\n    .Find(id);')).toEqual(['X.cs: var set = store.Find(id);'])
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Stored(store.Find(id) ?? throw U(id));')).toEqual([])
+    const unguarded = service.flatMap(file => unguardedIn(file, readFileSync(file, 'utf8')))
     expect(unguarded.sort()).toEqual([
       // Visibility only asks whether the result exists.
       'SqlService.cs: visibility = new ResultVisibility(id => this.store.Find(id) is not null);',
@@ -96,12 +103,15 @@ describe('result page access', () => {
     expect(service2).toMatch(/sets\.Select\(\(set, i\) => set\.IsRemote \|\| set\.Revision != revisions\[i\]\)\.Any\(moved => moved\)/)
     // Only the residence code builds a block cache or switches a set, so every switch bumps the revision, sends
     // resultSet.residence and settles the budget there; the store's Demote is the one caller of the set's.
-    const callers = (pattern: RegExp) => [...new Set(lines(pattern, []).filter(at => at.startsWith('backend/Varia.Backend/')).map(at => at.replace(/:\d+$/, '')))].sort()
+    const callers = (pattern: RegExp) => [...new Set(lines(new RegExp(String.raw`^(?!\s*\/\/).*(?:${pattern.source})`), []).filter(at => at.startsWith('backend/Varia.Backend/')).map(at => at.replace(/:\d+$/, '')))].sort()
     // Target-typed construction (RemoteResult cache = new(...)) counts too.
-    expect(callers(/\bnew RemoteResult\(|\bRemoteResult\??\s+\w+\s*=\s*new\s*\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
-    expect(callers(/\.Promote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
-    expect(callers(/\bstore\.Demote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
-    expect(callers(/\.Demote\(/)).toEqual(['backend/Varia.Backend/Results/ResultStore.cs', 'backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    // So does a qualified one (new Results.RemoteResult(...)); a method group of Promote or Demote counts as a call.
+    const construct = /\bnew\s+(?:[\w.]+\.)?RemoteResult\s*\(|\bRemoteResult\??\s+\w+\s*=\s*new\s*\(/
+    expect(['var c = new Results.RemoteResult(s, 1);', 'RemoteResult? c = new(s, 1);', 'var c = new RemoteResult (s, 1);'].every(line => construct.test(line))).toBe(true)
+    expect(callers(construct)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\.Promote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\bstore\.Demote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\.Demote\b/)).toEqual(['backend/Varia.Backend/Results/ResultStore.cs', 'backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(readFileSync('backend/Varia.Backend/SqlService.BigQueryResidence.cs', 'utf8')).toMatch(/internal static ResultSetBuffer Stored\(ResultSetBuffer set\) => set\.IsRemote \? throw RemoteRefused\(\) : set;/)
   })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {

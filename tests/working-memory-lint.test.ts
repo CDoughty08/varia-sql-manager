@@ -137,4 +137,9 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const callers = (readdirSync(backend, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
     .filter(name => /\bTryReserveCache\(/.test(strip(readFileSync(join(backend, name), 'utf8')))).map(name => name.replaceAll('\\', '/')).sort()
   expect(callers).toEqual(['Results/RemoteResult.cs', 'Results/ResultStore.cs'])
+  // The checks above read RemoteResult.cs alone: the cache stays one class in that one file, so no partial file escapes them.
+  const declared = (readdirSync(backend, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
+    .filter(name => /\bclass\s+RemoteResult\b/.test(strip(readFileSync(join(backend, name), 'utf8')))).map(name => name.replaceAll('\\', '/'))
+  expect(declared).toEqual(['Results/RemoteResult.cs'])
+  expect(remote).not.toMatch(/\bpartial\b[^{;]*\bclass\s+RemoteResult\b/)
 })

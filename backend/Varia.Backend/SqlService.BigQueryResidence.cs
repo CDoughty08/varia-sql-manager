@@ -42,8 +42,8 @@ internal sealed partial class SqlService
         : mib is >= 16 and <= 4096 ? mib.Value * (1L << 20) : throw new RequestException("INVALID_PARAMS", "The window cache is 16 to 4,096 MiB.");
 
     /// <summary>A windowed result's own error value, answered before any work by every reader of stored pages (the
-    /// architecture's page-access invariant): its rows stay in BigQuery, and its sort, filter and value lists go through
-    /// results.remoteQuery instead.</summary>
+    /// architecture's page-access invariant): its rows stay in BigQuery, so these features wait until it is loaded into
+    /// memory (results.remoteQuery, kind load).</summary>
     internal static RequestException RemoteRefused() =>
         new("REMOTE_RESULT", "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet.");
 
@@ -175,13 +175,16 @@ internal sealed partial class SqlService
     /// <summary>
     /// A block's rows through tabledata.list (free, random access): from its first row, following page tokens, decoded by the
     /// query's column plan. A 404 means BigQuery's result table is gone (REMOTE_EXPIRED). A rate limit backs off with jitter
-    /// and tries again, never as an error, until the reads waiting give up (their own wait) or the attempts run out.
+    /// and tries again, for no longer in all than a read waits (<see cref="RemoteReadWait"/>) and within the attempts: past
+    /// that no read is left waiting, and backing off would hold a slot of the connection's lane for no one, so the block
+    /// fails and the next read of it asks again.
     /// </summary>
     private RemoteFetch BigQueryFetch(BigQueryWindow context) => async (firstRow, rows, writer, token) =>
     {
         // Fetches of one result run side by side: each decodes with its own fork of the plan.
         var plan = context.Plan.Fork();
         string? pageToken = null;
+        var backedOff = TimeSpan.Zero;
         for (var attempt = 1; writer.Rows < rows; )
         {
             BigQueryPage page;
@@ -192,8 +195,10 @@ internal sealed partial class SqlService
             catch (Exception error) when (!token.IsCancellationRequested && NotFound(error)) { throw new RemoteExpiredException(error); }
             catch (Exception error) when (!token.IsCancellationRequested && RateLimited(error) && attempt < RateLimitAttempts)
             {
-                var delay = bigQuery.RetryDelay * (1 << Math.Min(attempt - 1, 5));
-                await Task.Delay(delay * (0.5 + Random.Shared.NextDouble()), token);
+                var delay = bigQuery.RetryDelay * (1 << Math.Min(attempt - 1, 5)) * (0.5 + Random.Shared.NextDouble());
+                if (backedOff + delay > RemoteReadWait) throw;
+                backedOff += delay;
+                await Task.Delay(delay, token);
                 attempt++;
                 continue;
             }
