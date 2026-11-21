@@ -489,6 +489,27 @@ internal static class LiveSchedulerChecks
                 "BUDGET retries at the interval without backing off; a terminal error stops its probe (all stopped ends the view with the first's code); a refresh restarts it, but never one the source opened unavailable");
         }
 
+        // A view or filter change reads again within the probe's minimum gap and interval, not a whole interval later; a stopped
+        // probe stays stopped.
+        using (var subscription = Subscription(sql, () => 0, ("fx.b", 5000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            var first = subscription.TakeDue(0);
+            subscription.Complete(first, Echo(first), 10);
+            var at = probe.DueAt;
+            var second = subscription.TakeDue(at);
+            subscription.Complete(second, Sample("fx.b"), at + 5);
+            var scheduled = probe.DueAt;
+            subscription.Reread(probe, at + 100);
+            var soon = probe.DueAt;
+            probe.Stopped = LiveErrors.Create("fx.b", "NOT_SUPPORTED", "Stopped.");
+            probe.DueAt = 99_999;
+            subscription.Reread(probe, at + 200);
+            check(scheduled >= at + 5000 && soon < scheduled && soon >= at + 100 && probe.DueAt == 99_999,
+                "a view or filter change brings the probe's next read forward (within its gap), and leaves a stopped probe alone: due " + scheduled + " then " + soon);
+        }
+
         // One probe that fails in two ways beside its sample (a table cut by the budget, a statement that failed) reports both,
         // and an error beside a sample never says terminal: the probe goes on sampling.
         using (var subscription = Subscription(sql, () => 0, ("fx.b", 1000)))

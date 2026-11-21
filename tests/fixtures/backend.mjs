@@ -1762,6 +1762,8 @@ function liveUpdate(id, params) {
     if (patch.sort !== undefined || patch.clear?.includes('sort')) probe.resort = true
     if (patch.view !== undefined) probe.view = patch.view
     if (patch.clear?.includes('view')) probe.view = undefined
+    // A view or filter change reads again at once, as the backend's Reread does (within the gap the fake has none of).
+    if ((patch.view !== undefined || patch.filter !== undefined || patch.clear?.some(item => item === 'view' || item === 'filter')) && !probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
   if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' ? { ...params.args } : { ...live.args, ...params.args }

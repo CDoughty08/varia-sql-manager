@@ -257,7 +257,7 @@ internal sealed class LiveSubscription : IDisposable
         foreach (var probe in Probes)
         {
             if (probe.Paused || probe.Gated) continue;
-            var due = probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
+            var due = RefreshDue(probe, now);
             if (probe.Stopped is not null)
             {
                 probe.Stopped = null;
@@ -266,6 +266,17 @@ internal sealed class LiveSubscription : IDisposable
             }
             else if (probe.Failures == 0) probe.DueAt = Math.Min(probe.DueAt, due);
         }
+    }
+
+    private static long RefreshDue(LiveProbeState probe, long now) =>
+        probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
+
+    /// <summary>A probe's view or filter changed: it reads again as a refresh would (within its minimum gap and interval), so the
+    /// rows match the new view without waiting a whole interval. One paused, backing off or stopped keeps its schedule.</summary>
+    public void Reread(LiveProbeState probe, long now)
+    {
+        if (probe.Paused || probe.Gated || probe.Stopped is not null || probe.Failures != 0) return;
+        probe.DueAt = Math.Min(probe.DueAt, RefreshDue(probe, now));
     }
 
     /// <summary>Every probe stopped for good: the first one's error, which ends the subscription failed.</summary>
@@ -616,6 +627,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     else if (setting == "view") state.View = null;
                     else state.Filter = null;
                 }
+                if (patch.View is not null || patch.Filter is not null || patch.Clear?.Any(setting => setting is "view" or "filter") == true) subscription.Reread(state, now);
             }
             foreach (var track in args.Track ?? []) subscription.Probes.Find(probe => probe.Spec.Id == track.Probe)!.Tracks[track.Table] = track;
             if (sourceArgs is not null) subscription.Sampler.Apply(sourceArgs);
