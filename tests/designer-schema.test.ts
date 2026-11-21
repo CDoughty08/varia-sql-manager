@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { actionDescribeSchema, actionRequestSchema } from '../src/shared/actions/schema'
 import { designerLimits, systemTypes } from '../src/shared/designer/catalog'
-import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, tempTableMessage, type DesignColumn, type NameComparison, type TableDesign } from '../src/shared/designer/schema'
+import { canonicalNumber, createTableSchema, designProblems, tableDesignSchema, tempTableMessage, type DesignColumn, type TableDesign } from '../src/shared/designer/schema'
 import { defaultType, formatTypeText, parseTypeText, typeProblem } from '../src/shared/designer/type-text'
 
 const id = { seed: '1', increment: '1' }
@@ -74,32 +74,18 @@ describe('table design schema', () => {
     expect(canonicalNumber('-0')).toBe('0')
     expect(canonicalNumber('-007')).toBe('-7')
   })
-  it('compares column names as the database\'s catalog collation does, and refuses # table names', () => {
-    const twins = design(column('Id', 'int'), column('ID', 'int'), column('café', 'int'), column('cafe', 'int'))
-    const twice = (names: readonly string[], comparison?: NameComparison) => designProblems(design(...names.map(name => column(name, 'int'))), 17, comparison)
-      .filter(problem => problem.property === 'name').map(problem => problem.column)
-    const named = (comparison?: NameComparison) => designProblems(twins, 17, comparison).filter(problem => problem.property === 'name').map(problem => problem.column)
-    // Main and the backend validators know no collation: the backend's preflight asks SQL Server before any DDL.
-    expect(named()).toEqual([])
-    expect(named({ caseSensitive: true })).toEqual([])
-    expect(named({ caseSensitive: false })).toEqual([1])
-    // Accents are never folded here: Turkish_100_CI_AI tells c from ç, Finnish_Swedish_100_CI_AI a from å, as SQL Server 2025 answers.
-    expect(twice(['c', 'ç'], { caseSensitive: false })).toEqual([])
-    expect(twice(['a', 'å'], { caseSensitive: false })).toEqual([])
-    // Turkish_100_CI_AS: I and i are two names, I and ı one, İ and i one (SQL Server 2025's answers).
-    const turkish = { caseSensitive: false, turkishCasing: true }
-    expect(twice(['I', 'i'], turkish)).toEqual([])
-    expect(twice(['Id', 'id'], turkish)).toEqual([])
-    expect(twice(['I', 'ı'], turkish)).toEqual([1])
-    expect(twice(['İd', 'id'], turkish)).toEqual([1])
-    expect(twice(['LIMIT', 'limit'], turkish)).toEqual([])
-    expect(twice(['LıMıT', 'limit'], turkish)).toEqual([])
-    expect(twice(['LIMIT', 'lımıt'], turkish)).toEqual([1])
-    expect(twice(['CODE', 'code'], turkish)).toEqual([1])
-    // Other collations pair I with i and leave ı and İ alone (non-ASCII case is the preflight's).
-    expect(twice(['I', 'i', 'ı', 'İ'], { caseSensitive: false })).toEqual([1])
-    expect(twice(['Ä', 'ä'], { caseSensitive: false })).toEqual([])
-    expect(twice(['a ', 'a'], { caseSensitive: true })).toEqual([1])
+  it('refuses only column names every collation finds equal, and # table names', () => {
+    const twice = (...names: string[]) => designProblems(design(...names.map(name => column(name, 'int'))), 17).filter(problem => problem.property === 'name').map(problem => problem.column)
+    // Trailing spaces never count (SQL Server pads).
+    expect(twice('a ', 'a', 'b', 'b  ')).toEqual([1, 3])
+    // Pairs some catalog collation tells apart (SQL Server 2025's answers), so the designer never refuses them; those the
+    // database finds equal are the backend preflight's to refuse, under its catalog collation, before any DDL.
+    expect(twice('I', 'i')).toEqual([]) // Turkish_100_CI_AS
+    expect(twice('Machine', 'MacHine')).toEqual([]) // Czech_100_CI_AS: ch is a contraction, cH two letters
+    expect(twice('pH', 'PH')).toEqual([]) // Welsh_100_CI_AS
+    expect(twice('c', 'ç')).toEqual([]) // Turkish_100_CI_AI
+    expect(twice('a', 'å')).toEqual([]) // Finnish_Swedish_100_CI_AI
+    expect(twice('Id', 'ID', 'café', 'cafe')).toEqual([]) // any _CS_AS collation
     expect(designProblems({ ...good, name: '##Orders' })).toEqual([{ property: 'tableName', message: tempTableMessage }])
     expect(designProblems({ ...good, name: 'Orders#' })).toEqual([])
     expect(designProblems({ ...good, schema: '#s' })).toEqual([])

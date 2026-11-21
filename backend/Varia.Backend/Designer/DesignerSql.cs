@@ -220,14 +220,12 @@ internal static class DesignerSql
 
     /// <summary>In the database (ModuleCall): at most @take schemas but sys and INFORMATION_SCHEMA, by name, dbo (schema 1)
     /// always among them when it exists, as it is the default; then the default rows filegroup; then whether the catalog
-    /// collation, which keeps column names unique, tells case and accents apart, and whether it ignores case but pairs I
-    /// with ı and İ with i (Turkish and Azeri) rather than I with i.</summary>
+    /// collation, which keeps column names unique, tells case and accents apart.</summary>
     public const string Describe = "SELECT x.schema_name FROM (SELECT TOP (@take) s.name AS schema_name FROM sys.schemas AS s WHERE s.schema_id NOT IN (3, 4) "
         + "ORDER BY CASE WHEN s.schema_id = 1 THEN 0 ELSE 1 END, s.name) AS x ORDER BY x.schema_name;\n"
         + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';\n"
         + "SELECT CONVERT(bit, CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS case_sensitive, "
-        + "CONVERT(bit, CASE WHEN N'e' = NCHAR(233) COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS accent_sensitive, "
-        + "CONVERT(bit, CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT AND N'i' <> N'I' COLLATE CATALOG_DEFAULT THEN 1 ELSE 0 END) AS turkish_casing;";
+        + "CONVERT(bit, CASE WHEN N'e' = NCHAR(233) COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS accent_sensitive;";
 
     /// <summary>In the database (ModuleCall, @schema, @name the table and @new the key's name): whether the schema exists,
     /// advisory ALTER on it, whether the table's or the key's name is taken in it, and the default rows filegroup. A check
@@ -242,8 +240,8 @@ internal static class DesignerSql
 
     /// <summary>The first of the @take names in @names (0-based) that the catalog collation, which keeps a table's column
     /// names unique, finds equal to an earlier one; no row when they all differ. Only SQL Server knows every collation's
-    /// rules (Turkish I and ı, Swedish å apart from a even ignoring accents), so this is the check before any DDL, and the
-    /// renderer's only a subset of it. SUBSTRING counts UTF-16 units under a binary collation that is not _SC; any
+    /// rules (Turkish I and ı, Swedish å apart from a even ignoring accents, Czech ch apart from cH even ignoring case),
+    /// so this is the only check of them, before any DDL; the renderer checks only trailing spaces. SUBSTRING counts UTF-16 units under a binary collation that is not _SC; any
     /// database's sys.all_columns has thousands of rows.</summary>
     public const string DuplicateName = "WITH numbers AS (SELECT TOP (@take) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b), "
         + "names AS (SELECT n, CONVERT(nvarchar(128), SUBSTRING(@names COLLATE Latin1_General_100_BIN2, (n - 1) * 128 + 1, 128)) COLLATE CATALOG_DEFAULT AS column_name FROM numbers) "

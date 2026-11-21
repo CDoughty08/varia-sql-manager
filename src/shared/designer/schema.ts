@@ -36,8 +36,6 @@ export interface TableDesignerModel {
   /** Whether the catalog collation tells Id from ID, and e from é. */
   readonly caseSensitiveNames: boolean
   readonly accentSensitiveNames: boolean
-  /** Whether it ignores case but pairs I with ı and İ with i, not I with i (Turkish and Azeri collations). */
-  readonly turkishCasing: boolean
   /** HAS_PERMS_BY_NAME(CREATE TABLE): advisory; absent when SQL Server could not say. */
   readonly canCreate?: boolean
 }
@@ -62,26 +60,17 @@ const nameProblem = (name: string, what: string): string | undefined =>
 export const tempTableMessage = 'A table name cannot start with #: that would make it a temporary table, which the table designer cannot create.'
 /** Why a table name cannot be saved (Choose Name, Properties and Save), or undefined. */
 export const tableNameProblem = (name: string): string | undefined => nameProblem(name, 'The table name') ?? (name.startsWith('#') ? tempTableMessage : undefined)
-/** How the catalog compares column names, as far as the renderer can know it for every collation: trailing spaces never
- *  count (SQL Server pads), and a collation that ignores case pairs the ASCII letters, I with ı and İ with i in Turkish
- *  and Azeri. Anything further (other letters' case, accents, Swedish å apart from a, contractions) differs between
- *  collations, so the renderer never guesses: the backend's preflight asks SQL Server under the catalog collation before
- *  any DDL. Without the database's answer only trailing spaces are ignored, as main and the backend validators check. */
-export interface NameComparison { readonly caseSensitive: boolean; readonly turkishCasing?: boolean }
-export function columnNameKey(name: string, comparison: NameComparison = { caseSensitive: true }): string {
-  const key = name.replace(/ +$/, '')
-  if (comparison.caseSensitive) return key
-  // Turkish: I is ı's capital and İ (U+0130) is i's.
-  if (comparison.turkishCasing) return key.replace(/[A-Z\u0130]/g, letter => letter === 'I' ? '\u0131' : letter === '\u0130' ? 'i' : letter.toLowerCase())
-  return key.replace(/[A-Z]/g, letter => letter.toLowerCase())
-}
+/** A column name as every catalog collation compares it: trailing spaces never count (SQL Server pads). Nothing else holds
+ *  in every collation, not even ASCII case (Turkish I is ı's capital, and Czech_100_CI_AS tells ch from cH, a contraction
+ *  from two letters), so names the database's collation finds equal are the backend preflight's to refuse, asking SQL
+ *  Server before any DDL; the designer never refuses a name SQL Server accepts. */
+export const columnNameKey = (name: string): string => name.replace(/ +$/, '')
 /** Every string of the design together, in UTF-16 units: bounded by `designerLimits.designChars`. */
 export const designChars = (design: TableDesign): number => design.schema.length + design.name.length
   + design.columns.reduce((sum, column) => sum + column.name.length + column.type.system.length + (column.identity ? column.identity.seed.length + column.identity.increment.length : 0), 0)
 
-/** Why the design cannot be saved, in order: the table, then each column, then the key. `band` gates json and vector, and
- *  `comparison` is the database's way of comparing names (the designer has it from the describe). */
-export function designProblems(design: TableDesign, band = Number.POSITIVE_INFINITY, comparison?: NameComparison): DesignProblem[] {
+/** Why the design cannot be saved, in order: the table, then each column, then the key. `band` gates json and vector. */
+export function designProblems(design: TableDesign, band = Number.POSITIVE_INFINITY): DesignProblem[] {
   const problems: DesignProblem[] = []
   const table = tableNameProblem(design.name), schema = nameProblem(design.schema, 'The schema name')
   if (table) problems.push({ property: 'tableName', message: table })
@@ -94,8 +83,8 @@ export function designProblems(design: TableDesign, band = Number.POSITIVE_INFIN
   design.columns.forEach((column, index) => {
     const name = nameProblem(column.name, 'A column name')
     if (name) problems.push({ column: index, property: 'name', message: name })
-    else if (seen.has(columnNameKey(column.name, comparison))) problems.push({ column: index, property: 'name', message: `The column name ${column.name} is used twice.` })
-    seen.add(columnNameKey(column.name, comparison))
+    else if (seen.has(columnNameKey(column.name))) problems.push({ column: index, property: 'name', message: `The column name ${column.name} is used twice.` })
+    seen.add(columnNameKey(column.name))
     const type = typeProblem(column.type, band)
     if (type) problems.push({ column: index, property: 'dataType', message: type })
     if (typeSpec(column.type.system)?.onePerTable && ++timestamps === 2) problems.push({ column: index, property: 'dataType', message: 'A table can have only one timestamp column.' })

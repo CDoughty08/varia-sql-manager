@@ -50,17 +50,18 @@ internal sealed partial class ActionService
         return (row, null);
     }
 
-    /// <summary>Runs a catalog statement in the database through ModuleCall; a missing wrapper means the database went away.</summary>
+    /// <summary>Runs a catalog statement in the database through ModuleCall, the designer's (with @names) when names are given;
+    /// a missing wrapper means the database went away.</summary>
     private async Task<(List<List<ScriptPreflight.Row>>? Sets, ActionError? Error)> InsideAsync(SqlConnection connection, string database, string statement, string? schema, string? name, string? other,
         int take, CancellationToken token, string? names = null)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = DesignerSql.ModuleCall;
+        command.CommandText = names is null ? ActionSql.ModuleCall : DesignerSql.ModuleCall;
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, database);
         Add(command, "@stmt", SqlDbType.NVarChar, -1, statement);
-        Add(command, "@decl", SqlDbType.NVarChar, -1, DesignerSql.Declarations);
-        Add(command, "@names", SqlDbType.NVarChar, -1, names);
+        Add(command, "@decl", SqlDbType.NVarChar, -1, names is null ? ActionSql.Declarations : DesignerSql.Declarations);
+        if (names is not null) Add(command, "@names", SqlDbType.NVarChar, -1, names);
         Add(command, "@schema", SqlDbType.NVarChar, 128, schema);
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         Add(command, "@new", SqlDbType.NVarChar, 128, other);
@@ -98,7 +99,7 @@ internal sealed partial class ActionService
         var listed = schemas.Where(schema => schema == "dbo" || kept.Contains(schema)).ToList();
         var comparison = sets.Count > 2 && sets[2].Count > 0 ? sets[2][0] : null;
         var model = new TableDesignerModelDto(database, band, listed, schemas.Count > limit, listed.Contains("dbo") ? "dbo" : listed.FirstOrDefault() ?? "dbo", filegroup,
-            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"), comparison?.Bool("turkish_casing") ?? false);
+            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"));
         return new(null, 0, TableDesigner: model);
     }
 

@@ -84,7 +84,8 @@ internal static class DesignerLiveChecks
         {
             ("Turkish_100_CI_AS", ["I", "i"], null), ("Turkish_100_CI_AS", ["Id", "x", "ıd"], "2"), ("Turkish_100_CI_AS", ["İd", "id"], "1"),
             ("Turkish_100_CI_AI", ["c", "ç"], null), ("Finnish_Swedish_100_CI_AI", ["a", "å"], null), ("Latin1_General_100_CI_AI", ["café", "x", "cafe", "CAFE"], "2"),
-            ("Latin1_General_100_CS_AS", ["Id", "ID"], null), ("Latin1_General_100_CI_AS", ["I", "i"], "1"), ("Latin1_General_100_CI_AS", [new string('a', 128), "b", new string('A', 127) + "a"], "2"),
+            ("Latin1_General_100_CS_AS", ["Id", "ID"], null), ("Czech_100_CI_AS", ["Machine", "MacHine"], null), ("Czech_100_CI_AS", ["Machine", "MacHine", "MACHINE"], "2"),
+            ("Welsh_100_CI_AS", ["pH", "PH"], null), ("Danish_Norwegian_CI_AS", ["aa", "aA"], null), ("Latin1_General_100_CI_AS", ["I", "i"], "1"), ("Latin1_General_100_CI_AS", [new string('a', 128), "b", new string('A', 127) + "a"], "2"),
             ("Latin1_General_100_CI_AS_SC", ["\U0001F600a", "\U0001F600b", "\U0001F600A"], "2"), ("Latin1_General_100_CI_AS", ["\U0001F600", "x"], null),
         })
         {
@@ -129,8 +130,8 @@ internal static class DesignerLiveChecks
         // [x] would read as x. The describe brackets it, so a sysadmin may create tables there; the catalog is Turkish_100_CI_AI.
         var odd = await scratch.CreateDesignerOddAsync();
         var oddModel = await client.Describe(odd);
-        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, TurkishCasing: true, DefaultSchema: "dbo" } },
-            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents with Turkish casing (" + oddModel.Error?.Message + ")");
+        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, DefaultSchema: "dbo" } },
+            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents (" + oddModel.Error?.Message + ")");
         // Turkish: I and i, and c and ç, are different column names; I and ı are the same, refused before any DDL.
         var legal = await client.Save(odd, new TableDesignDto("dbo", "TurkishLegal", [Column("I", "int"), Column("i", "int"), Column("c", "int"), Column("ç", "int")], []));
         var clash = await client.Save(odd, new TableDesignDto("dbo", "TurkishClash", [Column("I", "int"), Column("ı", "int")], []));

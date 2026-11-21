@@ -53,7 +53,7 @@ describe('custom document exact target binding', () => {
     const targetIds: Record<string, string> = { old: 'target-one', next: 'target-one', other: 'target-two' }
     connections.add(connectionInfo('old'), connectionOptions)
     const api = {
-      describeObject: vi.fn(async (): Promise<ApiResult<ActionDescribeResult>> => ({ ok: true, value: { elapsedMs: 1, tableDesigner: { database: 'AppData', band: 16, schemas: ['dbo'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, turkishCasing: false, canCreate: true } } })),
+      describeObject: vi.fn(async (): Promise<ApiResult<ActionDescribeResult>> => ({ ok: true, value: { elapsedMs: 1, tableDesigner: { database: 'AppData', band: 16, schemas: ['dbo'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true } } })),
       scriptObjectAction: vi.fn(), executeObjectAction: vi.fn(), cancelObjectActions: vi.fn(async () => ({ ok: true as const, value: { cancelled: 0 } }))
     }
     const designers = new TableDesignerService({ api, documents, connections, targetIdOf: id => targetIds[id], files: { saveCopy: async () => {} }, explorer: { reconcile: () => {} } })
