@@ -357,6 +357,14 @@ describe('Job Activity Monitor', () => {
 })
 
 describe("The status bar's running job", () => {
+  it('says the outcome is unknown for a Start answered after its connection was lost, and opens no view', () => {
+    const { agentJobs, handles, connections } = monitor()
+    const views = handles().length
+    connections.markLostBefore(2)
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
+    expect(agentJobs.getSnapshot().jobs.map(entry => entry.phase)).toEqual([{ phase: 'unknown', reason: 'gone' }])
+    expect(handles().length).toBe(views)
+  })
   it('follows a started job in a status-only view of the watched and service probes, to its outcome, then frees the slot', async () => {
     const { agentJobs, handles } = monitor()
     agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })

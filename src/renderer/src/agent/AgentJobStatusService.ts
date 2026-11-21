@@ -91,8 +91,10 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     // As many ended items are kept, so the list and its +N tooltip stay bounded: the oldest ended goes.
     const ended = others.filter(item => item.connectionId === connectionId && !active(item))
     const dropped = new Set([...followed.slice(agentLimits.watchedJobs - 1), ...ended.slice(agentLimits.watchedJobs)].map(item => item.key))
-    this.publish({ ...this.getSnapshot(), jobs: [entry, ...others.filter(item => !dropped.has(item.key))] })
-    this.follow(connectionId)
+    // Lost while the Start was answered: nothing can follow it, so its outcome is unknown from the start.
+    const live = this.isLive(connectionId)
+    this.publish({ ...this.getSnapshot(), jobs: [live ? entry : { ...entry, phase: { phase: 'unknown', reason: 'gone' } }, ...others.filter(item => !dropped.has(item.key))] })
+    if (live) this.follow(connectionId)
   }
 
   /** Dismiss: the item goes; a job still running keeps running, unfollowed. */

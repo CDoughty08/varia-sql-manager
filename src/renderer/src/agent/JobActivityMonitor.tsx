@@ -94,7 +94,6 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const lastRun = handle.table(agentJobsProbe, 1)
   const rows = table?.descriptor.rowsAvailable
   const end = service.ended(documentId)
-  // A lost connection's last service reading is no news: the banner, note, tiles and pill all wait for a live one.
   // Tiles, chips and the Status note keep the last reading while lost (it is what the grid shows); the banner and pill wait.
   const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
   const banner = agentBanner(shown, state.service, false, state.linux)
