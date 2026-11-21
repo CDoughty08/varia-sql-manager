@@ -124,6 +124,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal const long IndexDetailWalkMs = 5000;
     /// <summary>The clock (milliseconds) that spaces index detail walks; the checks replace it.</summary>
     internal Func<long> IndexDetailClock { get; set; } = () => Environment.TickCount64;
+    /// <summary>Runs between reading the index's counters and its budget (the checks race a build's end into that gap).</summary>
+    internal Action? IndexCountersRead { get; set; }
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -2840,15 +2842,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (wait) Monitor.Enter(indexMemoryGate);
         try
         {
-            var used = search.MemoryUsed;
+            // The counters before the budget: a build's end or a disconnect landing between the two shows as a changed counter at
+            // the next check (which then walks), never as a new counter beside a budget read before it.
             var finished = search.Finished;
+            var builds = search.Builds;
+            var forgets = search.Forgets;
+            IndexCountersRead?.Invoke();
+            var used = search.MemoryUsed;
             if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
             // above the last walk's is brought up to date without walking (the parts still add up, the change showing as reading);
             // one below it waits for the next walk. A build's end or a disconnect walks at once.
-            var builds = search.Builds;
-            var forgets = search.Forgets;
             var (build, searched) = search.Times();
             var now = IndexDetailClock();
             IndexMemoryDetail detail;

@@ -744,6 +744,30 @@ internal static class StoreChecks
         lock (reports)
             check(service.Search.Forgets == forgets + 1 && service.Search.DetailWalks == grown + 4 && reports[^1].Used == 0,
                 "a disconnect walks the index at once, though the walk interval has not passed");
+        // A disconnect whose index freed no byte (it held only a set another connection shares) is still reported.
+        var empty = Guid.NewGuid().ToString();
+        service.Search.Held(empty).Put(new DatabaseIndex("Shared", Array.Empty<IndexedObject>(), 0, 0, 0));
+        var before = reports.Count;
+        service.Search.Forget(empty);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(reports.Count == before + 1 && service.Search.DetailWalks == grown + 5, "a disconnect that frees no byte still sends an index report");
+        // A build that ends between reading the counters and the budget: the event carries the budget read after the counters,
+        // and the next check sees the end and walks at once, so no read is left showing as running.
+        var racing = pool.TryAcquire("dbo.Shipments");
+        service.ReportIndexMemory();
+        var raced = service.Search.DetailWalks;
+        service.IndexCountersRead = () =>
+        {
+            service.IndexCountersRead = null;
+            pool.Release([racing]);
+            service.Search.Ended();
+        };
+        service.ReportIndexMemory();
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == raced + 1 && reports[^1].Used == 0 && details[^1] == (0, 0L, 0L),
+                "a build ending between the counters and the budget is walked at the next check, with nothing left as reading");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

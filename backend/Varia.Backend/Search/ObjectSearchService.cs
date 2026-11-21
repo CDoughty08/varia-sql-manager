@@ -251,7 +251,9 @@ internal sealed class ObjectSearchService : IDisposable
         running.Forget(connectionId);
         if (!states.TryRemove(connectionId, out var state)) return;
         state.Index.Dispose();
+        // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
         Interlocked.Increment(ref forgets);
+        Interlocked.Increment(ref finished);
     }
 
     public void Dispose()
