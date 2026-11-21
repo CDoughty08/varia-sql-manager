@@ -321,7 +321,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -442,7 +442,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids),
-    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
+    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }),
+    refreshStatus: connectionId => explorerStatus.refresh(connectionId)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -803,7 +804,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),

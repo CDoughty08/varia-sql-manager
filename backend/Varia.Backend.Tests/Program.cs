@@ -513,6 +513,7 @@ if (liveGroup is null)
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
         ("Agent", () => AgentChecks.RunAsync(Check)),
+        ("AgentActions", () => AgentActionChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
@@ -669,8 +670,11 @@ if (liveGroup is null)
         && new[] { "0/2", "3/2", "1/0", "x/2", "1/2/3" }.All(value => { try { LiveGroups.Parse(["--live-group", value]); return false; } catch (ArgumentException) { return true; } })
         && LiveGroups.Runs(null, "Query") && LiveGroups.Split([("a", 5), ("b", 5), ("c", 9)], 2) is [["c"], ["a", "b"]]
         && LiveGroups.Parse(["--live-suite", "Scripting"]) is { Suite: "Scripting" } single && LiveGroups.Runs(single, "Scripting") && !LiveGroups.Runs(single, "Query")
-        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))(),
-        "--live-group k/n names one group of n, --live-suite one known suite, and a run without either runs every suite");
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "Agent,NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && LiveGroups.Parse(["--live-suite", "Agent,AgentService"]) is { } pair && LiveGroups.Runs(pair, "Agent") && LiveGroups.Runs(pair, "AgentService") && !LiveGroups.Runs(pair, "Query")
+        && !LiveGroups.Runs(null, "AgentService") && !LiveGroups.Runs(new LiveGroups.Group(1, 1), "AgentService") && LiveGroups.Covers([.. LiveGroups.Suites.Select(suite => suite.Name), "AgentService"]),
+        "--live-group k/n names one group of n, --live-suite one or more known suites, and a run without either runs every suite but the excluded ones (AgentService), which only --live-suite runs");
     Console.WriteLine("Passed " + passed + " offline .NET checks.");
 }
 
@@ -1051,6 +1055,7 @@ try
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
     await Suite("Agent", () => AgentLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("AgentService", () => AgentActionLiveChecks.ServiceAsync(Check, service, info, json));
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."

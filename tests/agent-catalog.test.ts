@@ -102,12 +102,17 @@ describe('Agent catalogue', () => {
     expect(readProcedures.find(procedure => procedure.name === 'sp_help_job')?.arguments.find(argument => argument.name === '@job_aspect')?.constants).toEqual(["N'JOB'"])
     // sp_purge_jobhistory without a job purges every job's history on the server: never a read, and only through a template that refuses a NULL job.
     expect(reads).not.toContain('sp_purge_jobhistory')
-    expect(writeProcedures.find(procedure => procedure.name === 'xp_servicecontrol')).toEqual({ name: 'xp_servicecontrol', lane: 'AG-2', database: 'master' })
+    // Writes are msdb's only: Start and Stop of the service go through the Service Control Manager (AgentServiceControl), never xp_servicecontrol.
+    expect(writeProcedures.every(procedure => procedure.database === 'msdb' && procedure.name !== 'xp_servicecontrol')).toBe(true)
+    // AG-2's writes name every argument their template passes; later lanes add theirs.
+    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-2').map(procedure => [procedure.name, procedure.arguments])).toEqual([
+      ['sp_start_job', ['@job_id', '@step_name']], ['sp_stop_job', ['@job_id']], ['sp_update_job', ['@job_id', '@enabled', '@new_name']], ['sp_delete_job', ['@job_id', '@delete_history', '@delete_unused_schedule']]
+    ])
     for (const shape of masterReadShapes) {
       expect(shape.shape, shape.name).toMatch(new RegExp(`^EXEC (@rc = )?master\\.dbo\\.${shape.name} `))
       expect(shape.shape.endsWith(';'), shape.name).toBe(true)
     }
-    // The service read is QueryState only, with both arguments constant; Start and Stop belong to the write lint.
+    // The service read is QueryState only, with both arguments constant.
     expect(masterReadShapes.find(shape => shape.name === 'xp_servicecontrol')?.shape).toBe("EXEC @rc = master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAgent';")
     expect(unique(agentErrorNumbers.map(error => error.number))).toBe(true)
   })

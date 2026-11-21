@@ -878,6 +878,8 @@ internal static partial class ActionSql
         foreach (var item in PermissionSql.Lint(ActionsCatalog.Current.Logins.Securables)) yield return item;
         // Table Properties: its reads for every band, and every statement its plan can make, run and (an ALTER) dry run.
         foreach (var item in TableAlter.Lint(ActionsCatalog.Current)) yield return item;
+        // SQL Server Agent's job verbs (AG-2): every msdb write in its one shape, and the reads its describes make outside AgentReader.
+        foreach (var item in Agent.AgentSql.LintWrites()) yield return ("agent " + item.Name, item.Problems);
     }
 }
 

@@ -35,6 +35,7 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   serviceStatementMs: 'One service Start or Stop statement, in ms',
   serviceWaitMs: 'How long a Start or Stop waits for the service\'s new state, in ms',
   serviceReadMs: 'One service state read, in ms',
+  servicePollMs: "How often a Start or Stop's wait polls the service's state, in ms",
   agentUpWaitMs: 'How long the live checks wait for Agent after the server is up, in ms',
   profileMs: 'The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role)'
 }
@@ -130,7 +131,7 @@ export function renderAgentDocs(): string {
     '',
     'Writes (from AG-2) call only these, each followed by a return-code check:',
     '',
-    table(['Procedure', 'Lane'], writeProcedures.map(procedure => [code(procedure.database + '.dbo.' + procedure.name), procedure.lane])),
+    table(['Procedure', 'Arguments', 'Lane'], writeProcedures.map(procedure => [code(procedure.database + '.dbo.' + procedure.name), procedure.arguments?.map(code).join(', ') ?? 'later lanes', procedure.lane])),
     '',
     'msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):',
     '',

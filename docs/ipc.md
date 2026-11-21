@@ -393,7 +393,9 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`, `NAME_IN_USE`, `PATH_NOT_FOUND`, `FILE_ACCESS` (a file SQL Server
   cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
   `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
-  refused a password) (docs/object-actions.md).
+  refused a password), `AGENT_STOPPED` (SQL Server Agent is not running), `JOB_STATE` (a job not running when stopped, or
+  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached);
+  the last three are not retryable (docs/object-actions.md, docs/sql-server-agent.md).
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
@@ -408,9 +410,9 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   ownedRoles, readOnly, ownedSecurables, grantedPermissions, canDrop }[] (≤ 100), mapped, checked, notChecked }`, read
   per database within `loginLimits.scanMs` (unread databases count in `notChecked`, never an error).
 
-**Action progress.** A long action (catalogue `long`: restore, verify, backup) runs under the long gate; the next waits
-up to 30 s, then `BUSY` ("Another restore or backup is running on this connection." or "Restores or backups are already
-running on other connections."). Action statements use a data reader, never `ExecuteNonQuery`
+**Action progress.** A long action (catalogue `long`: restore, verify, backup, Agent Start/Stop/Restart) runs under the long
+gate; the next waits up to 30 s, then `BUSY` ("Another restore, backup or SQL Server Agent start or stop is running on
+this connection." or "Restores, backups or SQL Server Agent starts and stops are already running on other connections."). Action statements use a data reader, never `ExecuteNonQuery`
 (`tests/action-reader-lint.test.ts`).
 - Message 3211 (`STATS`) becomes droppable `{ type: 'action.progress', step: 0–519, percent: 0–100 }` EVENTs: a step's
   start at once as 0, then at most every 250 ms (`progressEventMs`); a percent held inside the interval goes out when it

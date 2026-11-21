@@ -33,15 +33,22 @@ public static class LiveGroups
         ("Entra", 0), ("Agent", 22)
     ];
 
-    /// <summary>Group <c>Index</c> of <c>Count</c>, or with <c>Suite</c> only that suite (a developer's `--live-suite name`).</summary>
+    /// <summary>
+    /// Live suites no grouped or full run reaches, each run only when `--live-suite` names it: AgentService stops and starts the
+    /// server's SQL Server Agent, which `backend:test`'s shared machine lock cannot keep other sessions' Agent checks off, so it runs
+    /// through `npm run backend:test:agent-service` (the exclusive lock) and the Windows workflow (agent-service.yml).
+    /// </summary>
+    public static readonly (string Name, int Seconds)[] Excluded = [("AgentService", 40)];
+
+    /// <summary>Group <c>Index</c> of <c>Count</c>, or with <c>Suite</c> only the suites it names, comma-separated (`--live-suite a,b`).</summary>
     public sealed record Group(int Index, int Count, string? Suite = null);
 
-    /// <summary>`--live-group k/n` as a group, `--live-suite name` as one suite, no arguments as null (every suite, after the
-    /// offline checks).</summary>
+    /// <summary>`--live-group k/n` as a group, `--live-suite name[,name...]` as those suites (an excluded one included), no arguments as
+    /// null (every suite in <see cref="Suites"/>, after the offline checks).</summary>
     public static Group? Parse(string[] args)
     {
         if (args is ["--live-suite", var suite])
-            return Suites.Any(item => item.Name == suite) ? new(1, 1, suite) : throw new ArgumentException("Unknown live suite " + suite + "; LiveGroups.Suites names them.");
+            return suite.Split(',').All(name => Known(name)) ? new(1, 1, suite) : throw new ArgumentException("Unknown live suite in " + suite + "; LiveGroups.Suites and Excluded name them.");
         if (args is not ["--live-group", var value]) return null;
         var parts = value.Split('/');
         if (parts.Length == 2 && int.TryParse(parts[0], out var index) && int.TryParse(parts[1], out var count) && count >= 1 && index >= 1 && index <= count)
@@ -63,14 +70,18 @@ public static class LiveGroups
         return [.. Enumerable.Range(0, count).Select(group => suites.Where(suite => owner[suite.Name] == group).Select(suite => suite.Name).ToList())];
     }
 
-    /// <summary>Whether this run runs the named suite; a suite with no entry in <see cref="Suites"/> fails the run.</summary>
+    private static bool Known(string name) => Suites.Any(suite => suite.Name == name) || Excluded.Any(suite => suite.Name == name);
+
+    /// <summary>Whether this run runs the named suite: one `--live-suite` names, or else one of its group, never an excluded one; a suite
+    /// with no entry in <see cref="Suites"/> or <see cref="Excluded"/> fails the run.</summary>
     public static bool Runs(Group? group, string name)
     {
-        if (!Suites.Any(suite => suite.Name == name)) throw new Exception("FAIL: the live suite " + name + " needs its seconds in LiveGroups.Suites.");
-        if (group?.Suite is { } only) return name == only;
+        if (!Known(name)) throw new Exception("FAIL: the live suite " + name + " needs its seconds in LiveGroups.Suites.");
+        if (group?.Suite is { } only) return only.Split(',').Contains(name);
+        if (Excluded.Any(suite => suite.Name == name)) return false;
         return group is null || Split(Suites, group.Count)[group.Index - 1].Contains(name);
     }
 
-    /// <summary>Whether the suites a run reached are exactly <see cref="Suites"/>, in order.</summary>
-    public static bool Covers(IEnumerable<string> reached) => reached.SequenceEqual(Suites.Select(suite => suite.Name));
+    /// <summary>Whether the suites a run reached are exactly <see cref="Suites"/>, in order (the excluded ones aside).</summary>
+    public static bool Covers(IEnumerable<string> reached) => reached.Where(name => Excluded.All(suite => suite.Name != name)).SequenceEqual(Suites.Select(suite => suite.Name));
 }

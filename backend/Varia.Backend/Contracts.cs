@@ -559,7 +559,13 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
-    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null);
+    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
+    AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null);
+/// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
+/// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
+/// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
+/// Agent node as their target, on actions.execute only.</summary>
+internal sealed record AgentIdentityDto(string Created);
 /// <summary>Table Properties' changes (src/shared/actions/tables.ts TableChanges): LockEscalation TABLE, AUTO or DISABLE; ChangeTracking
 /// on or off with Track columns updated (only with it on); extended properties to add, update (each with a text Value of at most the
 /// catalogue's extendedPropertyValue UTF-16 units) or drop (no Value), each name once. The tableProperties action takes them with Identity
@@ -683,7 +689,7 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -720,7 +726,13 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
-    TablePropertiesDto? TableProperties = null);
+    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null);
+/// <summary>Start Job at Step's facts (AG-2): the job it read, whether it is enabled and running, and its steps (at most agentLimits.stepsPerJob).</summary>
+internal sealed record AgentJobFactsDto(string Name, AgentIdentityDto AgentIdentity, bool Enabled, bool Running, List<AgentJobStepDto> Steps, bool StepsTruncated);
+internal sealed record AgentJobStepDto(int Id, string Name);
+/// <summary>The Agent service dialogs' facts (AG-2): the machine and service they act on, and the state the Service Control Manager reports
+/// (src/shared/actions/schema.ts agentServiceStates).</summary>
+internal sealed record AgentServiceFactsDto(string Machine, string Service, string State);
 /// <summary>Table Properties' describe (src/shared/actions/tables.ts TablePropertiesModel): every page's facts, the lists clipped to the
 /// catalogue's limits (the flags say so), and why nothing can change, when nothing can.</summary>
 internal sealed record TablePropertiesDto(TableGeneralDto General, TableStorageDto Storage, TableChangeTrackingDto ChangeTracking, List<TablePermissionDto> Permissions, bool PermissionsTruncated,
@@ -806,7 +818,7 @@ internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Ab
 /// connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
     List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null,
-    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null);
+    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null, string? AgentService = null);
 /// <summary>A confirmed action-induced change to one live handle's backend settings. Monotonic safe-integer revision;
 /// initial connect is revision 0. At most 256 distinct handles per result. PasswordChanged carries no secret: main uses
 /// only the matching validated action's transient password. NewDatabase is the resulting catalog, at most 128 characters.</summary>

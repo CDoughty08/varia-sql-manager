@@ -270,6 +270,11 @@
     "license": "MIT"
   },
   {
+    "id": "System.ServiceProcess.ServiceController",
+    "version": "9.0.21",
+    "license": "MIT"
+  },
+  {
     "id": "System.Threading.RateLimiting",
     "version": "9.0.21",
     "license": "MIT"

@@ -13,6 +13,7 @@ import { loginRules, loginSubtypes, loginsCatalog, type LoginRule, type LoginSub
 import { restoreCatalog, restoreMessages } from './restore.ts'
 import { tablesCatalog } from './tables.ts'
 import type { ProviderId } from '../providers.ts'
+import { agentLimits } from '../agent/catalog.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 /** The most rows a Properties list (Table and Database Properties) shows before it scrolls; the page's sections scroll too. */
@@ -31,7 +32,12 @@ export const objectActions = [
   'restoreFiles',
   'disable',
   'enable',
-  'unlock'
+  'unlock',
+  'startJob',
+  'stopJob',
+  'startAgent',
+  'stopAgent',
+  'restartAgent'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` runs on the tree row as a status-bar job (Rename's box, a login's Disable and
@@ -86,7 +92,11 @@ export const dialogIds = [
   'detachDatabase',
   'unlockLogin',
   'loginProperties',
-  'tableProperties'
+  'tableProperties',
+  'startJobAtStep',
+  'startAgent',
+  'stopAgent',
+  'restartAgent'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -168,7 +178,26 @@ const actionSpecData = {
   disable: { title: 'Disable Login', menuTitle: 'Disable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.disable', engines: onServers },
   enable: { title: 'Enable Login', menuTitle: 'Enable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.enable', engines: onServers },
   // Varia's own verb (D4d): SSMS unlocks only on Login Properties › Status, with a new password. U is free in a login's menu.
-  unlock: { title: 'Unlock Login…', menuTitle: 'Unlock…', mnemonic: 'u', group: '6_state', order: 2, class: 'dialog', dialog: 'unlockLogin', command: 'explorer.unlock', engines: onServers }
+  unlock: { title: 'Unlock Login…', menuTitle: 'Unlock…', mnemonic: 'u', group: '6_state', order: 2, class: 'dialog', dialog: 'unlockLogin', command: 'explorer.unlock', engines: onServers },
+  // A SQL Server Agent job (AG-2): SSMS's job menu has Start Job at Step… and Stop Job after New Job…; its access keys are
+  // recalled, and T and O are free in a job's menu.
+  startJob: { title: 'Start Job at Step…', mnemonic: 't', group: '2_job', order: 1, class: 'dialog', dialog: 'startJobAtStep', command: 'explorer.startJob', engines: onServers },
+  stopJob: { title: 'Stop Job', mnemonic: 'p', group: '2_job', order: 2, class: 'inline', command: 'explorer.stopJob', engines: onServers },
+  // The SQL Server Agent node's Start, Stop and Restart (AG-2): the server machine's Service Control Manager, as the Windows user
+  // Varia runs as (AgentServiceControl), behind a confirmation, with a progress dialog. Each is long: it takes the long gate and a
+  // closing backend waits for it (a sent Start or Stop finishes). Its cleanup budget is the statement, the wait and the read after it.
+  startAgent: {
+    title: 'Start SQL Server Agent', menuTitle: 'Start', mnemonic: 's', group: '2_service', order: 1, class: 'dialog', dialog: 'startAgent', command: 'explorer.startAgent',
+    systemObjects: true, engines: onServers, long: true, cleanupMs: agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs
+  },
+  stopAgent: {
+    title: 'Stop SQL Server Agent', menuTitle: 'Stop', mnemonic: 'p', group: '2_service', order: 2, class: 'dialog', dialog: 'stopAgent', command: 'explorer.stopAgent',
+    systemObjects: true, engines: onServers, long: true, cleanupMs: agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs
+  },
+  restartAgent: {
+    title: 'Restart SQL Server Agent', menuTitle: 'Restart', mnemonic: 'e', group: '2_service', order: 3, class: 'dialog', dialog: 'restartAgent', command: 'explorer.restartAgent',
+    systemObjects: true, engines: onServers, long: true, cleanupMs: agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs
+  }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 type RowCommandOf<S> = S extends { readonly rows: { readonly command: infer C } } ? C : never
@@ -246,6 +275,9 @@ export interface ActionKindSpec {
   readonly subtypeStatuses?: Partial<Record<NodeSubtype, Partial<Record<NodeStatus, ActionRowOverlay>>>>
   /** The kind's own dialog for a verb, in place of the verb's (a login's Properties opens Login Properties). */
   readonly dialogs?: Partial<Record<ObjectAction, DialogId>>
+  /** The verb's title on this kind where it differs from the action's ("Enable Job" for the shared `enable`): the unavailable
+   *  hints and the docs use it, while the menu shows the action's short `menuTitle`. */
+  readonly titles?: Partial<Record<ObjectAction, string>>
 }
 const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabled' }
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
@@ -295,8 +327,19 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
     subtypes: Object.fromEntries(loginSubtypes.map(subtype => [subtype, loginRow(subtype)])),
     subtypeStatuses: Object.fromEntries(loginSubtypes.map(subtype => [subtype, { disabled: loginDisabled(subtype) }])),
     dialogs: { properties: 'loginProperties' }
-  }
+  },
+  // A SQL Server Agent job (AG-2): a disabled job offers Enable in place of Disable, as a login does. msdb refuses what the login may not
+  // do (another owner's job below SQLAgentOperatorRole) as a value.
+  agentJob: {
+    row: { startJob: 'enabled', stopJob: 'enabled', disable: 'enabled', rename: 'enabled', delete: 'enabled' },
+    statuses: { disabled: { disable: '', enable: 'enabled' } },
+    titles: { enable: 'Enable Job', disable: 'Disable Job', rename: 'Rename Job', delete: 'Delete Job' }
+  },
+  // The SQL Server Agent node: Start, Stop and Restart of its service, narrowed by agentServiceRules.
+  agent: { row: { startAgent: 'enabled', stopAgent: 'enabled', restartAgent: 'enabled' } }
 }
+/** A verb's title on a kind: the kind's own (`titles`), else the action's. */
+export const actionTitle = (kind: NodeKind | 'folder', action: ObjectAction): string => (kind !== 'folder' && actionKindSpecs[kind]?.titles?.[action]) || objectActionSpecs[action].title
 /** The dialog a verb opens on a kind: the kind's own (a login's Login Properties), else the verb's. */
 export const actionDialog = (kind: NodeKind, action: ObjectAction): DialogId | undefined => actionKindSpecs[kind]?.dialogs?.[action] ?? objectActionSpecs[action].dialog
 
@@ -379,6 +422,72 @@ export function databaseActionState(row: ActionRow, runtime: DatabaseRuntime | u
 }
 
 /**
+ * What the SQL Server Agent node's Start, Stop and Restart depend on: whether Varia runs on Windows (only Windows has a Service Control
+ * Manager client), whether the server is a failover cluster instance (`agent.profile`; undefined until it is read), the sampled
+ * service state and startup type (`explorer.agentService`: 1 stopped, 2 start pending, 3 stop pending, 4 running, 5-7 continue,
+ * pause pending and paused; startup 4 disabled; undefined when unknown), and whether a start, stop or restart of it already runs in
+ * this window. The server's platform comes from the target's `linux` and `engine`.
+ */
+export interface AgentServiceTarget {
+  readonly windowsClient: boolean
+  readonly clustered?: boolean
+  readonly state?: number
+  readonly startup?: number
+  readonly busy?: boolean
+}
+export type AgentServiceAction = 'startAgent' | 'stopAgent' | 'restartAgent'
+export const agentServiceActions = ['startAgent', 'stopAgent', 'restartAgent'] as const satisfies readonly AgentServiceAction[]
+export const isAgentServiceAction = (action: string): action is AgentServiceAction => (agentServiceActions as readonly string[]).includes(action)
+/**
+ * One rule that greys the service verbs it names; the first that applies to a verb wins. Without a sample the state is unknown, not
+ * unreadable, so the verbs stay enabled and the dialog's own describe decides (as a database's rules do without a runtime). Varia on
+ * macOS or Linux, a Linux server, Managed Instance and a failover cluster instance keep the verbs in the menu, greyed with the reason;
+ * the backend's preflight refuses them NOT_SUPPORTED all the same.
+ */
+export interface AgentServiceRule {
+  readonly id: 'client' | 'linux' | 'managedInstance' | 'clustered' | 'busy' | 'pending' | 'running' | 'stopped' | 'disabled'
+  readonly actions: readonly AgentServiceAction[]
+  readonly when: string
+  readonly reason: string
+}
+export const agentServiceRules: readonly AgentServiceRule[] = [
+  { id: 'client', actions: agentServiceActions, when: 'Varia is not running on Windows', reason: 'Starting and stopping SQL Server Agent needs Varia on Windows.' },
+  { id: 'linux', actions: agentServiceActions, when: 'the server runs on Linux', reason: 'On Linux, use systemctl on the server.' },
+  { id: 'managedInstance', actions: agentServiceActions, when: 'the server is Azure SQL Managed Instance', reason: 'Azure SQL Managed Instance runs SQL Server Agent itself.' },
+  { id: 'clustered', actions: agentServiceActions, when: 'the server is a failover cluster instance', reason: 'Use Failover Cluster Manager for a clustered instance.' },
+  { id: 'busy', actions: agentServiceActions, when: 'a start, stop or restart of SQL Server Agent runs in this window', reason: 'SQL Server Agent is being started or stopped.' },
+  { id: 'pending', actions: agentServiceActions, when: 'the service is starting, stopping, resuming, pausing or paused', reason: 'SQL Server Agent is changing state; try again when it settles.' },
+  { id: 'running', actions: ['startAgent'], when: 'the service is running', reason: 'SQL Server Agent is running.' },
+  { id: 'stopped', actions: ['stopAgent', 'restartAgent'], when: 'the service is stopped', reason: 'SQL Server Agent is stopped.' },
+  { id: 'disabled', actions: ['startAgent', 'restartAgent'], when: "the service's startup type is Disabled", reason: 'The SQL Server Agent service is disabled.' }
+]
+const agentRuleApplies = (id: AgentServiceRule['id'], target: ActionTarget, agent: AgentServiceTarget): boolean => {
+  switch (id) {
+    case 'client': return !agent.windowsClient
+    case 'linux': return !!target.linux
+    case 'managedInstance': return target.engine === 'managedInstance'
+    case 'clustered': return !!agent.clustered
+    case 'busy': return !!agent.busy
+    case 'pending': return agent.state !== undefined && agent.state !== 1 && agent.state !== 4
+    case 'running': return agent.state === 4
+    case 'stopped': return agent.state === 1
+    case 'disabled': return agent.startup === 4
+  }
+}
+/** The Agent node's row narrowed by its service facts, and why each greyed verb is unavailable. Without facts the row stands. */
+export function agentServiceActionState(row: ActionRow, target: ActionTarget, rules: readonly AgentServiceRule[] = agentServiceRules): { readonly row: ActionRow; readonly reasons: Partial<Record<ObjectAction, string>> } {
+  const agent = target.agent
+  if (!agent) return { row, reasons: {} }
+  const narrowed: ActionRow = { ...row }, reasons: Partial<Record<ObjectAction, string>> = {}
+  for (const action of agentServiceActions) {
+    if (row[action] !== 'enabled') continue
+    const rule = rules.find(item => item.actions.includes(action) && agentRuleApplies(item.id, target, agent))
+    if (rule) { narrowed[action] = 'disabled'; reasons[action] = rule.reason }
+  }
+  return { row: narrowed, reasons }
+}
+
+/**
  * What the selection is: a folder, or an object with its subtype, its status badge, a database's runtime state, and the
  * kind of server it is on. Each fact narrows the menu only when it is known.
  */
@@ -390,6 +499,10 @@ export interface ActionTarget {
   readonly status?: NodeStatus
   readonly database?: DatabaseRuntime
   readonly engine?: ServerEngine
+  /** The server runs on Linux (the connection's profile). */
+  readonly linux?: boolean
+  /** The SQL Server Agent node: what its Start, Stop and Restart depend on (agentServiceRules). */
+  readonly agent?: AgentServiceTarget
 }
 const noActions = Object.freeze(Object.fromEntries(objectActions.map(action => [action, '']))) as Readonly<Record<ObjectAction, ActionState>>
 /** Whether an action with these `engines` is offered on a server of `engine`; an unknown engine offers it. */
@@ -416,16 +529,17 @@ export function actionMenuState(target: ActionTarget | undefined, sources: Actio
   const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
   const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
   if (!listed) return noActions
-  const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
+  const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : target.kind === 'agent' ? agentServiceActionState(listed, target).row : listed
   const onRows = (action: ObjectAction) => specs[action]?.folder === undefined || specs[action]?.rows !== undefined
   return Object.fromEntries(objectActions.map(action => [action, onRows(action) && offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
 }
 /** Why the database's state greys each action it greys (the rules' reasons), for a database target; empty for anything else. */
 export function actionMenuReasons(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Partial<Record<ObjectAction, string>> {
-  if (target?.kind !== 'database') return {}
+  if (target?.kind !== 'database' && target?.kind !== 'agent') return {}
   const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
   const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
-  return listed ? databaseActionState(listed, target.database, sources.rules).reasons : {}
+  if (!listed) return {}
+  return target.kind === 'agent' ? agentServiceActionState(listed, target).reasons : databaseActionState(listed, target.database, sources.rules).reasons
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
@@ -507,7 +621,13 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   // SSMS has no keys for either.
   disable: { icon: 'circle-slash', keywords: ['login', 'account', 'block', 'deactivate'], documentTask: false, unavailableHint: 'Select an enabled login in Object Explorer.' },
   enable: { icon: 'pass', keywords: ['login', 'account', 'allow', 'activate'], documentTask: false, unavailableHint: 'Select a disabled login in Object Explorer.' },
-  unlock: { icon: 'unlock', keywords: ['login', 'account', 'locked', 'lockout', 'password', 'policy'], documentTask: false, unavailableHint: 'Select a SQL Server login in Object Explorer.' }
+  unlock: { icon: 'unlock', keywords: ['login', 'account', 'locked', 'lockout', 'password', 'policy'], documentTask: false, unavailableHint: 'Select a SQL Server login in Object Explorer.' },
+  // SSMS has no keys for the Agent verbs.
+  startJob: { icon: 'play', keywords: ['agent', 'job', 'run', 'step', 'execute'], documentTask: false, unavailableHint: 'Select a SQL Server Agent job in Object Explorer.' },
+  stopJob: { icon: 'debug-stop', keywords: ['agent', 'job', 'cancel', 'running'], documentTask: false, unavailableHint: 'Select a SQL Server Agent job in Object Explorer.' },
+  startAgent: { icon: 'play', keywords: ['agent', 'service', 'sqlserveragent'], documentTask: false, unavailableHint: 'Select the SQL Server Agent node in Object Explorer.' },
+  stopAgent: { icon: 'debug-stop', keywords: ['agent', 'service', 'sqlserveragent'], documentTask: false, unavailableHint: 'Select the SQL Server Agent node in Object Explorer.' },
+  restartAgent: { icon: 'debug-restart', keywords: ['agent', 'service', 'sqlserveragent'], documentTask: false, unavailableHint: 'Select the SQL Server Agent node in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -784,7 +904,13 @@ const dialogSpecData = {
     title: 'Table Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'tableProperties',
     pages: [page('general', 'General'), page('permissions', 'Permissions'), page('changeTracking', 'Change Tracking'), page('storage', 'Storage'), page('securityPredicates', 'Security Predicates'),
       page('extendedProperties', 'Extended Properties')]
-  }
+  },
+  // SSMS's "Start Job on '<server>'" step list (AG-2): only for a job with more than one step; one with a single step starts at once.
+  startJobAtStep: { title: 'Start Job at Step', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'startJob', pages: [page('general', 'General')] },
+  // The Agent service's confirmation, then its steps in place (AG-2).
+  startAgent: { title: 'Start SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'startAgent', pages: [page('general', 'General')], steps: true },
+  stopAgent: { title: 'Stop SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'stopAgent', pages: [page('general', 'General')], steps: true },
+  restartAgent: { title: 'Restart SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'restartAgent', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -866,7 +992,13 @@ export const actionErrorRetryable = {
   // The account differs from this target's verified identity; an explicit reconnect must resolve it.
   AUTH_IDENTITY: false,
   // The server's password policy refused the password (15114-15118, or 33062-33064 on Linux): another password can pass.
-  PASSWORD_POLICY: true
+  PASSWORD_POLICY: true,
+  // SQL Server Agent is not running (its 22022 after a re-read, or 15281: Agent XPs off): start it, then try again.
+  AGENT_STOPPED: false,
+  // SQL Server Agent refused a job's start or stop for the job's state (22022 after a re-read): already running, or not running.
+  JOB_STATE: false,
+  // The server machine or its Service Control Manager could not be reached for a start or stop of SQL Server Agent (RPC errors).
+  SERVICE_UNREACHABLE: false
 } as const satisfies Record<string, boolean>
 export type ActionErrorCode = keyof typeof actionErrorRetryable
 export const actionErrorCodes = Object.keys(actionErrorRetryable) as ActionErrorCode[]
