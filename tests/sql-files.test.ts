@@ -1035,6 +1035,18 @@ describe('changes made outside', () => {
     expect(await store.check(roomy)).toEqual([{ fileId: legacy.id, change: 'deleted' }])
     expect(await store.changedOnDisk(legacy.id)).toBe(false)
   })
+  it('asks before overwriting an external change that preserves file size and timestamp on an ordinary Save', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'ordinary.sql'), time = new Date('2026-01-01T00:00:00Z')
+    await writeFile(path, 'SELECT 1')
+    await utimes(path, time, time)
+    const opened = await store.read(path)
+    await writeFile(path, 'SELECT 2')
+    await utimes(path, time, time)
+    const declined = prompts()
+    expect(await saveDocument(store, request('SELECT 3', opened.id), undefined, declined.value, true)).toBeNull()
+    expect(declined.asked).toEqual(['changed ordinary.sql'])
+    expect(await readFile(path, 'utf8')).toBe('SELECT 2')
+  })
   it('verifies restored file bytes on save when a later external edit preserves the size and timestamp', async () => {
     const store = new SqlFileStore(), path = join(directory, 'pinned.sql'), time = new Date('2026-01-01T00:00:00Z')
     await writeFile(path, 'SELECT 1')

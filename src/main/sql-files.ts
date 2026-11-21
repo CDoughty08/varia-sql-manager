@@ -71,7 +71,7 @@ const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENO
  *  `missing` keeps the last content's hash: a file deleted and then written back unchanged is no change. */
 interface Stamp { readonly size: number; readonly mtimeMs: number; readonly sha256: string; readonly missing?: true }
 interface FileBaseline { readonly baseSha256?: string }
-interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind; readonly restored?: true }
+interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind }
 interface FileReadOptions {
   readonly reload?: boolean
   readonly kind?: DocumentKind
@@ -194,7 +194,7 @@ export class SqlFileStore {
       if (!existing || reload || !this.stamps.has(file.id)) {
         const hash = sha256(bytes)
         if (!existing || reload) this.files.set(file.id, restore
-          ? { file, kind, restored: true, baseSha256: restore.baseSha256 }
+          ? { file, kind, baseSha256: restore.baseSha256 }
           : { file, kind, baseSha256: hash })
         this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
       }
@@ -374,12 +374,12 @@ export class SqlFileStore {
    *  reported and the user did not reload counts): Save asks before replacing that. A deleted file is no change here,
    *  since Save writes it again. */
   async changedOnDisk(fileId: string): Promise<boolean> {
-    const { baseSha256, restored } = this.registered(fileId)
-    // Verify the bytes before a restored buffer replaces them, even if a sync or copy preserved the file metadata.
-    const comparison = await this.compare(fileId, restored).catch(() => undefined)
-    if (restored && !comparison) return true
-    const stamp = comparison?.stamp ?? this.stamps.get(fileId)
-    return !!stamp && !stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)
+    const { baseSha256 } = this.registered(fileId)
+    // A sync or copy can preserve the size and timestamp. Verify the bytes immediately before offering to replace them.
+    const comparison = await this.compare(fileId, true).catch(() => undefined)
+    if (!comparison) return true
+    const { stamp } = comparison
+    return !stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)
   }
 
   /** How the file differs from its stamp, and the stamp that records what was seen; undefined when it cannot tell. */
