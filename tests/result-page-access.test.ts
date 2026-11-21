@@ -41,6 +41,31 @@ describe('result page access', () => {
     const views = readFileSync('backend/Varia.Backend/Results/ResultViews.cs', 'utf8')
     expect([...views.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
   })
+  it('refuses a windowed BigQuery result in every reader of stored pages before it does any work (REMOTE_RESULT)', () => {
+    // A windowed result has no stored pages: its rows stay in BigQuery (docs/architecture.md, Results). Each reader finds its
+    // set through Stored(...), which answers REMOTE_RESULT; only these find a set another way, each for its own reason.
+    const service = sources.filter(file => /^backend\/Varia\.Backend\/SqlService[^/]*\.cs$/.test(file))
+    const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
+      .filter(([, , line]) => /\bstore\.Find\(/.test(line) && !/\bStored\(store\.Find\(/.test(line))
+      .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
+    expect(unguarded.sort()).toEqual([
+      // Visibility only asks whether the result exists.
+      'SqlService.cs: visibility = new ResultVisibility(id => this.store.Find(id) is not null);',
+      // results.read and results.rowBytes route a windowed result to its block cache (ReadRemoteAsync, RemoteResult.RowBytes).
+      'SqlService.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
+      'SqlService.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
+      // A comparison being replaced is a diff the backend built in memory, never windowed.
+      'SqlService.cs: var replaced = store.Find(replacedId) ?? throw Unavailable(replacedId);',
+      // Load into memory is the one request that wants the windowed result.
+      'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
+    ].sort())
+    const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
+    expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
+    expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)
+    // Copy and Save lease the set first; the lease refuses a windowed one.
+    expect(readFileSync('backend/Varia.Backend/Results/ResultJobs.cs', 'utf8')).toMatch(/var set = store\.Find\(resultId\);\n\s*\/\/[^\n]*\n\s*if \(set is \{ IsRemote: true \}\) throw SqlService\.RemoteRefused\(\);/)
+    expect(readFileSync('backend/Varia.Backend/SqlService.BigQueryResidence.cs', 'utf8')).toMatch(/internal static ResultSetBuffer Stored\(ResultSetBuffer set\) => set\.IsRemote \? throw RemoteRefused\(\) : set;/)
+  })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {
     const store = readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')
     expect(store).toMatch(/internal static PagePacking DefaultPacking \{ get; set; \} = PagePacking\.Off;/)

@@ -238,7 +238,7 @@ export class ResultsPortHost {
   }
 
   queryEvent(queryId: string, event: QueryEvent): void {
-    if (event.type === 'resultSet.opened') this.own([event.descriptor])
+    if (event.type === 'resultSet.opened' || event.type === 'resultSet.residence') this.own([event.descriptor])
     this.post({ t: 'query', queryId, event })
   }
 
@@ -341,6 +341,7 @@ export class ResultsPortHost {
     }
     const params: ResultsReadParams = { resultId: request.resultId, firstRow: request.firstRow, maxRows: request.maxRows }
     if (request.viewId !== undefined) params.viewId = request.viewId
+    if (request.viewer !== undefined) params.viewer = request.viewer
     stream.handle = this.backend.read(request.generation, params, sink, credit)
     stream.handle.done.then(result => {
       if (this.streams.get(rid) !== stream || this.port !== port) return

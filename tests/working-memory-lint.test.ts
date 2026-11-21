@@ -90,3 +90,27 @@ it('lists every method that reserves working memory, so a new one is added to th
   expect(counts(strip(body('DiffWritten').replace('!store.TryReserveWork(left.Budget, working)', 'false /* !store.TryReserveWork(left.Budget, working) */')))).not.toEqual(expected.DiffWritten)
   expect(counts(strip(body('PivotAsync').replace(/^.*figures\.TryReserve, keyMemory.*$/m, line => `#if false\n${line}\n#endif`)))).not.toEqual(expected.PivotAsync)
 })
+
+// A windowed BigQuery result's block cache (RemoteResult.cs) reserves a block's estimate from the global budget before it
+// fetches the block, within the cache's own limit, evicting its least recent blocks for room, and settles the difference
+// once the pages are built; a seeded page is reserved before it is kept. Without them a cache would grow uncounted.
+const remote = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'RemoteResult.cs'), 'utf8'))
+const between = (from: string, to: string) => remote.slice(remote.indexOf(from), remote.indexOf(to, remote.indexOf(from)))
+
+it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
+  const fetch = between('private async Task FetchAsync(', 'private void Reserve(')
+  expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
+  expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
+  // A failed fetch gives its estimate back; a built one settles what it really cost.
+  expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(2)
+  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate && !store\.TryReserveCache\(ref held, long\.MaxValue, cost - estimate\)\) Force\(cost - estimate\);/)
+  // The reservation is the cache's own limit and the global budget, evicting blocks no read waits for, else TOO_LARGE.
+  const reserve = between('private void Reserve(', 'private void Force(')
+  expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes\)\)/)
+  expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
+  expect(reserve).toMatch(/throw new RequestException\("TOO_LARGE"/)
+  const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
+  expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeLessThan(seed.indexOf('block.Pages.Add(page);'))
+  // Every charge of the cache goes through the store's cache accounting.
+  expect(count(remote, /\bstore\.TryReserve(?:Work|Spare)?\(/g)).toBe(0)
+})

@@ -1551,6 +1551,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 :is(.memory-bar > span, .memory-swatch)[data-part="raw"] { background: var(--varia-charts-blue); }
 :is(.memory-bar > span, .memory-swatch)[data-part="packed"] { background: var(--varia-charts-purple); }
 :is(.memory-bar > span, .memory-swatch)[data-part="cache"] { background: var(--varia-charts-yellow); }
+:is(.memory-bar > span, .memory-swatch)[data-part="window"] { background: var(--varia-charts-green); }
 :is(.memory-bar > span, .memory-swatch)[data-part="returned"] { background: repeating-linear-gradient(-45deg, var(--varia-successForeground) 0 3px, transparent 3px 6px); }
 .memory-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-1) var(--varia-space-4); margin: var(--varia-space-1) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); }
 .memory-legend li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--varia-space-2); }
@@ -1585,6 +1586,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .memory-bar > span, .memory-mini > span, .memory-swatch { forced-color-adjust: none; background: CanvasText; opacity: 1; }
   .memory-mini > span:not([data-state]), :is(.memory-bar > span, .memory-swatch)[data-part="packed"] { background: repeating-linear-gradient(90deg, CanvasText 0 2px, Canvas 2px 4px); }
   :is(.memory-bar > span, .memory-swatch)[data-part="cache"] { background: repeating-linear-gradient(0deg, CanvasText 0 2px, Canvas 2px 4px); }
+  :is(.memory-bar > span, .memory-swatch)[data-part="window"] { background: repeating-linear-gradient(45deg, CanvasText 0 1px, Canvas 1px 4px); }
   :is(.memory-bar > span, .memory-swatch)[data-part="returned"] { background: repeating-linear-gradient(-45deg, CanvasText 0 2px, Canvas 2px 4px); }
 }
 .update-status { display: flex; align-items: center; margin-left: 12px; white-space: nowrap; }

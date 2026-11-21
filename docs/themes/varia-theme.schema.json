@@ -1843,8 +1843,8 @@
         },
         "charts.green": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Third series of a chart. Default $chart3 (Dark #199e70, Light #12936a).",
-          "markdownDescription": "(VS Code) Third series of a chart. Default `$chart3` (Dark `#199e70`, Light `#12936a`)."
+          "description": "(VS Code) Third series of a chart; also the block cache of windowed BigQuery results in the Memory panel. Default $chart3 (Dark #199e70, Light #12936a).",
+          "markdownDescription": "(VS Code) Third series of a chart; also the block cache of windowed BigQuery results in the Memory panel. Default `$chart3` (Dark `#199e70`, Light `#12936a`)."
         },
         "charts.yellow": {
           "$ref": "#/definitions/value",

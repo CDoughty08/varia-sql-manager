@@ -197,7 +197,16 @@ export interface QueryOptions {
   maximumBytesBilled?: number
   /** BigQuery: false for Show cost as Bytes only, so the job's Messages line leaves out the dollars (default true). SQL Server refuses it. */
   prices?: boolean
+  /** BigQuery: where a result's rows live (queryResults.bigQuery.residence; docs/bigquery.md, Residence). SQL Server refuses it. */
+  residence?: ResidenceSetting
+  /** BigQuery: each windowed result's block cache, 16 to 4,096 MiB (queryResults.bigQuery.windowCacheMiB). SQL Server refuses it. */
+  windowCacheMiB?: number
 }
+/** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
+export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
+/** results.remoteQuery (docs/ipc.md): a query over a windowed BigQuery result this renderer owns in `generation`, run like
+ *  query.execute under its own `queryId` (query.cancel stops it). `load` reads the whole result into memory. */
+export interface ResultsRemoteQueryParams { queryId: string; resultId: number; generation: number; kind: 'load' }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
 export interface ResultColumn {
@@ -252,7 +261,16 @@ export interface ResultDescriptor {
   /** The query's own name for the set, from a `#Name="…"` marker comment before its statement (docs/ipc.md): 1 to 128
    *  characters, no control, line separator or bidirectional characters. Absent when the set has none. */
   name?: string
+  /** A BigQuery result's residence (docs/bigquery.md, Residence): `memory`, or `remote` when its rows stay in BigQuery's
+   *  destination table and are read in blocks as the grid scrolls. Absent for SQL Server. */
+  residence?: ResultResidence
+  /** BigQuery's total row count, which may pass `rowsAvailable` (the 2,147,483,647-row cap). */
+  rowsTotal?: number
+  /** Bumped by each switch between memory and windowed (resultSet.residence): pages read under an older revision are stale. */
+  revision?: number
 }
+/** Where a BigQuery result's rows live: `remote` is windowed in BigQuery. */
+export type ResultResidence = 'memory' | 'remote'
 /**
  * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); what the script
  * printed (PRINT, RAISERROR with severity 10 or less) is `print`, which opens the Messages strip under the results; SQL
@@ -330,6 +348,8 @@ export interface ResultCodecCounters {
 export interface ResultMemoryDetail {
   logicalBytes: number; storedBytes: number; compressedBytes: number; packedLogicalBytes: number; cacheBytes: number
   largest: ResultMemoryEntry[]; codec: ResultCodecCounters; heap: { committedBytes: number; freeBytes: number }
+  /** Windowed BigQuery results' block caches (docs/bigquery.md, Block cache), part of the global budget. */
+  windowCacheBytes?: number
 }
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
@@ -338,14 +358,17 @@ export type QueryEvent =
   | { type: 'session.opened'; spid: number; login?: string }
   | { type: 'resultSet.opened'; descriptor: ResultDescriptor }
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
+  /** A BigQuery result switched between memory and windowed under a new revision (a misestimate, Load into memory). Essential. */
+  | { type: 'resultSet.residence'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
   | { type: 'messages'; messages: MessageEntry[] }
   | QueryJobEvent
 /** A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): its id, project and location, whether
  *  it is auxiliary, and the session's tracked transaction as the job started. Never the session id. Essential. */
 export interface QueryJobEvent { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown' }
-/** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. */
-export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number }
+/** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. `viewer` names the grid
+ *  reading a windowed BigQuery result, whose read-ahead follows that grid's scrolling. */
+export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number; viewer?: number }
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
 export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
 export interface ResultsCloseResult { closed: number; usedBytes: number }
@@ -638,6 +661,8 @@ export interface RpcMethods {
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
+  /** A query over a windowed BigQuery result (Load into memory); its EVENTs and summary are a query's. */
+  'results.remoteQuery': { params: ResultsRemoteQueryParams; result: QueryResult }
   /** `transaction` ends the session's open transaction first; a failed commit leaves the session open.
    *  `abortOnRefusedCommit` (default true) lets a BigQuery commit refused on an unchecked session end the session anyway;
    *  the result's `note` says what became of a BigQuery commit or of the session's end. */
@@ -966,6 +991,8 @@ export interface VariaApi {
   shortcuts: ShortcutsApi
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
+  /** results.remoteQuery: Load into memory for a windowed BigQuery result this renderer owns; `cancel(queryId)` stops it. */
+  remoteQuery(params: ResultsRemoteQueryParams): Promise<ApiResult<QueryResult>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
    *  the session open, with its transaction. The result's `note` says what became of a BigQuery commit or session end. */
   closeQuerySession(sessionId: string, options?: SessionCloseOptions): Promise<ApiResult<SessionCloseResult>>

@@ -28,8 +28,14 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * A tile is read again only from where its rows end: when its rows' pages do not fit the worker's cache together (large
  * XML or JSON values), the worker answers with the rows it holds, and the tile's next part starts after them at once.
  */
+// Viewer ids name grids across the page; 1 up to 2^31 - 1, then round again (a few hundred grids live at once).
+let viewers = 0
+const nextViewer = (): number => (viewers = viewers % 0x7ffffffe + 1)
+
 export class GridData {
   readonly counters: TileCounters = { hits: 0, misses: 0 }
+  /** This grid as a reader of a windowed BigQuery result (results.read `viewer`): its read-ahead follows this grid alone. */
+  readonly viewer = nextViewer()
   private readonly handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>
   private readonly columns: number
   /** The tiles' size (tiles.ts); 128 rows × 32 columns unless the grid asks for another. */
@@ -254,7 +260,7 @@ export class GridData {
       this.parts.set(key, starts)
     }
     this.handle.getWindow(from, end - from, {
-      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal: controller.signal
+      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal: controller.signal, viewer: this.viewer
     }).then(window => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
       this.retried.delete(key)

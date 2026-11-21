@@ -1,0 +1,335 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using Google;
+using Google.Apis.Bigquery.v2.Data;
+using Varia.Backend.BigQuery;
+using Varia.Backend.Protocol;
+using Varia.Backend.Results;
+
+namespace Varia.Backend;
+
+/// <summary>
+/// Where a BigQuery result's rows live (docs/bigquery.md, Residence): in memory, as SQL Server's do, or windowed in the job's
+/// destination table and read in blocks through <see cref="RemoteResult"/>. The residence is chosen once the job is done,
+/// from the first page's measured row size and the room the query may still take (queryResults.bigQuery.residence); an
+/// Automatic in-memory read that the budget refuses part way switches to windowed instead of truncating, and Load into
+/// memory (results.remoteQuery, kind load) switches a windowed result back. Every switch bumps the result's revision and
+/// sends resultSet.residence.
+/// </summary>
+internal sealed partial class SqlService
+{
+    /// <summary>How long one results.read waits for a windowed result's blocks before it answers with the rows it has: inside
+    /// results.read's 60 s deadline, so the grid draws the rest as loading and reads again rather than failing.</summary>
+    internal TimeSpan RemoteReadWait { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>What a windowed BigQuery result reads from: its job and destination table, and what decided its blocks.</summary>
+    internal sealed record BigQueryWindow(QueryArgs Args, BigQueryConnection Connection, string Project, string JobId, string? Location, TableReference Table,
+        BigQueryColumnPlan Plan, double RowCost, long TotalRows, long CacheBytes);
+
+    internal enum BigQueryResidence { Automatic, Memory, Windowed }
+
+    internal static BigQueryResidence ResidenceOf(string? setting) => setting switch
+    {
+        null or "automatic" => BigQueryResidence.Automatic,
+        "memory" => BigQueryResidence.Memory,
+        "windowed" => BigQueryResidence.Windowed,
+        _ => throw new RequestException("INVALID_PARAMS", "A result residence is automatic, memory or windowed.")
+    };
+
+    /// <summary>The block cache's limit for a query (queryResults.bigQuery.windowCacheMiB, 16 to 4,096 MiB; 64 by default).</summary>
+    internal static long CacheBytesOf(int? mib) => mib is null ? RemoteResult.DefaultCacheBytes
+        : mib is >= 16 and <= 4096 ? mib.Value * (1L << 20) : throw new RequestException("INVALID_PARAMS", "The window cache is 16 to 4,096 MiB.");
+
+    /// <summary>A windowed result's own error value, answered before any work by every reader of stored pages (the
+    /// architecture's page-access invariant): its rows stay in BigQuery, and its sort, filter and value lists go through
+    /// results.remoteQuery instead.</summary>
+    internal static RequestException RemoteRefused() =>
+        new("REMOTE_RESULT", "This result is windowed in BigQuery: its rows are not in memory. Filter the result, or load it into memory first.");
+
+    /// <summary>Refuses a windowed result before a reader of stored pages does any work (REMOTE_RESULT).</summary>
+    internal static ResultSetBuffer Stored(ResultSetBuffer set) => set.IsRemote ? throw RemoteRefused() : set;
+
+    /// <summary>
+    /// Decides a result's residence after its first page (docs/bigquery.md, Choosing the residence), before the set is
+    /// announced. In memory when the rows arrived whole, under Always in memory, or when the projection from the first page's
+    /// measured row cost fits in half of what the query may still take; then null, and an Automatic read switches to
+    /// windowed if the budget refuses it later (<paramref name="window"/>). Otherwise the set becomes windowed here, its first
+    /// page kept in the cache, and the window is returned. A result whose destination table cannot be read stays in memory.
+    /// </summary>
+    private async Task<RemoteResult?> DecideResidenceAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, Job? job,
+        BigQueryColumnPlan plan, BigQueryPage first, ResultSetBuffer set, QueryBudget budget, QueryMessages messages, Action<BigQueryWindow?> window, CancellationToken token)
+    {
+        var residence = ResidenceOf(args.Residence);
+        var total = first.TotalRows ?? first.RowCount;
+        set.InMemory(total);
+        window(null);
+        if (residence == BigQueryResidence.Memory || first.PageToken is null || first.RowCount == 0) return null;
+        // The first page's rows as pages: what a row costs in the store, and the cache's first block.
+        var measured = new RemoteBlockWriter(set.ResultId, set.Wires, 0);
+        WriteRows(first, plan, measured, int.MaxValue);
+        var pages = measured.Finish();
+        var rowCost = (double)pages.Sum(page => page.Cost) / Math.Max(1, measured.Rows);
+        var wanted = args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
+        var room = Math.Min(store.QueryLimit(budget) - budget.UsedBytes, store.GlobalBytes - store.UsedBytes);
+        var fits = rowCost * wanted <= room / 2.0;
+        if (residence == BigQueryResidence.Automatic && fits) return await KeepInMemoryAsync();
+        var table = await DestinationAsync(connection, project, jobId, location, job, token);
+        if (table is null) return null;
+        var context = new BigQueryWindow(args, connection, project, jobId, location, table, plan, rowCost, total, CacheBytesOf(args.WindowCacheMiB));
+        var remote = Window(context, set);
+        // The first page stays readable at once: rebuilt per block, so each page lies inside one.
+        var seed = new List<RemotePage>();
+        for (long from = 0; from < measured.Rows; from += remote.BlockRows)
+        {
+            var writer = new RemoteBlockWriter(set.ResultId, set.Wires, from);
+            WriteRows(first, plan, writer, remote.BlockRows, skip: (int)from);
+            seed.AddRange(writer.Finish());
+        }
+        remote.Seed(seed);
+        if (!store.Demote(set, remote, total, bump: false)) return null;
+        if (remote.Capped && wanted > RemoteResult.MaxRows) messages.Add(CapNote(wanted));
+        return remote;
+
+        async Task<RemoteResult?> KeepInMemoryAsync()
+        {
+            // An Automatic read may still switch: the destination table is found now, while the job is fresh.
+            var found = await DestinationAsync(connection, project, jobId, location, job, token);
+            if (found is not null)
+            {
+                window(new BigQueryWindow(args, connection, project, jobId, location, found, plan, rowCost, total, CacheBytesOf(args.WindowCacheMiB)));
+                set.SwitchesOnRefusal = true;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>The row cap's note (decision 31): the grid's 32-bit row indexes show this many, and the rest are a filter away.</summary>
+    internal static string CapNote(long total) => "The grid shows the first " + RemoteResult.MaxRows.ToString("N0", CultureInfo.InvariantCulture) + " of "
+        + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Filter the result to see the rest.";
+
+    /// <summary>A windowed result over <paramref name="context"/>'s destination table for the set, its blocks sized by the
+    /// measured row cost and read on the connection's fetch lane.</summary>
+    private RemoteResult Window(BigQueryWindow context, ResultSetBuffer set)
+    {
+        var wanted = context.Args.MaxRows > 0 ? Math.Min(context.TotalRows, context.Args.MaxRows) : context.TotalRows;
+        var rows = Math.Min(wanted, RemoteResult.MaxRows);
+        return new RemoteResult(store, set.ResultId, set.Wires, rows, context.TotalRows > rows, context.RowCost, context.CacheBytes, context.Connection.FetchLane,
+            BigQueryFetch(context))
+        { Source = context };
+    }
+
+    /// <summary>
+    /// Switches an Automatic in-memory read that the budget refused to windowed (docs/bigquery.md, A misestimate): its pages
+    /// are released, it gets a new revision, and resultSet.residence tells the grid. Messages says why. False when the set
+    /// was released meanwhile.
+    /// </summary>
+    private bool SwitchToWindowed(ResultSetBuffer set, BigQueryWindow context, QueryEventSink events, QueryMessages messages)
+    {
+        var remote = Window(context, set);
+        if (!store.Demote(set, remote, context.TotalRows)) return false;
+        events.Residence(set);
+        messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.");
+        if (remote.Capped && context.TotalRows > RemoteResult.MaxRows) messages.Add(CapNote(context.TotalRows));
+        return true;
+    }
+
+    /// <summary>Whether a refusal the set saw should switch it to windowed rather than stop it.</summary>
+    private static bool Switches(ResultSetBuffer set, BigQueryWindow? context) =>
+        context is not null && set.SwitchesOnRefusal && set.Refusal != TruncationReason.None && set.IsOpen;
+
+    /// <summary>The job's destination table when BigQuery names one Varia can read (jobs.get, free); null otherwise.</summary>
+    private async Task<TableReference?> DestinationAsync(BigQueryConnection connection, string project, string jobId, string? location, Job? job, CancellationToken token)
+    {
+        try { job ??= await bigQuery.GetJobAsync(connection, project, jobId, location, token); }
+        catch (Exception error) when (!token.IsCancellationRequested && error is GoogleApiException or TimeoutException or HttpRequestException or IOException) { return null; }
+        return job.Configuration?.Query?.DestinationTable is { } table && BigQueryLimits.IsProject(table.ProjectId)
+            && table.DatasetId is { Length: > 0 and <= BigQueryLimits.Dataset } dataset && BigQueryLimits.DatasetId().IsMatch(dataset)
+            && table.TableId is { } tableId && StorageTableId().IsMatch(tableId) ? table : null;
+    }
+
+    /// <summary>Writes a page's rows (after <paramref name="skip"/>, at most <paramref name="max"/>) into a block writer.</summary>
+    private static void WriteRows(BigQueryPage page, BigQueryColumnPlan plan, RemoteBlockWriter writer, int max, int skip = 0)
+    {
+        if (page.Rows.ValueKind != System.Text.Json.JsonValueKind.Array) return;
+        var at = 0;
+        var written = 0;
+        foreach (var row in page.Rows.EnumerateArray())
+        {
+            if (at++ < skip) continue;
+            if (written++ >= max) break;
+            var builder = writer.BeginRow();
+            try { plan.ReadRow(row, builder, NoWarning); }
+            catch { writer.AbortRow(); throw; }
+            writer.CommitRow();
+        }
+    }
+
+    /// <summary>A windowed read's cell warnings go nowhere: the query's Messages said them for the first page already.</summary>
+    private static readonly Action<string> NoWarning = _ => { };
+
+    /// <summary>The most attempts a block's read makes while BigQuery answers rateLimitExceeded, backing off with jitter.</summary>
+    internal int RateLimitAttempts { get; set; } = 12;
+
+    /// <summary>
+    /// A block's rows through tabledata.list (free, random access): from its first row, following page tokens, decoded by the
+    /// query's column plan. A 404 means BigQuery's result table is gone (REMOTE_EXPIRED). A rate limit backs off with jitter
+    /// and tries again, never as an error, until the reads waiting give up (their own wait) or the attempts run out.
+    /// </summary>
+    private RemoteFetch BigQueryFetch(BigQueryWindow context) => async (firstRow, rows, writer, token) =>
+    {
+        string? pageToken = null;
+        for (var attempt = 1; writer.Rows < rows; )
+        {
+            BigQueryPage page;
+            try
+            {
+                page = await bigQuery.TableRowsAsync(context.Connection, context.Table, pageToken is null ? firstRow + writer.Rows : null, (int)Math.Min(rows - writer.Rows, bigQuery.PageRows), pageToken, token);
+            }
+            catch (Exception error) when (!token.IsCancellationRequested && NotFound(error)) { throw new RemoteExpiredException(error); }
+            catch (Exception error) when (!token.IsCancellationRequested && RateLimited(error) && attempt < RateLimitAttempts)
+            {
+                var delay = bigQuery.RetryDelay * (1 << Math.Min(attempt - 1, 5));
+                await Task.Delay(delay * (0.5 + Random.Shared.NextDouble()), token);
+                attempt++;
+                continue;
+            }
+            catch (ObjectDisposedException) when (!token.IsCancellationRequested) { throw new RequestException("NOT_CONNECTED", "The connection was closed."); }
+            using (page)
+            {
+                var count = page.RowCount;
+                WriteRows(page, context.Plan, writer, (int)(rows - writer.Rows));
+                pageToken = page.PageToken;
+                if (count == 0 || pageToken is null) break;
+            }
+        }
+    };
+
+    private static bool NotFound(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is GoogleApiException api) return api.HttpStatusCode == HttpStatusCode.NotFound;
+        return false;
+    }
+
+    private static bool RateLimited(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is GoogleApiException api) return api.HttpStatusCode == HttpStatusCode.TooManyRequests || api.Error?.Errors?.Any(item => item.Reason == "rateLimitExceeded") == true;
+        return false;
+    }
+
+    /// <summary>
+    /// results.read of a windowed result: the cached pages that cover the window, fetching the blocks it lacks (and its
+    /// viewer's read-ahead) on the fetch lane. It waits within <see cref="RemoteReadWait"/> and its credit, then answers with
+    /// the rows sent; rows not sent yet draw as loading and are read again. REMOTE_EXPIRED once the destination table is gone.
+    /// </summary>
+    private async Task<ResultsReadResult> ReadRemoteAsync(ResultsReadArgs args, ResultSetBuffer set, RemoteResult remote, RequestContext context)
+    {
+        var wait = context.Remaining is { } left ? TimeSpan.FromTicks(Math.Min(RemoteReadWait.Ticks, Math.Max(0, (left - TimeSpan.FromSeconds(5)).Ticks))) : RemoteReadWait;
+        int pages = 0, rows = 0;
+        long next;
+        try
+        {
+            next = await remote.ReadAsync(args.FirstRow, args.MaxRows, args.Viewer ?? 0, async body =>
+            {
+                if (set.IsReleased) throw Unavailable(args.ResultId);
+                await context.SendDataAsync(body);
+                pages++;
+            }, wait, context.Token);
+        }
+        catch (RemoteExpiredException) { throw Expired(); }
+        catch (ObjectDisposedException) { throw Unavailable(args.ResultId); }
+        catch (OperationCanceledException) when (!context.Token.IsCancellationRequested && set.IsReleased) { throw Unavailable(args.ResultId); }
+        catch (Exception error) when (!context.Token.IsCancellationRequested && error is not RequestException)
+        {
+            throw BigQueryErrors.Map(error, (remote.Source as BigQueryWindow)?.Project ?? "") as RequestException
+                ?? new RequestException("BACKEND_ERROR", "BigQuery's rows could not be read: " + BigQueryErrors.Sanitize(error.Message));
+        }
+        rows = (int)Math.Max(0, Math.Min(next, args.FirstRow + args.MaxRows) - args.FirstRow);
+        var available = remote.Rows;
+        return new ResultsReadResult(Math.Max(next, args.FirstRow), available, next >= available, pages, rows);
+    }
+
+    internal static RequestException Expired() =>
+        new("REMOTE_EXPIRED", "BigQuery no longer has this result: its temporary result table expired. Run the query again to see the rest of the rows.");
+
+    /// <summary>
+    /// results.remoteQuery (docs/ipc.md): a query over a windowed result's rows, run like query.execute (unary with EVENTs,
+    /// its own queryId for query.cancel). Only the load kind exists so far: Load into memory reads the destination table into
+    /// the same result, which switches to memory under a new revision (resultSet.residence), then completes (resultSet.closed).
+    /// A refusal part way switches it back to windowed, as an Automatic query's read would, and so does Stop: the result stays
+    /// whole either way. The answer is a query summary.
+    /// </summary>
+    private async Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context)
+    {
+        if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load")
+            throw new RequestException("INVALID_PARAMS", "A remote query needs its query ID, a result and a kind (load).");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (set.Remote is not { Source: BigQueryWindow window } remote) throw new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");
+        var connection = window.Connection;
+        if (bigQuery.Find(connection.Id) != connection) throw new RequestException("NOT_CONNECTED", "The connection was closed.");
+        if (BudgetStopped(set.Budget) is { } stopped) throw stopped;
+        using var cancellation = new CancellationTokenSource();
+        var running = new RunningQuery(connection.Id, args.QueryId, cancellation);
+        if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        using var cancelled = context?.Token.Register(running.Cancel);
+        using var events = new QueryEventSink(context is null ? null : context.SendEvent);
+        var messages = new QueryMessages(events.Message);
+        var token = cancellation.Token;
+        var watch = Stopwatch.StartNew();
+        var status = "completed";
+        QueryFailure? failure = null;
+        try
+        {
+            if (!set.Promote(window.TotalRows)) throw Unavailable(args.ResultId);
+            set.SwitchesOnRefusal = true;
+            events.Residence(set);
+            var first = await bigQuery.QueryResultsAsync(connection, window.Project, window.JobId, window.Location, null, BigQueryFirstPageRows, 0, token);
+            var loadArgs = window.Args;
+            var readSession = await BigQueryStorageSessionAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, messages, token);
+            if (readSession is null) await ReadBigQueryRowsAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
+            else
+            {
+                first.Dispose();
+                await ReadBigQueryArrowAsync(loadArgs, readSession, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
+            }
+            if (set.IsOpen) set.Complete();
+            messages.Add(set.IsRemote ? "The result did not fit in memory, so it stays windowed in BigQuery." : "The result was loaded into memory.");
+        }
+        catch (Exception error)
+        {
+            // Stopped or failed part way: the result goes back to windowed, whole, rather than staying a partial copy.
+            if (set.IsOpen && !set.IsReleased) SwitchBack();
+            if (token.IsCancellationRequested)
+            {
+                status = "cancelled";
+                failure = new("CANCELLED", "Loading into memory was cancelled. The result stays windowed in BigQuery.", 1, 1);
+                messages.Add(failure.Message, MessageKind.Error);
+            }
+            else
+            {
+                var mapped = error as RequestException ?? BigQueryErrors.Map(error, window.Project) as RequestException
+                    ?? new RequestException("BACKEND_ERROR", "Loading into memory stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
+                status = "failed";
+                failure = new(mapped.Code, mapped.Message, 1, 1);
+                messages.Add(mapped.Message, MessageKind.Error);
+            }
+        }
+        finally
+        {
+            watch.Stop();
+            queries.TryRemove(new(args.QueryId, running));
+            events.Closed(set);
+        }
+        var budget = set.Budget;
+        return new([set.Describe()], 0, messages.Snapshot(), -1, watch.ElapsedMilliseconds, status, failure, status == "completed" ? 1 : 0, 1, "", messages.Truncated,
+            SummaryBudget(budget.StoppedBytes), DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture));
+
+        void SwitchBack()
+        {
+            var back = Window(window, set);
+            if (store.Demote(set, back, window.TotalRows)) events.Residence(set);
+        }
+    }
+}

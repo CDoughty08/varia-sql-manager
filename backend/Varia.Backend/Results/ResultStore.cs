@@ -154,6 +154,8 @@ internal sealed partial class ResultStore
     private uint nextId = 1;
     private long used;
     private long liveUsed;
+    /// <summary>Windowed results' block caches, all of them (<see cref="TryReserveCache"/>): part of <see cref="UsedBytes"/>.</summary>
+    private long windowCacheUsed;
     private long freedSinceCollect;
     private long freedSinceCompact;
     private int collecting;
@@ -253,6 +255,8 @@ internal sealed partial class ResultStore
     /// <summary>What all live tables may hold together (the live share of the budget), and hold now.</summary>
     public long LiveBytes => Volatile.Read(ref figures).Live;
     public long LiveUsedBytes => Interlocked.Read(ref liveUsed);
+    /// <summary>What windowed results' block caches hold (the Memory panel's "window cache").</summary>
+    public long WindowCacheBytes => Interlocked.Read(ref windowCacheUsed);
     /// <summary>Bytes released toward the next forced collection (the checks read it).</summary>
     internal long FreedSinceCollect => Interlocked.Read(ref freedSinceCollect);
     /// <summary>Bytes released toward the next compacting collection (the checks read it).</summary>
@@ -810,6 +814,67 @@ internal sealed partial class ResultStore
     }
 
     public int IdentityCount { get { lock (gate) return identities.Count; } }
+
+    /// <summary>Switches a stored set to windowed (docs/bigquery.md, A misestimate): its views, snapshots and identities go
+    /// first, as on a release, then its pages (<see cref="ResultSetBuffer.Demote"/>). False once it was released, and the
+    /// remote result is then disposed.</summary>
+    public bool Demote(ResultSetBuffer set, RemoteResult remote, long totalRows, bool bump = true)
+    {
+        List<ResultView> dropped;
+        lock (gate)
+        {
+            if (!sets.ContainsKey(set.ResultId)) dropped = [];
+            else dropped = DropViewsLocked([set]);
+        }
+        Free([], dropped);
+        if (set.Demote(remote, totalRows, bump)) return true;
+        remote.Dispose();
+        return false;
+    }
+
+    /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Block cache) to the global budget, as a live table
+    /// is, not to a query's half: within the cache's own limit (<paramref name="limit"/>, what <paramref name="held"/> counts
+    /// for that cache) and the global budget. The cache evicts its own blocks and asks again when this refuses.</summary>
+    public bool TryReserveCache(ref long held, long limit, long bytes)
+    {
+        if (bytes <= 0) return true;
+        if (Interlocked.Add(ref held, bytes) > limit)
+        {
+            Interlocked.Add(ref held, -bytes);
+            return false;
+        }
+        var global = Volatile.Read(ref figures).Global;
+        for (var current = Interlocked.Read(ref used); ; current = Interlocked.Read(ref used))
+        {
+            if (current + bytes > global)
+            {
+                Interlocked.Add(ref held, -bytes);
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) break;
+        }
+        Interlocked.Add(ref windowCacheUsed, bytes);
+        return true;
+    }
+
+    /// <summary>Charges a block's bytes past its estimate whatever the budget (its pages are already built); the caller counts
+    /// them in its own figure.</summary>
+    internal void ForceCache(long bytes)
+    {
+        Interlocked.Add(ref used, bytes);
+        Interlocked.Add(ref windowCacheUsed, bytes);
+    }
+
+    /// <summary>Gives back a block cache's bytes (<see cref="TryReserveCache"/>).</summary>
+    public void ReturnCache(ref long held, long bytes)
+    {
+        if (bytes <= 0) return;
+        Interlocked.Add(ref held, -bytes);
+        Interlocked.Add(ref windowCacheUsed, -bytes);
+        Interlocked.Add(ref used, -bytes);
+        RoomChanged();
+        Freed(bytes);
+    }
 
     /// <summary>Releases the given ids (unknown and repeated ids are skipped) and returns how many were released.</summary>
     public int Release(IEnumerable<uint> resultIds)

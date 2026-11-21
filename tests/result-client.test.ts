@@ -209,6 +209,42 @@ describe('ResultClient', () => {
     expect(memory).toHaveBeenLastCalledWith({ usedBytes: 0, globalBytes: 0, generation: 0, seq: 0 })
   })
 
+  it('starts a result again under a new revision: its pages and windows go, and the grid reads its rows again', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10, truncated: 'queryBudget' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    const first = handle.getWindow(0, 4)
+    await settle()
+    serve()
+    expect((await first).count).toBe(4)
+    worker().fromWorker.splice(0)
+    // The read is cached: asking again reads nothing.
+    await handle.getWindow(0, 4)
+    expect(worker().fromWorker.filter(request => request.t === 'read')).toHaveLength(0)
+    // Switched to windowed (a misestimate): the counters start from the new descriptor, and the old pages go.
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: windowed } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, rowsAvailable: 10, state: 'complete' })
+    expect(handle.getSnapshot().truncated).toBeUndefined()
+    expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
+    const again = handle.getWindow(0, 4, { viewer: 5 })
+    await settle()
+    const reads = worker().fromWorker.filter(request => request.t === 'read')
+    expect(reads).toEqual([expect.objectContaining({ resultId: 3, firstRow: 0, viewer: 5 })])
+    serve()
+    expect((await again).count).toBe(4)
+    // A descriptor of an older revision changes nothing.
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.closed', descriptor: { ...opened, revision: 0, rowsStored: 10 } } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsStored: 0 })
+  })
+
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

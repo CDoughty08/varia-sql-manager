@@ -83,7 +83,38 @@ internal static partial class BigQueryExecutionChecks
             // Stop's jobs.cancel, best-effort.
             fake.On("POST", Base + "/jobs/[^/]+/cancel", request => { Cancels.Enqueue(request.Url.Split('/')[^2]); return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}"); });
             fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+", Table);
+            fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+/data", TableData);
             return fake;
+        }
+
+        /// <summary>What tabledata.list answers instead of rows: 404 (the result table expired), or a status for each of the
+        /// next reads in order (429 rateLimitExceeded).</summary>
+        public int TableDataStatus;
+        public Queue<int> TableDataReplies = new();
+        /// <summary>Holds each tabledata.list until it is set or the request is cancelled.</summary>
+        public TaskCompletionSource? TableDataGate;
+        /// <summary>The totalRows BigQuery reports, when it is not the rows the fake has (the row cap).</summary>
+        public long? ReportedTotal;
+        public readonly ConcurrentQueue<(long? StartIndex, int MaxResults, string? PageToken)> TableReads = new();
+
+        BigQueryFake.Reply TableData(BigQueryFake.Request request)
+        {
+            var parameters = HttpUtility.ParseQueryString(request.Uri.Query);
+            long? start = parameters["startIndex"] is { } given ? long.Parse(given, System.Globalization.CultureInfo.InvariantCulture) : null;
+            var asked = int.Parse(parameters["maxResults"] ?? "100000", System.Globalization.CultureInfo.InvariantCulture);
+            var token = parameters["pageToken"];
+            TableReads.Enqueue((start, asked, token));
+            TableDataGate?.Task.Wait(TimeSpan.FromSeconds(30));
+            int status;
+            lock (TableDataReplies) status = TableDataReplies.TryDequeue(out var next) ? next : TableDataStatus;
+            if (status == 404) return BigQueryFake.Fixture("error-not-found", 404);
+            if (status == 429)
+                return new(429, "{\"error\":{\"code\":429,\"message\":\"Exceeded rate limits.\",\"errors\":[{\"reason\":\"rateLimitExceeded\",\"message\":\"Exceeded rate limits.\"}]}}");
+            var offset = token is not null ? int.Parse(token[5..], System.Globalization.CultureInfo.InvariantCulture) : (int)(start ?? 0);
+            var count = Math.Max(0, Math.Min(Math.Min(asked, PageCap), Rows.Count - offset));
+            var answer = new JsonObject { ["kind"] = "bigquery#tableDataList", ["totalRows"] = (ReportedTotal ?? Rows.Count).ToString(System.Globalization.CultureInfo.InvariantCulture), ["rows"] = PageRows(offset, count) };
+            if (offset + count < Rows.Count) answer["pageToken"] = "page-" + (offset + count).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return new(200, answer.ToJsonString());
         }
 
         BigQueryFake.Reply Insert(BigQueryFake.Request request)
@@ -171,7 +202,7 @@ internal static partial class BigQueryExecutionChecks
                 // BigQuery leaves out rows and totalRows when a query returns none.
                 if (Rows.Count > 0)
                 {
-                    answer["totalRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    answer["totalRows"] = (ReportedTotal ?? Rows.Count).ToString(System.Globalization.CultureInfo.InvariantCulture);
                     if (!CacheRows) answer["rows"] = PageRows(offset, count);
                 }
                 if (offset + count < Rows.Count) answer["pageToken"] = Token ?? "page-" + (offset + count).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -289,6 +320,7 @@ internal static partial class BigQueryExecutionChecks
         await EdgesAsync(check);
         Trace("CancelAsync");
         await CancelAsync(check);
+        await ResidenceAsync(check);
         await StorageReadAsync(check);
     }
 

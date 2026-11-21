@@ -8,7 +8,7 @@ import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from
 import { buildLiveSchemas } from '../src/shared/live/schema'
 import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../src/shared/live/schema'
-import { summaryOf } from './fixtures/results'
+import { descriptor as fullDescriptor, summaryOf } from './fixtures/results'
 
 const MiB = 1024 * 1024
 
@@ -204,6 +204,25 @@ describe('ResultsPortHost', () => {
     host.backendState({ status: 'starting', generation: 2 })
     expect(host.ownedCount).toBe(0)
     expect(port().posted.filter(message => message.t === 'backend').map(message => message.t === 'backend' && [message.generation, message.status])).toEqual([[1, 'ready'], [1, 'restarting'], [2, 'starting']])
+  })
+
+  it('owns a result a residence event names, and reads it with its viewer, only in its generation', () => {
+    const { host, read, reads, port } = fixture()
+    // A result announced by resultSet.residence (Load into memory, a misestimate) is readable as one resultSet.opened named.
+    const switched = fullDescriptor(9, { residence: 'remote', rowsTotal: 5_000_000, revision: 1, rowsStored: 0, rowsAvailable: 5_000_000 })
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: switched })
+    expect(host.owns(1, 9)).toBe(true)
+    expect(host.owns(2, 9)).toBe(false)
+    expect(host.owns(1, 10)).toBe(false)
+    read(1, 9, { viewer: 3, firstRow: 1_000_000 })
+    read(2, 10, { viewer: 3 })
+    expect(reads.map(item => item.params)).toEqual([{ resultId: 9, firstRow: 1_000_000, maxRows: 100, viewer: 3 }])
+    expect(port().ends().map(end => [end.rid, !end.ok && end.code])).toEqual([[2, 'RESULT_UNAVAILABLE']])
+    expect(port().posted.filter(message => message.t === 'query').map(message => message.t === 'query' && message.event.type)).toEqual(['resultSet.residence'])
+    // A viewer id is a positive 31-bit number.
+    read(3, 9, { viewer: 0 })
+    read(4, 9, { viewer: 2 ** 31 })
+    expect(port().ends().slice(1).map(end => [end.rid, !end.ok && end.code])).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST']])
   })
 
   it('forwards pages as exact-size ArrayBuffers in sequence, then the end', async () => {

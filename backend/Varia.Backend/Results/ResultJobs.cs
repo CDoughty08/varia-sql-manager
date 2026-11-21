@@ -431,6 +431,8 @@ internal sealed class ResultJobs(ResultStore store)
     private ResultSetBuffer Lease(uint resultId)
     {
         var set = store.Find(resultId);
+        // A windowed result's Copy and Save stream from BigQuery (docs/bigquery.md, Windowed): not through the store's pages.
+        if (set is { IsRemote: true }) throw SqlService.RemoteRefused();
         if (set is not null && set.TryLease()) return set;
         throw store.WasReleased(resultId)
             ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")

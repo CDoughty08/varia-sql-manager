@@ -1,7 +1,8 @@
 import type { SettingDef } from './types'
 
 /**
- * BigQuery's pages (docs/bigquery.md, Cost): Text Editor › GoogleSQL and Query Execution › BigQuery. Byte figures are whole
+ * BigQuery's pages (docs/bigquery.md, Cost and Residence): Text Editor › GoogleSQL, Query Execution › BigQuery and Query
+ * Results › BigQuery. Byte figures are whole
  * GiB, as Google bills in binary units; the cost prompts and the estimate chip read them, and the cap goes out with every job.
  */
 export const bigQuerySettings = [
@@ -34,5 +35,16 @@ export const bigQuerySettings = [
     key: 'queryExecution.bigQuery.showCost', page: 'queryExecution.bigQuery.cost', group: 'Estimates', label: 'Show cost as', type: 'enum', default: 'onDemand', varia: true,
     values: [{ value: 'onDemand', label: 'On-demand US rate ($6.25 per TiB)' }, { value: 'bytes', label: 'Bytes only' }], keywords: ['bigquery', 'price', 'dollars', 'cost'],
     description: 'Dollars beside every byte figure (the estimate, the Results status, Messages and the prompts), at the US on-demand rate. Projects that use reserved capacity are not billed per byte; Bytes only leaves the dollars out.'
+  },
+  {
+    key: 'queryResults.bigQuery.residence', page: 'queryResults.bigQuery.results', label: 'Keep results', type: 'enum', default: 'automatic', varia: true,
+    values: [{ value: 'automatic', label: 'Automatically, by size' }, { value: 'memory', label: 'Always in memory' }, { value: 'windowed', label: 'Always windowed in BigQuery' }],
+    applies: 'nextExecution', keywords: ['bigquery', 'memory', 'windowed', 'remote', 'large results', 'residence'],
+    description: 'Automatically keeps a result in memory when it fits in half of the room the query may still take, and leaves a larger one windowed in BigQuery: its rows are read in blocks as you scroll, free, and expire with the result table BigQuery keeps for about 24 hours. Always in memory truncates at the result memory budget instead.'
+  },
+  {
+    key: 'queryResults.bigQuery.windowCacheMiB', page: 'queryResults.bigQuery.results', label: 'Block cache per windowed result', type: 'integer', min: 16, max: 4096, default: 64, unit: 'MiB', varia: true,
+    applies: 'nextExecution', keywords: ['bigquery', 'memory', 'windowed', 'cache', 'blocks'],
+    description: 'The rows of a windowed result kept in memory as you scroll, part of the result memory budget (Window cache in the Memory panel). The least recently read blocks go first.'
   }
 ] as const satisfies readonly SettingDef[]

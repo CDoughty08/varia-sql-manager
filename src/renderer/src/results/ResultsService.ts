@@ -1412,6 +1412,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
         break
+      case 'resultSet.residence': {
+        // The rows the grid showed are from an older revision: its selection goes (the grid keeps its scroll), and the
+        // status bar and live region say what changed.
+        const entry = run.sets.find(set => set.descriptor.resultId === event.descriptor.resultId)
+        const grid = entry ? this.views.get(tabId)?.grids.get(entry.key) : undefined
+        if (entry && grid?.selection) { grid.selection = undefined; this.controllers.get(entry.key)?.repaint(); this.selectionChanged() }
+        this.announce(tabId, event.descriptor.residence === 'remote'
+          ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
+          : 'The result is loading into memory.')
+        break
+      }
       case 'progress':
         run.completedBatches = event.completedBatches
         run.totalBatches = event.totalBatches

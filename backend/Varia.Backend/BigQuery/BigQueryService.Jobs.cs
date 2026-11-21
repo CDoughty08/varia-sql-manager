@@ -199,8 +199,32 @@ internal sealed partial class BigQueryService
         request.MaxResults = maxResults;
         request.TimeoutMs = waitMs;
         request.FormatOptionsUseInt64Timestamp = true;
+        return await PageAsync(service, request.CreateRequest(), token);
+    }
+
+    /// <summary>
+    /// One <c>tabledata.list</c> page of a result's destination table (docs/bigquery.md, Block cache): free, and random access
+    /// by <paramref name="startIndex"/>, then following <paramref name="pageToken"/>. Times are epoch microseconds, as
+    /// getQueryResults' are. Idempotent, so transport failures, 429 and 5xx are retried as other reads are.
+    /// </summary>
+    internal Task<BigQueryPage> TableRowsAsync(BigQueryConnection connection, TableReference table, long? startIndex, int maxResults, string? pageToken, CancellationToken token) =>
+        ReadAsync(t =>
+        {
+            var service = connection.Client.Service;
+            var request = service.Tabledata.List(table.ProjectId, table.DatasetId, table.TableId);
+            request.StartIndex = startIndex is { } start ? (ulong)start : null;
+            request.PageToken = pageToken;
+            request.MaxResults = maxResults;
+            request.FormatOptionsUseInt64Timestamp = true;
+            return PageAsync(service, request.CreateRequest(), t);
+        }, token);
+
+    /// <summary>A page answer's body read into a parsed document (at most <see cref="MaxPageBytes"/>); a refusal throws
+    /// Google's error.</summary>
+    async Task<BigQueryPage> PageAsync(Google.Apis.Bigquery.v2.BigqueryService service, HttpRequestMessage request, CancellationToken token)
+    {
         // Sent through the service's client (its credential and the library's own retries), its body read here.
-        using var message = request.CreateRequest();
+        using var message = request;
         using var response = await service.HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
         if (!response.IsSuccessStatusCode)
         {

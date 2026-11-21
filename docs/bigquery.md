@@ -285,6 +285,38 @@ type.
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
+### Residence
+
+A BigQuery result can be far larger than the memory budget, and its rows already sit in the job's destination table,
+which is free to read. So a result is either **in memory**, as SQL Server's are, or **windowed in BigQuery**: the
+backend keeps only the blocks the grid is showing, reads the rest as you scroll, and the caption says "windowed in
+BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is docs/ipc.md's Remote results).
+
+- **Setting.** Options › Query Results › BigQuery › Results: **Result residence** (`queryResults.bigQuery.residence`):
+  Automatically, by size (the default), Always in memory (the old behaviour: the budget truncates) or Always windowed in
+  BigQuery; and **Window cache** (`queryResults.bigQuery.windowCacheMiB`, 16 – 4,096 MiB, default 64), the blocks each
+  windowed result keeps. Each query takes them as it starts.
+- **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,
+  under Always in memory, when its destination table cannot be read, or when its rows (the first page's measured cost
+  per row, times the total) fit half of what the query may still take from the budget. Otherwise it is windowed, and the
+  first page becomes its first block. A windowed result counts at most 2,147,483,647 rows (the grid's 32-bit indexes);
+  Messages says so when BigQuery holds more.
+- **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of
+  truncating: its pages are freed, the grid keeps its place and drops its selection, and a screen reader hears that the
+  result is now windowed.
+- **Blocks.** About 4 MiB of measured rows each (256 – 16,384 rows), read with `tabledata.list` from the destination
+  table, at most two at a time per result and four per connection, backing off on rate limits. The cache keeps the
+  most recently used blocks within the window cache, reserving each block from the result budget before it fetches, and
+  shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
+  way it is scrolling; a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, then the
+  grid shows the rows it has and asks again.
+- **Load into memory.** `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
+  Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
+  result windowed, whole. The button that runs it comes in a later update.
+- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
+  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; later lanes run them in
+  BigQuery. A destination table lasts about 24 hours: once it has expired, rows not cached answer `REMOTE_EXPIRED`.
+
 ### Cost
 
 Bytes are written in binary units, as Google bills (`1.24 GiB`), and priced at the on-demand rate of $6.25 per TiB
@@ -389,7 +421,10 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Read part runs `BigQueryStorageFake` (Arrow batches through an in-process `IBigQueryStorageRead`): a golden of every
   type read through REST and Arrow to identical cells, the scanner, the session's request and thresholds, each fallback,
   the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
-  CONNECT.
+  CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
+  read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
+  a misestimate through REST and Arrow, and Load into memory with its refusal and Stop. `tests/bigquery-remote-results.test.ts`,
+  `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;

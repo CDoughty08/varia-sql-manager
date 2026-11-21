@@ -91,6 +91,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
+  // Load into memory runs like a query, as long as BigQuery takes; Stop is query.cancel.
+  'results.remoteQuery': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: () => 0, providers: ['bigquery'] },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
   // A commit covers a queued COMMIT and the session's end inside the backend's budgets; every other close (decision 54)
   // allows one BigQuery ABORT_SESSION job and its poll. The deadline cannot see the provider.
@@ -221,7 +223,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined
+  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.residence === undefined && options.windowCacheMiB === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

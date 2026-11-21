@@ -76,6 +76,9 @@ internal sealed partial class SqlService
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (BigQueryErrors.IsLegacySql(args.Sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         if (args.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed is outside its supported range.");
+        // Checked before any job runs, so a bad setting costs nothing.
+        ResidenceOf(args.Residence);
+        CacheBytesOf(args.WindowCacheMiB);
         // The connection's own cap (Advanced Properties) wins over Tools › Options' default.
         var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
 
@@ -159,9 +162,12 @@ internal sealed partial class SqlService
                 var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
                 if (set is null) { first.Dispose(); discarded++; return; }
                 sets.Add(set);
-                events.Opened(set);
                 currentSet = set;
-                await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token);
+                BigQueryWindow? window = null;
+                var windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, childPlan, first, set, budget!, messages, value => window = value, token);
+                events.Opened(set);
+                if (windowed is null) await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages);
+                else first.Dispose();
                 set.Complete();
                 events.Closed(set);
                 currentSet = null;
@@ -355,17 +361,23 @@ internal sealed partial class SqlService
                         else
                         {
                             sets.Add(currentSet);
+                            // In memory or windowed, decided from the first page before the set is announced.
+                            BigQueryWindow? window = null;
+                            var windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, plan, page, currentSet, budget, messages, value => window = value, token);
                             events.Opened(currentSet);
-                            // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
-                            var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
-                            // The reader owns the page from here.
-                            var reading = page;
-                            page = null;
-                            if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token);
-                            else
+                            if (windowed is null)
                             {
-                                reading.Dispose();
-                                await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token);
+                                // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
+                                // The reader owns the page from here.
+                                var reading = page;
+                                page = null;
+                                if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                                else
+                                {
+                                    reading.Dispose();
+                                    await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                                }
                             }
                             currentSet.Complete();
                             events.Closed(currentSet);
@@ -505,7 +517,8 @@ internal sealed partial class SqlService
     /// row limit, the budget). Rows not read then are counted from BigQuery's total, as SQL Server's reader counts the rows
     /// it reads past. Each page's bytes are charged to the query's budget while its rows are decoded (one page at a time).</summary>
     private async Task ReadBigQueryRowsAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, BigQueryColumnPlan plan,
-        BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token)
+        BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token,
+        BigQueryWindow? window = null, QueryMessages? messages = null)
     {
         var page = first;
         long counted = 0;
@@ -520,6 +533,8 @@ internal sealed partial class SqlService
                 {
                     // The page does not fit beside the rows already stored, so neither would its rows.
                     charge = 0;
+                    // An Automatic read switches to windowed instead (docs/bigquery.md, A misestimate).
+                    if (window is not null && set.SwitchesOnRefusal && SwitchToWindowed(set, window, events, messages!)) return;
                     set.Skip(refusal);
                     budget.Stop(refusal);
                     storing = false;
@@ -548,6 +563,8 @@ internal sealed partial class SqlService
                 }
                 finally { store.Return(budget, charge); }
                 events.RowsChanged();
+                // A row the budget refused in an Automatic read: the set switches to windowed rather than truncating.
+                if (!storing && Switches(set, window) && SwitchToWindowed(set, window!, events, messages!)) return;
                 // The rows so far become readable while the next page loads.
                 if (set.HasPendingRows)
                 {

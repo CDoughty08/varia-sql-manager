@@ -184,6 +184,7 @@ export class ResultsWorkerCore {
       case 'liveUpdate': return this.liveUpdate(request)
       case 'liveAck': return this.liveAck(request.id, request.bytes)
       case 'forget': return this.forgetResults(request.generation, request.resultIds)
+      case 'revise': return this.revise(request.key)
     }
   }
 
@@ -242,7 +243,7 @@ export class ResultsWorkerCore {
       const rows = this.covered(resultOf(request.key), bounded.first, count)
       const { text, flags } = this.build(bounded, rows)
       this.post({ type: 'window', id: request.id, first: bounded.first, count: rows, colStart, colEnd, text, flags }, [flags.buffer])
-    })
+    }, request.viewer)
   }
 
   /** The widest display text per column over the rows asked for (those cached once the reads end), in monospace
@@ -298,7 +299,7 @@ export class ResultsWorkerCore {
     this.wait(undefined, key, wires, Math.max(0, first), Math.max(0, Math.min(count, this.limits.readRows)), () => {})
   }
 
-  private wait(id: number | undefined, key: ResultKey, wires: readonly WireKind[], first: number, count: number, answer: () => void): void {
+  private wait(id: number | undefined, key: ResultKey, wires: readonly WireKind[], first: number, count: number, answer: () => void, viewer?: number): void {
     if (this.stale(key)) return this.error(id, 'RESULT_UNAVAILABLE', resultUnavailable)
     const result = resultOf(key)
     const waiter: Waiter = { id, key, result, wires, first, count, reads: new Set(), settle: () => { this.forget(waiter); answer() } }
@@ -321,7 +322,7 @@ export class ResultsWorkerCore {
         }
         const next = flying.find(item => item.firstRow > from)
         const to = Math.min(end, from + this.limits.readRows, next ? next.firstRow : end)
-        const read = this.read(key, wires, from, to)
+        const read = this.read(key, wires, from, to, viewer)
         read.waiters.add(waiter)
         waiter.reads.add(read)
         from = to
@@ -336,11 +337,11 @@ export class ResultsWorkerCore {
     waiter.reads.clear()
   }
 
-  private read(key: ResultKey, wires: readonly WireKind[], firstRow: number, end: number): Read {
+  private read(key: ResultKey, wires: readonly WireKind[], firstRow: number, end: number, viewer?: number): Read {
     const rid = this.allocate()
     const read: Read = { rid, key, result: resultOf(key), wires, firstRow, end, waiters: new Set(), cancelled: false }
     this.reads.set(rid, read)
-    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit, ...(key.view === undefined ? {} : { viewId: key.view }) })
+    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit, ...(key.view === undefined ? {} : { viewId: key.view }), ...(viewer === undefined ? {} : { viewer }) })
     return read
   }
 
@@ -582,6 +583,22 @@ export class ResultsWorkerCore {
 
   /** Results the backend already released: their pages go, and reads still bringing rows of them end, since main would
    *  refuse to read them again. No results.close is sent. */
+  /** A new revision of a result (resultSet.residence): its pages go, and its reads in flight end without an error, so their
+   *  windows answer with the rows still cached (none) and the grid reads them again from the new revision. */
+  private revise(key: ResultKey): void {
+    const result = resultOf(key)
+    const settled = new Set<Waiter>()
+    for (const read of [...this.reads.values()]) {
+      if (read.cancelled || baseOf(read.result) !== result) continue
+      this.reads.delete(read.rid)
+      read.cancelled = true
+      this.send({ t: 'cancel', rid: read.rid })
+      for (const waiter of read.waiters) { waiter.reads.delete(read); if (waiter.reads.size === 0) settled.add(waiter) }
+    }
+    this.dropAll(result)
+    for (const waiter of settled) waiter.settle()
+  }
+
   private forgetResults(generation: number, resultIds: readonly number[]): void {
     const results = new Set(resultIds.map(resultId => resultOf({ generation, resultId })))
     for (const read of [...this.reads.values()]) if (!read.cancelled && results.has(baseOf(read.result))) this.abandonRead(read, 'RESULT_RELEASED', released)

@@ -140,6 +140,9 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
     public long StoragePausedUntil;
     /// <summary>The Storage Read fallback reasons Messages has named on this handle, so each is said once.</summary>
     public readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> StorageNotices = new();
+    /// <summary>The fetch lane of this handle's windowed results (docs/bigquery.md, Fetch lane): block reads at once, apart
+    /// from the results slots that results.* methods hold.</summary>
+    public SemaphoreSlim FetchLane { get; } = new(Results.RemoteResult.FetchesPerConnection);
 
     public IBigQueryStorageRead Storage(Func<BigQueryConnection, IBigQueryStorageRead> create)
     {

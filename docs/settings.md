@@ -39,6 +39,8 @@ from Microsoft's documentation, so Varia keeps its own.
 - Query Results
   - SQL Server
     - Results to Grid (`queryResults.sqlServer.grid`)
+  - BigQuery
+    - Results (`queryResults.bigQuery.results`)
 - SQL Server Object Explorer
   - Commands (`objectExplorer.commands`)
   - Scripting (`objectExplorer.scripting`)
@@ -261,6 +263,15 @@ Sections: **Grid display** (How results look in the grid), **Copy and save**, **
 | Execution plan | `queryResults.plan.outlineWidth` | Outline width | Integer 120–600 px | 220 px |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Named "Execution plan outline width" outside its section. Not in SSMS. |
 | Execution plan | `queryResults.plan.propertiesWidth` | Properties width | Integer 140–600 px | 260 px |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Named "Execution plan properties width" outside its section. Not in SSMS. |
 
+### Query Results › BigQuery › Results
+
+Where the rows of a BigQuery result live: in memory, as with SQL Server, or windowed in the result table BigQuery keeps and read as the grid scrolls, which costs nothing. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `queryResults.bigQuery.residence` | Keep results | One of `automatic` (Automatically, by size), `memory` (Always in memory), `windowed` (Always windowed in BigQuery) | Automatically, by size |  | All | Next execution | Automatically keeps a result in memory when it fits in half of the room the query may still take, and leaves a larger one windowed in BigQuery: its rows are read in blocks as you scroll, free, and expire with the result table BigQuery keeps for about 24 hours. Always in memory truncates at the result memory budget instead. Not in SSMS. |
+| `queryResults.bigQuery.windowCacheMiB` | Block cache per windowed result | Integer 16–4,096 MiB | 64 MiB |  | All | Next execution | The rows of a windowed result kept in memory as you scroll, part of the result memory budget (Window cache in the Memory panel). The least recently read blocks go first. Not in SSMS. |
+
 ### SQL Server Object Explorer › Commands
 
 A property grid: True/False lists, values that differ from their default in bold.
@@ -382,4 +393,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (129 today).
+A patch holds at most one entry per setting (131 today).

@@ -2124,6 +2124,16 @@ async function workbench(id, method, params, credit) {
       if (closed) reportMemory()
       return respond(id, { closed, usedBytes: usedBytes() })
     }
+    // Load into memory as the real backend runs it: the result switches residence under a new revision (an EVENT), then
+    // the summary names it. The fake's results are all in memory already; this only exercises main's handling.
+    case 'results.remoteQuery': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      const descriptor = { ...describe(result), residence: 'memory', revision: 1, rowsTotal: available(result) }
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.residence', descriptor })
+      write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor })
+      return respond(id, { resultSets: [descriptor], discardedResultSets: 0, messages: [info('The result was loaded into memory.')], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1, database: '', messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00') })
+    }
   }
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')

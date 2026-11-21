@@ -34,6 +34,7 @@ SSMS display formats, and benchmarks. The code is the reference implementation; 
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
+- [Remote results](#remote-results)
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Messages](#messages)
 - [Sorted views](#sorted-views)
@@ -250,6 +251,7 @@ noted where it matters.
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
+| `results.remoteQuery` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only; Stop is `query.cancel` ([Remote results](#remote-results)) |
 | `query.session.close` | invoke | unary | control | 30 s, 60 s with `transaction: 'commit'` (a BigQuery close waits for a stopped job and ends the session within them); answered locally `{ closed: false }` for an ended generation or with no backend |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend |
 | `results.visibility` | invoke (`ResultVisibilityService`) | unary | control | 10 s (note 1 below) |
@@ -715,10 +717,11 @@ again first thing (`Providers.BothMethods`, compared with the policies by `tests
 
 ## Streams and credits
 
-`results.read { resultId: u32 ≥ 1, firstRow: 0 … 2⁵³ − 1, maxRows: 1 … 65,536 }` sends a DATA frame for every sealed page
-overlapping `[firstRow, firstRow + maxRows)`, then the RESPONSE `{ nextRow, rowsAvailable, complete, pages, rows }`. Rows
-in the open page builder are not served; the worker reads again after a progress event. Unknown id: `RESULT_NOT_FOUND`;
-released: `RESULT_RELEASED`.
+`results.read { resultId: u32 ≥ 1, firstRow: 0 … 2⁵³ − 1, maxRows: 1 … 65,536, viewId?, viewer?: 1 … 2³¹ − 1 }` sends a
+DATA frame for every sealed page overlapping `[firstRow, firstRow + maxRows)`, then the RESPONSE `{ nextRow, rowsAvailable,
+complete, pages, rows }`. Rows in the open page builder are not served; the worker reads again after a progress event.
+Unknown id: `RESULT_NOT_FOUND`; released: `RESULT_RELEASED`. A windowed BigQuery result is read from its block cache, may
+answer short after waiting, and uses `viewer` (the grid asking) for its read-ahead ([Remote results](#remote-results)).
 
 - **Credit counts DATA body bytes per stream.** The REQUEST's `credit` (clamped to 64 KiB – 16 MiB; the worker asks for
   4 MiB) is the initial grant.
@@ -883,9 +886,9 @@ gets Cancel.
 
 ## Query events
 
-EVENT frames whose id is a running `query.execute` request. Main validates each (`queryEventSchema`), stamps the
-generation on descriptors, registers the result as owned on `resultSet.opened`, and forwards it on the port (or drops
-it when no port is open).
+EVENT frames whose id is a running `query.execute` or `results.remoteQuery` request. Main validates each
+(`queryEventSchema`), stamps the generation on descriptors, registers the result as owned on `resultSet.opened` and
+`resultSet.residence`, and forwards it on the port (or drops it when no port is open).
 
 | type | Emitted |
 | --- | --- |
@@ -894,10 +897,11 @@ it when no port is open).
 | `progress` | At most 10 a second per query, latest wins; up to 64 sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set stopped storing. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once |
 | `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept set, with its final descriptor |
+| `resultSet.residence` | A BigQuery set switched between memory and windowed, with its new descriptor (`residence` and `revision` always present) ([Remote results](#remote-results)) |
 | `query.job` | A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): `{ jobId, project, location?, state, auxiliary, transaction }`, `transaction` (`none`, `open`, `unknown`) being the session's as the job started; never the session id |
 
 Progress and messages are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
-256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed` and `query.job` are essential: never refused, up to 4 MiB (a
+256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed`, `resultSet.residence` and `query.job` are essential: never refused, up to 4 MiB (a
 4,096-column descriptor with 128-character names). RESPONSE, PONG and GOAWAY are never dropped. The summary is
 authoritative; a query's events after it are ignored.
 
@@ -920,6 +924,7 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | `storedBytes` | Raw pages plus compressed ones: `logicalBytes` − `packedLogicalBytes` + `compressedBytes` |
 | `compressedBytes`, `packedLogicalBytes` | The compressed pages' size with their Find filters, and the uncompressed rows they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
+| `windowCacheBytes` | Optional: the block caches of windowed BigQuery results ([Remote results](#remote-results)), apart from `logicalBytes` |
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
 | `heap` | After the last GC (`GC.GetGCMemoryInfo`): `committedBytes`, `freeBytes` |
@@ -1056,6 +1061,40 @@ A cell whose typed read fails becomes NULL with the error flag and its column sw
 parse keeps its prefix (truncated, an estimate): "Column ‘{name}’ ({type}): some values could not be read to the end
 and show only the part read before the error." Under a Stop, a value that parses as malformed ends the read as the Stop
 instead.
+
+## Remote results
+
+A BigQuery result is either in memory, as SQL Server's are, or **windowed**: its rows stay in the job's destination table
+and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residence). Its descriptor says which:
+
+- `residence`: `memory` or `remote` (absent for SQL Server); `rowsTotal`: BigQuery's own total, which may pass
+  `rowsAvailable` (at most 2,147,483,647 rows, the grid's 32-bit indexes; a Messages line says so);
+  `revision`: 0, bumped by every switch.
+- **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
+  (16 – 4,096, default 64), BigQuery only: main (`optionsAllow`) and the backend refuse them for SQL Server. The backend
+  decides after the first page, before `resultSet.opened`: memory when the rows arrived whole, under `memory`, or when
+  the first page's measured row cost times the rows fits half of what the query may still take; otherwise windowed, with
+  the first page kept in the cache. A result whose destination table cannot be read stays in memory.
+- **A misestimate.** An `automatic` result kept in memory that the budget refuses part way switches to windowed instead
+  of truncating: its pages are freed, `revision` goes up, and `resultSet.residence` carries the new descriptor. The
+  renderer drops every cached page and window of the result, ends its reads in flight without an error, keeps the grid's
+  scroll and clears its selection.
+- **Reading.** `results.read` sends the cached pages covering the window (whole pages, so it may send rows either side)
+  and fetches the blocks it lacks with `tabledata.list` (free): about 4 MiB of measured rows each, 256 – 16,384 rows; at
+  most 2 fetches per result and 4 per connection; a 429 backs off with jitter. It waits up to 20 s (inside its deadline)
+  and then answers with the rows it has; the grid draws the rest as loading and reads again. Each `viewer` reads ahead
+  one block either side and one more in its direction of travel; a jump cancels that viewer's stale read-ahead.
+  `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
+  detail's `windowCacheBytes`), and reserves a block's estimate before fetching it.
+- **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,
+  diffs, pivots, Copy and Save) answers `REMOTE_RESULT` before any work. A 404 from `tabledata.list` (BigQuery's result
+  table expired) answers `REMOTE_EXPIRED` for rows not cached; cached rows still read.
+- **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result
+  like `query.execute`: unary with EVENTs, the same summary, stopped by `query.cancel(queryId)`. Main sends it only for a
+  result its renderer owns in that generation (else `RESULT_UNAVAILABLE`) and pins the request to it. `load` (Load into
+  memory) empties the set and reads the whole table into it under a new revision (`resultSet.residence`), then
+  `resultSet.closed`; a refusal part way, a failure or Stop switches it back to windowed, whole, under another revision.
+  Only a windowed result loads (`INVALID_PARAMS` otherwise).
 
 ## Cell lengths and row sizes
 

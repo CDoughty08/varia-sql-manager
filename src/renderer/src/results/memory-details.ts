@@ -35,7 +35,7 @@ function duration(microseconds: number): string {
 }
 
 export interface Tile { readonly label: string; readonly value: string; readonly unit?: string; readonly note: string; readonly tone?: 'saved' }
-export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'returned'; readonly label: string; readonly bytes: number; readonly share: number }
+export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'window' | 'returned'; readonly label: string; readonly bytes: number; readonly share: number }
 export interface Bar { readonly label: string; readonly total: number; readonly segments: readonly Segment[] }
 /** A result's name in Biggest results in its two parts: its query tab's, which gives way first, and the Results part. */
 export interface ResultLabel { readonly tab?: string; readonly result: string }
@@ -60,7 +60,7 @@ export interface NerdMetricsModel {
 }
 
 const stateLabels: Readonly<Record<ResultMemoryEntry['state'], string>> = { raw: 'Raw', partial: 'Partly packed', packed: 'Packed', unpacking: 'Unpacking' }
-const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', returned: 'Given back' }
+const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', window: 'Window cache', returned: 'Given back' }
 
 /** Whether any page is compressed: what the ring's second tone, the packed chip, the ratio and the trend wait for. */
 export const anyCompressed = (detail: ResultMemoryDetail | undefined): boolean => !!detail && detail.compressedBytes > 0 && detail.packedLogicalBytes > 0
@@ -71,8 +71,10 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const { logicalBytes: logical, storedBytes: stored, compressedBytes: compressed, packedLogicalBytes: packedLogical, cacheBytes: cache, codec, heap } = detail
   const isCompressed = anyCompressed(detail)
   const codecOn = codec.name !== undefined
-  const memory = stored + cache
-  const givenBack = Math.max(0, logical - memory)
+  // Windowed BigQuery results' block caches hold rows read from BigQuery, apart from the rows as read.
+  const window = detail.windowCacheBytes ?? 0
+  const memory = stored + cache + window
+  const givenBack = Math.max(0, logical - stored - cache)
   const rawBytes = Math.max(0, stored - compressed)
   const ratio = isCompressed ? packedLogical / compressed : 0
   const codecNote = codecOn ? `${codec.name}${codec.level === undefined ? '' : ` · level ${codec.level}`}` : 'Compression off'
@@ -88,8 +90,8 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const scale = Math.max(logical, memory, 1)
   const segment = (part: Segment['part'], bytes: number): Segment => ({ part, label: partLabels[part], bytes, share: bytes / scale })
   const asRead = [segment('raw', Math.max(0, logical - packedLogical)), segment('packed', packedLogical)].filter(part => part.bytes > 0)
-  const now = [segment('raw', rawBytes), segment('packed', compressed), segment('cache', cache), segment('returned', givenBack)].filter(part => part.bytes > 0)
-  const legend = [segment('raw', rawBytes), ...[segment('packed', compressed), segment('cache', cache), segment('returned', givenBack)].filter(part => part.bytes > 0)]
+  const now = [segment('raw', rawBytes), segment('packed', compressed), segment('cache', cache), segment('window', window), segment('returned', givenBack)].filter(part => part.bytes > 0)
+  const legend = [segment('raw', rawBytes), ...[segment('packed', compressed), segment('cache', cache), segment('window', window), segment('returned', givenBack)].filter(part => part.bytes > 0)]
   const widest = Math.max(1, ...detail.largest.map(entry => entry.logicalBytes))
   const biggest = detail.largest.map(entry => ({
     resultId: entry.resultId, label: name(entry), name: labelText(name(entry)), logical: bytes(entry.logicalBytes), stored: bytes(entry.storedBytes), state: entry.state,
