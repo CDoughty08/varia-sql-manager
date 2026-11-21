@@ -57,8 +57,8 @@ internal static class LiveTableChecks
             && grid.Tables is [{ Mode: "snapshot", RowCap: 10_000, Departed: true, Facets: ["group"] }, { Mode: "snapshot", RowCap: 10, Departed: false, Facets: [] }]
             && grid.Views is ["even"] && grid.FilterMode == "memory"
             && log.Tables is [{ Mode: "append", Key: ["messageId"], Settle: { Ticks: 2, Ms: 0 }, BatchRows: 5000 }] && log.FilterMode == "restart"
-            && catalog.Probes[SyntheticSampler.WideProbe].Tables is [{ Columns.Count: 23 }] && catalog.Sources.Values.All(source => source.Hidden == "pause"),
-            "the embedded catalogue carries the table limits, and each table's row cap, departed rows, facets, settle window and reads");
+            && catalog.Probes[SyntheticSampler.WideProbe].Tables is [{ Columns.Count: 23 }] && catalog.Sources.Values.All(source => source.Hidden == (source.Id == "agent.jobs" ? "statusOnly" : "pause")),
+            "the embedded catalogue carries the table limits, and each table's row cap, departed rows, facets, settle window and reads; only agent.jobs keeps status probes while hidden (statusOnly)");
         check(LiveErrors.IsTerminal("CATALOG_MISSING") && LiveErrors.IsTerminal("NOT_FOUND") && !LiveErrors.IsTerminal("BUDGET") && !LiveErrors.IsTerminal("BLOCKED"),
             "a missing SSISDB catalog and a missing followed object stop their probe (terminal); BUDGET and BLOCKED retry");
     }

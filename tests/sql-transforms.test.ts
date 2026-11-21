@@ -120,6 +120,24 @@ describe('Toggle Brackets', () => {
     expect(toggle('SELECT 1 FROM t loop JOIN u ON 1 = 1')).toBe('SELECT 1 FROM [t] [loop] JOIN [u] ON 1 = 1')
     expect(toggle('ENABLE TRIGGER tr ON t; DISABLE TRIGGER ALL ON DATABASE')).toBe('ENABLE TRIGGER [tr] ON [t]; DISABLE TRIGGER ALL ON DATABASE')
   })
+  it('leaves the NULL ON NULL, ABSENT ON NULL and RETURNING clauses of JSON functions alone, but brackets names spelled the same', () => {
+    // `[ABSENT] ON NULL` and `[RETURNING] json` are syntax errors (102) on SQL Server 2025.
+    expect(toggle('SELECT JSON_ARRAY(1, NULL ABSENT ON NULL)')).toBe('SELECT JSON_ARRAY(1, NULL ABSENT ON NULL)')
+    expect(toggle("SELECT JSON_OBJECT('a':c ABSENT ON NULL RETURNING json) FROM t")).toBe("SELECT JSON_OBJECT('a':[c] ABSENT ON NULL RETURNING json) FROM [t]")
+    expect(toggle('SELECT JSON_ARRAYAGG(v ORDER BY v NULL ON NULL RETURNING json), JSON_OBJECTAGG(k:v ABSENT ON NULL) FROM t'))
+      .toBe('SELECT JSON_ARRAYAGG([v] ORDER BY [v] NULL ON NULL RETURNING json), JSON_OBJECTAGG([k]:[v] ABSENT ON NULL) FROM [t]')
+    expect(toggle("SELECT JSON_OBJECT('a':JSON_ARRAY(c ABSENT ON NULL)) FROM t")).toBe("SELECT JSON_OBJECT('a':JSON_ARRAY([c] ABSENT ON NULL)) FROM [t]")
+    expect(toggle("SELECT JSON_VALUE(doc, '$.a' RETURNING int) FROM t")).toBe("SELECT JSON_VALUE([doc], '$.a' RETURNING int) FROM [t]")
+    // The same words as names, which SQL Server reads as columns wherever an argument or an ORDER BY item goes.
+    expect(toggle('SELECT JSON_ARRAY(absent ABSENT ON NULL), absent, returning FROM t')).toBe('SELECT JSON_ARRAY([absent] ABSENT ON NULL), [absent], [returning] FROM [t]')
+    expect(toggle("SELECT JSON_ARRAY(returning RETURNING json), JSON_OBJECT('a':returning), JSON_ARRAYAGG(absent ORDER BY returning ABSENT ON NULL) FROM t"))
+      .toBe("SELECT JSON_ARRAY([returning] RETURNING json), JSON_OBJECT('a':[returning]), JSON_ARRAYAGG([absent] ORDER BY [returning] ABSENT ON NULL) FROM [t]")
+    expect(toggle('SELECT returning date FROM t')).toBe('SELECT [returning] [date] FROM [t]')
+    // A JSON key before a colon is a name, not a label.
+    expect(toggle('SELECT JSON_OBJECT(k:v), JSON_OBJECTAGG(t.k:v) FROM t')).toBe('SELECT JSON_OBJECT([k]:[v]), JSON_OBJECTAGG([t].[k]:[v]) FROM [t]')
+    expect(toggle('SELECT JSON_OBJECT([k]:[v], [returning]:[absent] RETURNING json) FROM [t]')).toBe('SELECT JSON_OBJECT(k:v, returning:absent RETURNING json) FROM t')
+    expect(toggle('SELECT [absent], [returning] FROM [t]')).toBe('SELECT absent, returning FROM t')
+  })
   it('brackets the names after an option and in an index\'s or a later CTE\'s column list', () => {
     expect(toggle('ALTER TABLE c WITH CHECK ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p (b)'))
       .toBe('ALTER TABLE [c] WITH CHECK ADD CONSTRAINT [fk] FOREIGN KEY ([a]) REFERENCES [p] ([b])')

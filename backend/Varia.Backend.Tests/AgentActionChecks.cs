@@ -72,13 +72,14 @@ internal static class AgentActionChecks
     {
         var failures = AgentSql.LintWrites().Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
         check(failures.Count == 0 && AgentSql.Writes.Count == 6, "every Agent write passes its lint, as do the job verbs' own reads" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2, "the object actions' lint runs the Agent writes too");
+        check(ActionSql.Lint().Count(item => item.Name.StartsWith("agent ", StringComparison.Ordinal)) == AgentSql.Writes.Count + 2 + AgentSql.LintServerWrites().Count(), "the object actions' lint runs the Agent writes too, SQL Server Agent Properties' included");
         var start = AgentSql.StartJob.Text;
         string Call(string call) => AgentSql.Resolve + call + AgentSql.Check;
         var misses = new (string Text, string Problem)[]
         {
             (start.Replace("msdb.dbo.sp_start_job", "master.dbo.xp_servicecontrol N'Start', N'SQLServerAgent'", StringComparison.Ordinal), "uses xp_servicecontrol"),
-            (Call("EXEC @rc = msdb.dbo.sp_purge_jobhistory @job_id = @job_id;"), "EXECs sp_purge_jobhistory, which is not an Agent write procedure"),
+            (Call("EXEC @rc = msdb.dbo.sp_add_job @job_id = @job_id;"), "EXECs sp_add_job, which is not an Agent write procedure"),
+            (Call("EXEC @rc = msdb.dbo.sp_purge_jobhistory @job_id = @job_id;"), "passes @job_id to sp_purge_jobhistory"),
             (Call("EXEC @rc = msdb.dbo.sp_stop_job @job_id = @job_id, @step_name = @step_name;"), "passes @step_name to sp_stop_job"),
             (Call("EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @new_name;"), "passes @enabled another parameter's value"),
             (Call("EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled, @enabled = @enabled;"), "passes @enabled twice"),

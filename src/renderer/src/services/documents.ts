@@ -30,7 +30,7 @@ export type ModelFactory = (text: string, uri: string, language: string) => edit
 /** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */
 interface Fill { appending: boolean; userEdited: boolean; done: Promise<void>; finish: () => void }
 /** `plain`: a large value document, shown without bracket matching and colours. */
-interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean }
+interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean; edits: number }
 /** A text document opened from a value: its tab name, its text, and what it holds. */
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
@@ -176,6 +176,10 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   setDirty(id: string, dirty: boolean): void { if (this.customs.has(id) && this.get(id)?.dirty !== dirty) this.replace(id, { dirty }) }
   /** What changes with every edit: the model's version for text, the provider's revision for a custom document. */
   revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
+  /** What changes with every edit to a text document but not with its fill's chunks: an edit someone made since it was taken. */
+  editRevision(id: string): number { return this.entries.get(id)?.edits ?? this.revision(id) }
+  /** Whether a document has changes Save would keep, counting typing during its fill, which marks it dirty only once the fill ends. */
+  hasUnsavedEdits(id: string): boolean { return !!this.get(id)?.dirty || !!this.entries.get(id)?.fill?.userEdited }
   /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
   follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
   canFollowTarget(id: string, targetId: string): boolean { return this.provider(id)?.canFollowTarget?.(id, targetId) ?? false }
@@ -367,14 +371,15 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...targetId ? { targetId, attachWanted: true } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => {
       if (this.pendingReveal?.id === id) this.dropPendingFocus()
-      const current = this.get(id), fill = this.entries.get(id)?.fill
+      const current = this.get(id), entry = this.entries.get(id), fill = entry?.fill
+      if (entry && !fill?.appending) entry.edits++
       if (!current) return
       if (fill) { if (!fill.appending) fill.userEdited = true; return }
       const dirty = current.savedVersionId === null ? model.getValueLength() > 0 : model.getAlternativeVersionId() !== current.savedVersionId
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })
-    this.entries.set(id, { model, subscription, plain, viewState })
+    this.entries.set(id, { model, subscription, plain, viewState, edits: 0 })
     const current = this.getSnapshot(), documents = [...current.documents]
     const firstUnpinned = document.pinned ? documents.findIndex(tab => !tab.pinned) : -1
     documents.splice(firstUnpinned < 0 ? documents.length : firstUnpinned, 0, document)

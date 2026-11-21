@@ -232,6 +232,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   const activate = useCallback((rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node?.lost && node.kind === 'server') { run('connection.reconnect', rowId); return }
+    // Job Activity Monitor's node opens its document (KindSpec.opens); the command is registered only behind agentEnabled.
+    if (node?.kind === 'agentJobActivity') { run('agent.jobActivity', rowId); return }
     const verb = ssisDefaultVerb(node?.kind)
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])

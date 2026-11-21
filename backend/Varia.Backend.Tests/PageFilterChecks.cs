@@ -55,6 +55,7 @@ internal static class PageFilterChecks
         Typing(check);
         Budget(check);
         Capped(check);
+        Floor(check);
         Unbuilt(check);
     }
 
@@ -303,6 +304,32 @@ internal static class PageFilterChecks
         }
         set.Complete();
         return set;
+    }
+
+    /// <summary>A cap below what any filter of the page takes (its header, and each built column's characters) gives no filter
+    /// without reading a cell, or past the column that reaches it: a highly compressible page of many columns, whose cap is
+    /// an eighth of its packed bytes, read every cell and waited for every collation's fold to keep nothing.</summary>
+    private static void Floor(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off };
+        var set = FillWide(store, "floor", 2000);
+        using (set.Pin())
+        {
+            var body = set.SealedSnapshot()[0].Body();
+            var rows = PageView.Parse(body, WideWires.Length).Rows;
+            var header = 64 + 8L * WideWires.Length;
+            var whole = PageFilter.Build(body, WideColumns, WideWires);
+            PageFilter.CellsRead = 0;
+            var belowHeader = PageFilter.Build(body, WideColumns, WideWires, header - 1);
+            var readBelowHeader = PageFilter.CellsRead;
+            PageFilter.CellsRead = 0;
+            var oneColumn = PageFilter.Build(body, WideColumns, WideWires, header + 72);
+            var readOneColumn = PageFilter.CellsRead;
+            check(whole is not null && whole.Bytes > header + 72 && belowHeader is null && readBelowHeader == 0 && oneColumn is null && readOneColumn > 0 && readOneColumn <= 2L * rows,
+                "a cap below a page's header gives no filter and reads no cell, and one that the second column's characters pass stops there: "
+                + readBelowHeader + " and " + readOneColumn + " cells of " + rows + " rows");
+        }
+        store.Release(set.ResultId);
     }
 
     /// <summary>Real pages under the store's real cap: a page of GUIDs would need more filter than packing saves, so its filter
