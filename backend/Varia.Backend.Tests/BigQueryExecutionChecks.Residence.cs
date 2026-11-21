@@ -882,6 +882,83 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // Two grids on one result, rows near half the cache wide: while one grid's block is fetching, the other grid's read
+        // finds the cache's own limit full. It answers short (the grid reads again), never TOO_LARGE "not enough result
+        // memory" while the global budget is nearly empty.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockRows = 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                if (first >= 2L * blockRows) await gate.Task.WaitAsync(token);
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 50_000);
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 50_000, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var first = ReadRemote(remote, 2L * blockRows - 5, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 1, 15_000);
+            string other;
+            try { other = "next " + ((await ReadRemote(remote, 50L * blockRows, 10, viewer: 2)).Next - 50L * blockRows); }
+            catch (RequestException error) { other = error.Code; }
+            gate.TrySetResult();
+            var (next, _) = await first;
+            check(other.StartsWith("next ", StringComparison.Ordinal) && next >= 2L * blockRows + 5,
+                $"another grid's read past a full window cache answers short, not TOO_LARGE: {other}, first grid next {next - 2L * blockRows}");
+        }
+
+        // Three grids on one result, rows far wider than measured: one block is held while sent, two more are fetched at
+        // once, so the second overrun finds the cache past even twice its limit. The refusal names the window cache and how
+        // to raise it, not a global budget that is nearly empty.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var gates = new ConcurrentDictionary<long, TaskCompletionSource>();
+            TaskCompletionSource GateOf(long index) => gates.GetOrAdd(index, _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
+            var blockRows = 0;
+            int PadOf(long index) => index == 0 ? 560 : index is 5 or 10 ? 860 : 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                var index = first / blockRows;
+                if (index is 5 or 10) await GateOf(index).Task.WaitAsync(token);
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, PadOf(index));
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 16_384L * 20, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0L; row < blockRows; row++) Blocks.Write(seed, row, PadOf(0));
+            remote.Seed(seed.Finish());
+            async Task<string> Held(long first, uint viewer, Task? hold = null, TaskCompletionSource? sending = null)
+            {
+                try
+                {
+                    var next = await remote.ReadAsync(first, 10, viewer, async body => { sending?.TrySetResult(); if (hold is not null) await hold; }, TimeSpan.FromSeconds(20), CancellationToken.None);
+                    return "next " + (next - first);
+                }
+                catch (RequestException error) { return error.Code + ": " + error.Message; }
+            }
+            var holdSeed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var holdZ = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendingSeed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendingZ = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var v3 = Held(0, 3, holdSeed.Task, sendingSeed);
+            await sendingSeed.Task;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var v1 = Held(5L * blockRows, 1);
+            var v2 = Held(10L * blockRows, 2, holdZ.Task, sendingZ);
+            // Both fetches hold their estimates before either lands.
+            SpinWait.SpinUntil(() => gates.Count == 2, 15_000);
+            GateOf(5).TrySetResult();
+            GateOf(10).TrySetResult();
+            var outcome = await v1;
+            holdSeed.TrySetResult();
+            holdZ.TrySetResult();
+            await Task.WhenAll(v2, v3);
+            check(outcome.StartsWith("next ", StringComparison.Ordinal) || outcome.Contains("window cache", StringComparison.Ordinal),
+                "a read refused past twice the window cache names the cache, not the global budget: " + outcome);
+        }
+
         // A block whose last, partly filled page takes it just past the cache (419 rows of 10,000 characters in 4 MiB): refused
         // as too wide, never read again and again for nothing.
         {

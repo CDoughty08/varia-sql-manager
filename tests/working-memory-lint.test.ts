@@ -122,7 +122,10 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const overrun = between('private async Task ReserveOverrunAsync(', 'private void Reserve(')
   expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
   expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
-  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n\s*throw;/)
+  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n(\s*\/\/[^\n]*\n)*\s*if \(Interlocked\.Read\(ref held\) \+ bytes > OverLimit\) throw RemoteBlockWriter\.CacheTooSmall\(\);\n\s*throw;/)
+  // A block's estimate the cache's own limit refuses (other reads hold it) answers the read short, with nothing fetched;
+  // only a full global budget answers TOO_LARGE.
+  expect(fetch).toMatch(/try \{ Reserve\(estimate, block\); \}\n\s*catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ estimate > CacheLimit\) \{ throw new RemoteRetryException\(error\); \}/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)

@@ -37,6 +37,9 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         if (bytes > maxBytes) throw BlockTooLarge();
     }
 
+    internal static RequestException CacheTooSmall() =>
+        new("TOO_LARGE", "The window cache is too small for these rows while other reads of this result hold it. Raise Block cache per windowed result in Tools › Options › Query Results › BigQuery › Results, or select fewer columns.");
+
     internal static RequestException BlockTooLarge() =>
         new("TOO_LARGE", "These rows are too wide for the window cache. Raise Block cache per windowed result in Tools › Options › Query Results › BigQuery › Results, or select fewer columns.");
 
@@ -425,7 +428,10 @@ internal sealed class RemoteResult : IDisposable
                 // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min(EstimateOf(rows), CacheLimit / 2);
-                Reserve(estimate, block);
+                // The cache's own limit, held by other reads' blocks (another grid on this result): nothing was fetched yet,
+                // so the read answers with the rows it has and the grid asks again; TOO_LARGE stays for a full global budget.
+                try { Reserve(estimate, block); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + estimate > CacheLimit) { throw new RemoteRetryException(error); }
                 lock (gate) block.Holding = true;
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
@@ -503,6 +509,8 @@ internal sealed class RemoteResult : IDisposable
                 if (others.Length == 0 || round > 0)
                 {
                     if (store.TryReserveCache(ref held, OverLimit, bytes)) return;
+                    // Past even that, the cache (not the global budget) is what refuses: say so, and how to raise it.
+                    if (Interlocked.Read(ref held) + bytes > OverLimit) throw RemoteBlockWriter.CacheTooSmall();
                     throw;
                 }
                 // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
