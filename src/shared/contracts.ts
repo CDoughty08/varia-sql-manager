@@ -351,6 +351,18 @@ export interface ResultMemoryDetail {
   /** Windowed BigQuery results' block caches (docs/bigquery.md, Block cache), part of the global budget. */
   windowCacheBytes?: number
 }
+/** What every connection's Search Objects index holds, with each explorer.index.memory event (the Memory panel's Nerd
+ *  metrics). Objects and definitions count each held table once (a shared resource set once): `definitions` and
+ *  `packedDefinitions` are objects, `definitionTexts` and `packedTexts` the distinct texts behind them. `packedBytes` is what
+ *  the packed texts cost and `packedTextBytes` what they would as strings. `texts` and `references` are the shared pool's
+ *  distinct texts and the references to them. `recordBytes`, `nameBytes`, `definitionBytes` and `readingBytes` (what reads
+ *  still running added) add up to the budget's use. `cut` is definitions left out or cut short, `childrenLeftOut` databases
+ *  indexed without their children. The times are absent before the first build or search. */
+export interface IndexMemoryDetail {
+  connections: number; objects: number; texts: number; references: number; definitions: number; packedDefinitions: number; definitionTexts: number; packedTexts: number
+  packedBytes: number; packedTextBytes: number; cut: number; childrenLeftOut: number; recordBytes: number; nameBytes: number; definitionBytes: number; readingBytes: number
+  lastBuildMs?: number; lastSearchMs?: number
+}
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */

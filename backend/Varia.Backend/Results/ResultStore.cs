@@ -33,6 +33,30 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
     public long? StoppedBytes => Volatile.Read(ref stoppedBytes) is > 0 and var bytes ? bytes : null;
     /// <summary>Records the figure a reservation was just refused at (ResultStore.TryReserve).</summary>
     internal void Refused(long figure) => Interlocked.Exchange(ref refusedBytes, figure);
+    private int sealPending;
+    /// <summary>Pages of this query's sets queued for packing at seal and not yet packed (<see cref="ResultStore.PackAtSeal"/>):
+    /// while there are any, a refused row waits for their saving (<see cref="ResultStore.WaitForRoomAsync"/>).</summary>
+    public int SealPending => Volatile.Read(ref sealPending);
+    internal void SealQueued(int pages) => Interlocked.Add(ref sealPending, pages);
+    private readonly List<ResultSetBuffer> sealing = [];
+
+    /// <summary>Records a set of this query that queued pages for packing at seal (called under that set's lock; this
+    /// list's lock is taken inside it, never the other way).</summary>
+    internal void Sealing(ResultSetBuffer set)
+    {
+        lock (sealing) if (!sealing.Contains(set)) sealing.Add(set);
+    }
+
+    /// <summary>Whether a page this query queued for packing at seal will pack without waiting on a lease
+    /// (<see cref="ResultSetBuffer.SealPackable"/>). Asked outside every set's lock (ResultStore.WaitForRoomAsync), so a row is
+    /// refused at once while a Copy or Save holds every set with pages queued, and waits through a pin, which ends with its read, Find or profile.</summary>
+    internal bool SealCanPack()
+    {
+        if (SealPending == 0) return false;
+        ResultSetBuffer[] sets;
+        lock (sealing) sets = [.. sealing];
+        return sets.Any(set => set.SealPackable);
+    }
     internal void Stop(TruncationReason reason)
     {
         // The refusal that stops a query comes just before its Stop, on the same thread.
@@ -286,6 +310,16 @@ internal sealed partial class ResultStore
     /// policy turns it on. Switching it off packs nothing more and leaves packed pages packed; they read as ever.</summary>
     internal PagePacking Packing { get; set; } = DefaultPacking;
 
+    /// <summary>Packs a query's pages as they seal, on a thread-pool worker beside the reading thread, once its set holds <see cref="ResultPacker.FloorBytes"/>
+    /// (ResultSetBuffer.PackSealed), so a result larger than its query's half is not truncated while its raw pages wait
+    /// for the policy, which packs only complete results. The service running the policy turns it on; the checks' stores
+    /// leave it off unless a check turns it on.</summary>
+    internal bool PackAtSeal { get; set; }
+
+    /// <summary>The checks' way into packing at seal: run on the worker after it compresses a page and before it takes the
+    /// set's lock to replace it. Null in the product.</summary>
+    internal Action<ResultSetBuffer>? SealCompressed { get; set; }
+
     /// <summary>The size at which a query's pages are sealed (the checks lower it for many small pages).</summary>
     internal int SealBytes { get; init; } = PageBuilder.SealBytes;
 
@@ -354,12 +388,13 @@ internal sealed partial class ResultStore
 
     /// <summary>Whether a policy runs that could pack results to make room for a query's refused row: asked inside the refused
     /// set's lock, so it takes none (<see cref="WaitForRoomAsync"/> asks the policy, outside every lock).</summary>
-    internal bool CanMakeRoom(QueryBudget query) => query.Live is null && RoomMaker is not null;
+    internal bool CanMakeRoom(QueryBudget query) => query.Live is null && (RoomMaker is not null || query.SealPending > 0);
 
     /// <summary>Whether packing could make room for a refused row, in the global budget (<paramref name="global"/>) or the
     /// query's own half, starting it if so (<see cref="RoomMaker"/>). Never called holding a set's lock: the policy takes
     /// the store's and its candidates' locks.</summary>
-    private bool MayMakeRoom(QueryBudget query, bool global) => query.Live is null && RoomMaker is { } maker && maker(query, global);
+    // Pages of its own queued for packing at seal make room too, unless a lease holds them: they pack outside the policy.
+    private bool MayMakeRoom(QueryBudget query, bool global) => query.Live is null && (query.SealCanPack() || RoomMaker is { } maker && maker(query, global));
 
     /// <summary>Waits, outside every lock, until <paramref name="bytes"/> fit the query's half and the global budget or packing
     /// has nothing more to give: true when they fit (the caller reserves them then, and may find them taken again), false

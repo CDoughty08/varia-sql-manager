@@ -111,6 +111,22 @@ internal sealed record ResultCodecCounters(string? Name, int? Level, long PagesP
 {
     public static readonly ResultCodecCounters Off = new(null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
+/// <summary>The global explorer.index.memory EVENT: the shared index budget's figures and, for the Memory panel's Nerd metrics,
+/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out.</summary>
+internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail)
+{
+    [JsonPropertyOrder(-1)] public string Type => "explorer.index.memory";
+}
+/// <summary>What every connection's index holds. Objects and definitions count each held table once (a shared resource set once);
+/// Definitions and PackedDefinitions are objects, DefinitionTexts and PackedTexts the distinct texts behind them. PackedBytes is
+/// what the packed texts cost and PackedTextBytes what they would as strings. Texts and References are the pool's distinct texts
+/// and the references to them. RecordBytes (records and their slots), NameBytes, DefinitionBytes and ReadingBytes (what reads
+/// still running added) add up to the budget's use. Cut is definitions left out or cut short, ChildrenLeftOut the held databases
+/// read without their children. Connections counts those whose index holds something. LastBuildMs and LastSearchMs are left out
+/// before the first.</summary>
+internal sealed record IndexMemoryDetail(int Connections, long Objects, int Texts, long References, long Definitions, long PackedDefinitions, long DefinitionTexts,
+    long PackedTexts, long PackedBytes, long PackedTextBytes, long Cut, int ChildrenLeftOut, long RecordBytes, long NameBytes, long DefinitionBytes, long ReadingBytes,
+    long? LastBuildMs = null, long? LastSearchMs = null);
 /// <summary>The managed heap after the last collection (GC.GetGCMemoryInfo): committed bytes, and the free space inside
 /// them the runtime keeps for reuse rather than returning to the operating system.</summary>
 internal sealed record ManagedHeap(long CommittedBytes, long FreeBytes);

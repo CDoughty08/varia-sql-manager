@@ -399,8 +399,14 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     a shown one idle for 30 s (no pin or lease begun or ended, not completed or shown again; `ResultSetBuffer.Activity`
     on `ResultStore.Clock`), the wait doubling per operation that unpacked it whole, up to `MaxBackoff` (3) times, 4 minutes at most. An
     operation's unpack clears the packed mark and counts as a use.
-  - Never a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`, page by page; a page
-    saving under a tenth stays raw). An open view (a sorted or filtered grid) does not prevent packing, nor does an open
+  - At seal: once a query's own set holds 1 MiB (`ResultPacker.FloorBytes`), each page is packed as it seals, the
+    earlier pages with the one that crosses it, on a thread-pool worker (one a set, never the reading thread or the workers' gate;
+    `ResultStore.PackAtSeal`, `ResultSetBuffer.PackSealed`; a failure drops the queue and leaves the pages raw), so a result larger than its query's half raw is not truncated
+    while it waits for the policy. Never a live table or a derived set; never while a pin or lease is held (the page stays
+    queued and the hold's end restarts the worker); a release, or a complete result an operation unpacked whole, drops
+    what is queued. Only the service running the policy turns it on (`packHidden`).
+  - The policy never packs a live table, a result still storing rows, or one pinned or leased (`ResultSetBuffer.Pack`,
+    page by page; a page saving under a tenth stays raw). An open view (a sorted or filtered grid) does not prevent packing, nor does an open
     distinct snapshot: their sorts and screens read the packed pages, and a view never unpacks a result whole
     (`node.packedSort.budgetGrowthMb`, `node.viewTile.packedP99Ms`).
   - Idle packing (both stages) runs on its own thread, not the workers' gate: it compresses at the lowest priority (honoured on Windows) and takes locks or
@@ -418,7 +424,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     room, never one an operation unpacked and still uses
     (`ForRoom`, `MakeRoom`, `PackForRoom`; any query's for the global budget,
     only its own for its own half; hidden first, then largest, until `StillWaited` is false), then commits the row again.
-    With nothing to pack the row is refused at once. A stop is never undone: stored rows are a prefix of rows read.
+    The query's own pages queued for packing at seal make room too unless a lease holds them
+    (`QueryBudget.SealCanPack`; a pin ends with its read, Find or profile and its end restarts the worker, within the
+    wait's bounds): the row waits for them as for
+    the policy. With nothing to pack the row is refused at once. A stop is never undone: stored rows are
+    a prefix of rows read.
   - Reads: a packed page unpacks into a six-page per-result cache (`CachePages`) only while the budget has spare room
     (`TryReserveSpare`), else for that read alone. A view read unpacks its base pages 64 at a time on the workers
     (`BodiesTogether`, reserved working memory, one at a time when refused) into rooms rented from the store's pool.

@@ -88,8 +88,71 @@ internal sealed class ObjectSearchService : IDisposable
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
     internal ResourceCatalog Resources => resources;
+    /// <summary>The budget every connection's index shares (the checks charge it).</summary>
+    internal IndexBudget Budget => budget;
     /// <summary>The names and definitions every connection shares (the checks read it).</summary>
     internal StringPool Pool => pool;
+    /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
+    /// that the budget's figure does not show.</summary>
+    private long lastBuildMs = -1, lastSearchMs = -1, finished, builds, forgets;
+    private int detailWalks;
+    /// <summary>The set a memory detail walk dedupes texts in, kept between walks (empty in between).</summary>
+    private readonly HashSet<object> walkSeen = new(ReferenceEqualityComparer.Instance);
+    public long Finished => Interlocked.Read(ref finished);
+    /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
+    /// only after a build ends (or the budget moves).</summary>
+    public long Builds => Interlocked.Read(ref builds);
+    /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
+    public long Forgets => Interlocked.Read(ref forgets);
+    /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
+    internal int DetailWalks => Volatile.Read(ref detailWalks);
+
+    /// <summary>The last finished build's and search's times, absent before the first.</summary>
+    internal (long? Build, long? Search) Times()
+    {
+        var build = Interlocked.Read(ref lastBuildMs);
+        var search = Interlocked.Read(ref lastSearchMs);
+        return (build < 0 ? null : build, search < 0 ? null : search);
+    }
+
+    /// <summary>What every connection's index holds (<see cref="IndexMemoryReport"/>), for the Memory panel's Nerd metrics: read
+    /// only when an explorer.index.memory event goes out, against the <paramref name="used"/> that event carries.</summary>
+    internal IndexMemoryDetail MemoryDetail(long? used = null)
+    {
+        Interlocked.Increment(ref detailWalks);
+        var (build, search) = Times();
+        lock (walkSeen) return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used, walkSeen);
+    }
+
+    /// <summary>A memory detail from an earlier walk brought up to <paramref name="used"/> without walking: the pool's counts and the
+    /// times are read afresh, and what the budget gained since the walk shows as reading (a build's reads, not yet walked).</summary>
+    internal IndexMemoryDetail Refresh(IndexMemoryDetail walked, long used)
+    {
+        var (texts, references, _) = pool.Stats;
+        var (build, search) = Times();
+        return walked with
+        {
+            Texts = texts, References = references, LastBuildMs = build, LastSearchMs = search,
+            ReadingBytes = Math.Max(0, used - walked.RecordBytes - walked.NameBytes - walked.DefinitionBytes),
+        };
+    }
+
+    /// <summary>Records a finished build's (<paramref name="build"/>) or search's time, which the next memory report carries.</summary>
+    internal void Finish(bool build, long ms)
+    {
+        Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
+        if (build) Ended();
+        else Interlocked.Increment(ref finished);
+    }
+
+    /// <summary>Records that a build ended: a stopped or failed one keeps no time, but what its reads left is walked again, so no
+    /// read shows as still running.</summary>
+    internal void Ended()
+    {
+        // Builds before finished: a report that sees the finish sees the build.
+        Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref finished);
+    }
 
     public async Task<ObjectIndexResult> IndexAsync(ObjectIndexArgs args, CancellationToken token, Action<object>? progress = null)
     {
@@ -104,6 +167,7 @@ internal sealed class ObjectSearchService : IDisposable
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
+        var finishedBuild = false;
         lock (state.Gate)
         {
             // A newer build supersedes a running one, which answers CANCELLED and keeps what it read.
@@ -137,6 +201,8 @@ internal sealed class ObjectSearchService : IDisposable
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
             }
+            Finish(build: true, watch.ElapsedMilliseconds);
+            finishedBuild = true;
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
@@ -157,6 +223,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             lock (state.Gate)
                 if (ReferenceEquals(state.Build, source)) { state.Build = null; state.Building = false; }
+            if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
     }
@@ -170,9 +237,17 @@ internal sealed class ObjectSearchService : IDisposable
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
-        try { return IndexSearch.Run(state.Index, query, matcher, Limits, status, token); }
+        try
+        {
+            var result = IndexSearch.Run(state.Index, query, matcher, Limits, status, token);
+            Finish(build: false, result.ElapsedMs);
+            return result;
+        }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
+
+    /// <summary>A connection's index, made if it has none (the checks hold reads in it).</summary>
+    internal ConnectionIndex Held(string connectionId) => states.GetOrAdd(connectionId, _ => new State(pool, resources)).Index;
 
     /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
     internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
@@ -184,7 +259,11 @@ internal sealed class ObjectSearchService : IDisposable
     public void Forget(string connectionId)
     {
         running.Forget(connectionId);
-        if (states.TryRemove(connectionId, out var state)) state.Index.Dispose();
+        if (!states.TryRemove(connectionId, out var state)) return;
+        state.Index.Dispose();
+        // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
+        Interlocked.Increment(ref forgets);
+        Interlocked.Increment(ref finished);
     }
 
     public void Dispose()
@@ -328,6 +407,7 @@ internal sealed class ObjectSearchService : IDisposable
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        var Put = Holding(state.Index, children);
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
@@ -343,7 +423,7 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             var index = await ReadBatchAsync(command,
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), state.Index.Put, budgetSource.Token);
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), Put, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -356,7 +436,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             // A statement that fails part way (a catalog view this edition lacks) keeps what came before it, unless an earlier build
             // read the database whole.
-            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), state.Index.Put);
+            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), Put);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, database, database);
             return new(database, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
         }
@@ -367,6 +447,14 @@ internal sealed class ObjectSearchService : IDisposable
         }
         finally { total.Release(); }
     }
+
+    /// <summary>Puts a read into <paramref name="index"/>. A read without children is the fallback for a database too large with them
+    /// (<see cref="WithFallbackAsync"/>), so the index it holds says so.</summary>
+    internal static Action<DatabaseIndex> Holding(ConnectionIndex index, bool children) => read =>
+    {
+        read.ChildrenLeftOut = !children;
+        index.Put(read);
+    };
 
     /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
     internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)

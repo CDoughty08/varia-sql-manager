@@ -618,10 +618,19 @@ internal static class StoreChecks
     private static void MemoryBudgetReports(Action<bool, string> check)
     {
         var reports = new List<(long Used, long Limit, long Seq)>();
+        var details = new List<(int Texts, long ReadingBytes, long NameBytes)>();
+        var sent = new List<IndexMemoryDetail>();
         var store = new ResultStore(1L << 30, 1L << 29);
         long resultsUsed = -1;
-        using var service = new SqlService(store, publish: value =>
+        Func<bool>? during = null;
+        SqlService? self = null;
+        using var service = self = new SqlService(store, publish: value =>
         {
+            if (value is IndexMemoryEvent indexEvent)
+            {
+                lock (reports) sent.Add(indexEvent.Detail);
+                if (during is { } inside) { during = null; if (!inside()) return false; }
+            }
             var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
             var used = report.GetProperty("usedBytes").GetInt64();
             if (report.GetProperty("type").GetString() == "results.memory")
@@ -631,10 +640,14 @@ internal static class StoreChecks
             }
             lock (reports)
             {
+                var detail = report.GetProperty("detail");
+                details.Add((detail.GetProperty("texts").GetInt32(), detail.GetProperty("readingBytes").GetInt64(), detail.GetProperty("nameBytes").GetInt64()));
                 reports.Add((used, report.GetProperty("globalBytes").GetInt64(), report.GetProperty("seq").GetInt64()));
                 return reports.Count != 1;
             }
         });
+        long clock = 0;
+        service.IndexDetailClock = () => Volatile.Read(ref clock);
         service.ReportMemory();
         check(Interlocked.Read(ref resultsUsed) == 0, "results.memory reports the initial empty store");
         var pool = service.Search.Pool;
@@ -649,6 +662,144 @@ internal static class StoreChecks
         lock (reports)
             check(reports.SequenceEqual([(0L, limit, 1L), (0L, limit, 1L), (StringPool.Cost("dbo.Orders"), limit, 2L), (0L, limit, 3L)]),
                 "explorer.index.memory reports the shared index budget, retries refused samples, and reports bytes released");
+        lock (reports)
+            check(details.SequenceEqual([(0, 0L, 0L), (0, 0L, 0L), (1, StringPool.Cost("dbo.Orders"), 0L), (0, 0L, 0L)]),
+                "explorer.index.memory carries what the index holds, read as each event goes out (a pooled text no table holds yet is still being read)");
+        lock (reports)
+            check(ReferenceEquals(sent[0], sent[1]) && !ReferenceEquals(sent[1], sent[2]),
+                "a refused index report's detail is kept for its retry rather than walking the index again");
+        // A finished search (or build) changes no byte, yet its time goes out with the next check; a search changes nothing the
+        // index holds, so its report reuses the last walk.
+        var walks = service.Search.DetailWalks;
+        service.Search.Finish(build: false, 7);
+        service.ReportIndexMemory();
+        service.ReportIndexMemory(); // Nothing more to report.
+        lock (reports)
+            check(reports.Count == 5 && reports[^1] == (0L, limit, 4L) && details.Count == 5 && sent[^1] is { LastSearchMs: 7, LastBuildMs: null }
+                && service.Search.DetailWalks == walks,
+                "a finished search sends an index report with its time though the budget is unchanged, without walking the index again");
+        // While one report is walking (here, inside its publish), the timer's check skips its tick instead of queueing behind it.
+        // The hook is set before the build finishes, so whichever thread sends the report (this one or the timer's) runs it.
+        var skipped = false;
+        during = () =>
+        {
+            var tick = Task.Run(() => self!.ReportIndexMemory(wait: false));
+            skipped = tick.Wait(TimeSpan.FromSeconds(30));
+            return true;
+        };
+        service.Search.Finish(build: true, 30);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(skipped && reports.Count == 6 && sent.Count == 6 && sent[^1] is { LastBuildMs: 30 } && service.Search.DetailWalks == walks + 1,
+                "the timer's index report skips a tick while another report holds the walk, and never queues behind it; a finished build walks again");
+        // While a build adds to the budget, the walk runs at most every few seconds: between walks a report brings the last walk up to
+        // date, the pool's counts afresh and the growth as reading, and a fall walks at once.
+        var grown = service.Search.DetailWalks;
+        var read = pool.TryAcquire("dbo.Customers");
+        service.ReportIndexMemory();
+        var more = pool.TryAcquire("dbo.Invoices");
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown && details[^1] == (2, StringPool.Cost("dbo.Customers") + StringPool.Cost("dbo.Invoices"), 0L)
+                && sent[^1] is { LastBuildMs: 30, LastSearchMs: 7 },
+                "a build's growth within the walk interval is reported without walking, the pool's counts afresh and the growth as reading");
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        var last = pool.TryAcquire("dbo.Payments");
+        service.ReportIndexMemory();
+        check(service.Search.DetailWalks == grown + 1, "once the interval has passed, a growing budget walks the index again");
+        // A fall that stays at or above the last walk's figure is brought up to date; one below it waits for the next walk, so
+        // the parts never claim more than the budget holds.
+        var extra = pool.TryAcquire("dbo.Credits");
+        service.ReportIndexMemory();
+        pool.Release([extra]);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 1 && details[^1] == (3, StringPool.Cost("dbo.Customers") + StringPool.Cost("dbo.Invoices") + StringPool.Cost("dbo.Payments"), 0L), "a fall back to the last walk's figure is reported without walking");
+        var reported = reports.Count;
+        pool.Release([read, more, last]);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 1 && reports.Count == reported, "a fall below the last walk's figure waits for the next walk");
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == grown + 2 && details[^1] == (0, 0L, 0L) && reports[^1].Used == 0, "the next walk reports the fall");
+        // A build stopped or failed part way keeps no time, but its end walks the index again so no read is left showing as running.
+        var held = pool.TryAcquire("dbo.Refunds");
+        service.ReportIndexMemory();
+        var stopped = service.Search.DetailWalks;
+        var builds = service.Search.Builds;
+        service.Search.Ended();
+        service.ReportIndexMemory();
+        lock (reports)
+            check(stopped == grown + 2 && service.Search.DetailWalks == grown + 3 && service.Search.Builds == builds + 1 && sent[^1] is { LastBuildMs: 30 },
+                "a stopped build's end walks the index again, though the budget is unchanged, and keeps the last finished build's time");
+        // A disconnect drops its index and walks at once, within the interval and below the last walk's figure.
+        var connectionId = Guid.NewGuid().ToString();
+        service.Search.Held(connectionId).Put(new DatabaseIndex("Gone", Array.Empty<IndexedObject>(), 0, 0, 0));
+        var forgets = service.Search.Forgets;
+        pool.Release([held]);
+        service.Search.Forget(connectionId);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.Forgets == forgets + 1 && service.Search.DetailWalks == grown + 4 && reports[^1].Used == 0,
+                "a disconnect walks the index at once, though the walk interval has not passed");
+        // A disconnect whose index freed no byte (it held only a set another connection shares) is still reported.
+        var empty = Guid.NewGuid().ToString();
+        service.Search.Held(empty).Put(new DatabaseIndex("Shared", Array.Empty<IndexedObject>(), 0, 0, 0));
+        var before = reports.Count;
+        service.Search.Forget(empty);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(reports.Count == before + 1 && service.Search.DetailWalks == grown + 5, "a disconnect that frees no byte still sends an index report");
+        // A build that ends between reading the counters and the budget: the event carries the budget read after the counters,
+        // and the next check sees the end and walks at once, so no read is left showing as running.
+        var racing = pool.TryAcquire("dbo.Shipments");
+        service.ReportIndexMemory();
+        var raced = service.Search.DetailWalks;
+        service.IndexCountersRead = () =>
+        {
+            service.IndexCountersRead = null;
+            pool.Release([racing]);
+            service.Search.Ended();
+        };
+        service.ReportIndexMemory();
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == raced + 1 && reports[^1].Used == 0 && details[^1] == (0, 0L, 0L),
+                "a build ending between the counters and the budget is walked at the next check, with nothing left as reading");
+        // A read charges its records and texts as it runs, so holding it changes no byte: once the interval has passed, a last walk
+        // that still shows reading is walked again, and a walk that finds nothing new sends nothing.
+        var lateName = pool.TryAcquire("dbo.Late")!;
+        var builder = new ObjectTable.Builder();
+        builder.Text(lateName);
+        builder.Add("procedure", "storedProcedures", null, null, lateName, null, false);
+        var lateBytes = IndexMemory.RecordBytes + IndexMemory.SlotBytes;
+        service.Search.Budget.Force(lateBytes);
+        service.ReportIndexMemory();
+        var beforeHeld = service.Search.DetailWalks;
+        var reportsHeld = reports.Count;
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        service.ReportIndexMemory();
+        var stillReading = (Walks: service.Search.DetailWalks, Reports: reports.Count);
+        var lateConnection = Guid.NewGuid().ToString();
+        service.Search.Held(lateConnection).Put(new DatabaseIndex("Late", builder.Build(), lateBytes, 0, 0, pooled: true));
+        service.ReportIndexMemory();
+        lock (reports)
+            check(stillReading == (beforeHeld + 1, reportsHeld) && reports.Count == reportsHeld && service.Search.DetailWalks == beforeHeld + 1 && details[^1].ReadingBytes > 0,
+                "a read still running is walked again after the interval, and a walk that finds nothing new sends nothing: " + stillReading);
+        // The walk that finds it held is refused once (the control lane full); the next check sends it without walking again.
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        during = () => false;
+        service.ReportIndexMemory();
+        var refused = (Walks: service.Search.DetailWalks, Reports: reports.Count);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(refused == (beforeHeld + 2, reportsHeld) && service.Search.DetailWalks == beforeHeld + 2 && reports.Count == reportsHeld + 1
+                && details[^1] == (1, 0L, StringPool.Cost("dbo.Late")) && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
+                "a database held without changing the budget stops showing as reading at the first check after the interval, and a refused walk is sent at the next check: " + refused);
+        service.Search.Forget(lateConnection);
+        service.ReportIndexMemory();
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>
