@@ -619,6 +619,9 @@ internal sealed class RemoteResult : IDisposable
             }
             while (!store.TryReserveCache(ref held, limit, bytes, out var full))
             {
+                // Evicting gives back only what this cache holds: when the global budget refused, a block only read ahead
+                // stops there rather than flush the cache for a refusal anyway.
+                if (ahead && !full) return false;
                 // A block only read ahead never evicts one a viewer's last read covered: the rows on screen.
                 var victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !(ahead && OnScreenLocked(block)));
                 if (victim is null) return full ? false : throw BudgetFull();

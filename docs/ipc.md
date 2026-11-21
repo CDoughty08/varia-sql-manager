@@ -1118,7 +1118,7 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
   being built there). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block
   only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A
-  block only read ahead never evicts one a viewer's last read covered, nor takes the room of a block a read waits for that has not reserved yet, nor evicts anything for room it could not reach even then, and its own overrun stops it there too. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
+  block only read ahead never evicts one a viewer's last read covered, nor takes the room of a block a read waits for that has not reserved yet, nor evicts anything for room it could not reach even then (the cache's own limit or the global budget), and its own overrun stops it there too. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit, up to twice it (the global budget still refusing it; past that, `TOO_LARGE` names the window cache
   and its setting), and the cache trims back once no read holds them. A read that already sent rows answers short with them instead of failing, whatever stops a later

@@ -511,6 +511,55 @@ internal static partial class BigQueryExecutionChecks
                 $"the rows on screen are every block the last read covered: {string.Join(",", covered)}");
         }
 
+        // A read-ahead the global budget refuses evicts nothing for it (evicting frees only this cache) and stops quietly.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 64L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
+            var evicted = remote.Evictions;
+            long other = 0;
+            var ownReserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Holds = first => first == 20L * size;
+            // Once the read's own block 20 has its room, the global budget is left with less than a block's estimate.
+            remote.Reserved = index => { if (index == 20) { store.TryReserveCache(ref other, long.MaxValue, store.GlobalBytes - store.UsedBytes - (4L << 20)); ownReserved.TrySetResult(); } };
+            remote.Reserving = index => { if (index != 20) ownReserved.Task.Wait(15_000); };
+            var reading = ReadRemote(remote, 20L * size, 10, viewer: 1);
+            await ownReserved.Task;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 1, 15_000);
+            var cachedWhile = remote.CachedBlocks();
+            var evictedWhile = remote.Evictions - evicted;
+            blocks.Gate.TrySetResult();
+            var (next, _) = await reading;
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            store.ReturnCache(ref other, other);
+            check(cachedWhile.Contains(0) && evictedWhile == 0 && next > 20L * size,
+                $"a read-ahead the global budget refuses evicts nothing: cached [{string.Join(",", cachedWhile)}] while block 20 is read, {evictedWhile} evicted, next {next}");
+        }
+
+        // Read-ahead evicts in LRU order but never a block on screen, however old: another grid's read-ahead keeps it.
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: CostPerRow(32_000), cache: 64L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            foreach (var index in remote.CachedBlocks()) if (index != 0) remote.EvictForChecks(index);
+            await ReadRemote(remote, 50L * size, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            await ReadRemote(remote, 20L * size, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.Contains(0) && after.Contains(0) && after.Contains(20),
+                $"read-ahead never evicts an older block on screen: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
         // Viewer ids come from the untrusted renderer: the read-ahead state of a few hundred at most is remembered.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
