@@ -6,8 +6,8 @@ import { modalOpen } from '../core/modal'
 import { watchModals } from '../core/windows'
 import Icon from '../Icon'
 import { memoryLevel, type MemoryUsage, type MemoryUsageService } from './memory'
-import { anyCompressed, nerdMetrics, panelBytes, resultNames } from './memory-details'
-import { NerdDetails, NerdMetrics } from './NerdMetrics'
+import { anyCompressed, indexNerdMetrics, nerdMetrics, panelBytes, resultNames } from './memory-details'
+import { IndexDetails, NerdDetails, NerdMetrics } from './NerdMetrics'
 import { SavedTrend } from './SavedTrend'
 
 // Chromium handles Escape through close requests, independently of the panel's visual layer.
@@ -76,9 +76,12 @@ function NerdSection({ memory, service, pinned }: { memory: MemoryUsage; service
   </NerdMetrics>
 }
 
-/** The open section's body: only now does it follow the Results tabs and documents that name the largest results. */
+/** The open section's body: only now does it follow the Results tabs and documents that name the largest results, and
+ *  the Search Indexer's detail below them. */
 function OpenNerdBody({ memory }: { memory: MemoryUsage }) {
-  const { results, documents } = useWorkbench()
+  const { results, documents, indexMemory } = useWorkbench()
+  const { index } = useServiceSnapshot(indexMemory)
+  const indexModel = useMemo(() => index && indexNerdMetrics(index), [index])
   const tabs = useServiceSnapshot(results)
   const { documents: docs } = useServiceSnapshot(documents)
   const { detail, generation } = memory
@@ -87,7 +90,10 @@ function OpenNerdBody({ memory }: { memory: MemoryUsage }) {
     const names = new Map(docs.map(document => [document.id, document.name]))
     return nerdMetrics(detail, resultNames(tabs, id => names.get(id), generation))
   }, [detail, generation, tabs, docs])
-  return model ? <NerdDetails model={model} /> : <p className="memory-nerd-empty">Waiting for the backend's first report.</p>
+  return <>
+    {model ? <NerdDetails model={model} /> : <p className="memory-nerd-empty">Waiting for the backend's first report.</p>}
+    {indexModel && <IndexDetails model={indexModel} />}
+  </>
 }
 
 const tabbableSelector = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]'

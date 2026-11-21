@@ -106,6 +106,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly Func<object, bool>? publish;
     private readonly Timer? memoryTimer;
     private readonly object memoryGate = new();
+    /// <summary>The index's memory reports, apart from results': its detail walks the held indexes, which must not hold up a results.close.</summary>
+    private readonly object indexMemoryGate = new();
     private long reportedBytes = -1;
     private long reportedGlobalBytes = -1;
     /// <summary>A summary's budget counted as a report but carries no detail: the next check sends the store's detail once.</summary>
@@ -114,6 +116,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long memorySeq;
     private long reportedIndexBytes = -1;
     private long indexMemorySeq;
+    private long reportedIndexFinished = -1;
+    /// <summary>The index detail last sent: a walk whose event was refused is still unsent, so the next check sends it.</summary>
+    private IndexMemoryDetail? reportedIndexDetail;
+    /// <summary>The detail worked out for an index report the control lane refused, with the figures it was for: the retry at the
+    /// next check reuses it while they are unchanged, rather than walking the index again.</summary>
+    private (long Used, long Builds, long Forgets, IndexMemoryDetail Detail, long WalkedAt, long WalkedUsed)? walkedIndexDetail;
+    /// <summary>While the budget moves with no build ending, the index detail is walked at most this often (milliseconds).</summary>
+    internal const long IndexDetailWalkMs = 5000;
+    /// <summary>The clock (milliseconds) that spaces index detail walks; the checks replace it.</summary>
+    internal Func<long> IndexDetailClock { get; set; } = () => Environment.TickCount64;
+    /// <summary>Runs between reading the index's counters and its budget (the checks race a build's end into that gap).</summary>
+    internal Action? IndexCountersRead { get; set; }
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -187,6 +201,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (packHidden)
         {
             if (this.store.Packing == PagePacking.Off) this.store.Packing = PagePacking.OnRequest;
+            this.store.PackAtSeal = true;
             packer = new ResultPacker(this.store, visibility);
             packer.Start();
         }
@@ -235,7 +250,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); this.store.Rooms.Trim(Environment.TickCount64); }, null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(wait: false); this.store.Rooms.Trim(Environment.TickCount64); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
@@ -2824,6 +2839,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = store.Open(store.BeginQuery("debug:" + Guid.NewGuid()), 0, 1, 1, "rows",
             [.. columns.Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary", column.Role))], [.. columns.Select(column => column.Wire)])
             ?? throw new RequestException("BACKEND_ERROR", "The result memory budget is full.");
+        // Raw unless asked to pack, as the checks and benchmarks that compare raw and packed results expect.
+        set.SealRaw = true;
         try
         {
             for (long row = 0; row < args.Rows; row++)
@@ -2878,17 +2895,61 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
     }
 
-    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index.</summary>
-    internal void ReportIndexMemory()
+    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index; also after a build or
+    /// search finished, whose time the detail shows. The detail (the Memory panel's Nerd metrics) walks the held indexes, so it is
+    /// read only when an event goes out, never by a search, and walked again at once after a build ends or a disconnect, else at most every few seconds. The timer's check
+    /// (<paramref name="wait"/> false) skips a tick while another report is still walking, so slow walks never pile up threads.</summary>
+    internal void ReportIndexMemory(bool wait = true)
     {
-        lock (memoryGate)
+        if (!wait && !Monitor.TryEnter(indexMemoryGate)) return;
+        if (wait) Monitor.Enter(indexMemoryGate);
+        try
         {
+            // The counters before the budget: a build's end or a disconnect landing between the two shows as a changed counter at
+            // the next check (which then walks), never as a new counter beside a budget read before it.
+            var finished = search.Finished;
+            var builds = search.Builds;
+            var forgets = search.Forgets;
+            IndexCountersRead?.Invoke();
             var used = search.MemoryUsed;
-            if (publish is null || used == reportedIndexBytes) return;
-            if (!publish(new { Type = "explorer.index.memory", UsedBytes = used, GlobalBytes = search.Limits.MemoryBytes, Seq = indexMemorySeq + 1 })) return;
+            var now = IndexDetailClock();
+            // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
+            // reading is walked again once the interval has passed, though nothing else moved.
+            var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
+            var sent = used == reportedIndexBytes && finished == reportedIndexFinished;
+            if (publish is null || sent && !due && ReferenceEquals(walkedIndexDetail?.Detail, reportedIndexDetail)) return;
+            // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
+            // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
+            // above the last walk's is brought up to date without walking (the parts still add up, the change showing as reading);
+            // one below it waits for the next walk. A build's end or a disconnect walks at once.
+            var (build, searched) = search.Times();
+            IndexMemoryDetail detail;
+            var (walkedAt, walkedUsed) = (now, used);
+            if (!due && walkedIndexDetail is { } kept && kept.Builds == builds && kept.Forgets == forgets && (kept.Used == used || now - kept.WalkedAt < IndexDetailWalkMs))
+            {
+                if (kept.Used == used)
+                    detail = kept.Detail.LastBuildMs == build && kept.Detail.LastSearchMs == searched ? kept.Detail : kept.Detail with { LastBuildMs = build, LastSearchMs = searched };
+                else if (used >= kept.WalkedUsed) detail = search.Refresh(kept.Detail, used);
+                else return;
+                (walkedAt, walkedUsed) = (kept.WalkedAt, kept.WalkedUsed);
+            }
+            else detail = search.MemoryDetail(used);
+            var unchanged = sent && detail == reportedIndexDetail;
+            walkedIndexDetail = (used, builds, forgets, detail, walkedAt, walkedUsed);
+            // A walk that finds nothing new beside what was sent (a read still running, nothing new held) sends nothing; the walk's
+            // time moves on. One whose event is refused stays unsent, and the next check sends it.
+            if (unchanged)
+            {
+                walkedIndexDetail = (used, builds, forgets, reportedIndexDetail!, walkedAt, walkedUsed);
+                return;
+            }
+            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
+            reportedIndexFinished = finished;
+            reportedIndexDetail = detail;
         }
+        finally { Monitor.Exit(indexMemoryGate); }
     }
 
     /// <summary>A summary's budget counts as reported, so a subsequent close reports any fall from the summary. The
