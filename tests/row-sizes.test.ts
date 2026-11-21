@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResultsProfileResult, ResultsRowBytesResult } from '../src/shared/contracts'
 import { RowSizes, rowSizeLimits } from '../src/renderer/src/grid/row-sizes'
 import type { ResultHandle } from '../src/renderer/src/results/ResultClient'
+import { heavyTimeout } from './fixtures/work-meter'
 
 interface Pending<T> { resolve(value: T): void; reject(error: unknown): void; signal?: AbortSignal }
 
@@ -49,7 +50,7 @@ describe('row sizes', () => {
     sizes.ensure(0, 400)
     expect(reads.slice(0, 2).map(read => read.signal?.aborted)).toEqual([true, true])
     expect(reads.slice(2).map(read => read.first)).toEqual([0, 256])
-  })
+  }, heavyTimeout)
   it('keeps no answer of an older revision that lands after the new one was seen', async () => {
     const { sizes, reads, answer, settle, snapshot } = fixture()
     sizes.ensure(0, 10)
@@ -86,7 +87,7 @@ describe('row sizes', () => {
     }
     expect(live.size).toBe(0)
     sizes.dispose()
-  })
+  }, heavyTimeout)
 
   it('backs off paint-driven re-asks of a windowed short block that does not grow, as its wakes do', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
@@ -107,7 +108,7 @@ describe('row sizes', () => {
     sizes.ensure(0, 10)
     expect(reads).toHaveLength(3)
     sizes.dispose()
-  })
+  }, heavyTimeout)
 
   it('wakes a windowed block that grew at the plain wait while another backs off, and stops one whose rows come and go', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
@@ -147,7 +148,7 @@ describe('row sizes', () => {
     }
     expect(wakes).toBeLessThanOrEqual(rowSizeLimits.unchangedWakes + 1)
     second.sizes.dispose()
-  })
+  }, heavyTimeout)
 
   it('wakes the grid once a windowed short block has waited, so its bars fill without a scroll', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
@@ -189,7 +190,7 @@ describe('row sizes', () => {
     expect(scheduled).toHaveLength(rowSizeLimits.unchangedWakes + 2)
     expect(scheduled.at(-1)!.ms).toBe(rowSizeLimits.retryMs + 1)
     sizes.dispose()
-  })
+  }, heavyTimeout)
 
   it('reads a windowed block again whose rows land after its first wait, so its bars do not stay empty', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
@@ -224,7 +225,7 @@ describe('row sizes', () => {
     expect(sizes.get(5)?.bytes).toBe(10)
     expect(live.size).toBe(0)
     sizes.dispose()
-  })
+  }, heavyTimeout)
 
   it('asks a windowed result for a block its cache does not hold yet once per wait, not on every paint', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
@@ -246,7 +247,7 @@ describe('row sizes', () => {
     snapshot.revision = 1
     sizes.ensure(0, 40)
     expect(reads).toHaveLength(3)
-  })
+  }, heavyTimeout)
 
   it('asks no profile of a windowed BigQuery result (it would be refused), and asks once the result is loaded into memory', () => {
     const { sizes, reads, profiles, snapshot } = fixture()

@@ -171,7 +171,7 @@ describe('the comments that point into docs/bigquery.md', () => {
   it('say tabledata.list leaves a rate limit to the block\'s own backoff', () => {
     const jobs = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'BigQuery', 'BigQueryService.Jobs.cs'), 'utf8')
     expect(jobs).not.toMatch(/429 and 5xx are retried/)
-    expect(jobs).toMatch(/return PageAsync\(service, request\.CreateRequest\(\), t\);\n\s*\}, token, rateLimits: false\);/)
+    expect(jobs).toMatch(/return SendRawAsync\(service, request, t\);\n\s*\}, token, rateLimits: false\);/)
   })
 })
 
