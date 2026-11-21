@@ -231,8 +231,11 @@ describe('Job Activity Monitor', () => {
     // The list failing whole (Agent XPs off) reads no last run: no longer reading.
     jobActivity.toggleExpanded(id, { id: backup, name: 'Backup' })
     expect(jobActivity.get(id)?.lastRunPending).toBe(true)
-    handle().deliver({ type: 'live.tick', seq: 3, sampledAt: 3, samples: [], errors: [{ probe: 'agent.jobs.list', code: 'AGENT_DISABLED', message: 'Agent XPs are off.', retryInMs: 0, terminal: true }] })
-    expect(jobActivity.get(id)?.lastRunPending).toBe(false)
+    expect(jobActivity.lastRunWaiting(id)).toEqual({ text: 'Reading the last run…', failed: false })
+    // The list failing whole reads no last run: still unread (table 1 is Nightly's), and the panel says why in its place.
+    handle().set({ status: 'live', probes: { 'agent.jobs.list': { state: 'failing', intervalMs: 5000, effectiveIntervalMs: 5000, error: { probe: 'agent.jobs.list', code: 'AGENT_DISABLED', message: 'Agent XPs are off.', retryInMs: 0, terminal: true } } } } as never)
+    expect(jobActivity.get(id)?.lastRunPending).toBe(true)
+    expect(jobActivity.lastRunWaiting(id)).toEqual({ text: 'The last run is read once SQL Server Agent can run jobs again.', failed: true })
     jobActivity.toggleExpanded(id, { id: nightly, name: 'Nightly' })
     // Between retries is a Status filter; pressed again it comes off. Running is the view chip.
     jobActivity.applyTile(id, agentJobTiles[2].applies)

@@ -178,7 +178,16 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
   /** Agent's state for a document, by its service probe's last sample. */
   availability(id: string): AgentAvailability { return agentAvailability(this.get(id)?.service) }
-  /** What the document shows: a lost connection's last service reading is no news, so it waits (pending) for a live one. */
+  /** While the expanded job's last run is unread, what the panel says in place of table 1 (another job's, or none). */
+  lastRunWaiting(id: string): { readonly text: string; readonly failed: boolean } | undefined {
+    if (!this.get(id)?.lastRunPending) return undefined
+    if (!this.live(id)) return { text: 'The last run is read when the server is connected again.', failed: false }
+    // The list failing whole reads no last run: say so rather than reading forever.
+    const error = this.handles.get(id)?.getSnapshot().probes[agentJobsProbe]?.error
+    if (error && !error.tables?.length) return { text: error.code === 'AGENT_DISABLED' ? 'The last run is read once SQL Server Agent can run jobs again.' : `The last run could not be read: ${error.message}`, failed: true }
+    return { text: 'Reading the last run…', failed: false }
+  }
+  /** What the banner and pill show: a lost connection's last service reading is no news, so they wait (pending) for a live one. */
   shownAvailability(id: string): AgentAvailability { return this.live(id) ? this.availability(id) : 'pending' }
 
   // --- Opening ---------------------------------------------------------------------------------------------------------
@@ -228,8 +237,6 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
           if (agentAvailability(service) === 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()
         }
       }
-      // The list failing whole (Agent XPs off, say) reads no last run either: the panel stops saying it is reading.
-      if (tick.errors?.some(error => error.probe === agentJobsProbe && !error.tables?.length) && this.get(state.id)?.lastRunPending) patch = { ...patch, lastRunPending: false }
       if (Object.keys(patch).length) this.patch(state.id, patch)
     })
     this.watches.set(state.id, () => ticks.dispose())

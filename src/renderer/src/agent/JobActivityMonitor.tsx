@@ -95,10 +95,12 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const rows = table?.descriptor.rowsAvailable
   const end = service.ended(documentId)
   // A lost connection's last service reading is no news: the banner, note, tiles and pill all wait for a live one.
-  const availability = service.shownAvailability(documentId)
-  const banner = agentBanner(availability, state.service, false, state.linux)
+  // Tiles, chips and the Status note keep the last reading while lost (it is what the grid shows); the banner and pill wait.
+  const availability = service.availability(documentId), shown = service.shownAvailability(documentId)
+  const banner = agentBanner(shown, state.service, false, state.linux)
   const override = agentStatusOverride(availability)
   const problems = listProblems(probe)
+  const waiting = service.lastRunWaiting(documentId)
   const failure = !end ? problems.failure : undefined
   const unavailable = probe?.state === 'unavailable' ? probe.note ?? 'Job Activity Monitor is not available on this server.' : undefined
   const stale = !end && problems.stale ? { since: probe?.lastSampleAt ?? Date.now() } : undefined
@@ -118,7 +120,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
   const verbs = [{ command: 'agent.refreshJobs' as const, args: { tabId: documentId }, label: 'Refresh' }]
   const pillProbe = live.probes[agentJobsProbe] ? agentJobsProbe : agentServiceProbe
   // While Agent cannot run jobs the pill says so in place of the interval: the list's rows are msdb's last reading.
-  const note = pillNote(availability, end)
+  const note = pillNote(shown, end)
   const pill = note ? <span className="live-pill" data-state="paused"><Icon name={end?.denied ? 'lock' : 'warning'} /><span>{note}</span></span>
     : <LivePill {...probePillStatus(live, pillProbe, listSpec.intervalMs.default)} />
   return <DocumentFrame id={`agent-jobs-${documentId}`} title={jobActivityTitle} subtitle="SQL Server Agent"
@@ -177,7 +179,8 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             <button type="button" aria-label="Hide the last run" onClick={() => service.toggleExpanded(documentId, undefined)}><Icon name="close" /></button>
           </div>
           {problems.lastRun ? <InlineError role="status" message={problems.lastRun} code={probe?.error?.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />
-            : state.lastRunPending ? <p className="agent-last-run-empty" role="status">{service.isLive(documentId) ? 'Reading the last run…' : 'The last run is read when the server is connected again.'}</p>
+            : waiting?.failed ? <InlineError role="status" message={waiting.text} code={probe?.error?.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />
+            : waiting ? <p className="agent-last-run-empty" role="status">{waiting.text}</p>
             : lastRun && lastRun.descriptor.rowsAvailable === 0 ? <p className="agent-last-run-empty">{lastRun.descriptor.truncated
               ? 'The newest history rows hold no finished run (the run in progress wrote them all), so the last run is not shown.'
               : 'This job has no finished run in its history.'}</p>
