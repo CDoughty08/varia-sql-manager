@@ -167,25 +167,34 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       // Main has moved every reported file's stamp, so a file left out here is not reported again: one that fails is
       // reported and the rest are still asked about.
       try {
-        let reload = silent(document) || all === 'yes'
-        if (!reload && !all) {
+        const fileId = document.file.id
+        const ask = async (dirty: boolean) => {
           const later = ids.slice(index + 1).map(other => this.documents.get(other)).some(other => !!other && changeOf(other) === 'modified' && !silent(other))
-          const answer = unwrap(await confirmReload({ fileId: document.file.id, dirty: document.dirty, more: later }))
+          const answer = unwrap(await confirmReload({ fileId, dirty, more: later }))
           if (answer === 'yesToAll') all = 'yes'
           if (answer === 'noToAll') all = 'no'
-          reload = answer === 'yes' || answer === 'yesToAll'
+          return answer === 'yes' || answer === 'yesToAll'
         }
-        if (reload) await this.reload(id)
+        if (!(silent(document) || all === 'yes' || (!all && await ask(document.dirty)))) continue
+        // The read is awaited: an edit made meanwhile was covered by no answer (and a silent reload is only for a clean
+        // query), so the text read replaces it only once File changed asks again and the user says so.
+        const revision = this.documents.revision(id), read = await this.readAgain(id)
+        if (!read || this.disposed) continue
+        const current = this.documents.get(id)
+        if (!current || this.documents.revision(id) === revision || await ask(current.dirty)) this.applyReload(id, read)
       } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
     if (failed.length) throw new Error([...failed, ...deleted].join(' '))
     if (deleted.length) this.reportError(deleted.join(' '), 'warning')
   }
-  /** Reads the query's file again into it, as one undoable edit that leaves it clean. */
-  private async reload(id: string): Promise<void> {
+  /** Reads the query's file again, for `applyReload`. */
+  private async readAgain(id: string): Promise<OpenSqlFile | undefined> {
     const file = this.documents.get(id)?.file, reloadSqlFile = this.api.reloadSqlFile
-    if (!file || !reloadSqlFile) return
-    const opened = unwrap(await reloadSqlFile(file.id))
+    if (!file || !reloadSqlFile) return undefined
+    return unwrap(await reloadSqlFile(file.id))
+  }
+  /** Puts a file read again into its query while the query still holds that file: one undoable edit that leaves it clean. */
+  private applyReload(id: string, opened: OpenSqlFile): void {
     if (this.disposed || this.documents.get(id)?.file?.id !== opened.id) return
     this.documents.reload(id, opened.content, opened.eol, registeredFile(opened))
   }
