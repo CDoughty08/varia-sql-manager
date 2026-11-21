@@ -401,6 +401,24 @@ internal static partial class BigQueryExecutionChecks
             // The blocks the jump cancelled (never fetched) leave the cache's lists.
             check(jumped.ListedBlocks() == cached.Length, $"blocks a jump cancelled are not kept: {jumped.ListedBlocks()} listed, {cached.Length} cached");
         }
+        // A read that names no viewer (results.read without `viewer`: prefetch, Open Value, a live swap's tile read) hands its
+        // cancelled fetch to the viewerless read-ahead too: the next viewerless jump stops it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var jumped = Remote(store, held);
+            using var stopJump = new CancellationTokenSource();
+            var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            stopJump.Cancel();
+            try { await first; } catch (OperationCanceledException) { }
+            await ReadRemote(jumped, 300 * 256, 10, viewer: 0, waitMs: 50);
+            held.Gate.SetResult();
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            var cached = jumped.CachedBlocks();
+            check(!cached.Contains(40) && cached.Contains(300),
+                $"a viewerless jump after a cancelled viewerless read stops that read's fetch: {string.Join(",", cached)} cancelled {held.Cancelled}");
+        }
 
         // Once the table has expired, a read of cached rows lists no read-ahead blocks it can never fetch.
         {
@@ -1909,7 +1927,8 @@ internal static partial class BigQueryExecutionChecks
                 var size = remote.BlockRows;
                 blocks.PadOf = row => row < size ? 2_000 : (int)(2_000 * wide);
                 await ReadRemote(remote, 0, 10, viewer: 1);
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                // A fetch leaves the count before its finally gives the estimate back: wait for both (a leak never settles).
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), 15_000);
                 if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
             }
             check(failures.Count == 0, "a refused read-ahead overrun gives back its estimate: " + string.Join(", ", failures));
