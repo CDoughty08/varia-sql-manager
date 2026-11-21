@@ -312,7 +312,8 @@ internal sealed class RemoteResult : IDisposable
                     }
                     // Rate limited for longer than a read waits: the rows it has are the answer, never an error.
                     catch (RemoteRetryException) { return await SendHeldAsync(block, next); }
-                    catch (RequestException)
+                    // Any other failure of the block's fetch (BigQuery's error, a connection lost past its retries): the same.
+                    catch (Exception error) when (error is not OperationCanceledException)
                     {
                         next = await SendHeldAsync(block, next);
                         if (next > firstRow) return next;

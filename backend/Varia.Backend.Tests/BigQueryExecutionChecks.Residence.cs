@@ -364,6 +364,30 @@ internal static partial class BigQueryExecutionChecks
                 $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
         }
 
+        // A fetch that fails with something other than a RequestException (a connection error past its retries): a read
+        // across it answers with the rows before it, as for BigQuery's own errors, and one starting on it fails.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blockRows = 0;
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                await Task.Yield();
+                if (first >= blockRows) throw new HttpRequestException("No connection could be made.");
+                for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 0);
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            blockRows = remote.BlockRows;
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 0, 2 * blockRows, viewer: 1); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            string later;
+            try { await ReadRemote(remote, blockRows, 10, viewer: 1); later = "ok"; }
+            catch (Exception error) { later = error.GetType().Name; }
+            check(outcome == "ok" && next == blockRows && later == nameof(HttpRequestException),
+                $"a read across a block whose fetch fails answers with the rows before it, and one starting on it fails: {outcome} next {next}, later {later}");
+        }
+
         // A read across the end of the seeded first page answers with its cached rows once it gives up on the rest: when
         // the table has expired, and when the wait for the rest passes.
         foreach (var expire in new[] { true, false })
