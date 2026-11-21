@@ -45,27 +45,42 @@ const basedOn = (differential: BackupSetRow, full: BackupSetRow) => differential
  * it continues to the latest base (a differential with its full, or a full). With `limit`, every set before the end finished
  * by it. Bases are tried before logs, as SMO prefers a differential to the logs it covers; a dead end tries the next set.
  */
-function chainTo(end: BackupSetRow, candidates: readonly BackupSetRow[], limit?: string): BackupSetRow[] | undefined {
-  const fits = (set: BackupSetRow) => limit === undefined || set.finish <= limit
-  const fulls = candidates.filter(set => set.type === 'full').sort(latest)
-  const base = (set: BackupSetRow): BackupSetRow[] | undefined => {
-    if (set.type === 'full') return [set]
-    const full = fulls.find(item => basedOn(set, item) && fits(item))
-    return full ? [full, set] : undefined
-  }
-  if (end.type !== 'log') return base(end)
+function firstChain(ends: readonly BackupSetRow[], candidates: readonly BackupSetRow[], fulls: readonly BackupSetRow[], limit?: string): BackupSetRow[] | undefined {
+  // A log can continue only a predecessor ending in [firstLSN, lastLSN). Searching just that range also leaves
+  // equally ranked candidates in input order, as the stable latest-first sort does.
+  const byLast = candidates.filter(set => limit === undefined || set.finish <= limit)
+    .map(set => ({ set, last: lsn(set.lastLsn) })).sort((a, b) => a.last < b.last ? -1 : a.last > b.last ? 1 : 0)
   const dead = new Set<BackupSetRow>()
-  const walk = (current: BackupSetRow, depth: number): BackupSetRow[] | undefined => {
-    if (dead.has(current) || depth > candidates.length) return undefined
-    const before = candidates.filter(set => set !== current && fits(set) && continues(current, set)).sort(latest)
-    for (const set of [...before.filter(item => item.type !== 'log'), ...before.filter(item => item.type === 'log')]) {
-      const chain = set.type === 'log' ? walk(set, depth + 1) : base(set)
-      if (chain) return [...chain, current]
+  const reversed: BackupSetRow[] = []
+  function reach(set: BackupSetRow): boolean {
+    if (dead.has(set)) return false
+    reversed.push(set)
+    if (set.type === 'full') return true
+    if (set.type === 'differential') {
+      const full = fulls.find(item => basedOn(set, item))
+      if (full) { reversed.push(full); return true }
+    } else {
+      const first = lsn(set.firstLsn), last = lsn(set.lastLsn)
+      let low = 0, high = byLast.length
+      while (low < high) {
+        const mid = (low + high) >> 1
+        if (byLast[mid].last < first) low = mid + 1
+        else high = mid
+      }
+      const before: BackupSetRow[] = []
+      for (let i = low; i < byLast.length && byLast[i].last < last; i++) {
+        const from = byLast[i].set
+        if (!dead.has(from) && continues(set, from)) before.push(from)
+      }
+      // Prefer the latest reachable base, then the latest reachable log. Every step decreases the last LSN.
+      before.sort((a, b) => Number(a.type === 'log') - Number(b.type === 'log') || latest(a, b))
+      for (const predecessor of before) if (reach(predecessor)) return true
     }
-    dead.add(current)
-    return undefined
+    reversed.pop()
+    dead.add(set)
+    return false
   }
-  return walk(end, 0)
+  return ends.some(reach) ? reversed.reverse() : undefined
 }
 
 /**
@@ -83,17 +98,19 @@ export function planRestore(sets: readonly BackupSetRow[], goal: RestoreGoal = {
   const candidates = sets.filter(usableSet)
   const none = (problem: string): RestorePlan => ({ ids: [], problem: sets.length === 0 ? restoreMessages.noSets : problem })
   const ids = (chain: readonly BackupSetRow[]) => chain.map(set => set.id)
+  const fulls = candidates.filter(set => set.type === 'full' && (point === undefined || set.finish <= point)).sort(latest)
+  if (!fulls.length) return none(restoreMessages.noFullBackup)
   if (point === undefined) {
-    for (const end of [...candidates].sort(latest)) { const chain = chainTo(end, candidates); if (chain) return { ids: ids(chain) } }
-    return none(restoreMessages.noFullBackup)
+    const chain = firstChain([...candidates].sort(latest), candidates, fulls)
+    return chain ? { ids: ids(chain) } : none(restoreMessages.noFullBackup)
   }
-  const full = candidates.filter(set => set.type === 'full' && set.finish <= point).sort(latest)[0]
-  if (!full) return none(restoreMessages.noFullBackup)
+  const full = fulls[0]
   const differential = candidates.filter(set => set.type === 'differential' && set.finish <= point && basedOn(set, full)).sort(latest)[0]
   // A point at a base backup's own finish needs no log, and so no STOPAT.
   if ((differential ?? full).finish >= point) return { ids: ids([full, ...differential ? [differential] : []]) }
   const ends = candidates.filter(set => set.type === 'log' && set.finish >= point).sort((a, b) => a.finish < b.finish ? -1 : a.finish > b.finish ? 1 : byLsn(a, b))
-  for (const end of ends) { const chain = chainTo(end, candidates, point); if (chain) return { ids: ids(chain), stopAt: point } }
+  const chain = firstChain(ends, candidates, fulls, point)
+  if (chain) return { ids: ids(chain), stopAt: point }
   return none(candidates.every(set => set.finish < point) ? restoreMessages.afterLastBackup : restoreMessages.noFullBackup)
 }
 
