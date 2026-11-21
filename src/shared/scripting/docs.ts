@@ -99,7 +99,7 @@ export function renderScriptingDocs(): string {
     '',
     'DDL verbs run SMO\'s Scripter with the listed flag (every other verb flag is off); DML and EXECUTE verbs are SSMS\'s',
     'templates, built from one catalog query. EXECUTE To names its return code `@RC`, or `@RC1`, `@RC2` and on when a',
-    'parameter has, or under some collation could have, that name. A verb a kind does not support is shown greyed (○) or not offered (–).',
+    'parameter has, or under some collation could have, that name (a name built to clash with every one leaves it out). A verb a kind does not support is shown greyed (○) or not offered (–).',
     '',
     table(['Verb', 'Submenu', 'Mnemonic', 'Group', 'Produced by'], scriptVerbs.map(verb => {
       const spec = scriptVerbSpecs[verb]

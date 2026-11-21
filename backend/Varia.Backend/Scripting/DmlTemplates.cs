@@ -114,9 +114,9 @@ internal static class DmlTemplates
     /// code, still a valid call) when parameters built to block them exhaust the bound.</summary>
     /// <remarks>An all-ASCII name clashes case-insensitively: no collation ignores or equates the ASCII characters a name
     /// may hold. A non-ASCII character may count as nothing (the default SQL_Latin1_General_CP1_CI_AS weighs thousands
-    /// zero, so @RC followed by U+0219 is @RC) or as its NFKD fold (a fullwidth R is R, Ç is C); a letter, mark, number or
-    /// symbol may also equal any one character (U+0280 is R in the default collation, U+0661 is 1 in accent-insensitive
-    /// _100_ ones). An ideograph, kana or Hangul syllable never equals R, C or a digit. A needless @RC1 is harmless.</remarks>
+    /// zero, so @RC followed by U+0219 is @RC) or as its NFKD fold (a fullwidth R is R, Ç is C); some numbers,
+    /// symbols, Latin letters and marks may also equal any one character (U+0280 is R in the default collation, U+0661 is
+    /// 1 in accent-insensitive _100_ ones; NameChar.Of). A needless @RC1 is harmless.</remarks>
     private static string? ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
     {
         var ascii = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -149,13 +149,16 @@ internal static class DmlTemplates
         public static NameChar Of(char c)
         {
             if (char.IsAscii(c)) return new(char.ToUpperInvariant(c), null, false);
+            // Where a scan of every CI_AS and CI_AI collation found characters equal to R, C, @ or a digit beyond NFKD: numbers
+            // and symbols of any script, letters only in the Latin and IPA extensions (never Greek, Cyrillic or CJK, so an
+            // ordinary name in those keeps @RC), and the combining Latin letters and two Quranic marks.
             var any = CharUnicodeInfo.GetUnicodeCategory(c) switch
             {
+                UnicodeCategory.DecimalDigitNumber or UnicodeCategory.LetterNumber or UnicodeCategory.OtherNumber or UnicodeCategory.OtherSymbol => true,
                 UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter or UnicodeCategory.ModifierLetter
-                    or UnicodeCategory.NonSpacingMark or UnicodeCategory.DecimalDigitNumber or UnicodeCategory.LetterNumber or UnicodeCategory.OtherNumber
-                    or UnicodeCategory.OtherSymbol => true,
-                // Latin "other letters" such as U+01BB, a 2 in some collations.
-                UnicodeCategory.OtherLetter => c < 'ɐ',
+                    or UnicodeCategory.OtherLetter => c is >= '\u0080' and <= '˿' or >= 'ᴀ' and <= 'ỿ' or >= 'Ⱡ' and <= 'Ɀ'
+                        or >= '꜠' and <= 'ꟿ' or >= 'ꬰ' and <= '꭯',
+                UnicodeCategory.NonSpacingMark => c is >= '̀' and <= 'ͯ' or >= '᷀' and <= '᷿' or >= 'ۖ' and <= 'ۭ',
                 _ => false
             };
             string decomposed;
