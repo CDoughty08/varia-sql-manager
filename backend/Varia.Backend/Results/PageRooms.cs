@@ -12,7 +12,7 @@ namespace Varia.Backend.Results;
 /// rooms their readers gave back; a room still out then is left to its reader and dropped. The rooms ask the system's memory load once for
 /// every <see cref="ResultStore.WorkCheckBytes"/> they take together, as one reservation of that size would, so many
 /// small rooms (a diff's page caches) are refused under high load as other working memory is.</summary>
-internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Func<Exception> refusal) : IDisposable
+internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Func<Exception> refusal, Func<bool>? yieldSpare = null) : IDisposable
 {
     private readonly ConcurrentBag<PageRoom> free = [];
     private readonly List<PageRoom> made = [];
@@ -22,8 +22,10 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
     private bool disposed;
 
     /// <summary>Rooms for reading <paramref name="pages"/> (of one set) fused, each the largest packed page's length, or null
-    /// when none of them is packed now. The caller holds the set's pin, so no page is packed while it reads.</summary>
-    public static PageRooms? Over(StoredPage[] pages, int columns, Func<Exception> refusal)
+    /// when none of them is packed now. The caller holds the set's pin, so no page is packed while it reads. A room refused
+    /// asks <paramref name="yieldSpare"/> to give back spare memory the operation holds (a search's memo) and, when it did,
+    /// asks again before it is refused.</summary>
+    public static PageRooms? Over(StoredPage[] pages, int columns, Func<Exception> refusal, Func<bool>? yieldSpare = null)
     {
         ResultSetBuffer? owner = null;
         var largest = 0;
@@ -33,7 +35,7 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
             owner = set;
             largest = Math.Max(largest, page.Length);
         }
-        return owner is null ? null : new PageRooms(owner, largest, PageView.ScratchLength(columns), refusal);
+        return owner is null ? null : new PageRooms(owner, largest, PageView.ScratchLength(columns), refusal, yieldSpare);
     }
 
     /// <summary>The set whose pages the rooms are for.</summary>
@@ -63,7 +65,7 @@ internal sealed class PageRooms(ResultSetBuffer set, int length, int layout, Fun
         }
         var total = Interlocked.Add(ref asked, length);
         var ask = total / CheckBytes != (total - length) / CheckBytes;
-        if (!set.TryReserveWork(length, ask))
+        if (!set.TryReserveWork(length, ask) && !(yieldSpare?.Invoke() == true && set.TryReserveWork(length, ask)))
         {
             Interlocked.Add(ref asked, -length);
             throw refusal();

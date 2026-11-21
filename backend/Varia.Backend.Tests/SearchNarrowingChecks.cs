@@ -54,6 +54,7 @@ internal static class SearchNarrowingChecks
         Loading(check);
         Values(check);
         Memory(check);
+        Squeezed(check);
     }
 
     /// <summary>The cultures that join two ASCII characters into one letter are found from the collator, not listed by hand.</summary>
@@ -259,6 +260,103 @@ internal static class SearchNarrowingChecks
             }
         }
         check(differences.Count == 0 && narrowed > steps / 4, "every keystroke of " + steps + " typed into the value search (" + narrowed + " narrowed) lists what a fresh list's search lists: " + string.Join(" | ", differences.Take(2)));
+    }
+
+    /// <summary>A search that fits without a memo is never refused for one: with the result's free memory just what a full
+    /// search needs (a scattered view's inverse, or the rooms base order unpacks packed pages into) and spare room for a memo,
+    /// the memo's room goes back to the search, which is answered, keeps no memo and leaves the budget as it found it.</summary>
+    private static void Squeezed(Action<bool, string> check)
+    {
+        // Through the view with short cells the memo outweighs the two rooms, so the inverse is what a memo reserved first would
+        // have refused; with long cells (large pages, so large rooms) it is the second room, as base order's one room is. Spare
+        // room must leave an eighth of the limit free: the long cells' rooms leave that of 1.875 MiB.
+        foreach (var (scattered, wide) in new[] { (true, false), (false, true), (true, true) })
+        {
+            var limit = wide ? 15L << 17 : 16L << 20;
+            var rows = wide ? 5 * 4096 : 192 * 4096;
+            var store = new ResultStore(2 * limit, limit) { Packing = PagePacking.EveryComplete };
+            var set = store.Open(store.BeginQuery("squeezed"), 0, 1, 1, "rows", [new ResultColumn("val", "nvarchar", "text")], [WireKind.Text])!;
+            for (var row = 0; row < rows; row++)
+            {
+                set.CountRow();
+                var number = row * 134775813 & ((1 << 19) - 1);
+                // Base order reads a packed page into a room: long cells make its pages, and so its rooms, large.
+                set.BeginRow()!.AppendText("ab" + number.ToString("X5", CultureInfo.InvariantCulture) + (wide ? new string((char)('a' + row % 26), 56) : ""));
+                set.TryCommitRow();
+            }
+            set.Complete();
+            var pages = set.SealedSnapshot();
+            ResultView? view = null;
+            long viewBytes = 0;
+            if (scattered)
+            {
+                viewBytes = 4L * rows;
+                set.TryReserveWork(viewBytes);
+                view = store.AddView(set, [.. Enumerable.Range(0, rows).Select(row => (int)(row * 134775811L % rows))], [], false, true, viewBytes, null, rows);
+            }
+            int largest;
+            using (set.Pin()) largest = pages.Where(page => set.Raw(page) is null).Max(page => page.Length);
+            var memoBytes = SearchMemo.BytesFor(rows, 1, 2, 0);
+            // What a full search reserves (the inverse and two rooms through the view, one room in base order), and half the memo:
+            // a narrowed search that reserved its memo first would be refused.
+            var headroom = (scattered ? 4L * rows + 2L * largest : largest) + memoBytes / 2;
+            var ballast = limit - store.UsedBytes - headroom;
+            var squeezed = ballast > 0 && set.TryReserveWork(ballast);
+            var spare = set.TryReserveSpare(memoBytes);
+            if (spare) set.ReturnWork(memoBytes);
+            var before = store.UsedBytes;
+            SearchOutcome? full = null, narrowed = null;
+            string? refused = null;
+            var yielded = false;
+            try
+            {
+                full = ResultSearcher.Search(set, pages, view, "ab", 0, false, 10, CancellationToken.None, workers: 1, narrow: false);
+                narrowed = ResultSearcher.Search(set, pages, view, "ab", 0, false, 10, CancellationToken.None, workers: 1);
+                yielded = ResultSearcher.LastYielded;
+            }
+            catch (RequestException error) { refused = error.Code; }
+            check(set.HasPacked && squeezed && spare && full?.Total == rows && narrowed?.Total == rows && yielded && set.SearchMemo is null && store.UsedBytes == before,
+                "a narrowing search that fits without its memo is answered" + (scattered ? " through a scattered view" : " in base order") + (wide ? " of long cells" : "") + ", keeping no memo: "
+                + squeezed + " " + spare + " " + full?.Total + " " + narrowed?.Total + " " + refused + " yielded " + yielded + " memo " + (set.SearchMemo is not null) + " used " + before + " " + store.UsedBytes);
+            if (squeezed) set.ReturnWork(ballast);
+            store.Release(set.ResultId);
+        }
+
+        // Several runs refused at once: each asks again once the memo's room has gone back, which goes back only once.
+        var latchStore = new ResultStore(1L << 30, 1L << 29);
+        var latchSet = latchStore.Open(latchStore.BeginQuery("latch"), 0, 1, 1, "rows", [new ResultColumn("val", "nvarchar", "text")], [WireKind.Text])!;
+        for (var row = 0; row < 1000; row++) { latchSet.CountRow(); latchSet.BeginRow()!.AppendText("ab" + row); latchSet.TryCommitRow(); }
+        latchSet.Complete();
+        var held = latchStore.UsedBytes;
+        var plan = Narrowing.Plan(latchSet, null, "ab", [ResultSearcher.MatcherFor(latchSet.Columns[0], latchSet.Wires[0], "ab")], 1000)!;
+        var planned = latchStore.UsedBytes;
+        var (firstYield, secondYield) = (plan.YieldMemo(latchSet), plan.YieldMemo(latchSet));
+        var afterYields = latchStore.UsedBytes;
+        var holds = plan.HoldsMemo;
+        plan.Dispose(latchSet);
+        check(planned > held && firstYield && secondYield && !holds && afterYields == held && latchStore.UsedBytes == held,
+            "every refused run of a search asks again once its memo's room went back, which goes back once, its arrays let go: " + held + " " + planned + " " + afterYields + " " + latchStore.UsedBytes);
+        // Runs refused together: every run told the room went back finds it back when it asks again, not only the run that
+        // gave it back (two threads at a time, many times, as the window between the two is short).
+        var early = 0;
+        using (var start = new Barrier(2))
+        {
+            for (var round = 0; round < 2000; round++)
+            {
+                var racing = Narrowing.Plan(latchSet, null, "ab", [ResultSearcher.MatcherFor(latchSet.Columns[0], latchSet.Wires[0], "ab")], 1000)!;
+                void Yield()
+                {
+                    start.SignalAndWait();
+                    if (racing.YieldMemo(latchSet) && latchStore.UsedBytes != held) Interlocked.Increment(ref early);
+                }
+                var other = Task.Run(Yield);
+                Yield();
+                other.Wait();
+                racing.Dispose(latchSet);
+            }
+        }
+        check(early == 0 && latchStore.UsedBytes == held, "a run told its search's memo room went back finds it back when it asks again: " + early + " early");
+        latchStore.Release(latchSet.ResultId);
     }
 
     /// <summary>A search's memo is charged to the result's budget, replaced (its bytes returned) by the next search's,

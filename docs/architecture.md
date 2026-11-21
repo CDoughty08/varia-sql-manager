@@ -256,7 +256,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   memory-load check are never raised. Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
   of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
-  memory, one a result, freed with it: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  memory, one a result, freed with it and given back to the search's own reservations when they would be refused: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
