@@ -2,7 +2,7 @@ import type { ResultHandle } from '../results/ResultClient'
 import { browserTimers, type Timers } from '../core/timers'
 
 /** Rows one results.rowBytes asks for, blocks kept at most, blocks asked at once, and how long a failed block waits. */
-export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000 } as const
+export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000, unchangedWakes: 3 } as const
 
 /** A row's size as the row-size bar draws it: its share of the largest row (0 – 1), whether it is over half of it, and
  *  its exact bytes, `estimated` when an estimated cell took part. */
@@ -33,9 +33,12 @@ export class RowSizes {
   private revision: number | undefined
   /** One repaint once a windowed short block has waited: nothing else paints a grid whose cells have all arrived. */
   private wakeTimer: unknown
-  /** The rows each windowed short block answered when it last armed the wake: it arms again only once it has grown, so a
-   *  block that never fits the cache stops asking rather than polling. */
-  private readonly woken = new Map<number, number>()
+  /** When the wake is due: a block arming it later than that moves it, never earlier, so no block's wake is lost. */
+  private wakeDue = 0
+  /** The rows each windowed short block answered when it last armed the wake, and how often it has since answered no more:
+   *  a block still fetching wakes again after twice the wait each time, a few times, so one that never fits the cache stops
+   *  asking rather than polling. */
+  private readonly woken = new Map<number, { rows: number; unchanged: number }>()
 
   constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void, private readonly timers: Timers = browserTimers) {}
 
@@ -110,17 +113,14 @@ export class RowSizes {
       const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
       if (short && this.handle.getSnapshot().residence === 'remote') {
         this.failed.set(block, performance.now())
-        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again, while the
-        // block keeps growing.
+        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again. A block
+        // that grew waits the wait; one that did not (still fetching, or never fits) waits twice as long each time, a few
+        // times only.
         const last = this.woken.get(block)
-        if (last === undefined || result.bytes.length > last) {
-          this.woken.set(block, result.bytes.length)
-          // Due once this block has waited, which covers every block that armed it earlier.
-          if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
-          this.wakeTimer = this.timers.setTimeout(() => {
-            this.wakeTimer = undefined
-            if (!this.disposed) this.changed()
-          }, rowSizeLimits.retryMs + 1)
+        const unchanged = last === undefined || result.bytes.length > last.rows ? 0 : last.unchanged + 1
+        if (unchanged <= rowSizeLimits.unchangedWakes) {
+          this.woken.set(block, { rows: result.bytes.length, unchanged })
+          this.wake(rowSizeLimits.retryMs * 2 ** unchanged + 1)
         }
       } else {
         this.failed.delete(block)
@@ -134,6 +134,18 @@ export class RowSizes {
       this.abort.signal.removeEventListener('abort', stop)
       if (this.pending.get(block) === controller) this.pending.delete(block)
     })
+  }
+
+  /** Arms the one wake for `ms` from now, unless it is already due later (which still covers this block's wait). */
+  private wake(ms: number): void {
+    const due = performance.now() + ms
+    if (this.wakeTimer !== undefined && this.wakeDue >= due) return
+    if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+    this.wakeDue = due
+    this.wakeTimer = this.timers.setTimeout(() => {
+      this.wakeTimer = undefined
+      if (!this.disposed) this.changed()
+    }, ms)
   }
 
   private profile(): void {

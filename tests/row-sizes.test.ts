@@ -70,16 +70,62 @@ describe('row sizes', () => {
     // The paint it wakes asks again.
     sizes.ensure(0, 40)
     expect(reads).toHaveLength(2)
-    // A block that never grows (its rows never fit the cache) arms no further wake: no polling.
-    reads[1].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
-    await settle()
-    expect(scheduled).toHaveLength(1)
-    // One that grew wakes once more.
+    // A block that does not grow (still fetching, or its rows never fit the cache) wakes after twice the wait each time,
+    // a few times, then stops: no polling.
+    for (let attempt = 1; attempt <= rowSizeLimits.unchangedWakes + 1; attempt++) {
+      reads[attempt].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+      await settle()
+      if (attempt > rowSizeLimits.unchangedWakes) break
+      expect(scheduled).toHaveLength(attempt + 1)
+      expect(scheduled[attempt].ms).toBe(rowSizeLimits.retryMs * 2 ** attempt + 1)
+      vi.advanceTimersByTime(scheduled[attempt].ms)
+      scheduled[attempt].callback()
+      sizes.ensure(0, 40)
+      expect(reads).toHaveLength(attempt + 2)
+    }
+    expect(scheduled).toHaveLength(rowSizeLimits.unchangedWakes + 1)
+    // One that grew wakes once more, at the plain wait.
     vi.advanceTimersByTime(rowSizeLimits.retryMs + 1)
     sizes.ensure(0, 40)
-    reads[2].resolve({ firstRow: 0, bytes: [10, 20], rowsAvailable: 100_000, estimated: [] })
+    reads.at(-1)!.resolve({ firstRow: 0, bytes: [10, 20], rowsAvailable: 100_000, estimated: [] })
     await settle()
-    expect(scheduled).toHaveLength(2)
+    expect(scheduled).toHaveLength(rowSizeLimits.unchangedWakes + 2)
+    expect(scheduled.at(-1)!.ms).toBe(rowSizeLimits.retryMs + 1)
+    sizes.dispose()
+  })
+
+  it('reads a windowed block again whose rows land after its first wait, so its bars do not stay empty', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const live = new Map<number, { callback: () => void; due: number }>()
+    let id = 0
+    const timers = { setTimeout: (callback: () => void, ms: number) => { live.set(++id, { callback, due: performance.now() + ms }); return id }, clearTimeout: (handle: unknown) => { live.delete(handle as number) } }
+    const { sizes, reads, settle, snapshot } = fixture(100_000, 'complete', timers)
+    snapshot.residence = 'remote'
+    const fire = () => {
+      const [[key, wake]] = live.entries()
+      live.delete(key)
+      vi.advanceTimersByTime(Math.max(0, wake.due - performance.now()))
+      wake.callback()
+    }
+    sizes.ensure(0, 40)
+    reads[0].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    // The first wake asks again while the block is still fetching: still short.
+    fire()
+    sizes.ensure(0, 40)
+    reads[1].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    // Its rows land a second later; the paints then fall inside the wait. A later wake still asks again.
+    vi.advanceTimersByTime(1000)
+    for (let frame = 0; frame < 5; frame++) sizes.ensure(0, 40)
+    expect(live.size).toBe(1)
+    fire()
+    sizes.ensure(0, 40)
+    expect(reads).toHaveLength(3)
+    reads[2].resolve({ firstRow: 0, bytes: Array.from({ length: 256 }, () => 10), rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    expect(sizes.get(5)?.bytes).toBe(10)
+    expect(live.size).toBe(0)
     sizes.dispose()
   })
 

@@ -102,6 +102,23 @@ const between = (from: string, to: string) => {
   return remote.slice(start, end)
 }
 
+it('reads BigQuery\'s remote rows only through the block cache, and builds unlimited blocks only of the first page', () => {
+  const backend = join(__dirname, '..', 'backend', 'Varia.Backend')
+  const files = (readdirSync(backend, { recursive: true }) as string[]).filter(file => file.endsWith('.cs')).map(file => ({ file: file.replaceAll('\\', '/'), code: strip(readFileSync(join(backend, file), 'utf8')) }))
+  const uses = (pattern: RegExp) => files.flatMap(({ file, code }) => Array.from(code.matchAll(pattern), () => file))
+  // The fetch delegate is built once and handed only to the cache (Window's RemoteResult.Create), which reserves before it
+  // calls it: nothing else may call it with a writer of its own.
+  expect(uses(/\bBigQueryFetch\b/g)).toEqual(['SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
+  const residence = files.find(({ file }) => file === 'SqlService.BigQueryResidence.cs')!.code
+  expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
+  expect(residence).toMatch(/private RemoteFetch BigQueryFetch\(BigQueryWindow context\) =>/)
+  // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
+  expect(uses(/new RemoteBlockWriter\(/g).sort()).toEqual(['Results/RemoteResult.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
+  const decide = residence.slice(residence.indexOf('DecideResidenceAsync('), residence.indexOf('async Task<RemoteResult?> KeepInMemoryAsync()'))
+  expect(count(decide, /new RemoteBlockWriter\(set\.ResultId, set\.Wires, (0|from)\);/g)).toBe(2)
+  expect(count(decide, /WriteRows\(first, plan, /g)).toBe(2)
+})
+
 it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const fetch = between('private async Task FetchAsync(', 'private void Reserve(')
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
@@ -125,6 +142,9 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n(\s*\/\/[^\n]*\n)*\s*if \(Interlocked\.Read\(ref held\) \+ bytes > OverLimit\) throw RemoteBlockWriter\.CacheTooSmall\(\);\n\s*throw;/)
   // A block's estimate the cache's own limit refuses (other reads hold it) answers the read short, with nothing fetched;
   // only a full global budget answers TOO_LARGE.
+  // What it reserves is the block's estimate, never less.
+  expect(fetch).toMatch(/var estimate = Math\.Min\(EstimateOf\(rows\), CacheLimit \/ 2\);\n(\s*\/\/[^\n]*\n)*\s*try \{ Reserve\(estimate, block\); \}/)
+  expect(count(fetch, /\bestimate = /g)).toBe(1)
   expect(fetch).toMatch(/try \{ Reserve\(estimate, block\); \}\n\s*catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ estimate > CacheLimit\) \{ throw new RemoteRetryException\(error\); \}/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
