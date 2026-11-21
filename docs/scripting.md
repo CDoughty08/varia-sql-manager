@@ -10,7 +10,8 @@ queries are data in `src/shared/scripting/catalog.ts`; the backend embeds the sa
 ## Verbs
 
 DDL verbs run SMO's Scripter with the listed flag (every other verb flag is off); DML and EXECUTE verbs are SSMS's
-templates, built from one catalog query. A verb a kind does not support is shown greyed (○) or not offered (–).
+templates, built from one catalog query. EXECUTE To names its return code `@RC`, or `@RC1`, `@RC2` and on when a
+parameter has, or under some collation could have, that name (a name built to clash with every one leaves it out). A verb a kind does not support is shown greyed (○) or not offered (–).
 
 | Verb | Submenu | Mnemonic | Group | Produced by |
 | --- | --- | --- | --- | --- |
@@ -107,6 +108,12 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 | `agentAlert` | — | Script Alert as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Alert` | `agentObject` |
 | `agentOperator` | — | Script Operator as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Operator` | `agentObject` |
 | `agentProxy` | — | Script Proxy as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `ProxyAccount` | `agentObject` |
+| `bqTable` | none | Script Table as | ✓ | – | – | ✓ | – | ✓ | ✓ | ✓ | ✓ | – | – | `BigQuery` | `bigquery` |
+| `bqTable` | `snapshot` | Script Table Snapshot as | ✓ | – | – | ✓ | – | ✓ | ○ | ○ | ○ | – | – | `BigQuery` | `bigquery` |
+| `bqView` | — | Script View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |
+| `bqMaterializedView` | — | Script Materialized View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |
+| `bqExternalTable` | — | Script External Table as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |
+| `bqRoutine` | none, `procedure`, `scalar`, `tableValued`, `aggregate` | Script Routine as | ✓ | – | – | ✓ | – | – | – | – | – | – | – | `BigQuery` | `bigquery` |
 
 Children are scripted only below these parents: `key` below `table`; `constraint` below `table`; `trigger` below `table` or `view`; `index` below `table` or `view`; `statistic` below `table` or `view`. A table type's keys, constraints and indexes are not.
 
@@ -114,7 +121,7 @@ Module preflights find the object by these `sys.objects.type` codes: `view`: V; 
 
 Deferred, with no Script submenu yet (key material, binaries or external integrations): `cryptographicProvider`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `externalDataSource`, `externalFileFormat`, `table` (`droppedLedger`), `view` (`droppedLedger`), `procedure` (`extended`), `procedure` (`replicationFilter`).
 
-Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`.
+Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`, `bqProject`, `bqDataset`, `bqModel`, `bqColumn`.
 
 ## Options
 
@@ -208,6 +215,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AUTH_UNSUPPORTED` | Yes |
 | `AUTH_ENTRA` | Yes |
 | `AUTH_IDENTITY` | No |
+| `COST_CAP` | No |
+| `QUOTA` | Yes |
+| `AUTH_EXPIRED` | No |
 
 ## Limits
 

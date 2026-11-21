@@ -125,6 +125,41 @@ describe('ResultsSearchService', () => {
     expect(search().marks.get('e1')!.current).toEqual({ row: 1, column: 0 })
   })
 
+  it('drops a run read once a later step lands back in the run held, so it cannot replace that run\'s marks', async () => {
+    const { service, searches, set, show, settle, answerAll, search } = fixture({ maxMatches: 2 })
+    show([set(0, ['x'], [[1, 0], [3, 0], [4, 0], [8, 0], [9, 0]], 10)])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    // Back from the first wraps to the last, which reads the run before the end; Next at once returns to the first.
+    service.step('t1', -1)
+    const wrap = searches.shift()!
+    service.step('t1', 1)
+    expect(wrap.o.signal?.aborted).toBe(true)
+    expect(search().marks.get('e1')!.current).toEqual({ row: 1, column: 0 })
+    wrap.resolve()
+    await settle()
+    expect(search().current).toBe(0)
+    expect(search().marks.get('e1')!.current).toEqual({ row: 1, column: 0 })
+  })
+
+  it('moves only the active marker on a step within the runs held, rebuilding no grid\'s matched cells', async () => {
+    const { service, set, show, answerAll, search } = fixture({ maxMatches: 2 })
+    show([set(0, ['a'], [[1, 0], [3, 0], [4, 0]], 10), set(1, ['b'], [[2, 0], [5, 0]], 10)])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    const before = search().marks
+    service.step('t1', 1)
+    const after = search().marks
+    expect(after.get('e1')!.current).toEqual({ row: 3, column: 0 })
+    expect(after.get('e1')!.cells).toBe(before.get('e1')!.cells)
+    expect(after.get('e2')!.cells).toBe(before.get('e2')!.cells)
+    // A new run brings its own cells.
+    service.step('t1', 1)
+    await answerAll()
+    expect(search().marks.get('e1')!.cells).not.toBe(before.get('e1')!.cells)
+    expect(search().marks.get('e1')!.current).toEqual({ row: 4, column: 0 })
+  })
+
   it('reads a run for a step while the other grids are still searched, without stopping their search', async () => {
     const { service, searches, set, show, settle, search } = fixture({ maxMatches: 1 })
     show([set(0, ['a'], [[1, 0], [6, 0]]), set(1, ['b'], [[2, 0]])])

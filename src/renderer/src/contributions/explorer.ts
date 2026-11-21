@@ -1,5 +1,7 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { insertTextFor } from '../../../shared/explorer/refs.ts'
+import { bigQueryPath } from '../../../shared/bigquery/names.ts'
+import { bigQueryPreviewRows } from '../../../shared/bigquery/objects'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, filterable, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
@@ -14,7 +16,8 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+  & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
@@ -28,6 +31,8 @@ export function explorerContribution({ commands, documents, connections, explore
     if (node.kind === 'server') return connections.get(node.connectionId)?.server
     return node.kind === 'folder' ? explorer.insertText(node.id) : insertTextFor(node.ref)
   }
+  // A BigQuery table (or snapshot, or clone): the rows tabledata.list can list.
+  const previewNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && node.ref.type === 'object' && node.ref.object.kind === 'bqTable' && !!queries ? node : undefined }
   const filterNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && filterable(node) ? node : undefined }
   const registrations = [
     // Refresh also samples the server's live status at once, so its chips match the reloaded rows.
@@ -84,6 +89,26 @@ export function explorerContribution({ commands, documents, connections, explore
         if (inCard || !peekTabs?.view(documents.getSnapshot().activeId)) peek?.refresh()
         else peekTabs.view(documents.getSnapshot().activeId)?.refresh()
       }
+    }),
+    // Preview Rows (docs/bigquery.md): a new query tab whose text is the SELECT the preview stands for, filled through tabledata.list,
+    // which is free. Its dataset is the table's when the table is in the billing project.
+    commands.register('explorer.previewRows', {
+      when: args => !!previewNode(args),
+      run: async args => {
+        const node = previewNode(args), connection = node && connections.get(node.connectionId)
+        if (!node || !connection || node.ref.type !== 'object') return
+        const { project, dataset, name } = node.ref.object
+        if (project === undefined || dataset === undefined || name === undefined) return
+        const sql = `-- Preview Rows read the first ${bigQueryPreviewRows.toLocaleString('en-US')} rows with tabledata.list, which is free and runs no job.\n`
+          + `-- Execute runs this query instead, which BigQuery bills.\nSELECT *\nFROM ${bigQueryPath(project, dataset, name)}\nLIMIT ${bigQueryPreviewRows};\n`
+        const document = documents.newQuery(sql, undefined, connection.id, project === connection.server ? dataset : connection.database)
+        frame(() => documents.boundEditor?.focus())
+        await queries?.execute(document.id, { project, dataset, table: name })
+      }
+    }),
+    commands.register('explorer.bigQueryProperties', {
+      when: args => !!bigQueryProperties?.canOpen(nodeOf(args)) && live(nodeOf(args)),
+      run: args => { bigQueryProperties?.open(nodeOf(args)) }
     }),
     // A server's name as connected to, or the quoted object name.
     commands.register('explorer.copyName', {

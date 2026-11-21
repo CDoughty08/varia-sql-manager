@@ -215,8 +215,6 @@ export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' 
   if (connection.options?.provider === 'bigquery') return `(BigQuery${connection.login ? ' - ' + connection.login : ''})`
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : connection.serverVersion ? `(SQL Server ${connection.serverVersion})` : '(SQL Server)'
 }
-/** BigQuery's root has no children until its Explorer (docs/bigquery-plan.md, BQ-5): its datasets are not SQL Server's catalog. */
-const browsable = (connection: LiveConnection): boolean => connection.options.provider !== 'bigquery'
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
  * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
@@ -863,7 +861,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (!available && !root.lost) this.markLost(root)
       else if (available && root.lost) {
         root.lost = false
-        root.hasChildren = browsable(connection)
+        root.hasChildren = true
         root.generation++
         added.push(root.id)
       }
@@ -1014,7 +1012,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.targetId = connection.targetId
     this.updateRoot(node, connection)
-    node.hasChildren = connectionAvailable(connection) && browsable(connection)
+    node.hasChildren = connectionAvailable(connection)
     node.lost = !connectionAvailable(connection)
     node.lastUsed = ++this.clock
     this.rootByConnection.set(connection.id, node.id)

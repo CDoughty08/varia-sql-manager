@@ -93,7 +93,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
     '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.discard-status-button .codicon', '.memory-nerd-toggle > .codicon', '.memory-group-aside > .codicon', '.update-status .codicon', '.oe-active > .codicon',
-    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon',
+    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon', '.agent-job-status .codicon, .agent-stopped-status .codicon',
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],

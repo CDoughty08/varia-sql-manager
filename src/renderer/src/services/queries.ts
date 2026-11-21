@@ -1,4 +1,5 @@
 import type { ConnectionInfo, QueryResult, VariaApi } from '../../../shared/contracts'
+import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { sessionCloseNoteText, sessionPromptLimits, type SessionAction, type SessionCloseNote, type SessionEnd, type SessionLocationSwitch } from '../../../shared/sessions'
@@ -246,11 +247,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
       ...estimateMode ? { estimateMode } : {} })
   }
-  /** Runs the active query, or the query `tabId` names. */
-  execute(tabId = this.documents.getSnapshot().activeId): Promise<void> {
+  /** Runs the active query, or the query `tabId` names. `preview`: a BigQuery tab's Preview Rows, read with tabledata.list
+   *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. */
+  execute(tabId = this.documents.getSnapshot().activeId, preview?: BigQueryPreviewTarget): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
-    const run = this.run(tabId)
+    const run = this.run(tabId, preview)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
   }
@@ -304,9 +306,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     this.publish(next)
   }
-  private async run(tabId: string): Promise<void> {
+  private async run(tabId: string, preview?: BigQueryPreviewTarget): Promise<void> {
     const document = this.documents.get(tabId)!
     const connection = this.getConnection(document.connectionId!)!
+    if (preview && connection.providerId !== 'bigquery') return
     const { sql, startLine, startColumn } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), before = this.getSnapshot()[tabId], previous = before?.session
@@ -321,7 +324,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
     // BigQuery dry-runs first (free) and may ask (docs/bigquery.md, Cost). Declined or cancelled, the tab is as it was.
-    if (bigQuery && this.costGate) {
+    if (bigQuery && this.costGate && !preview) {
       const stop = new AbortController()
       this.gated.set(tabId, { queryId, stop, before })
       const stopped = new Promise<false>(resolve => { stop.signal.addEventListener('abort', () => resolve(false), { once: true }) })
@@ -352,7 +355,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // A BigQuery error names a column too, so a selection's first column maps it back to the editor.
       const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, ...target, sql, startLine, ...bigQuery && startColumn > 1 ? { startColumn } : {}, queryId,
         ...options, ...sqlServerOnly.includeActualPlan ? { includeActualPlan: true } : {},
-        ...sqlServerOnly.includeClientStatistics ? { includeClientStatistics: true } : {}, ...sqlServerOnly.includeLivePlan ? { includeLivePlan: true } : {} })
+        ...sqlServerOnly.includeClientStatistics ? { includeClientStatistics: true } : {}, ...sqlServerOnly.includeLivePlan ? { includeLivePlan: true } : {}, ...preview ? { preview } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }

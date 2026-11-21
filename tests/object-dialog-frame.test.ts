@@ -127,8 +127,8 @@ describe('Take Database Offline and Bring Database Online page', () => {
     // PASSWORD_POLICY instead of returning to Password.
     const { DialogButtons } = await import('../src/renderer/src/dialogs/ObjectDialog')
     type Shown = { key: string | null; props: { children: string; disabled?: boolean } }
-    const buttons = (phase: Parameters<typeof DialogButtons>[0]['phase'], busy = false) => {
-      const element = DialogButtons({ phase, busy, blocked: undefined, closeRef: null, stopRef: null, onClose: () => {}, onStop: () => {} }) as unknown as Shown & { props: { children: Shown | (Shown | false)[] } }
+    const buttons = (phase: Parameters<typeof DialogButtons>[0]['phase'], busy = false, readOnly = false) => {
+      const element = DialogButtons({ phase, busy, blocked: undefined, readOnly, closeRef: null, stopRef: null, onClose: () => {}, onStop: () => {} }) as unknown as Shown & { props: { children: Shown | (Shown | false)[] } }
       const shown = Array.isArray(element.props.children) ? element.props.children.filter((child): child is Shown => !!child) : [element]
       return shown.map(button => `${button.key} ${button.props.children}${button.props.disabled ? ' (disabled)' : ''}`)
     }
@@ -137,6 +137,9 @@ describe('Take Database Offline and Bring Database Online page', () => {
     expect(buttons('failed')).toEqual(['ok OK', 'cancel Cancel'])
     expect(buttons('disconnected')).toEqual(['ok OK (disabled)', 'cancel Close'])
     expect(buttons('succeeded')).toEqual(['close Close'])
+    // A read-only dialog (SQL Server Agent Properties below sysadmin) has only Close.
+    expect(buttons('ready', false, true)).toEqual(['close Close'])
+    expect(buttons('loading', true, true)).toEqual(['close Close'])
   })
   it('says after Stop that the count read before OK no longer holds', async () => {
     const { stoppedMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')

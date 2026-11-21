@@ -234,6 +234,25 @@ describe('the estimate before Execute', () => {
     await f.settle()
     expect(f.api.bigQueryDryRun).toHaveBeenCalledTimes(1)
   })
+  it("asks Script As › CREATE's prompts for its estimate, and sends Options' cap only when the connection has none of its own", async () => {
+    const bytes = (value: number) => ({ bytesProcessed: value })
+    const f = fixture()
+    f.setAnswer({ run: true })
+    await expect(f.service.beforeScript(connectionId, bytes(20 * GiB))).resolves.toMatchObject({ run: true })
+    expect(f.asked).toEqual([expect.objectContaining({ prompt: { kind: 'threshold', bytes: 20 * GiB }, connection: 'acme-analytics' })])
+    f.setAnswer({ run: false })
+    await expect(f.service.beforeScript(connectionId, bytes(20 * GiB))).resolves.toMatchObject({ run: false })
+    // An aborted prompt or a lost connection runs nothing.
+    const aborted = new AbortController(); aborted.abort()
+    await expect(f.service.beforeScript(connectionId, bytes(20 * GiB), aborted.signal)).resolves.toMatchObject({ run: false })
+    f.setLive(false)
+    await expect(f.service.beforeScript(connectionId, bytes(1024))).resolves.toEqual({ run: false })
+    expect(f.asked).toHaveLength(2)
+    // Options' cap goes with a small estimate's run, unasked, when the connection has no cap of its own.
+    const capped = fixture({ 'queryExecution.bigQuery.maximumBytesBilled': 2 } as never)
+    await expect(capped.service.beforeScript(connectionId, bytes(1024))).resolves.toEqual({ run: true, maximumBytesBilled: 2 * GiB })
+    expect(capped.asked).toHaveLength(0)
+  })
   it("never asks again for a connection the user opted out of", async () => {
     const f = fixture()
     f.replies.push(estimate(20 * GiB), estimate(20 * GiB))
