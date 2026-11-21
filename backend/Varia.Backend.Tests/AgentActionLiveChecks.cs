@@ -48,6 +48,27 @@ internal static class AgentActionLiveChecks
         var stale = await Execute("disable", job, Guid.NewGuid().ToString("D"));
         check(stale.Error?.Code == "NOT_FOUND" && await Enabled() == "1", "a job's verb with a stale identity is refused NOT_FOUND and changes nothing: " + Steps(stale));
 
+        // The listed job renamed away and another created under its name in the same second (a script that drops and adds a job does
+        // that): date_created to the second cannot tell them apart, so the replacement's creation time is set to the original's here.
+        var moved = job + "_m";
+        var replaced = await sql("SET NOCOUNT ON; DECLARE @id uniqueidentifier;\nEXEC msdb.dbo.sp_update_job @job_id = '" + jobId + "', @new_name = " + Quote(moved) + ";\n"
+            + "EXEC msdb.dbo.sp_add_job @job_name = " + Quote(job) + ", @job_id = @id OUTPUT;\n"
+            + "UPDATE msdb.dbo.sysjobs SET date_created = (SELECT date_created FROM msdb.dbo.sysjobs WHERE job_id = '" + jobId + "') WHERE job_id = @id;\n"
+            + "SELECT CONVERT(nvarchar(36), @id);", "msdb");
+        var replacement = Guid.TryParse(replaced.Scalar, out var other) ? other.ToString("D") : null;
+        try
+        {
+            var hijack = await Execute("disable", job, jobId);
+            var untouched = (await sql("SELECT CONVERT(nvarchar(1), enabled) FROM msdb.dbo.sysjobs WHERE job_id = '" + replacement + "';", "msdb")).Scalar;
+            check(replacement is not null && hijack.Error?.Code == "NOT_FOUND" && untouched == "1" && await Enabled() == "1",
+                "a job created in the same second under the listed job's name is refused NOT_FOUND and left enabled: " + replaced.Error + " " + Steps(hijack));
+        }
+        finally
+        {
+            await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + " AND job_id <> '" + jobId + "') EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ";\n"
+                + "EXEC msdb.dbo.sp_update_job @job_id = '" + jobId + "', @new_name = " + Quote(job) + ";", "msdb");
+        }
+
         var renamedName = job + "_r";
         var renamed = await Execute("rename", job, jobId, newName: renamedName);
         var named = (await sql("SELECT name FROM msdb.dbo.sysjobs WHERE job_id = '" + id.ToString("D") + "';", "msdb")).Scalar;
