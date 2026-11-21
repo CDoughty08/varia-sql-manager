@@ -48,6 +48,17 @@ const node = name => tree().getByRole('treeitem', { name, exact: true })
 const field = label => dialog().getByLabel(label, { exact: true })
 const heading = () => optionsHeading(dialog())
 const search = () => dialog().getByRole('searchbox', { name: 'Search Options', exact: true })
+const controlShape = control => control.evaluate(element => {
+  const style = getComputedStyle(element)
+  return { height: element.getBoundingClientRect().height, radius: style.borderTopLeftRadius }
+})
+const searchIconFits = control => control.evaluate(element => {
+  const icon = element.parentElement.querySelector('[data-icon="search"]')?.getBoundingClientRect()
+  const field = element.getBoundingClientRect(), textStart = field.left + parseFloat(getComputedStyle(element).paddingInlineStart)
+  return !!icon && icon.left > field.left && icon.right <= textStart && Math.abs((icon.top + icon.bottom - field.top - field.bottom) / 2) < 1
+})
+const standardControl = { height: 26, radius: '4px' }
+const denseControl = { ...standardControl, height: 22 }
 const warningBanner = () => warningBannerOf(page)
 const calls = async method => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
 const nbsp = String.fromCharCode(160)
@@ -106,6 +117,9 @@ try {
   await openOptions()
   await expect(search()).toBeFocused()
   await expect(search()).toHaveAttribute('placeholder', mac ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)')
+  expect(await controlShape(search())).toEqual(standardControl)
+  expect(await searchIconFits(search())).toBe(true)
+  await expect(search()).toHaveCSS('outline-offset', '-2px')
   await expect(heading()).toHaveText('Environment › General')
   await expect(node('General').first()).toHaveAttribute('aria-selected', 'true')
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
@@ -136,6 +150,9 @@ try {
   await node('Shortcuts').click()
   await expect(dialog().getByRole('heading', { name: 'Keyboard and mouse shortcuts', exact: true })).toBeVisible()
   await expect(shortcutsTable(dialog())).toBeVisible()
+  expect(await controlShape(shortcutsSearch(dialog()))).toEqual(standardControl)
+  expect(await searchIconFits(shortcutsSearch(dialog()))).toBe(true)
+  expect(await controlShape(dialog().getByRole('combobox', { name: /^Mapping scheme/ }))).toEqual(standardControl)
   // Ctrl+C on a row copies it as shown, its command by title: Command, Shortcut, Scope and Source, tab-separated.
   const firstCommand = shortcutsTable(dialog()).getByRole('row').filter({ has: options.getByRole('gridcell') }).first()
   await firstCommand.click()
@@ -145,9 +162,12 @@ try {
   const copiedCommand = (await application.evaluate(({ clipboard }) => clipboard.readText())).split('\t')[0]
   expect((await firstCommand.getByRole('gridcell').first().innerText()).startsWith(copiedCommand)).toBe(true)
   await expect(optionsDescription(dialog())).toHaveCount(0)
+  await dialog().getByRole('radio', { name: 'Mouse', exact: true }).click()
+  expect(await controlShape(dialog().getByRole('combobox', { name: /: modifier$/ }).first())).toEqual(denseControl)
   // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
   await node('Fonts and Colors').click()
   await field('Size').focus()
+  expect(await controlShape(field('Size'))).toEqual(standardControl)
   await expect(optionsNotes(dialog())).toHaveText('Colors come from the color theme (View › Theme).')
   await expect(optionsDescription(dialog())).toContainText('Size')
   // Environment › AutoRecover has SSMS's defaults (on, every 5 minutes, kept 7 days); off greys both numbers.
@@ -157,6 +177,7 @@ try {
   await expect(field('Keep AutoRecover information for')).toHaveValue('7')
   await field('Save AutoRecover information').uncheck()
   await expect(field('Save AutoRecover information every')).toBeDisabled()
+  await expect(field('Save AutoRecover information every')).toHaveCSS('opacity', '0.5')
   await expect(field('Keep AutoRecover information for')).toBeDisabled()
   await field('Save AutoRecover information').check()
   await expect(field('Keep AutoRecover information for')).toBeEnabled()
@@ -282,6 +303,7 @@ try {
   // 4. OK refuses an out-of-range value, shows why and focuses the field; Cancel discards a draft across pages.
   await openOptions()
   await node('Query Execution').click()
+  const validBorder = await field('Execution time-out').evaluate(element => getComputedStyle(element).borderTopColor)
   await field('Execution time-out').fill('99999')
   await showPage('Text Editor', 'Transact-SQL', 'Tabs')
   await expect(heading()).toHaveText('Text Editor › Transact-SQL › Tabs')
@@ -293,6 +315,8 @@ try {
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(dialog().getByText('Execution time-out must be a whole number from 0 to 86,400.', { exact: true })).toBeVisible()
   await expect(field('Execution time-out')).toBeFocused()
+  await expect(field('Execution time-out')).toHaveAttribute('aria-invalid', 'true')
+  await expect(field('Execution time-out')).not.toHaveCSS('border-top-color', validBorder)
   await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
   await closed()
   expect((await stored()).values).toMatchObject({ 'environment.connections.autoReconnect': false, 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
@@ -345,9 +369,21 @@ try {
   await expect(optionsSection(dialog(), 'Execution plan').getByRole('spinbutton', { name: 'Outline width', exact: true })).toHaveValue('220')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('0 = no limit')
   await expect(optionsSection(dialog(), 'Limits and memory')).toContainText('GiB · 0 = automatic')
+  const resultsLayout = field('Show results')
+  expect(await controlShape(resultsLayout)).toEqual(standardControl)
+  expect(await controlShape(dialog().getByRole('button', { name: 'OK', exact: true }))).toEqual(standardControl)
+  // Transfer keyboard focus from the search box so the select shows its inset focus ring.
+  await search().focus()
+  await options.keyboard.press('Tab')
+  await options.keyboard.press('Tab')
+  await expect(resultsLayout).toBeFocused()
+  await expect(resultsLayout).toHaveCSS('outline-offset', '-2px')
   const columns = await optionsControls(dialog()).evaluateAll(controls => controls.map(control => { const box = control.getBoundingClientRect(); return `${Math.round(box.left)}:${Math.round(box.width)}` }))
   expect(columns.length).toBeGreaterThan(5)
   expect(new Set(columns).size).toBe(1)
+  await showPage('Text Editor', 'Editor Tab and Status Bar')
+  expect(await controlShape(field('Include database name'))).toEqual(denseControl)
+  await showPage('Query Results', 'SQL Server', 'Results to Grid')
   // Searching a section's name finds its rows.
   await search().fill('execution plan')
   await expect(heading()).toHaveText('Query Results › SQL Server › Results to Grid')

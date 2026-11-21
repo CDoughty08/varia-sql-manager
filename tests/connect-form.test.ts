@@ -65,7 +65,7 @@ describe('Connect dialog v2 form', () => {
     expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost · <default>')
   })
   it('keeps one bounded two-pane size, stacking the panes in a narrow window', () => {
-    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(720px, calc(100vw - 40px))')
+    expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(820px, calc(100vw - 40px))')
     expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(520px, calc(100vh - 40px))')
     expect(valueOf('.connection-modal.connect-dialog', 'display')).toBe('grid')
     expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('272px minmax(0, 1fr)')
@@ -99,7 +99,8 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.connect-actions', 'grid-column', stacked)).toBe('1')
     // The rows draw their focus ring inside, which the scrolling list would clip, and Browse's Refresh stays beside the
     // source select rather than wrapping under it as a lone, borderless word.
-    expect(valueOf('.connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible, .connect-sources-pane .connection-list-row .icon-button:focus-visible', 'outline-offset')).toBe('-2px')
+    expect(valueOf('.connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible', 'outline-offset')).toBe('-2px')
+    expect(valueOf('.ui-field:focus-visible, .ui-button:focus-visible', 'outline-offset')).toBe('calc(-1 * var(--varia-space-0))')
     expect(valueOf('.connect-sources-pane .browse-toolbar', 'flex-wrap')).toBeUndefined()
     expect(valueOf('.connect-sources-pane .browse-toolbar select', 'min-width')).toBe('0')
   })

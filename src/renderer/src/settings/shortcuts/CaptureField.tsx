@@ -80,6 +80,6 @@ export default function CaptureField({ id, platform, value, onChange, capture, l
     record(chord)
   }
   const text = prefix ? `${formatLabel(prefix.chord, platform)}, …` : value.length ? keybindingLabel(value, platform).text : ''
-  return <input ref={input} id={id} type="text" readOnly className={'shortcuts-capture' + (className ? ' ' + className : '')} aria-label={label} aria-describedby={describedBy} placeholder={placeholder}
+  return <input ref={input} id={id} type="text" readOnly className={'ui-field shortcuts-capture' + (className ? ' ' + className : '')} aria-label={label} aria-describedby={describedBy} placeholder={placeholder}
     value={text} data-pending={prefix ? true : undefined} autoFocus={autoFocus} spellCheck={false} autoComplete="off" onFocus={start} onBlur={end} onKeyDown={keyDown} />
 }

@@ -35,7 +35,7 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
   if (def.type === 'boolean') control = <label className="options-check"><input {...common} type="checkbox" checked={row.value === 'true'} onChange={event => onChange(String(event.target.checked))} /><span>{label}</span></label>
   else if (def.type === 'integer') {
     control = <><label className="options-label" htmlFor={id}>{label}</label>
-      <input {...common} className="options-control" type="number" step={1} min={def.min} max={def.max} value={row.value} aria-invalid={error ? true : undefined} aria-errormessage={error ? id + '-error' : undefined}
+      <input {...common} className="ui-field options-control" type="number" step={1} min={def.min} max={def.max} value={row.value} aria-invalid={error ? true : undefined} aria-errormessage={error ? id + '-error' : undefined}
         onChange={event => onChange(event.target.value)} /></>
   } else if (def.presentation === 'radio') {
     control = <><span className="options-label" id={id + '-label'}>{label}</span><div className="options-radios" role="radiogroup" aria-labelledby={id + '-label'} aria-disabled={row.disabled || undefined}>
@@ -43,7 +43,7 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
         {...index === 0 ? { id, 'data-setting': row.key } : {}} onChange={() => onChange(choice.value)} />{choice.label}</label>)}
     </div></>
   } else {
-    control = <><label className="options-label" htmlFor={id}>{label}</label><select {...common} className="options-control" value={row.value} onChange={event => onChange(event.target.value)}>
+    control = <><label className="options-label" htmlFor={id}>{label}</label><select {...common} className="ui-field options-control" value={row.value} onChange={event => onChange(event.target.value)}>
       {def.values.map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></>
   }
   return <div className="options-form-row" data-focused={focused || undefined} data-disabled={row.disabled || undefined} onPointerDown={onFocus}>
@@ -241,8 +241,11 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     <DialogHeading id="options-title" title="Options" closeLabel="Close options" disabled={saving} onClose={close} />
     <div className="options-body">
       <div className="options-nav">
-        <input ref={search} type="search" className="options-search" data-options-search placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
-          maxLength={256} value={query} autoFocus onChange={event => changeQuery(event.target.value)} />
+        <div className="options-search-box">
+          <Icon name="search" />
+          <input ref={search} type="search" className="ui-field options-search" data-options-search placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
+            maxLength={256} value={query} autoFocus onChange={event => changeQuery(event.target.value)} />
+        </div>
         {found && !found.pages.length
           ? <p className="options-empty" role="status">No settings match.</p>
           : <ul ref={tree} className="options-pages" role="tree" aria-label="Options pages" onKeyDown={treeKeyDown}>
@@ -262,7 +265,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture} linked={linked}
             salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError('') }} />
           : form.page.layout === 'propertyGrid'
-            ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
+            ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" fieldSize="dense" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
             : <div className="options-form">{groups(form.groups)}</div>}
       </div>
     </div>
@@ -270,9 +273,9 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     {form.page.layout !== 'shortcuts' && <div className="options-description"><strong>{described.title}</strong>{described.text && <p>{described.text}</p>}{described.notes.map(note => <p key={note}>{note}</p>)}</div>}
     {error && <p className="connect-error options-error" role="alert">{error}</p>}
     <div className="connection-footer">
-      {form.page.layout !== 'shortcuts' && <button type="button" onClick={() => { setDraft(current => resetPage(current, page, platform)); setErrors(new Map()); setError('') }}>Reset to Defaults</button>}
+      {form.page.layout !== 'shortcuts' && <button type="button" className="ui-button" data-control-variant="secondary" onClick={() => { setDraft(current => resetPage(current, page, platform)); setErrors(new Map()); setError('') }}>Reset to Defaults</button>}
       <span className="options-staged">{staged > 0 && <><span className="shortcuts-dot" aria-hidden="true" />{staged === 1 ? '1 shortcut change' : `${staged} shortcut changes`} staged · applied on OK</>}</span>
-      <button className="primary" type="submit" disabled={saving}>OK</button><button type="button" disabled={saving} onClick={close}>Cancel</button>
+      <button className="ui-button primary" type="submit" disabled={saving}>OK</button><button className="ui-button" data-control-variant="secondary" type="button" disabled={saving} onClick={close}>Cancel</button>
     </div>
   </form></DialogWindow>
 }

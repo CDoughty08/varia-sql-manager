@@ -34,7 +34,7 @@ function Binding({ row, platform, onPick }: { row: GestureRow; platform: Platfor
     row.problems.length ? domId(row.id) + '-problems' : ''
   ].filter(Boolean).join(' ')
   return <span className="mouse-binding">
-    <select id={domId(row.id)} value={row.currentToken} aria-label={`${row.title}: modifier`} aria-describedby={described}
+    <select id={domId(row.id)} className="ui-field" data-control-size="dense" value={row.currentToken} aria-label={`${row.title}: modifier`} aria-describedby={described}
       aria-invalid={row.problems.some(problem => problem.severity === 'error') || undefined} onChange={event => onPick(event.target.value)}>
       {row.options.map(option => <option key={option.token} value={option.token}>{option.label}</option>)}
     </select>
@@ -105,7 +105,7 @@ export default function MouseView({ draft, onChange, platform, search, onOpenPag
           <td>{row.scopeTitle}</td>
           <td>
             <span className="mouse-source" data-source={row.source} title={row.locked}>{row.locked && <Icon name="lock" />}{gestureSourceTitles[row.source]}</span>
-            {row.options.length > 0 && <button type="button" className="icon-button mouse-reset" disabled={!row.changed} title={`Reset to ${row.defaultLabel}`}
+            {row.options.length > 0 && <button type="button" className="ui-button icon-button mouse-reset" data-control-size="dense" disabled={!row.changed} title={`Reset to ${row.defaultLabel}`}
               aria-label={`Reset ${row.title} to ${row.defaultLabel}`} onClick={() => pick(row, undefined)}><Icon name="discard" /></button>}
           </td>
         </tr>)}

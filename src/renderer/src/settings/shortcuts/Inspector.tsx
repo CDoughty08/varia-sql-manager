@@ -58,17 +58,17 @@ export default function Inspector({ row, draft, platform, onChange, capture }: P
             <KeyCaps label={binding.label} source={binding.source} />
             <span className="shortcuts-muted">{binding.scopeTitle}{binding.source === 'removed' ? ' · removed' : binding.source === 'user' ? ' · yours' : ''}</span>
             {row.lock ? <span className="shortcuts-lock" title={row.lock.reason}><Icon name="lock" /></span>
-              : binding.source === 'removed' ? <button type="button" aria-label={`Restore ${binding.label.text}`} onClick={() => onChange(restoreRule(draft, binding.rule, platform))}>Restore</button>
-                : <button type="button" aria-label={`Remove ${binding.label.text}`} onClick={() => onChange(removeRule(draft, binding.rule, platform))}>Remove</button>}
+              : binding.source === 'removed' ? <button type="button" className="ui-button" data-control-size="dense" data-control-variant="secondary" aria-label={`Restore ${binding.label.text}`} onClick={() => onChange(restoreRule(draft, binding.rule, platform))}>Restore</button>
+                : <button type="button" className="ui-button" data-control-size="dense" data-control-variant="secondary" aria-label={`Remove ${binding.label.text}`} onClick={() => onChange(removeRule(draft, binding.rule, platform))}>Remove</button>}
           </li>) : <li className="shortcuts-muted">No shortcuts</li>}
         </ul>
-        <div><button type="button" disabled={!row.changed} onClick={() => onChange(resetCommand(draft, row.id, platform))}><Icon name="discard" />Reset command</button></div>
+        <div><button type="button" className="ui-button" data-control-variant="secondary" disabled={!row.changed} onClick={() => onChange(resetCommand(draft, row.id, platform))}><Icon name="discard" />Reset command</button></div>
       </div>
       <fieldset className="shortcuts-new" disabled={locked}>
         <legend className="visually-hidden">New shortcut</legend>
         <div className="shortcuts-field">
           <label htmlFor="shortcuts-scope">Use new shortcut in:</label>
-          <select id="shortcuts-scope" value={scope} onChange={event => setScope(event.target.value as ScopeId)}>
+          <select id="shortcuts-scope" className="ui-field" value={scope} onChange={event => setScope(event.target.value as ScopeId)}>
             {shortcutScopes.map(preset => <option key={preset.id} value={preset.id}>{preset.title}</option>)}
           </select>
         </div>
@@ -76,7 +76,7 @@ export default function Inspector({ row, draft, platform, onChange, capture }: P
           <label htmlFor={captureFieldId}>Press shortcut keys:</label>
           <div className="shortcuts-capture-row">
             <CaptureField id={captureFieldId} platform={platform} value={chords} onChange={setChords} capture={capture} label="Press shortcut keys" describedBy={describedBy} />
-            <button type="button" className={verdict && verdict.verdict !== 'refused' ? 'primary' : undefined} disabled={!verdict || verdict.verdict === 'refused'} onClick={assign}>Assign</button>
+            <button type="button" className={verdict && verdict.verdict !== 'refused' ? 'ui-button primary' : 'ui-button'} disabled={!verdict || verdict.verdict === 'refused'} onClick={assign}>Assign</button>
           </div>
           <span id={describedBy} className="shortcuts-muted">Tab leaves the box; every other key is recorded, Escape and Enter included. {platform === 'darwin' ? '⌘K' : 'Ctrl+K'} starts a two-part shortcut.</span>
         </div>

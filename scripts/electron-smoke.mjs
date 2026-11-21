@@ -213,6 +213,8 @@ try {
   // (the filled button), Cancel, Actual Plan, Estimated Plan and Client Statistics, then its server and database lists in the connection pill.
   expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
+  await expect(toolbarButton(page, 'New query')).toHaveCSS('height', '26px')
+  await expect(page.getByRole('button', { name: 'Search', exact: true })).toHaveCSS('height', '26px')
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
   await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
   expect(await page.evaluate(part => {
@@ -226,6 +228,8 @@ try {
   await page.keyboard.press('ArrowLeft')
   const clientStatistics = queryBarButton(page, 'Include Client Statistics')
   await expect(clientStatistics).toBeFocused()
+  await expect(clientStatistics).toHaveCSS('height', '26px')
+  await expect(clientStatistics).toHaveCSS('outline-offset', '-2px')
   await page.keyboard.press('Space')
   await expect(clientStatistics).toHaveAttribute('aria-pressed', 'true')
   await page.keyboard.press('Space')
@@ -254,6 +258,18 @@ try {
   await expect(clientStatistics).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(queryServer(page)).toBeFocused()
+  await expect(queryServer(page)).toHaveCSS('outline-width', '2px')
+  await expect(queryServer(page)).toHaveCSS('outline-offset', '-2px')
+  await expect(queryServer(page)).toHaveCSS('padding-inline', '0px')
+  await expect(queryDatabase(page)).toHaveCSS('padding-inline', '0px')
+  await expect(queryServer(page)).toHaveCSS('border-inline-width', '2px')
+  await expect(queryDatabase(page)).toHaveCSS('border-inline-width', '2px')
+  // The inset focus ring and its native popup start at the visible edge of the connection pill.
+  expect(await queryConnection(page).evaluate(pill => {
+    const edge = pill.getBoundingClientRect()
+    const [server, database] = [...pill.querySelectorAll('select')].map(select => select.getBoundingClientRect())
+    return [server.left - edge.left, server.top - edge.top, edge.bottom - server.bottom, edge.right - database.right]
+  })).toEqual([0, 0, 0, 0])
   await expect(queryServer(page)).toHaveValue('')
   expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
@@ -263,7 +279,16 @@ try {
   await expect(queryBar(page)).toHaveCount(0)
   await expect(toolbar(page).getByLabel('Query server', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Query server', { exact: true })).toHaveCount(1)
+  await queryServer(page).focus()
+  await expect(queryServer(page)).toHaveCSS('outline-width', '2px')
+  await expect(queryServer(page)).toHaveCSS('outline-offset', '-2px')
+  await expect(queryServer(page)).toHaveCSS('padding-inline', '0px')
+  await expect(queryDatabase(page)).toHaveCSS('padding-inline', '0px')
+  await expect(queryServer(page)).toHaveCSS('height', '26px')
+  await expect(queryServer(page)).toHaveCSS('border-inline-width', '2px')
+  await expect(queryDatabase(page)).toHaveCSS('border-inline-width', '2px')
   await expect(toolbarButton(page, /Execute/)).toBeVisible()
+  await expect(toolbarButton(page, /Execute/)).toHaveCSS('height', '26px')
   expect(await page.evaluate(part => {
     const header = document.querySelector(part.titleBar), toolbar = document.querySelector(part.toolbar)
     return [header.contains(toolbar), toolbar.getBoundingClientRect().top >= header.getBoundingClientRect().bottom - 0.5, document.querySelectorAll(part.toolbar).length]
@@ -520,6 +545,8 @@ try {
   await queryServer(page).focus()
   await page.keyboard.press('End')
   await expect(queryDatabase(page)).toBeFocused()
+  await expect(queryDatabase(page)).toHaveCSS('outline-width', '2px')
+  await expect(queryDatabase(page)).toHaveCSS('outline-offset', '-2px')
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
   // Each database is its exact name, spaces and all: an option's own text would turn "Sales  2024" into "Sales 2024".

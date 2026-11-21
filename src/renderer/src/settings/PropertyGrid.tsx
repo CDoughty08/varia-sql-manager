@@ -32,6 +32,8 @@ export interface PropertyGridProps {
   readonly order?: 'categorized' | 'alphabetical'
   /** Prefixes every control's id, so two grids never share one. */
   readonly idPrefix: string
+  /** Opts the fields into the shared control styling at the chosen size. */
+  readonly fieldSize?: 'dense'
   /** The row whose description shows; it is highlighted. */
   readonly focused?: string
   /** Messages of fields whose value cannot be saved, by key. */
@@ -49,8 +51,8 @@ export interface PropertyGridProps {
 /** A control's id: the prefix and the key, dots as dashes (Tools › Options uses 'setting-'). */
 export const controlId = (key: string, idPrefix = 'setting-') => idPrefix + key.replaceAll('.', '-')
 
-function Control({ row, id, error, onFocus, onChange, autoFocus }: { row: GridRow; id: string; error?: string; onFocus(): void; onChange(text: string): void; autoFocus?: boolean }) {
-  const common = { id, disabled: row.disabled, 'data-changed': row.changed || undefined, 'data-setting': row.key, 'aria-description': row.description, onFocus, autoFocus }
+function Control({ row, id, error, onFocus, onChange, autoFocus, fieldSize }: { row: GridRow; id: string; error?: string; onFocus(): void; onChange(text: string): void; autoFocus?: boolean; fieldSize?: PropertyGridProps['fieldSize'] }) {
+  const common = { id, disabled: row.disabled, className: fieldSize ? 'ui-field' : undefined, 'data-control-size': fieldSize, 'data-changed': row.changed || undefined, 'data-setting': row.key, 'aria-description': row.description, onFocus, autoFocus }
   const invalid = { 'aria-invalid': error ? true : undefined, 'aria-errormessage': error ? id + '-error' : undefined }
   if (row.control === 'integer') {
     return <input {...common} type="number" step={1} min={row.min} max={row.max} value={row.value} {...invalid} onChange={event => onChange(event.target.value)} />
@@ -70,7 +72,7 @@ function Control({ row, id, error, onFocus, onChange, autoFocus }: { row: GridRo
  * SSMS's property grid: categories, then one row per property with its name and value. A changed value is bold, and a
  * greyed row cannot change. Stateless: the dialog owns the draft, the focused row and which rows are expanded.
  */
-export default function PropertyGrid({ label, groups, order = 'categorized', idPrefix, focused, errors, onFocusRow, onChange, onToggle, renderLabel = text => text, autoFocus }: PropertyGridProps) {
+export default function PropertyGrid({ label, groups, order = 'categorized', idPrefix, fieldSize, focused, errors, onFocusRow, onChange, onToggle, renderLabel = text => text, autoFocus }: PropertyGridProps) {
   const shown = visibleGridRows(groups, order)
   const first = shown[0]?.rows[0]?.key
   return <div className="options-list" role="group" aria-label={label} {...{ [propertyGridAttribute]: '' }}>
@@ -84,7 +86,7 @@ export default function PropertyGrid({ label, groups, order = 'categorized', idP
           {row.expanded === undefined ? name : <span className="property-parent">
             <button type="button" className="property-twisty" aria-expanded={row.expanded} aria-label={(row.expanded ? 'Collapse ' : 'Expand ') + row.label} onClick={() => onToggle?.(row.key)}>
               <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} /></button>{name}</span>}
-          <Control row={row} id={id} error={error} onFocus={() => onFocusRow(row.key)} onChange={text => onChange(row.key, text)} autoFocus={autoFocus && row.key === first} />
+          <Control row={row} id={id} error={error} onFocus={() => onFocusRow(row.key)} onChange={text => onChange(row.key, text)} autoFocus={autoFocus && row.key === first} fieldSize={fieldSize} />
           {error && <span className="options-field-error" id={id + '-error'}>{error}</span>}
         </div>
       })}

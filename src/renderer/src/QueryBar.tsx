@@ -49,13 +49,13 @@ export function QueryPickers({ variant }: { variant: 'bar' | 'classic' }) {
   const environment = environmentTag(model.environment)
   return <>
     {classic && <label className="context-field" htmlFor="query-server">Server</label>}
-    <select id="query-server" aria-label="Query server" aria-description={environment?.description} title={classic ? undefined : model.serverName ? `Server: ${model.serverName}` : 'This query is not connected'} disabled={!tab || model.serverDisabled}
+    <select id="query-server" className="ui-field" aria-label="Query server" aria-description={environment?.description} title={classic ? undefined : model.serverName ? `Server: ${model.serverName}` : 'This query is not connected'} disabled={!tab || model.serverDisabled}
       value={model.serverValue} onChange={event => { if (tab) void targets.changeConnection(tab.id, event.target.value || undefined) }}>
       {model.servers.map(server => <option key={server.id} value={server.id} disabled={server.disabled}>{server.label}</option>)}
     </select>
     {classic ? <label className="context-field" htmlFor="query-database">{model.datasets ? 'Dataset' : 'Database'}</label> : <><span className="query-connection-divider" aria-hidden="true" /><Icon name="database" className="query-connection-icon" /></>}
     {/* A BigQuery query's box lists the project's datasets (its default dataset), with none as a choice. */}
-    <select id="query-database" aria-label={model.datasets ? 'Query dataset' : 'Query database'} title={classic ? undefined : model.datasets ? `Default dataset: ${model.database || 'none'}` : `Database: ${model.database}`} disabled={model.databaseDisabled} value={model.database}
+    <select id="query-database" className="ui-field" aria-label={model.datasets ? 'Query dataset' : 'Query database'} title={classic ? undefined : model.datasets ? `Default dataset: ${model.database || 'none'}` : `Database: ${model.database}`} disabled={model.databaseDisabled} value={model.database}
       onChange={event => { if (tab) targets.changeDatabase(tab.id, event.target.value) }}>
       {model.databases.map(name => <option key={name} value={name}>{name || (model.datasets ? '<no default dataset>' : name)}</option>)}
     </select>
@@ -73,7 +73,7 @@ export function ActualPlanToggle({ classic = false, live = false }: { classic?: 
   const id = live ? 'query.includeLivePlan' : 'query.includeActualPlan'
   const title = live ? 'Include Live Execution Plan' : 'Include Actual Execution Plan'
   const enabled = useCommandEnabled(id), [pressed] = useCommandsToggled([id]), key = useKeybindingLabel(id)
-  return <button type="button" className={classic ? 'actual-plan-toggle' : 'query-bar-action actual-plan-toggle'}
+  return <button type="button" className={classic ? 'ui-button actual-plan-toggle' : 'ui-button query-bar-action actual-plan-toggle'}
     aria-label={title} aria-keyshortcuts={key?.aria} aria-pressed={pressed} disabled={!enabled}
     title={withKey(title, key)} onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
     <Icon name="execution-plan" /><span className="query-bar-label">{live ? 'Live Plan' : 'Actual Plan'}</span>
@@ -83,7 +83,7 @@ export function ActualPlanToggle({ classic = false, live = false }: { classic?: 
 export function EstimatedPlanButton({ classic = false }: { classic?: boolean }) {
   const { commands } = useWorkbench()
   const id = 'query.estimatePlan', enabled = useCommandEnabled(id), key = useKeybindingLabel(id)
-  return <button type="button" className={classic ? undefined : 'query-bar-action estimated-plan-button'} aria-label="Display Estimated Execution Plan"
+  return <button type="button" className={classic ? 'ui-button' : 'ui-button query-bar-action estimated-plan-button'} aria-label="Display Estimated Execution Plan"
     aria-keyshortcuts={key?.aria} disabled={!enabled} title={withKey('Display Estimated Execution Plan', key)}
     onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
     <Icon name="execution-plan" /><span className="query-bar-label">Estimated Plan</span>
@@ -142,12 +142,12 @@ export default function QueryBar() {
   const tag = environmentTag(environment)
   return <div className="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" ref={bar} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
     <div className="query-bar-actions">
-      <button type="button" className="query-bar-action execute primary" aria-label={scope.title} aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
+      <button type="button" className="ui-button query-bar-action execute primary" aria-label={scope.title} aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
         title={model.connection?.lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onPointerDown={keepFocus} onClick={() => void commands.execute('query.execute', undefined, 'toolbar')}>
         <Icon name="play" /><span className="query-bar-label">{scope.title}</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}
       </button>
       <span className="query-scope">{scope.detail}</span>
-      <button type="button" className="query-bar-action" aria-label="Cancel" aria-keyshortcuts={keys.cancel?.aria} disabled={!canCancel} title={withKey('Cancel Executing Query', keys.cancel)}
+      <button type="button" className="ui-button query-bar-action" aria-label="Cancel" aria-keyshortcuts={keys.cancel?.aria} disabled={!canCancel} title={withKey('Cancel Executing Query', keys.cancel)}
         onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
         <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
       </button>

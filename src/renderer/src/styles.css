@@ -48,7 +48,7 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 /* A size container, so the search box shows as much of its label as fits in the room the toolbar leaves it. */
 .title-bar-center { flex: 1 1 0; min-width: var(--varia-control); display: flex; justify-content: center; container-type: inline-size; }
 .title-bar-actions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; }
-.command-centre { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 440px; min-width: var(--varia-control); height: var(--varia-control); padding: 0 8px; overflow: hidden; background: var(--varia-commandCenter-background); color: var(--varia-commandCenter-foreground); border: 1px solid var(--varia-commandCenter-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); -webkit-app-region: no-drag; }
+.command-centre { width: 100%; max-width: 440px; min-width: var(--varia-control); overflow: hidden; background: var(--varia-commandCenter-background); color: var(--varia-commandCenter-foreground); border-color: var(--varia-commandCenter-border); -webkit-app-region: no-drag; }
 .command-centre:hover:not(:disabled) { background: var(--varia-commandCenter-activeBackground); color: var(--varia-commandCenter-foreground); }
 .command-centre-text, .command-centre-short { flex: 1; min-width: 0; overflow: hidden; text-align: start; }
 .command-centre kbd { color: inherit; border-color: var(--varia-commandCenter-border); }
@@ -57,7 +57,7 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
    "Search", else only its icon, never a label cut short. */
 .command-centre-text { display: none; }
 @container (min-width: 320px) { .command-centre-text { display: block; } .command-centre-short { display: none; } }
-@container (max-width: 159px) { .command-centre-short, .command-centre kbd { display: none; } .command-centre { justify-content: center; } }
+@container (max-width: 159px) { .command-centre-short, .command-centre kbd { display: none; } }
 /* Forced colours keep the search box apart from the title bar by its outline. */
 @media (forced-colors: active) { .command-centre { border-color: CanvasText; } }
 :root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
@@ -99,7 +99,6 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .status-dot.online { background: var(--varia-statusBar-onlineIndicator); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 44px; padding: 7px 12px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); flex-shrink: 0; }
 .toolbar-actions { display: flex; align-items: center; gap: 4px; }
-.toolbar-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 8px; }
 .toolbar-divider { height: 20px; width: 1px; background: var(--varia-toolbar-separatorBackground); margin: 0 5px; }
 .execute:not(.primary) { color: var(--varia-successForeground); }
 kbd { padding: 0 4px; color: var(--varia-keybindingLabel-foreground); font: var(--varia-size-xs)/14px var(--varia-font-ui); border: 1px solid var(--varia-keybindingLabel-border); border-radius: var(--varia-radius-sm); }
@@ -107,7 +106,26 @@ kbd { padding: 0 4px; color: var(--varia-keybindingLabel-foreground); font: var(
 .context-field { color: var(--varia-toolbar-labelForeground); font-size: var(--varia-size-xs); line-height: 16px; white-space: nowrap; }
 select, input { background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); color: var(--varia-input-foreground); padding: 7px 9px; font-size: var(--varia-size-sm); line-height: 16px; }
 input::placeholder, textarea::placeholder { color: var(--varia-input-placeholderForeground); }
-.toolbar-context select { width: 100%; height: 28px; padding: 0 8px; }
+/* Shared control styles. The containing layout owns the width and chooses the density. */
+.ui-field, .ui-button { --ui-control-height: var(--varia-control); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); border-radius: var(--varia-radius-sm); }
+:is(.ui-field, .ui-button)[data-control-size="dense"] { --ui-control-height: calc(var(--varia-control) - var(--varia-space-1)); }
+.ui-field { --ui-field-border: var(--varia-input-border); height: var(--ui-control-height); min-width: 0; padding: 0 var(--varia-space-1); background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--ui-field-border); }
+.ui-field[aria-invalid="true"] { --ui-field-border: var(--varia-errorForeground); }
+textarea.ui-field { height: auto; min-height: var(--ui-control-height); padding-block: var(--varia-space-1); }
+/* The native arrow follows the inner border. Reserve the focus stroke without adding an outer gap. */
+select.ui-field { padding: 0; border-inline: var(--varia-space-0) solid transparent; }
+select.ui-field:not(:focus-visible) { outline: 1px solid var(--ui-field-border); outline-offset: -1px; }
+.ui-button { display: inline-flex; align-items: center; justify-content: center; gap: var(--varia-space-1); min-height: var(--ui-control-height); padding: var(--varia-space-0) var(--varia-space-2); }
+.ui-button.icon-button { width: var(--ui-control-height); height: var(--ui-control-height); padding: 0; flex-shrink: 0; }
+.ui-button[data-control-variant="secondary"] { border-color: var(--varia-button-border); }
+button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.ui-field:focus-visible, .ui-button:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); }
+.ui-field:disabled, .ui-button:disabled { opacity: .5; cursor: default; }
+@media (forced-colors: active) {
+  .ui-field:focus-visible, .ui-button:focus-visible { outline-color: Highlight; }
+  .ui-field:disabled, .ui-button:disabled { color: GrayText; opacity: 1; }
+}
+.toolbar-context select { width: 100%; }
 .workbench { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 /* Dockview puts its theme class on the shell, which also hosts floating groups; two classes outrank its theme rules. */
 .varia-dock.dockview-theme-dark, .varia-dock.dockview-theme-light {
@@ -181,13 +199,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .docking-guide-cell.active { background: var(--varia-dock-guideActiveBackground); border-color: var(--varia-dock-guideActiveBorder); box-shadow: 0 0 0 2px var(--varia-dock-guideActiveRing); }
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
-.explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; }
+.explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; container: explorer / inline-size; }
 /* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. */
 .explorer-header { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
-/* Sentence case, not Calm Pro's capitals: "Object Explorer" then fits beside SSMS's six buttons at the default width. */
 .pane-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-sideBarTitle-foreground); }
-.explorer-header .icon-button { width: 24px; }
+.explorer-header .icon-button { width: var(--varia-space-5); }
 .explorer-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 1px; }
+/* Give the title and panel menu their own row when the title no longer fits beside the tools. */
+@container explorer (width < 328px) {
+  .explorer-header { display: grid; grid-template: 'title menu' 1fr 'tools tools' auto / minmax(0, 1fr) auto; gap: 0; min-block-size: calc(var(--varia-bar) + var(--varia-control)); padding: 0 var(--varia-space-1) var(--varia-space-1); }
+  .explorer-header .pane-title { grid-area: title; padding-inline-start: var(--varia-space-2); }
+  .explorer-header .pane-menu { grid-area: menu; }
+  .explorer-header .explorer-toolbar { grid-area: tools; }
+  .explorer-toolbar .icon-button { flex: 0 1 var(--varia-space-5); min-width: 0; padding-inline: var(--varia-space-0); }
+}
 .pane-menu { flex-shrink: 0; }
 .pane-menu:focus-visible { outline-offset: -2px; }
 .explorer-header .pane-menu { color: var(--varia-objectExplorer-actionForeground); }
@@ -417,7 +442,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-modal.options-dialog:focus { outline: none; }
 .options-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .options-nav { flex: 0 0 clamp(180px, 28%, 240px); display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
-.options-dialog .options-search { margin: 8px; flex-shrink: 0; min-width: 0; }
+.options-search-box { position: relative; margin: var(--varia-space-2); flex-shrink: 0; }
+.options-search-box > [data-icon], .shortcuts-search > [data-icon] { position: absolute; top: 50%; inset-inline-start: var(--varia-space-2); transform: translateY(-50%); color: var(--varia-icon-foreground); pointer-events: none; }
+.options-search, .shortcuts-search-input { width: 100%; padding-inline-start: calc(var(--varia-glyph-md) + var(--varia-space-3)); }
 .options-pages { flex: 1; overflow: auto; list-style: none; margin: 0; padding: 0 0 6px; }
 .options-pages [role="treeitem"] { display: flex; align-items: center; gap: 2px; padding-top: 3px; padding-bottom: 3px; padding-right: 8px; line-height: 16px; overflow-wrap: anywhere; cursor: default; }
 .options-pages [role="treeitem"]:focus { outline: none; }
@@ -445,8 +472,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-label { overflow-wrap: anywhere; }
 .options-check { grid-column: 1 / 3; display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
 .options-check > span { overflow-wrap: anywhere; }
-.options-dialog .options-control { width: 100%; min-width: 0; height: 24px; }
-.options-dialog .options-control[type="number"] { padding: 2px 6px; }
+.options-control, .options-dialog .options-row .ui-field { width: 100%; }
 .options-hint { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .options-radios { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; }
 .options-radios label { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
@@ -456,15 +482,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 46%); align-items: center; gap: 2px 8px; min-height: 22px; padding: 0 10px 0 22px; }
 .options-row > label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .options-row[data-focused] { background: var(--varia-list-inactiveSelectionBackground); }
-.options-dialog .options-row select, .options-dialog .options-row input { width: 100%; min-width: 0; height: 20px; padding: 0 4px; line-height: 16px; }
 .options-row [data-changed] { font-weight: 700; }
-.options-row:has(:disabled) > label, .options-row :disabled { color: var(--varia-disabledForeground); }
+.options-row:has(:disabled) > label, .options-row :disabled:not(.ui-field) { color: var(--varia-disabledForeground); }
 .options-description { flex-shrink: 0; height: 80px; overflow-y: auto; padding: 8px 20px; overflow-wrap: anywhere; }
 .options-description p { margin: 2px 0 0; line-height: 1.5; color: var(--varia-descriptionForeground); }
 .options-dialog .options-error { margin: 0 20px 8px; flex-shrink: 0; }
+.options-dialog .connection-footer > .ui-button { min-inline-size: 78px; }
 @media (forced-colors: active) {
   .options-pages [aria-selected="true"], .options-row[data-focused], .options-form-row[data-focused] { outline: 1px solid CanvasText; outline-offset: -1px; }
-  .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
+  .options-row:has(:disabled) > label, .options-row :disabled:not(.ui-field), .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
 }
 /* Tools › Options › Environment › Shortcuts: a table of the shortcuts of every command above SSMS's inspector. */
@@ -476,11 +502,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .shortcuts-muted { color: var(--varia-descriptionForeground); }
 .shortcuts-scheme, .shortcuts-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .shortcuts-scheme > span { flex: 1; }
-.shortcuts-scheme > button, .shortcuts-toolbar > button, .shortcuts-inspector button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-color: var(--varia-button-border); }
 .shortcuts-toolbar > button[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
-.shortcuts-search { flex: 1 1 260px; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
-.shortcuts-search[data-recording] { border-color: var(--varia-chip-activeBorder); }
-.connection-modal .shortcuts-search .shortcuts-search-input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 3px 0; }
+.shortcuts-search { position: relative; flex: 1 1 260px; min-width: 0; }
+.shortcuts-search[data-recording] .shortcuts-search-input { --ui-field-border: var(--varia-chip-activeBorder); }
 .shortcuts-check { display: inline-flex; align-items: center; gap: 4px; }
 .shortcuts-count { margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
 .shortcuts-table { flex: 1 1 160px; min-height: 120px; overflow: auto; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
@@ -511,7 +535,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .shortcuts-source { display: inline-flex; align-items: center; gap: 3px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .shortcuts-source[data-source="user"] { color: var(--varia-chip-activeForeground); font-weight: 600; }
 .shortcuts-source > .codicon { font-size: var(--varia-glyph-sm); }
-.shortcuts-reset { padding: 0 6px; font-size: var(--varia-size-xs); }
 .shortcuts-empty { text-align: center; padding: 12px; white-space: normal; }
 .shortcuts-link { padding: 0; text-decoration: underline; }
 .shortcuts-inspector { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
@@ -524,11 +547,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .shortcuts-field > .shortcuts-muted { font-size: var(--varia-size-xs); }
 .shortcuts-list, .shortcuts-used { list-style: none; margin: 0; padding: 0; min-height: 22px; display: flex; flex-direction: column; gap: 2px; }
 .shortcuts-list > li { display: flex; align-items: center; gap: 6px; }
-.shortcuts-list > li > button { margin-left: auto; padding: 0 6px; }
+.shortcuts-list > li > button { margin-inline-start: auto; }
 .shortcuts-lock { margin-left: auto; color: var(--varia-descriptionForeground); }
 .shortcuts-capture-row { display: flex; gap: 6px; }
-.connection-modal .shortcuts-capture { flex: 1; min-width: 0; }
-.shortcuts-capture[data-pending] { border-color: var(--varia-chip-activeBorder); }
+.shortcuts-capture-row > .shortcuts-capture { flex: 1; }
+.shortcuts-capture[data-pending] { --ui-field-border: var(--varia-chip-activeBorder); }
 .shortcuts-message { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 4px 8px; border-radius: var(--varia-radius-sm); overflow-wrap: anywhere; }
 .shortcuts-message > span { display: flex; flex-direction: column; gap: 2px; }
 .shortcuts-message[data-kind="refused"], .shortcuts-message[data-kind="conflict"] { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
@@ -550,7 +573,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .shortcuts-sheet p { margin: 0; }
 .shortcuts-sheet-options { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
 .shortcuts-sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 4px; }
-.shortcuts-sheet-actions > button { min-width: 78px; border-color: var(--varia-button-border); }
+.shortcuts-sheet-actions > button { min-width: 78px; }
 .shortcuts-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
 .shortcuts-facts > div { display: contents; }
 .shortcuts-facts dt { color: var(--varia-descriptionForeground); }
@@ -564,7 +587,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .shortcuts-table tr[aria-selected="true"] td { outline: 1px solid CanvasText; outline-offset: -1px; }
   .shortcuts-dot { background: CanvasText; forced-color-adjust: none; }
   /* Record Keys' pressed state is a fill otherwise, which forced colours drop. */
-  .shortcuts-toolbar > button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: 1px; }
+  .shortcuts-toolbar > button[aria-pressed="true"] { border-color: Highlight; }
   .shortcuts-keys[data-source="removed"] kbd { color: GrayText; }
   .shortcuts-message, .shortcuts-banner { border: 1px solid CanvasText; }
 }
@@ -588,12 +611,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .mouse-problem[data-severity="error"] { color: var(--varia-errorForeground); }
 .mouse-problem[data-severity="warning"] { color: var(--varia-warningForeground); }
 .mouse-binding { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.options-dialog .mouse-binding select { height: 20px; padding: 0 4px; line-height: 16px; }
 .mouse-action { color: var(--varia-descriptionForeground); }
 .mouse-source { display: inline-flex; align-items: center; gap: 4px; }
 .mouse-source[data-source="user"] { font-weight: 600; }
 .mouse-source[data-source="builtin"], .mouse-source[data-source="setting"] { color: var(--varia-descriptionForeground); }
-.mouse-reset { margin-left: 4px; padding: 0 2px; }
+.mouse-reset { margin-inline-start: var(--varia-space-1); }
 .mouse-link { padding: 0; border: 0; color: var(--varia-list-highlightForeground); text-decoration: underline; }
 .mouse-empty { margin: 8px 10px; color: var(--varia-descriptionForeground); }
 @media (forced-colors: active) {
@@ -791,7 +813,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Activating a sibling editor group must leave its controls under the pointer. */
 .query-bar-spacer { flex: 0 0 var(--varia-bar); }
 .query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
-.query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
+.query-bar-action { flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
 .query-scope { flex-shrink: 0; max-width: 15em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .editor-group-new-query { color: var(--varia-descriptionForeground); }
@@ -802,11 +824,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (max-width: 700px) { .query-bar .query-scope { display: none; } }
 /* A BigQuery tab's estimate beside Execute (BigQueryCostChip): the pill's own tone says neutral, amber or ran. */
 .bigquery-cost-chip { display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 18em; }
-.query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
-  background: var(--varia-list-activeSelectionBackground);
-  color: var(--varia-list-activeSelectionForeground);
-}
-.query-connection { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding: 0 var(--varia-space-0) 0 var(--varia-space-2); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.query-connection { --query-connection-start: calc(var(--varia-space-2) + 1px); position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding-inline-start: var(--query-connection-start); background: var(--varia-input-background); border-radius: var(--varia-radius-sm); }
+/* Draw the shared border over the unfocused controls so their boxes can reach the pill edges. */
+.query-connection::after { content: ''; position: absolute; inset: 0; pointer-events: none; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.query-connection:has(> select:first-child) { padding-inline-start: 0; }
 /* The connection colour as the history list draws it, a short bar at the pill's start. */
 .query-connection .connection-swatch { height: 14px; }
 .query-connection-divider { width: 1px; height: 14px; flex: none; background: var(--varia-toolbar-separatorBackground); }
@@ -814,11 +835,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-bar-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; }
 /* The tag shrinks inside its wrapper, so a long label ends in an ellipsis rather than running under the server list. */
 .environment-tag[data-place="query"] { flex: 0 1 auto; }
-/* The lists draw no box of their own inside the pill; focus still outlines the one that has it. Their fill is the
-   pill's, opaque, because Chromium draws a list's open popup on its background, white for a transparent one. Their
-   shrink weight has them give way, down to their minimum, before the environment tag. */
-.query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
-.query-connection select:focus-visible { outline-offset: 0; }
+/* Only focus draws the select's individual outline. Its shrink weight lets it give way before the environment tag. */
+.query-connection select.ui-field { flex: 0 1000 auto; min-width: 64px; max-width: 220px; border-block-width: 0; text-overflow: ellipsis; }
+.query-connection select.ui-field:not(:focus-visible) { outline: none; }
+.query-connection select.ui-field:focus-visible { position: relative; z-index: 1; }
 @container (max-width: 960px) {
   .query-bar-action.execute kbd { display: none; }
   .query-bar-action.actual-plan-toggle .query-bar-label, .query-bar-action.estimated-plan-button .query-bar-label { display: none; }
@@ -826,7 +846,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (max-width: 500px) {
   .query-bar-label { display: none; }
   .query-bar-action { padding: 0 2px; }
-  .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
+  .query-connection { --query-connection-start: calc(var(--varia-space-1) + 1px); gap: var(--varia-space-0); }
   /* Reserve compact space for the environment label and both selectors. */
   .query-connection-icon { display: none; }
 }
@@ -834,17 +854,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-bar-actions { gap: 0; }
   .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
   .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
-  .query-connection { gap: 0; padding: 0; }
+  .query-connection { --query-connection-start: 0px; gap: 0; }
   .query-bar-environment .status-pill.small { padding: 0 var(--varia-space-0); }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
 @container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
-@media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection { border-color: CanvasText; } }
+@media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection::after { border-color: CanvasText; } }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
+.output-panel[data-output-panel="results"] { container: results-panel / inline-size; }
 /* The results head: the segmented views, the run summary, the copy and save strips and the panel menu. */
 .output-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: var(--varia-bar); box-sizing: border-box; padding: 0 6px 0 8px; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
 /* Results, Messages and Execution plan as one segmented control: the selected view is a raised pill. */
@@ -862,8 +883,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 /* The results toolbar, in the Results head after its views: tools for every grid in the run, as segmented controls. */
-/* In a narrow window the toolbar gives way to the job strips and clips its last groups (each is also a palette command and
-   in the grid's menu); the clip margin keeps a focused button's ring. */
+/* The toolbar folds its groups as space gives way to the other controls. The clip margin keeps a focused button's ring. */
 .results-toolbar { display: flex; flex-shrink: 1; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); overflow: clip; overflow-clip-margin: 2px; }
 .results-toolbar-label { display: inline-flex; align-items: center; gap: 5px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
 .results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
@@ -898,7 +918,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
 .results-toolbar[data-fold~="layout"] .results-layout { display: none; }
 .output-toolbar:has(> .results-toolbar[data-fold~="tight"]) { gap: 4px; }
-.output-toolbar:has(> .results-toolbar[data-fold~="tight"]) .output-views button { padding: 0 6px; }
+.output-toolbar:has(> :where(.results-toolbar[data-fold~="tight"])) .output-views button { padding: 0 6px; }
 .results-toolbar[data-fold~="tight"] { gap: 1px; padding-left: 6px; }
 .results-toolbar[data-fold~="tight"] .results-toolbar-label, .results-toolbar[data-fold~="tight"] .results-search > .results-search-icon, .results-toolbar[data-fold~="tight"] .results-search > button { display: none; }
 .results-toolbar[data-fold~="tight"] .results-segments button, .results-toolbar[data-fold~="tight"] .results-segments button.results-icon-toggle { padding: 0 3px; }
@@ -914,6 +934,19 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A long name gives way before the progress beside it; past that the progress is cut too, never Cancel. */
 .job-strip > span:first-child { flex-shrink: 1000; }
 .output-toolbar .job-strip button, .output-toolbar .op-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+/* Give Results its own row of tools when the summary and view tabs leave too little room in the header. */
+@container results-panel (width < 400px) {
+  .output-panel > .output-toolbar { display: grid; grid-template-columns: minmax(0, max-content) minmax(var(--varia-glyph-sm), 1fr) auto; height: auto; min-height: var(--varia-bar); gap: var(--varia-space-1); padding-block: var(--varia-space-1); }
+  .output-toolbar > .output-views { grid-area: 1 / 1; min-width: 0; }
+  .output-toolbar > .output-views > button { min-width: 0; gap: var(--varia-space-0); padding-inline: var(--varia-space-1); }
+  .output-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .output-toolbar > :is(.output-status, .output-spacer) { grid-area: 1 / 2; min-width: 0; }
+  .output-toolbar > .pane-menu { grid-area: 1 / 3; }
+  .output-toolbar > .results-toolbar { grid-area: 2 / 1 / auto / -1; padding-inline: 0; border: 0; }
+  .output-toolbar > :is(.job-strip, .op-strip) { grid-column: 1 / -1; }
+  .results-search-count { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .results-toolbar[data-fold~="show"] .results-search-field { min-width: var(--varia-control); }
+}
 /* Operations over whole results (OperationStrip, ResultOperations): the toolbar's strip with its meter and Cancel, the
    2 px bar along the top of the grid, the ring on the busy column's sort button, and held-off controls (dimmed, not-allowed). */
 .op-strip { gap: var(--varia-space-2); }
@@ -1648,7 +1681,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-scroll { padding: 4px 20px 12px; overflow-y: auto; min-height: 0; }
 .connection-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--varia-dialog-separatorBackground); flex-shrink: 0; }
 .connection-footer > span { flex: 1; }
-.connection-footer > button { min-width: 78px; border-color: var(--varia-button-border); }
+.connection-footer > button:where(:not(.ui-button)) { min-width: 78px; border-color: var(--varia-button-border); }
 .connection-tabs { display: flex; gap: 12px; margin: 2px 0 10px; }
 .connection-tabs > button { border-radius: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
 .connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); transition: none; }
@@ -1674,28 +1707,28 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-grid[hidden] { display: none; }
 .property-row { display: grid; grid-template-columns: 176px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 26px; }
 .property-row > label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
-.property-row > input, .property-row > select, .property-input-action > input:not([type="color"]), .property-input-action > select { width: 100%; min-width: 0; height: 28px; }
-.connection-modal input:not([type="checkbox"]):not([type="color"]) { padding: 4px 8px; line-height: 16px; }
-.connection-modal select { padding: 0 8px; height: 28px; line-height: 16px; }
-.property-row input:disabled, .property-row select:disabled { opacity: .5; }
+.property-row > input, .property-row > select, .property-input-action > input:not([type="color"]), .property-input-action > select { width: 100%; min-width: 0; }
+.property-row > :is(input, select):where(:not(.ui-field)), .property-input-action > input:not([type="color"]):where(:not(.ui-field)), .property-input-action > select:where(:not(.ui-field)) { height: 28px; }
+.connection-modal input:not([type="checkbox"]):not([type="color"]):where(:not(.ui-field)) { padding: 4px 8px; line-height: 16px; }
+.connection-modal select:where(:not(.ui-field)) { padding: 0 8px; height: 28px; line-height: 16px; }
+.property-row :is(input, select):disabled:where(:not(.ui-field)) { opacity: .5; }
 .property-input-action { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .property-input-action > input:not([type="color"]), .property-input-action > select { flex: 1; }
-.property-input-action > button { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--varia-button-border); }
-.property-input-action input[type="color"] { width: 36px; height: 28px; padding: 2px; flex-shrink: 0; cursor: pointer; }
+.property-input-action > button:where(:not(.ui-button)) { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--varia-button-border); }
+.property-input-action input[type="color"] { width: 36px; padding: 2px; flex-shrink: 0; cursor: pointer; }
+.property-input-action input[type="color"]:where(:not(.ui-field)) { height: 28px; }
 .property-row .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .advanced-action { display: flex; justify-content: flex-end; }
-.advanced-action button, .connection-save-actions button { border: 1px solid var(--varia-button-border); }
 .property-section { border: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); padding: 9px 0 0; margin: 12px 0 0; min-width: 0; }
 .property-section legend { padding: 0 7px 0 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
 .connection-save-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
-.connection-save-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: var(--varia-size-xs); padding: 4px 7px; }
 .connection-save-actions .codicon { font-size: var(--varia-glyph-sm); }
-.connection-preview textarea { width: 100%; height: 285px; resize: vertical; background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); padding: 10px; font: var(--varia-size-sm)/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
+.connection-preview textarea { width: 100%; resize: vertical; font: var(--varia-size-sm)/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
 .advanced-backdrop { z-index: 20010; }
 .advanced-dialog { width: min(640px, calc(100vw - 40px)); }
 .advanced-dialog .property-row { grid-template-columns: 230px minmax(0, 1fr); }
 .advanced-dialog .field-note { margin-top: 16px; }
-.connect-inline-action { margin-left: 6px; font-size: var(--varia-size-xs); padding: 1px 7px; }
+.connect-inline-action { margin-inline-start: var(--varia-space-1); }
 .bq-account .field-note { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .bq-unit { flex: 0 0 84px; width: 84px; }
 .bq-extra-projects { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; grid-column: 2; }
@@ -1717,7 +1750,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Connect v2: saved and discovered servers on the left, the form on the right, each scrolling on its own, so the dialog
    keeps one size and Connect, with any error under it, never leaves the view. A grid, so the actions (a sibling of the
    panes, outside every scroll) sit under the form beside the list, and span the dialog once the panes stack. */
-.connection-modal.connect-dialog { display: grid; grid-template-columns: 272px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; width: min(720px, calc(100vw - 40px)); height: min(520px, calc(100vh - 40px)); max-height: none; }
+.connection-modal.connect-dialog { display: grid; grid-template-columns: 272px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; width: min(820px, calc(100vw - 40px)); height: min(520px, calc(100vh - 40px)); max-height: none; }
 .connect-dialog .connection-heading { grid-column: 1 / -1; padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .connect-panes { display: contents; }
 .connect-sources-pane { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); border-right: 1px solid var(--varia-dialog-separatorBackground); }
@@ -1728,17 +1761,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Refresh stays beside the source on one line, where it reads as a button: the select gives way to it. */
 .connect-sources-pane .browse-toolbar select { min-width: 0; }
 /* The list scrolls, so it would clip a ring drawn outside its rows: the rows draw theirs inside. */
-.connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible, .connect-sources-pane .connection-list-row .icon-button:focus-visible { outline-offset: -2px; }
+.connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible { outline-offset: -2px; }
 .connection-filter-box { position: relative; display: flex; align-items: center; margin-bottom: var(--varia-space-2); }
-.connection-filter-box > .codicon { position: absolute; left: var(--varia-space-2); color: var(--varia-icon-foreground); pointer-events: none; }
-.connect-dialog .connection-filter-box > input.connection-filter { width: 100%; margin: 0; padding-left: 28px; }
+.connection-filter-icon { position: absolute; inset-inline-start: var(--varia-space-2); color: var(--varia-icon-foreground); pointer-events: none; }
+.connection-filter-box > .connection-filter { width: 100%; margin: 0; padding-inline-start: 28px; }
 .connect-form-pane { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .connect-form-pane > .connection-property-tabs { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4) 0; }
 .connect-form-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4) var(--varia-space-3); }
 .connect-dialog .property-row { grid-template-columns: 152px minmax(0, 1fr); }
 .connect-dialog .property-row > label { font-size: var(--varia-size-sm); }
 .connect-dialog .connection-preview textarea { height: 220px; }
-.connect-dialog .connection-footer { padding: var(--varia-space-2) var(--varia-space-4); }
+.connect-dialog .connection-footer { flex-wrap: wrap; align-items: end; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); }
+.connect-dialog .connection-footer > div { display: flex; gap: var(--varia-space-2); min-width: 0; max-width: 100%; }
+.connect-footer-end { margin-inline-start: auto; }
+.connect-dialog .connection-footer button { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+/* Fit the changing labels in the same space so the actions stay under the pointer during a test or connection. */
+.connect-dialog .connection-footer button[data-reserve-label] { display: grid; place-items: center; }
+.connect-dialog .connection-footer button[data-reserve-label] > span,
+.connect-dialog .connection-footer button[data-reserve-label]::before,
+.connect-dialog .connection-footer button[data-reserve-busy-label]::after { grid-area: 1 / 1; }
+.connect-dialog .connection-footer button[data-reserve-label]::before { content: attr(data-reserve-label); visibility: hidden; }
+.connect-dialog .connection-footer button[data-reserve-busy-label]::after { content: attr(data-reserve-busy-label); visibility: hidden; }
 /* At Connect: busy, notices and the failure just above the footer, which stays put at the dialog's bottom, so Connect
    and Stop never move under the pointer. Bounded to half the dialog, a long message scrolls here instead of pushing
    Connect out. */

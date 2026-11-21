@@ -4,6 +4,8 @@ In Connect, a single click or Space selects a saved connection for editing; Ente
 Explorer's recovery rows offer **Retry** after a failed load, **Continue loading** after a stopped or paused one, and
 **Filter** on a folder that reached its item cap.
 
+When you narrow Object Explorer, the panel menu stays beside the title and the toolbar moves to its own row.
+
 ## Disconnect, reconnect and remove
 
 - Disconnect keeps the server at its position, collapsed and marked Disconnected; its metadata (pending loads included)
@@ -66,6 +68,9 @@ Explorer's recovery rows offer **Retry** after a failed load, **Continue loading
 - Entra authentication keeps the configured Application Name for server classifiers, logon triggers and auditing.
 
 ## Reusing a target
+
+Connect shows History or Browse beside Connection Properties. In narrow or zoomed windows the panes stack.
+The footer stays in view and can put Reset and Test Connection on a row above Save, Connect and Cancel.
 
 Equivalent connections share one root only after main verifies identity: account, credentials, submitted destination,
 initial database, TLS, advanced settings and execution policy. A saved profile or similar server name is not enough.

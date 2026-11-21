@@ -57,18 +57,48 @@ async function customProperties(dialog) {
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 }
-/** The dialog's layout: the two panes side by side inside 720x520, and the failure at Connect, between the form and the footer. */
+/** The two panes side by side inside 820×520, with the footer under the form and failures just above it. */
 const layout = dialog => dialog.evaluate((form, part) => {
   const box = element => element?.getBoundingClientRect()
   const outer = box(form), sources = box(form.querySelector(part.connectSourcesPane)), fields = box(form.querySelector(part.connectFormPane))
   const footer = box(form.querySelector(part.connectionFooter)), scroll = box(form.querySelector(part.connectFormScroll)), failure = box(form.querySelector(part.connectFailure))
   return {
-    size: outer.width <= 720.5 && outer.height <= 520.5, sideBySide: sources.right <= fields.left + 0.5 && Math.abs(sources.top - fields.top) < 1,
-    connectInside: footer.bottom <= outer.bottom + 0.5, failureAtConnect: failure ? failure.top >= scroll.bottom - 0.5 && failure.bottom <= footer.top + 0.5 : null
+    size: Math.abs(outer.width - Math.min(820, innerWidth - 40)) < 1 && outer.height <= 520.5,
+    sideBySide: sources.right <= fields.left + 0.5 && Math.abs(sources.top - fields.top) < 1,
+    connectInside: footer.bottom <= outer.bottom + 0.5 && Math.abs(footer.left - fields.left) < 1 && Math.abs(footer.right - fields.right) < 1,
+    failureAtConnect: failure ? failure.top >= scroll.bottom - 0.5 && failure.bottom <= footer.top + 0.5 : null
   }
 }, part)
+/** Check the ink's bounds as well as the buttons' bounds. A nowrap label can spill outside an otherwise visible button. */
+const footerFit = dialog => dialog.locator(part.connectionFooter).evaluate(footer => {
+  const box = footer.getBoundingClientRect(), buttons = [...footer.querySelectorAll('button')]
+  const bounds = buttons.map(button => button.getBoundingClientRect())
+  const last = bounds.at(-1), first = bounds[0]
+  const insets = [first.left - box.left, box.right - last.right]
+  return {
+    labelsFit: buttons.every((button, index) => {
+      const range = document.createRange(), rect = bounds[index]
+      range.selectNodeContents(button.firstElementChild ?? button)
+      return [...range.getClientRects()].every(text =>
+        text.left >= rect.left - 0.5 && text.right <= rect.right + 0.5 && text.top >= rect.top - 0.5 && text.bottom <= rect.bottom + 0.5)
+    }),
+    inset: insets.every(inset => Math.abs(inset - 16) < 1),
+    inside: bounds.every(button => button.left >= box.left + 15 && button.right <= box.right - 15 && button.bottom <= box.bottom + 0.5),
+    grouped: Math.abs(bounds[1].bottom - first.bottom) < 1 && bounds.slice(2).every(button => Math.abs(button.bottom - last.bottom) < 1),
+    wrapped: first.bottom <= last.top
+  }
+})
+const fittingFooter = { labelsFit: true, inset: true, inside: true, grouped: true, wrapped: false }
+async function expectControlHeight(control, dense = false) {
+  const { height, expected } = await control.evaluate((element, dense) => {
+    const style = getComputedStyle(element)
+    const metric = name => parseFloat(style.getPropertyValue(name))
+    return { height: parseFloat(style.height), expected: metric('--varia-control') - (dense ? metric('--varia-space-1') : 0) }
+  }, dense)
+  expect(height).toBeCloseTo(expected, 1)
+}
 /** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer.
- *  Reset, Test Connection and Save come first: Save, disabled while connecting, may shift as Connect's label grows to Connecting…. */
+ *  Reset, Test Connection and Save come first. */
 const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(3).map(button => {
   const box = button.getBoundingClientRect()
   return [box.top, box.bottom, box.right].map(Math.round)
@@ -215,6 +245,7 @@ try {
   await dialog.getByLabel('Filter connections').fill('')
   // Connect v2: saved connections on the left, the form on the right, one bounded size.
   expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureAtConnect: null })
+  expect(await footerFit(dialog)).toEqual(fittingFooter)
   // Up and Down move from the filter box through the rows and back.
   await dialog.getByLabel('Filter connections').focus()
   // With a modifier the key stays the text's: Shift+Down selects, Ctrl+Down and Cmd+Down move the caret.
@@ -331,6 +362,8 @@ try {
   await dialog.getByRole('button', { name: 'Advanced…', exact: true }).click()
   advanced = page.getByRole('dialog', { name: 'Advanced Properties', exact: true })
   await expect(advanced.getByLabel('Command timeout (seconds)', { exact: true })).toHaveValue('7')
+  await expectControlHeight(advanced.getByLabel('Command timeout (seconds)', { exact: true }))
+  await expectControlHeight(advanced.getByRole('button', { name: 'OK', exact: true }))
   await page.keyboard.press('Escape')
   await expect(advanced).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toBeFocused()
@@ -353,6 +386,19 @@ try {
   await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
   await dialog.getByRole('tab', { name: 'History', exact: true }).click()
+  const authControl = dialog.getByLabel('Authentication', { exact: true })
+  for (const control of [dialog.getByLabel('Filter connections'), authControl, dialog.getByLabel('Database Name', { exact: true }),
+    dialog.getByRole('button', { name: 'Load databases', exact: true }), dialog.getByRole('button', { name: 'Test Connection', exact: true })]) {
+    await expectControlHeight(control)
+  }
+  await expectControlHeight(dialog.getByRole('button', { name: 'Custom Properties', exact: true }), true)
+  await dialog.getByLabel('Server Name', { exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(authControl).toBeFocused()
+  expect(await authControl.evaluate(element => {
+    const style = getComputedStyle(element)
+    return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) <= 0
+  })).toBe(true)
   const controlMetrics = await dialog.locator('select').evaluateAll(controls => controls.filter(control => control.getClientRects().length).map(control => {
     const style = getComputedStyle(control)
     return { height: control.getBoundingClientRect().height, contentHeight: control.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom), lineHeight: parseFloat(style.lineHeight) }
@@ -633,9 +679,11 @@ try {
   // A test that waits (here, for a sign-in) locks the form; Test Connection becomes Stop, and Escape stops the test
   // without closing the dialog.
   await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
+  const testFooter = await footerPlace(dialog)
   await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click()
   await expect(dialog.getByText('Testing the connection to entra-wait…', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  expect(await footerPlace(dialog)).toEqual(testFooter)
   await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
   await page.keyboard.press('Escape')
   await expect(dialog.getByText('Test cancelled.', { exact: true })).toBeVisible()
@@ -706,6 +754,7 @@ try {
     await size(width, height)
     await app.evaluate(({ BrowserWindow }, factor) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor), zoom)
     await expect.poll(() => stackedRoom(dialog), `zoom ${zoom} at ${width}x${height}`).toEqual({ stacked: true, rows: true, room: true, inside: true })
+    expect(await footerFit(dialog)).toEqual(fittingFooter)
     await expect(connectFailure(dialog)).toBeInViewport()
     await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeInViewport()
     if (zoom === 2) {
@@ -1011,6 +1060,25 @@ async function rememberPassword() {
   // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
   // main gives a password only to those, so the fix checks the box and asks for the password instead of connecting.
   await disconnectPasswordServer()
+  // The longer label fits under the form at desktop width. At high zoom only the utility group moves above it.
+  await explorerLabel(await explorerRow(page, 'password-check')).click({ button: 'right' })
+  await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Reconnect…', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(form(dialog).password).toHaveAttribute('placeholder', '••••••••')
+  await form(dialog).password.fill(marker)
+  const reconnect = dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true })
+  await expect(reconnect).toBeVisible()
+  expect(await footerFit(dialog)).toEqual(fittingFooter)
+  const contentSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  await size(1024, 700)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(2.5))
+  await expect.poll(() => footerFit(dialog)).toEqual({ ...fittingFooter, wrapped: true })
+  await expect(reconnect).toBeInViewport()
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
+  await size(...contentSize)
+  await form(dialog).password.fill('')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
   await writeFile(join(control, 'untrusted-certificate'), '')
   dialog = await remembered()
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -1585,11 +1653,19 @@ async function bigQueryEmulator() {
     const type = dialog.getByLabel('Server type', { exact: true })
     await expect(type).toHaveValue('sqlserver')
     await type.selectOption('bigquery')
+    expect(await footerFit(dialog)).toEqual(fittingFooter)
     // SQL Server's fields give way to BigQuery's, and Undo is offered.
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveCount(0)
     await expect(dialog.getByRole('button', { name: 'Undo', exact: true })).toBeVisible()
     await expect(dialog.getByRole('tab', { name: 'Connection String', exact: true })).toHaveCount(0)
     await expect(dialog.getByText(/^Emulator account /)).toBeVisible({ timeout: 20000 })
+    await expectControlHeight(dialog.getByLabel('Project', { exact: true }))
+    await expectControlHeight(dialog.getByRole('button', { name: 'Load projects', exact: true }))
+    await dialog.getByRole('button', { name: 'Advanced…', exact: true }).click()
+    const advanced = page.getByRole('dialog', { name: 'Advanced Properties', exact: true })
+    await expectControlHeight(advanced.getByLabel('Maximum bytes billed', { exact: true }))
+    await expectControlHeight(advanced.getByLabel('Maximum bytes billed unit', { exact: true }))
+    await advanced.getByRole('button', { name: 'Cancel', exact: true }).click()
     await dialog.getByLabel('Project', { exact: true }).fill('varia-emulator')
     await dialog.getByRole('button', { name: 'Load datasets', exact: true }).click()
     await expect.poll(() => dialog.getByLabel('Default dataset', { exact: true }).evaluate(input => [...input.list?.options ?? []].map(option => option.value)), { timeout: 20000 }).toContain('varia_fixture')
