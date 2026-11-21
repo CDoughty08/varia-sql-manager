@@ -86,8 +86,8 @@ interface Marks {
   version: number
   /** The entry the highlights were last published for (undefined: none), so they are published again when another has them. */
   at: EntryKey | undefined
-  /** Rows found per handle, and the version they were found for. */
-  readonly found: Map<ResultHandle, { readonly version: number; readonly rows: RowHighlights; readonly marks: number; readonly truncated: boolean }>
+  /** Rows found per handle, the version they were found for, and the identities found. */
+  readonly found: Map<ResultHandle, { readonly version: number; readonly rows: RowHighlights; readonly marks: number; readonly truncated: boolean; readonly ids: ReadonlySet<number> }>
   /** Searches in flight, by handle. */
   readonly finding: Map<ResultHandle, number>
   /** Searches that failed, by handle and version: not tried again until the highlights or the shown handle change, the
@@ -96,6 +96,9 @@ interface Marks {
   /** Retries since the last search that succeeded, and the one waiting. */
   retries: number
   retry?: unknown
+  /** A comparison replaced in place (D15): its highlights wait for the first complete search of the new result (`handle`)
+   *  to drop, when `prune`, those whose entry it no longer has, saying how many through `pruned`. */
+  carry?: { readonly handle: ResultHandle; readonly prune: boolean; readonly pruned: (count: number) => void }
 }
 
 /** The most rows one Highlight command marks, the most highlights a result set keeps and rows one search lists
@@ -204,6 +207,36 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     }
   }
 
+  /**
+   * Carries a comparison's highlights over a replace (D15): they follow each entry by identity (an entry's input rows),
+   * through a layout switch or a swap. After the new result's first complete search of its own rows (not a sorted or
+   * filtered view, which can hide rows it has), the highlights it did not find are dropped and counted (`pruned`), but only
+   * when it stores every row (`prune`): in Changes only, an unchanged entry exists without a stored row, so its highlight
+   * is kept, silently, for when All rows shows it again. A search that lists only some of the rows (truncated) keeps all.
+   */
+  carry(tabId: string, key: EntryKey, o: { readonly prune: boolean; readonly pruned: (count: number) => void }): void {
+    const entry = this.entry(tabId, key), marks = entry && this.tabs.get(tabId)?.get(ownerOf(entry))
+    if (!entry || !marks || marks.colors.size === 0) return
+    marks.carry = { handle: entry.handle, prune: o.prune, pruned: o.pruned }
+    // Rows already found for the new result (none, unless its search answered first) settle it now.
+    const found = marks.found.get(entry.handle)
+    if (found?.version === marks.version) this.settleCarry(tabId, ownerOf(entry), marks, entry.handle, found.truncated, found.ids)
+  }
+
+  /** The carry step once the new result's own rows are found (`ids`, the identities found): drops those not found. */
+  private settleCarry(tabId: string, owner: Owner, marks: Marks, handle: ResultHandle, truncated: boolean, ids: ReadonlySet<number>): void {
+    const carry = marks.carry
+    if (!carry || carry.handle !== handle) return
+    marks.carry = undefined
+    if (!carry.prune || truncated) return
+    const gone = [...marks.colors.keys()].filter(id => !ids.has(id))
+    if (gone.length === 0) return
+    for (const id of gone) marks.colors.delete(id)
+    marks.version++
+    carry.pruned(gone.length)
+    void this.refresh(tabId, owner)
+  }
+
   /** Takes every highlight off a grid. */
   clear(tabId: string, key: EntryKey): void {
     const entry = this.entry(tabId, key), index = entry && ownerOf(entry)
@@ -291,7 +324,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     await Promise.all([...handles].map(async handle => {
       if (marks.found.get(handle)?.version === version || marks.finding.get(handle) === version || marks.failed.get(handle) === version) return
       if (ids.length === 0) {
-        marks.found.set(handle, { version, rows: { handle, positions: new Float64Array(0), colors: new Uint8Array(0) }, marks: 0, truncated: false })
+        marks.found.set(handle, { version, rows: { handle, positions: new Float64Array(0), colors: new Uint8Array(0) }, marks: 0, truncated: false, ids: new Set() })
         return
       }
       marks.finding.set(handle, version)
@@ -299,8 +332,11 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         const found = await handle.findRows(ids, binding.abort.signal)
         if (marks.bound !== binding || marks.version !== version) return
         const colors = Uint8Array.from(found.marks, mark => marks.colors.get(ids[mark]) ?? 0)
-        marks.found.set(handle, { version, rows: { handle, positions: Float64Array.from(found.positions), colors }, marks: new Set(found.marks).size, truncated: found.truncated })
+        const foundIds = new Set(found.marks.map(mark => ids[mark]))
+        marks.found.set(handle, { version, rows: { handle, positions: Float64Array.from(found.positions), colors }, marks: foundIds.size, truncated: found.truncated, ids: foundIds })
         marks.retries = 0
+        // A replaced comparison's first complete search of its own rows settles which highlights it carries (D15).
+        if (handle === entry.handle) this.settleCarry(tabId, index, marks, handle, found.truncated, foundIds)
       } catch (error) {
         if ((error as Error).name === 'AbortError' || marks.bound !== binding) return
         // Remembered so the notice's own snapshot (resultsChanged) does not search again, and again, while the error lasts.
@@ -422,11 +458,13 @@ const lacksText = (count: number, column: string, ambiguous = false) =>
 
 /** What the strip says of a set's highlights: a key column these results lack (nothing can be found or highlighted), more
  *  rows than one search draws, those this run lacks (kept, they return with their rows), or a key that is not unique here
- *  (one highlight covers every row with its value). */
-export function highlightText(marked: SetHighlights | undefined): string | undefined {
+ *  (one highlight covers every row with its value). A comparison's says only the second: its highlights follow entries,
+ *  which are unique, and one kept for an unchanged entry Changes only does not store is not missing (D15). */
+export function highlightText(marked: SetHighlights | undefined, o: { readonly comparison?: boolean } = {}): string | undefined {
   if (!marked || marked.count === 0) return undefined
-  if (marked.lacks !== undefined) return lacksText(marked.count, marked.lacks, marked.ambiguous)
+  if (marked.lacks !== undefined && !o.comparison) return lacksText(marked.count, marked.lacks, marked.ambiguous)
   if (marked.truncated) return `More than ${formatCount(highlightLimits.drawn)} rows have these highlights; only the first ${formatCount(highlightLimits.drawn)} are drawn.`
+  if (o.comparison) return undefined
   const missing = marked.count - marked.found
   if (missing > 0 && marked.rows.length > 0) return `${formatCount(missing)} highlighted ${missing === 1 ? 'row is' : 'rows are'} not in these results. ${missing === 1 ? 'It stays' : 'They stay'} highlighted for when ${missing === 1 ? 'it returns' : 'they return'}.`
   if (!marked.unique && marked.found > 0) return marked.by ? `${marked.by} is not unique in these results, so a highlight can cover several rows.` : 'Some rows here are identical, so a highlight covers each of them.'

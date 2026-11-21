@@ -472,9 +472,15 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   and add a case. Names compare through one table, `src/shared/ordinal-casing.ts`, in the backend (`OrdinalNames`), the
   renderer and the fake backend, never ICU casing (its Unicode version differs by platform); `DiffChecks.OrdinalCasing`
   checks it against the runtime. Pivots and comparisons share the window's `DerivedJobs` (four at once, busy refusals
-  retried), count each other's in-flight results against a run's 1,000 (`adding`), one comparison per pair and
-  exact-text choice at a time. Source links come from frozen `ResultSlot.sources` and go only to an entry whose set key
-  is still the one compared; otherwise they read closed.
+  retried), count each other's in-flight results against a run's 1,000 (`adding`; a change of a comparison is not
+  counted). A run has one comparison per ordered pair (`pairId`, without Exact text); asked again with other options while
+  its first run is in flight, the first run is given up. Its options (layout, Exact text, match, rows) are its state: a
+  change goes only through `CompareService.replace`, which asks `results.diff` with `replaces` and shows the answer through
+  `ResultsService.replaceComparison` (same entry key and number, widths carried by column name, old result released
+  after), one change in flight per comparison (a newer one aborts it). Highlights carry by entry identity
+  (`HighlightsService.carry`). Changes are refused while an input is closed (`closedReason`, the `comparisonInputsOpen`
+  key). Source links come from frozen `ResultSlot.sources` and go only to an entry whose set key is still the one
+  compared; otherwise they read closed.
 - **Dropping a result.** Every way a result leaves its run goes through `ResultsService.drop`: closing one view
   (`removeEntry`, caption or tab close buttons, Close Result on an ended run; a Table closes its group and Pivot), Close
   Results, a new run, the tab closing. It aborts the entry's sort or filter build, forgets held views, sort, distinct

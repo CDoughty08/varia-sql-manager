@@ -98,17 +98,18 @@ describe('the Compare popover', () => {
     handle(keys[2]).snapshot = { ...handle(keys[2]).snapshot, rowsStored: 40_000 }
     await compare.run('t1')
     await settle()
-    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(handle(keys[2]).diff).toHaveBeenCalledWith(handle(keys[0]), { exact: true, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const made = tab().comparisons[0]
     // Named old → new, its frozen sources in that order, and it took the focus; the popover closed, and opens again on that
     // pair, which the run now has (Show It).
-    expect(made.entry.label).toBe('Differences: Result 3 → Result 1')
+    expect(made.entry.label).toBe('Differences: Result 3 → Result 1 (exact text)')
+    expect(comparisonTabLabel(made)).toBe('Result 3 → Result 1 (exact text)')
     expect(made.sources.map(source => source.key)).toEqual([keys[2], keys[0]])
     expect(tab().focused).toBe(made.key)
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
     compare.open('t1', keys[2])
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ active: keys[2], target: keys[0], swapped: true, exact: true })
-    expect(compare.existing('t1', keys[2], keys[0], true)?.key).toBe(made.key)
+    expect(compare.existing('t1', keys[2], keys[0])?.key).toBe(made.key)
     expect(compare.getSnapshot().info.get(setKey(made.entry.descriptor))).toMatchObject({ left: keys[2], right: keys[0], exact: true, inputRows: 40_000 })
   })
 
@@ -132,7 +133,7 @@ describe('the Compare popover', () => {
     compare.setExact('t1', true)
     vi.mocked(handle(keys[0]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
     const cancelled = compare.run('t1')
-    compare.cancel('t1', keys[0], keys[1], true)
+    compare.cancel('t1', keys[0], keys[1])
     await expect(cancelled).resolves.toBeUndefined()
     expect(compare.getSnapshot().pickers.t1).toMatchObject({ cancelled: true })
     expect(compare.getSnapshot().pickers.t1.error).toBeUndefined()
@@ -142,7 +143,7 @@ describe('the Compare popover', () => {
     compare.swap('t1')
     vi.mocked(handle(keys[0]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
     const again = compare.run('t1')
-    compare.cancel('t1', keys[0], keys[1], true)
+    compare.cancel('t1', keys[0], keys[1])
     await again
     expect(compare.getSnapshot().pickers.t1.cancelled).toBe(true)
     run(3, { queryId: 'q2' })
@@ -156,9 +157,9 @@ describe('the Compare popover', () => {
     await settle()
     results.focusEntry('t1', keys[1])
     compare.open('t1', keys[1])
-    expect(compare.existing('t1', keys[0], keys[1], false)?.key).toBe(tab().comparisons[0].key)
-    // Exact text is another comparison.
-    expect(compare.existing('t1', keys[0], keys[1], true)).toBeUndefined()
+    expect(compare.existing('t1', keys[0], keys[1])?.key).toBe(tab().comparisons[0].key)
+    // Not the reversed pair: that is another comparison.
+    expect(compare.existing('t1', keys[1], keys[0])).toBeUndefined()
     await expect(compare.run('t1')).resolves.toBe(tab().comparisons[0].key)
     expect(handle(keys[0]).diff).toHaveBeenCalledTimes(1)
     expect(tab().comparisons).toHaveLength(1)
@@ -166,7 +167,7 @@ describe('the Compare popover', () => {
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
   })
 
-  it('runs one comparison per pair and exact-text choice, other pairs at once, at most four at a time', async () => {
+  it('runs one comparison per ordered pair, other pairs at once, at most four at a time', async () => {
     const { compare, run, tab, handle, jobs } = fixture()
     const keys = run(6)
     const answers: ReturnType<typeof held<DiffAnswer>>[] = []
@@ -174,10 +175,10 @@ describe('the Compare popover', () => {
     const first = compare.comparePair('t1', keys[0], keys[1], { exact: false })
     // The same one again does nothing while it runs.
     await expect(compare.comparePair('t1', keys[0], keys[1], { exact: false })).resolves.toBeUndefined()
-    expect(compare.isRunning('t1', keys[0], keys[1], false)).toBe(true)
+    expect(compare.isRunning('t1', keys[0], keys[1])).toBe(true)
     expect(compare.getSnapshot().running.t1).toHaveLength(1)
-    // Its exact form and other pairs run beside it; a fifth waits for a place.
-    const others = [compare.comparePair('t1', keys[0], keys[1], { exact: true }), compare.comparePair('t1', keys[1], keys[2], { exact: false }), compare.comparePair('t1', keys[2], keys[3], { exact: false }),
+    // Other pairs run beside it; a fifth waits for a place.
+    const others = [compare.comparePair('t1', keys[4], keys[5], { exact: false }), compare.comparePair('t1', keys[1], keys[2], { exact: false }), compare.comparePair('t1', keys[2], keys[3], { exact: false }),
       compare.comparePair('t1', keys[3], keys[4], { exact: false })]
     expect(answers).toHaveLength(4)
     expect(jobs.load).toEqual({ running: 4, waiting: 1 })
@@ -437,7 +438,7 @@ describe('the Compare popover', () => {
     expect(compare.getSnapshot().pickers.t1.error).toBe('Too large to compare.')
     vi.mocked(handle(keys[1]).diff).mockImplementationOnce((_right, o) => new Promise((_yes, no) => o?.signal?.addEventListener('abort', () => no(new DOMException('Given up.', 'AbortError')))))
     const cancelled = compare.compare('t1', keys[2])
-    compare.cancel('t1', keys[1], keys[2], false)
+    compare.cancel('t1', keys[1], keys[2])
     await cancelled
     compare.close('t1')
     // Neither was a choice: back in the first layout, Result 3 offers Result 1 again.
@@ -547,7 +548,7 @@ describe('a comparison given up or gone', () => {
     vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
     const comparing = compare.comparePair('t1', keys[0], keys[1], { exact: false })
     await settle()
-    compare.cancel('t1', keys[0], keys[1], false)
+    compare.cancel('t1', keys[0], keys[1])
     answer.resolve({ descriptor: descriptor(991, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' })
     await expect(comparing).resolves.toBeUndefined()
     expect(tab().comparisons).toHaveLength(0)

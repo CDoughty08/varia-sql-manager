@@ -10,9 +10,9 @@ import { gridLimits as g } from './constants'
 /** The shortest set: its caption, the header, four rows, a horizontal scrollbar and the border. */
 export const minGridHeight = (scrollbar: number): number => g.captionHeight + g.headerHeight + g.stackMinRows * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
 /** A set sized to its rows: its caption, the header, every row, a horizontal scrollbar (0 when its columns fit), the border, and
- *  its strip when it shows one. */
-export const contentHeight = (rows: number, scrollbar: number, strip: boolean): number =>
-  g.captionHeight + g.headerHeight + Math.max(0, rows) * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder + (strip ? g.stripHeight : 0)
+ *  its strip when it shows one, and a comparison's toolbar (`bar`). */
+export const contentHeight = (rows: number, scrollbar: number, strip: boolean, bar = false): number =>
+  g.captionHeight + g.headerHeight + Math.max(0, rows) * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder + (strip ? g.stripHeight : 0) + (bar ? g.comparisonBarHeight : 0)
 
 export interface StackLayout {
   readonly heights: readonly number[]
