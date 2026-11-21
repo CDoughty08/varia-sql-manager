@@ -348,6 +348,9 @@ internal sealed class SearchMatcher
     private readonly StringComparison comparison;
     private readonly Regex? regex;
     private readonly bool wholeWord;
+    private readonly bool boundedWildcard;
+    // Each search owns its matcher. Reuse the boundary buffer across its names and definitions.
+    private char[] boundedInput = [];
     /// <summary>For a plain search, the longest run of its text without a dot or wildcard: a name the search can match with a
     /// dot must contain it, which spares building the qualified name of every object that cannot.</summary>
     private readonly string hint;
@@ -359,6 +362,7 @@ internal sealed class SearchMatcher
         comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         this.wholeWord = wholeWord;
         this.regex = regex;
+        boundedWildcard = plain && wholeWord && regex is not null;
     }
 
     /// <summary>The matcher, or the reason the pattern cannot be one (a syntax error, or a construct NonBacktracking lacks).</summary>
@@ -369,7 +373,16 @@ internal sealed class SearchMatcher
         {
             var literal = wholeWord ? text : text.Trim('*');
             if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
-            return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(Wildcard(literal), options, timeout), true), null);
+            var pattern = Wildcard(literal);
+            if (wholeWord)
+            {
+                const string separator = @"(?-i:[^\p{L}\p{Nd}_@#$])";
+                // Only stars can match nothing. Whole Word requires a nonempty match.
+                if (literal.All(c => c == '*')) pattern = @"[\p{L}\p{Nd}_@#$]+";
+                pattern = separator + pattern + separator;
+            }
+            try { return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(pattern, options, timeout), true), null); }
+            catch (NotSupportedException) { return (null, "The wildcard pattern is too complex. Try a shorter pattern."); }
         }
         try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(text, options, timeout), false), null); }
         catch (ArgumentException error) { return (null, Problem(error)); }
@@ -421,8 +434,39 @@ internal sealed class SearchMatcher
     private bool Has(string? value) => value is not null && value.Contains(hint, comparison);
 
     /// <summary>The first match at or after <paramref name="start"/>.</summary>
-    public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length)
+    public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length) =>
+        FindPrepared(Prepare(value), start, out index, out length);
+
+    /// <summary>Whole-word wildcard patterns consume one separator on each side. Pad the true ends with separators so
+    /// the same pattern works at any offset. The span is valid until the next Prepare on this query's matcher.</summary>
+    internal ReadOnlySpan<char> Prepare(ReadOnlySpan<char> value)
     {
+        if (!boundedWildcard) return value;
+        var size = value.Length + 2;
+        if (boundedInput.Length < size) boundedInput = new char[Math.Max(size, boundedInput.Length * 2)];
+        var padded = boundedInput.AsSpan(0, size);
+        padded[0] = padded[^1] = '\n';
+        value.CopyTo(padded[1..]);
+        return padded;
+    }
+
+    internal bool FindPrepared(ReadOnlySpan<char> value, int start, out int index, out int length)
+    {
+        if (boundedWildcard)
+        {
+            // In padded coordinates the preceding separator starts at the original match index.
+            if (start <= value.Length - 2)
+            {
+                var matches = regex!.EnumerateMatches(value, start);
+                if (matches.MoveNext())
+                {
+                    (index, length) = (matches.Current.Index, matches.Current.Length - 2);
+                    return true;
+                }
+            }
+            (index, length) = (-1, 0);
+            return false;
+        }
         while (start <= value.Length)
         {
             if (regex is not null)
@@ -620,12 +664,13 @@ internal static class IndexSearch
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
         var stored = table.StoredDefinition(at);
         var text = query.Definitions && stored is not null && !(first < 0 && late) ? DefinitionText.Read(stored, scratch) : default;
+        var input = matcher.Prepare(text);
         if (query.Definitions && stored is not null && first < 0 && late) stopped = true;
-        else if (query.Definitions && stored is not null && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        else if (query.Definitions && stored is not null && (first >= 0 || matcher.FindPrepared(input, 0, out first, out size)))
         {
             var count = 1;
             var next = first + Math.Max(1, size);
-            for (; !late && count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            for (; !late && count < limits.MatchesCounted && next <= text.Length && matcher.FindPrepared(input, next, out var again, out var width); count++)
             {
                 next = again + Math.Max(1, width);
                 token.ThrowIfCancellationRequested();
