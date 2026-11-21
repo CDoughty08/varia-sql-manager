@@ -70,6 +70,9 @@ internal static class SearchCostChecks
         public long CharsRead;
         /// <summary>When above 0, the most characters one GetChars call answers: DbDataReader does not promise a full read.</summary>
         public int Chunk;
+        /// <summary>When above 0, the NextResult call (counting from 1) that fails, as a batch that errors there does.</summary>
+        public int FailAtResult;
+        private int results;
 
         public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         {
@@ -91,7 +94,7 @@ internal static class SearchCostChecks
         }
 
         public override bool Read() => inner.Read();
-        public override bool NextResult() => inner.NextResult();
+        public override bool NextResult() => ++results == FailAtResult ? throw new InvalidOperationException("The batch failed.") : inner.NextResult();
         public override int Depth => inner.Depth;
         public override int FieldCount => inner.FieldCount;
         public override bool HasRows => inner.HasRows;
@@ -184,6 +187,18 @@ internal static class SearchCostChecks
         var used = budget.Used;
         held.Dispose();
         check(threw && used > 0 && budget.Used == 0, "a read whose reader fails as it closes is already held, so dropping the index gives back all it took: " + budget.Used);
+
+        // The collation's case probe comes last and is best-effort: a batch that fails there still yields everything it read.
+        var probeFails = Procedures(3, definitions: false);
+        probeFails.FailAtResult = 5;
+        var probed = await new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(1 << 24))).ReadAsync(probeFails, false, CancellationToken.None, children: false);
+        var earlier = Procedures(3, definitions: false);
+        earlier.FailAtResult = 4;
+        var stopped = false;
+        try { await new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(1 << 24))).ReadAsync(earlier, false, CancellationToken.None, children: false); }
+        catch (InvalidOperationException) { stopped = true; }
+        check(probed is { CaseSensitive: null, DottedI: false } && probed.Table.Count == 3 && stopped,
+            "a batch that fails at the case probe still yields its objects with the case rule unknown, and one that fails before it still fails");
 
         // A read that throws cancels its batch before its reader closes, as one that stops early does, and its own error is the
         // one that comes out, not the cancelled batch's on close.

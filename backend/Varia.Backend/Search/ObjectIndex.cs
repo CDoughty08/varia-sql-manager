@@ -54,6 +54,13 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
+
+    /// <summary>Whether, ignoring case otherwise, the collation tells i from I (Turkish and Azeri: i pairs with İ and ı with I);
+    /// the second column of <see cref="ObjectSearchSql.CaseSensitive"/>.</summary>
+    public bool DottedI { get; set; }
+
+    /// <summary>When the read was made, on <see cref="IndexClock"/>: what the lookup orders reads and skips by.</summary>
+    public long Stamp { get; } = IndexClock.Next();
     /// <summary>Held after its read failed part way (KeepPartial): it has only what came before the failure, whatever the build
     /// records of it (set before it is held, so a lookup never sees it as whole).</summary>
     public bool FailedPart { get; set; }
@@ -69,14 +76,15 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public TableLookup? Lookup(IndexBudget budget, Action? built = null)
     {
         if (Volatile.Read(ref lookup) is { } held) return held;
-        TableLookup made;
+        // Built outside the gate, which Put, Keep and Dispose take, and charged only once built; a concurrent build that loses
+        // the race is dropped.
+        var made = TableLookup.Build(Table);
         lock (gate)
         {
             if (lookup is not null || dropped) return lookup;
             var bytes = TableLookup.BytesFor(Table);
             if (!budget.TryTake(bytes)) return null;
             lookupBytes = bytes;
-            made = TableLookup.Build(Table);
             Volatile.Write(ref lookup, made);
         }
         built?.Invoke();
@@ -414,6 +422,14 @@ internal sealed class SearchMatcher
 
 /// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
 /// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
+/// <summary>A process-wide sequence that orders reads and build outcomes for the lookup; the wall clock can step back.</summary>
+internal static class IndexClock
+{
+    private static long now;
+
+    public static long Next() => Interlocked.Increment(ref now);
+}
+
 internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit,
     bool Fuzzy = false);
 

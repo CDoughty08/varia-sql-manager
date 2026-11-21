@@ -143,6 +143,13 @@ internal sealed class TableLookup
             if (table.Parent(at) < 0 && string.Equals(table.Name(at), name, StringComparison.OrdinalIgnoreCase)) yield return at;
     }
 
+    /// <summary>Every object that is not a child, for a comparison the name ranges cannot narrow.</summary>
+    public static IEnumerable<int> ScanTop(ObjectTable table)
+    {
+        for (var at = 0; at < table.Count; at++)
+            if (table.Parent(at) < 0) yield return at;
+    }
+
     public static IEnumerable<int> ScanChildren(ObjectTable table, int parent)
     {
         for (var at = 0; at < table.Count; at++)
@@ -151,6 +158,20 @@ internal sealed class TableLookup
 
     public static IEnumerable<int> ScanReferencing(ObjectTable table, int referenced) =>
         table.Details?.ForeignKeys().Where(key => key.Referenced == referenced).Select(key => key.At) ?? [];
+}
+
+/// <summary>Case-insensitive equality as Turkish and Azeri collations have it: i and İ are one letter, ı and I another.</summary>
+internal static class TurkishCase
+{
+    private static char Fold(char letter) => letter switch { 'i' => 'İ', 'ı' => 'I', _ => char.ToUpperInvariant(letter) };
+
+    public static bool Same(string left, string right)
+    {
+        if (left.Length != right.Length) return false;
+        for (var at = 0; at < left.Length; at++)
+            if (Fold(left[at]) != Fold(right[at])) return false;
+        return true;
+    }
 }
 
 /// <summary>
@@ -162,14 +183,14 @@ internal sealed class TableLookup
 /// </summary>
 internal sealed class LookupLedger
 {
-    private DateTime? started;
+    private long? started;
     private HashSet<string> listed = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, (ObjectIndexSkip Skip, DateTime At)> skips = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ObjectIndexSkip Skip, long At)> skips = new(StringComparer.Ordinal);
 
-    /// <summary>What a lookup reads, copied.</summary>
-    internal sealed record View(DateTime? Started, IReadOnlySet<string> Listed, IReadOnlyDictionary<string, (ObjectIndexSkip Skip, DateTime At)> Skips);
+    /// <summary>What a lookup reads, copied. Times are <see cref="IndexClock"/> stamps.</summary>
+    internal sealed record View(long? Started, IReadOnlySet<string> Listed, IReadOnlyDictionary<string, (ObjectIndexSkip Skip, long At)> Skips);
 
-    public void Start(DateTime now) => started = now;
+    public void Start() => started = IndexClock.Next();
 
     public void List(IEnumerable<string> names)
     {
@@ -177,13 +198,13 @@ internal sealed class LookupLedger
         foreach (var name in skips.Keys.Where(name => !listed.Contains(name)).ToList()) skips.Remove(name);
     }
 
-    public void Done(string database, ObjectIndexSkip? skip, DateTime now)
+    public void Done(string database, ObjectIndexSkip? skip)
     {
         if (skip is null or { Code: ObjectSearchService.ChildrenLeftOut }) skips.Remove(database);
-        else skips[database] = (skip, now);
+        else skips[database] = (skip, IndexClock.Next());
     }
 
-    public View Snapshot() => new(started, listed.ToHashSet(StringComparer.Ordinal), new Dictionary<string, (ObjectIndexSkip, DateTime)>(skips, StringComparer.Ordinal));
+    public View Snapshot() => new(started, listed.ToHashSet(StringComparer.Ordinal), new Dictionary<string, (ObjectIndexSkip, long)>(skips, StringComparer.Ordinal));
 }
 
 /// <summary>
@@ -201,9 +222,9 @@ internal sealed class IndexLookup
     private readonly Dictionary<string, DatabaseIndex> held;
     private readonly ResourceSet? resource;
     private readonly bool building;
-    private readonly DateTime? buildStarted;
+    private readonly long? buildStarted;
     private readonly IReadOnlySet<string> listed;
-    private readonly IReadOnlyDictionary<string, (ObjectIndexSkip Skip, DateTime At)> skipped;
+    private readonly IReadOnlyDictionary<string, (ObjectIndexSkip Skip, long At)> skipped;
     private readonly Action? arraysBuilt;
 
     internal IndexLookup(ConnectionIndex index, IndexBudget budget, bool building, LookupLedger.View builds, Action? arraysBuilt = null)
@@ -228,14 +249,14 @@ internal sealed class IndexLookup
     {
         var database = Resolve(name);
         held.TryGetValue(database, out var read);
-        var failed = skipped.TryGetValue(database, out var last) ? last : ((ObjectIndexSkip Skip, DateTime At)?)null;
+        var failed = skipped.TryGetValue(database, out var last) ? last : ((ObjectIndexSkip Skip, long At)?)null;
         // A read held since the skip was recorded supersedes it (the build records its outcome just after holding it).
-        if (failed is { } skip && read is not null && skip.At < read.ReadAt) failed = null;
+        if (failed is { } skip && read is not null && skip.At < read.Stamp) failed = null;
         var gaps = read is null ? LookupGaps.None
             : (read.ChildrenLeftOut ? LookupGaps.ChildrenLeftOut : 0) | (read.DefinitionsLeftOut ? LookupGaps.DefinitionsLeftOut : 0) | (read.Cut > 0 ? LookupGaps.DefinitionsCut : 0)
                 | (resource is null ? LookupGaps.SystemObjectsLeftOut : 0);
         // A running build has reached a database once it has an outcome in it: a read, or a skip, since it started.
-        var reached = buildStarted is not { } started || read?.ReadAt >= started || failed?.At >= started;
+        var reached = buildStarted is not { } started || read?.Stamp >= started || failed?.At >= started;
         var known = read is not null || failed is not null || listed.Contains(database);
         var state = building && known && !reached ? LookupState.Building
             : failed is not null || read?.FailedPart == true ? LookupState.Skipped
@@ -251,16 +272,19 @@ internal sealed class IndexLookup
     {
         var known = Database(database);
         var found = new List<LookupObject>();
-        var comparison = known.CaseSensitive == true ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        // Turkish and Azeri collations pair i with İ and ı with I, which OrdinalIgnoreCase (and so the name arrays) does not.
+        var dotted = known.CaseSensitive != true && known.Held?.DottedI == true;
+        Func<string, string, bool> same = known.CaseSensitive == true ? string.Equals
+            : dotted ? TurkishCase.Same : (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
         void Collect(ObjectTable table, IEnumerable<int> named, DatabaseIndex? source)
         {
             foreach (var at in named)
-                if (string.Equals(table.Name(at), name, comparison) && (schema is null || string.Equals(table.Schema(at), schema, comparison))
-                    && (kinds is null || kinds.Contains(table.Kind(at))))
+                if (same(table.Name(at), name) && (schema is null || same(table.Schema(at) ?? "", schema)) && (kinds is null || kinds.Contains(table.Kind(at))))
                     found.Add(new(known.Database, table, at, source));
         }
-        if (known.Held is { } read) Collect(read.Table, read.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(read.Table, name), read);
-        if (resource is not null && known.State != LookupState.Absent) Collect(resource.Table, TableLookup.ScanNamed(resource.Table, name), null);
+        IEnumerable<int> Scan(ObjectTable table) => dotted ? TableLookup.ScanTop(table) : TableLookup.ScanNamed(table, name);
+        if (known.Held is { } read) Collect(read.Table, !dotted && read.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Named(name) : Scan(read.Table), read);
+        if (resource is not null && known.State != LookupState.Absent) Collect(resource.Table, Scan(resource.Table), null);
         return new(known, found);
     }
 

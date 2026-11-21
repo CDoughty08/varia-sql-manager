@@ -547,7 +547,7 @@ internal static class SearchChecks
     /// type or a parameter's direction): the rest is filled in (a nullable int column, index_id and parameter_id counting up, an int
     /// parameter). The key metadata sets are empty unless given.</summary>
     internal static DataTableReader Batch(bool children, object?[][] objects, object?[][] types, object?[][] named, object?[][] columns, object?[][] indexes, object?[][] stats, object?[][] parameters,
-        object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null, bool? caseSensitive = null)
+        object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null, bool? caseSensitive = null, bool dottedI = false)
     {
         var counted = 0;
         object?[] Column(object?[] row) => row.Length > 11 ? row : row.Length > 2 ? [.. row, null] : [row[0], row[1], ++counted, 56, (short)4, (byte)10, (byte)0, true, false, false, false, null];
@@ -578,7 +578,7 @@ internal static class SearchChecks
             sets.Add(Rows([("id", typeof(int)), ("column", typeof(int)), ("referenced", typeof(int)), ("other", typeof(int))], foreignKeys ?? []));
         }
         // A read without definitions: the collation's case set follows directly (ObjectSearchSql.CaseSensitive).
-        if (caseSensitive is { } cased) sets.Add(Rows([("cased", typeof(bool))], [cased]));
+        if (caseSensitive is { } cased) sets.Add(Rows([("cased", typeof(bool)), ("dotted", typeof(bool))], [cased, dottedI]));
         return new DataTableReader([.. sets]);
     }
 

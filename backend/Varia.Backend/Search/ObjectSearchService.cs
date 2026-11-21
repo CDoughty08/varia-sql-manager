@@ -187,7 +187,7 @@ internal sealed class ObjectSearchService : IDisposable
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
-            state.Ledger.Start(DateTime.UtcNow);
+            state.Ledger.Start();
         }
         try
         {
@@ -210,7 +210,7 @@ internal sealed class ObjectSearchService : IDisposable
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
                     if (skip is not null) state.Skipped.Add(at, skip);
-                    state.Ledger.Done(names[at], skip, DateTime.UtcNow);
+                    state.Ledger.Done(names[at], skip);
                 }
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
@@ -685,6 +685,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>Whether the read asked for definitions, and its database's case rule once read: kept on whatever it hands over.</summary>
     private bool definitionsRead = true;
     private bool? caseSensitive;
+    private bool dottedI;
 
     /// <summary>A read past the budget.</summary>
     private sealed class TooLarge : Exception;
@@ -720,7 +721,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
         {
             // A read that failed part way (KeepPartial) says what it read as much as a whole one.
-            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive
+            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI
         };
         objects.Clear();
         taken = 0;
@@ -809,7 +810,21 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             }
             await Definitions(reader, byId, definitions, token);
             // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
-            caseSensitive = await reader.NextResultAsync(token) && await reader.ReadAsync(token) ? reader.GetBoolean(0) : null;
+            // Best-effort: the objects are all read by now, so a probe that fails leaves the case rule unknown rather than losing
+            // them (a stop the caller asked for still stops).
+            try
+            {
+                if (await reader.NextResultAsync(token) && await reader.ReadAsync(token))
+                {
+                    caseSensitive = reader.GetBoolean(0);
+                    dottedI = reader.FieldCount > 1 && reader.GetBoolean(1);
+                }
+            }
+            catch (Exception error) when (error is DbException or InvalidOperationException && !token.IsCancellationRequested)
+            {
+                caseSensitive = null;
+                dottedI = false;
+            }
             return Partial();
         }
         catch (TooLarge)

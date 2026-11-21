@@ -155,7 +155,8 @@ internal static class ObjectSearchSql
     /// <summary>Whether the database's catalog collation, which its object names compare under, tells case apart: a and A compared
     /// under CATALOG_DEFAULT (the database's collation, or a contained database's fixed catalog collation). No catalog row, so no
     /// metadata visibility can hide it.</summary>
-    internal const string CaseSensitive = "SELECT CONVERT(bit, CASE WHEN NCHAR(97) COLLATE CATALOG_DEFAULT = NCHAR(65) THEN 0 ELSE 1 END);\n";
+    internal const string CaseSensitive = "SELECT CONVERT(bit, CASE WHEN NCHAR(97) COLLATE CATALOG_DEFAULT = NCHAR(65) THEN 0 ELSE 1 END), "
+        + "CONVERT(bit, CASE WHEN NCHAR(105) COLLATE CATALOG_DEFAULT = NCHAR(73) THEN 0 ELSE 1 END);\n";
 
     /// <summary>The types columns and parameters name, by user_type_id: system ones, and with <paramref name="userDefined"/> the
     /// database's own (alias, CLR and table types) with their schema.</summary>
