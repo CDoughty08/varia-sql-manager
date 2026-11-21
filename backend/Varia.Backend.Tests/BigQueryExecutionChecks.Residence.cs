@@ -540,6 +540,9 @@ internal static partial class BigQueryExecutionChecks
             await Refuses("results.profile", new JsonObject { ["columns"] = new JsonArray(0) });
             await Refuses("results.search", new JsonObject { ["text"] = "row", ["fromRow"] = 0, ["maxMatches"] = 10 });
             await Refuses("results.distinct", new JsonObject { ["column"] = 0 });
+            // A value list's later reads too (FindSnapshot), though no snapshot of a windowed set can exist.
+            await Refuses("results.distinctRead", new JsonObject { ["snapshotId"] = 1, ["order"] = "value", ["offset"] = 0, ["count"] = 10 });
+            await Refuses("results.distinctTick", new JsonObject { ["snapshotId"] = 1, ["checked"] = true, ["all"] = true });
             await Refuses("results.pivot", new JsonObject { ["rows"] = new JsonArray(0), ["values"] = new JsonArray(new JsonObject { ["aggregate"] = "count" }) });
             await Refuses("results.identify", new JsonObject { ["by"] = "row" });
             await Refuses("results.rowIds", new JsonObject { ["firstRow"] = 0, ["count"] = 10 });
@@ -829,6 +832,18 @@ internal static partial class BigQueryExecutionChecks
         var set = harness.Service.Results.Find(id);
         check(code == "ok" && result is { Status: "failed", Error.Code: "PERMISSION_DENIED" } && !Says(result, "was cancelled") && set is { IsRemote: true },
             $"a load BigQuery refuses part way fails with BigQuery's error and stays windowed: {code} {message} {result?.Status} {result?.Error?.Code} {set?.IsRemote}");
+
+        // A load after the destination table expired says so, as a windowed read does, not to check the project.
+        using var expired = new Harness(Lines(3000));
+        await expired.ConnectAsync();
+        (_, executed, _) = await expired.Execute("SELECT n, s FROM t", Windowed);
+        id = executed!.ResultSets.Single().ResultId;
+        expired.Jobs.TableDataStatus = 404;
+        expired.Fake.On("GET", Base + "/queries/[^/]+", new BigQueryFake.Reply(404, "{\"error\":{\"code\":404,\"message\":\"Not found: Table p:_anon.t was not found in location US\",\"errors\":[{\"message\":\"Not found: Table p:_anon.t\",\"domain\":\"global\",\"reason\":\"notFound\"}],\"status\":\"NOT_FOUND\"}}"));
+        var (readCode, _, _, _) = await ReadRows(expired, id, 2000, 100);
+        (code, result, _, message) = await Run(expired, "results.remoteQuery", Load(id));
+        check(readCode == "REMOTE_EXPIRED" && code == "ok" && result is { Status: "failed", Error.Code: "REMOTE_EXPIRED" },
+            $"a load after the result table expired answers REMOTE_EXPIRED, as a read does: read {readCode}, load {code} {message} {result?.Status} {result?.Error?.Code}");
     }
 
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>

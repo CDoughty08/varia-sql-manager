@@ -58,9 +58,9 @@ const resultOf = (key: ResultKey): string => key.view === undefined ? `${key.gen
 /** The result a cache key belongs to, without its view. */
 const baseOf = (result: string): string => { const at = result.indexOf('#'); return at < 0 ? result : result.slice(0, at) }
 
-/** A page's firstRow from its header (array(7) of uints: version, resultId, firstRow, …), or undefined when the
- *  header is not in that canonical form; decodePage validates everything properly. */
-function pageFirstRow(body: ArrayBuffer): number | undefined {
+/** A page's firstRow and rowCount from its header (array(7) of uints: version, resultId, firstRow, rowCount, …), or
+ *  undefined when the header is not in that canonical form; decodePage validates everything properly. */
+function pageRows(body: ArrayBuffer): { firstRow: number; rowCount: number } | undefined {
   const bytes = new Uint8Array(body, 0, Math.min(body.byteLength, 32))
   let at = 1
   const uint = (): number | undefined => {
@@ -77,7 +77,8 @@ function pageFirstRow(body: ArrayBuffer): number | undefined {
   if (bytes[0] !== 0x97) return undefined
   uint()
   uint()
-  return uint()
+  const firstRow = uint(), rowCount = uint()
+  return firstRow === undefined || rowCount === undefined ? undefined : { firstRow, rowCount }
 }
 
 /**
@@ -608,9 +609,11 @@ export class ResultsWorkerCore {
   private page(rid: number, body: ArrayBuffer): void {
     const read = this.reads.get(rid)
     if (!read || read.cancelled) return
-    // A page another read already brought is credited but not decoded again.
-    const firstRow = pageFirstRow(body)
-    if (firstRow !== undefined && this.cache.has(`${read.result}:${firstRow}`)) {
+    // A page another read already brought is credited but not decoded again: the same rows from the same row. A windowed
+    // result's block fetched again may break its pages elsewhere (a longer page from the same row): that one is kept.
+    const rows = pageRows(body)
+    const cached = rows && this.cache.get(`${read.result}:${rows.firstRow}`)
+    if (rows && cached && cached.rowCount >= rows.rowCount) {
       this.send({ t: 'credit', rid, bytes: body.byteLength })
       return
     }
@@ -815,7 +818,11 @@ export class ResultsWorkerCore {
   private store(read: Read, view: PageView, bytes: number): void {
     if (read.key.generation !== this.generation && this.generation !== 0) return
     const id = `${read.result}:${view.firstRow}`
-    if (this.cache.has(id)) return
+    const same = this.cache.get(id)
+    if (same && same.rowCount >= view.rowCount) return
+    // Pages never overlap in the index (its lookups assume it): cached pages this one overlaps go, as its rows replace theirs.
+    const end = view.firstRow + view.rowCount
+    for (const other of [...this.indexes.get(read.result) ?? []]) if (other.firstRow < end && other.firstRow + other.rowCount > view.firstRow) this.remove(other)
     const page: CachedPage = { id, result: read.result, firstRow: view.firstRow, rowCount: view.rowCount, view, bytes }
     this.cache.set(id, page)
     this.cacheBytes += bytes

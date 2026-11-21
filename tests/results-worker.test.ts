@@ -209,6 +209,28 @@ describe('results worker core', () => {
     expect([answer(first), answer(second)].map(result => result?.type === 'window' && result.count)).toEqual([128, 128])
   })
 
+  it('keeps a longer page from a row it holds a page from (a windowed block fetched again), replacing pages it overlaps', () => {
+    const { window, reads, core, answer } = fixture()
+    // The first page of a windowed result: rows 0-49 alone.
+    const first = window(0, 50)
+    core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 50) })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { nextRow: 50, rowsAvailable: 10_000, complete: false, pages: 1, rows: 50 } })
+    expect(answer(first)?.type === 'window' && (answer(first) as { count: number }).count).toBe(50)
+    // Rows 60-109, after the block was evicted and fetched again: its page now starts at row 0 and holds 200 rows.
+    const later = window(60, 50)
+    const read = reads().at(-1)!
+    expect(read.firstRow).toBe(60)
+    core.receive({ t: 'page', rid: read.rid, seq: 1, body: page(0, 200) })
+    core.receive({ t: 'end', rid: read.rid, ok: true, result: { nextRow: 200, rowsAvailable: 10_000, complete: false, pages: 1, rows: 140 } })
+    const result = answer(later)
+    expect(result?.type === 'window' && [result.first, result.count, result.text[0]]).toEqual([60, 50, '60'])
+    // The longer page replaced the shorter one it overlaps: one page, and rows on either side of row 50 read without a gap.
+    expect(core.cachedPages).toBe(1)
+    const across = window(40, 20)
+    expect(reads()).toHaveLength(2)
+    expect(answer(across)?.type === 'window' && (answer(across) as { count: number }).count).toBe(20)
+  })
+
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
     const { window, core, posted, serve, answer } = fixture()
     window(0, 64)

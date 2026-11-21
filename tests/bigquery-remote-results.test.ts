@@ -196,5 +196,20 @@ describe('the user-facing text about windowed results', () => {
     const changelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8')
     const entry = changelog.slice(changelog.indexOf('- **BigQuery results larger than memory:**'), changelog.indexOf('\n', changelog.indexOf('- **BigQuery results larger than memory:**')))
     for (const feature of ['Sorting', 'filtering', 'searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
+    // docs/architecture.md states the invariant's exception, naming code that exists; the Results area doc says what a
+    // windowed result refuses.
+    const architecture = readFileSync(join(__dirname, '..', 'docs', 'architecture.md'), 'utf8')
+    const at = architecture.indexOf('- **A windowed BigQuery result keeps its rows in BigQuery**')
+    expect(at).toBeGreaterThan(0)
+    const bullet = architecture.slice(at, architecture.indexOf('\n- **', at + 1))
+    const backend = join(__dirname, '..', 'backend', 'Varia.Backend')
+    const code = (readdirSync(backend, { recursive: true }) as string[]).filter(file => file.endsWith('.cs')).map(file => readFileSync(join(backend, file), 'utf8')).join('\n')
+    for (const symbol of ['DecideResidenceAsync', 'Demote', 'Promote', 'Stored', 'Lease', 'SealedSnapshot', 'AddView', 'AddSnapshot', 'Released']) {
+      expect(bullet).toContain(symbol)
+      expect(new RegExp(`\\b${symbol}\\b`).test(code)).toBe(true)
+    }
+    for (const rule of ['charged to the global budget', 'REMOTE_RESULT', 'up to twice the limit', 'never builds a block past that limit']) expect(bullet).toContain(rule)
+    const tools = readFileSync(join(__dirname, '..', 'docs', 'results-tools.md'), 'utf8')
+    expect(tools).toMatch(/A BigQuery result can instead stay windowed in BigQuery[^]*refuse a windowed result/)
   })
 })

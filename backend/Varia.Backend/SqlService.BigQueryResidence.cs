@@ -363,7 +363,8 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = error as RequestException ?? BigQueryErrors.Map(error, window.Project) as RequestException
+                // The destination table expired: as a windowed read of it says, not a project to check.
+                var mapped = error as RequestException ?? (NotFound(error) ? Expired() : BigQueryErrors.Map(error, window.Project) as RequestException)
                     ?? new RequestException("BACKEND_ERROR", "Loading into memory stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
                 status = "failed";
                 failure = new(mapped.Code, mapped.Message, 1, 1);
