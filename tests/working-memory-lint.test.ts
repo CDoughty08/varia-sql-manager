@@ -122,10 +122,14 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const overrun = between('private async Task ReserveOverrunAsync(', 'private void Reserve(')
   expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
   expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
-  expect(overrun).toMatch(/if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n\s*throw;/)
+  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n\s*throw;/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)
+  // A trim evicts only what Reserve may: blocks no read waits for and no fetch is filling.
+  const trim = between('private void TrimLocked(', 'private void Reserve(')
+  expect(trim).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)
+  expect(trim).toMatch(/lru\.FirstOrDefault\(block => block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0\)/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
   // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
   const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')
