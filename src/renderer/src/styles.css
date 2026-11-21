@@ -945,6 +945,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .output-toolbar > .results-toolbar { grid-area: 2 / 1 / auto / -1; padding-inline: 0; border: 0; }
   .output-toolbar > :is(.job-strip, .op-strip) { grid-column: 1 / -1; }
   .results-search-count { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .results-toolbar[data-fold~="show"] .results-search { min-width: 0; }
   .results-toolbar[data-fold~="show"] .results-search-field { min-width: var(--varia-control); }
 }
 /* Operations over whole results (OperationStrip, ResultOperations): the toolbar's strip with its meter and Cancel, the

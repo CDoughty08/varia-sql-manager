@@ -485,7 +485,16 @@ try {
   await narrowFind.click()
   await narrowFind.fill('unmatched_column')
   await expect(resultsSearchCount(popout)).toHaveText(/^0 of [\d,]+ columns$/)
-  await expect.poll(() => resultsToolbarFit(popout)).toMatchObject({ fits: true })
+  await expect.poll(async () => {
+    const fit = await resultsToolbarFit(popout)
+    if (fit.fits) return true
+    const widths = await narrowTools.evaluate(tools => ({
+      client: tools.clientWidth,
+      scroll: tools.scrollWidth,
+      groups: [...tools.children].map(group => [group.className, group.getBoundingClientRect().width, group.getBoundingClientRect().right])
+    }))
+    return JSON.stringify({ ...fit, ...widths })
+  }).toBe(true)
   await expect(narrowFind).toBeInViewport({ ratio: 1 })
   await narrowTools.getByRole('button', { name: 'Data', exact: true }).click()
   await expect(narrowTools.getByRole('textbox', { name: 'Search results', exact: true })).toHaveValue('unmatched_column')

@@ -88,7 +88,8 @@ const footerFit = dialog => dialog.locator(part.connectionFooter).evaluate(foote
     wrapped: first.bottom <= last.top
   }
 })
-const fittingFooter = { labelsFit: true, inset: true, inside: true, grouped: true, wrapped: false }
+const containedFooter = { labelsFit: true, inset: true, inside: true, grouped: true }
+const fittingFooter = { ...containedFooter, wrapped: false }
 async function expectControlHeight(control, dense = false) {
   const { height, expected } = await control.evaluate((element, dense) => {
     const style = getComputedStyle(element)
@@ -1060,7 +1061,7 @@ async function rememberPassword() {
   // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
   // main gives a password only to those, so the fix checks the box and asks for the password instead of connecting.
   await disconnectPasswordServer()
-  // The longer label fits under the form at desktop width. At high zoom only the utility group moves above it.
+  // The longer label fits under the form even if the groups wrap with the system font. High zoom forces the wrap.
   await explorerLabel(await explorerRow(page, 'password-check')).click({ button: 'right' })
   await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Reconnect…', exact: true }).click()
   dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -1068,11 +1069,11 @@ async function rememberPassword() {
   await form(dialog).password.fill(marker)
   const reconnect = dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true })
   await expect(reconnect).toBeVisible()
-  expect(await footerFit(dialog)).toEqual(fittingFooter)
+  expect(await footerFit(dialog)).toMatchObject(containedFooter)
   const contentSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
   await size(1024, 700)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(2.5))
-  await expect.poll(() => footerFit(dialog)).toEqual({ ...fittingFooter, wrapped: true })
+  await expect.poll(() => footerFit(dialog)).toEqual({ ...containedFooter, wrapped: true })
   await expect(reconnect).toBeInViewport()
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
   await size(...contentSize)
