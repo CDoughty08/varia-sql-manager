@@ -166,10 +166,11 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // resource).
   // (A file reaching the client through a connection, `bigQuery.Find(id).Client.Service`, is BigQuery code too.)
   const isBigQueryCode = (file: string, code: string) => file.startsWith('BigQuery/') || file.startsWith('SqlService.BigQuery')
-    || /\b(?:Google\.Apis\.Bigquery|Google\.Cloud\.BigQuery|BigqueryService|BigQueryConnection)\b|\bClient\s*\.\s*Service\b|\bbigQuery\s*\.\s*Find\s*\(/.test(code)
+    || /\b(?:Google\.Apis\.Bigquery|Google\.Cloud\.BigQuery|BigqueryService|BigQueryConnection)\b|\b\w*[Cc]lient\s*\.\s*Service\b|\bBigQueryWindow\b|\bbigQuery\s*\.\s*Find\s*\(/.test(code)
   expect(isBigQueryCode('Explorer/AgentListings.cs', '_ = results.ContainsKey(AgentSql.Jobs.Id); var jobs = server.JobServer.Jobs;')).toBe(false)
   expect(isBigQueryCode('SqlService.Load.cs', 'var connection = bigQuery.Find(id); var jobs = connection.Client.Service.Jobs;')).toBe(true)
   expect(isBigQueryCode('Results/Helper.cs', 'var service = connection.Client.Service; var jobs = service.Jobs;')).toBe(true)
+  expect(isBigQueryCode('SqlService.RowCount.cs', 'if (remote.Source is not BigQueryWindow window) return 0; var client = window.Connection.Client; var jobs = client.Service.Jobs;')).toBe(true)
   const bigQueryUses = (pattern: RegExp) => files.filter(({ file, code }) => isBigQueryCode(file, code))
     .flatMap(({ file, code }) => Array.from(code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').matchAll(pattern), () => file))
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
@@ -178,7 +179,12 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // only Jobs.cs's GetRequest and Sessions.cs's ListRequest name them.
   expect(bigQueryUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
   expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
-  expect(bigQueryUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs'])
+  // A Jobs member is reached for those calls alone anywhere in the backend, however the resource is held (a local, a field,
+  // a connection's client in another file): SQL Server Agent's AgentSql.Jobs and SMO's JobServer.Jobs are statements and
+  // collections, a job list's own Jobs (Sessions.cs) and SSIS's created.Jobs a list and a flag.
+  expect(codeUses(/(?<!\b(?:AgentSql|JobServer)\s*)\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs', 'Ssis/SsisActionService.cs', 'Ssis/SsisCreate.cs'])
+  // ...and Google's client service is reached only in BigQuery's own code.
+  expect(codeUses(/\b\w*[Cc]lient\s*\.\s*Service\b/g).filter(file => !file.startsWith('BigQuery/') && !file.startsWith('SqlService.BigQuery'))).toEqual([])
   expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
   expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
