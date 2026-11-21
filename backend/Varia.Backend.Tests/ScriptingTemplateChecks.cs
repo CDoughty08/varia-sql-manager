@@ -162,7 +162,7 @@ internal static class ScriptingTemplateChecks
         check(DmlTemplates.Execute(obj, [P(1, "@rc\u0219")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal)
             && DmlTemplates.Execute(obj, [P(1, "@RC"), P(2, "@RC1\u0219")], false, true).StartsWith("DECLARE @RC2 int" + NL, StringComparison.Ordinal)
             && DmlTemplates.Execute(obj, [P(1, "@\uFF52\uFF43")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal),
-            "ASCII letters and digits beside non-ASCII ones, and a lowercase fullwidth fold, still match case-insensitively");
+            "lowercase ASCII letters beside non-ASCII ones match case-insensitively, ASCII digits there are not skipped, and a lowercase fullwidth name folds to uppercase");
         var blocking = "@RC" + new string('\u0219', 125);
         check(DmlTemplates.Execute(obj, [P(1, blocking)], false, true) == Lines("DECLARE " + blocking + " int", "", "-- TODO: Set parameter values here.", "", "EXECUTE [dbo].[p] ", "   " + blocking)
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, blocking)], false, true).EndsWith("EXECUTE [dbo].[f] " + NL + "   " + blocking, StringComparison.Ordinal),
