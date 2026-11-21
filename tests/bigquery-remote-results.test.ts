@@ -21,7 +21,7 @@ describe('BigQuery remote results', () => {
 
   it('takes results.remoteQuery strictly: a query id, an owned result and its generation, and only the load kind', () => {
     expect(validateRequest('results.remoteQuery', load)).toEqual(load)
-    for (const patch of [{ kind: 'view' }, { kind: 'sample' }, { queryId: 'not-a-uuid' }, { resultId: 0 }, { generation: 0 }, { generation: 2 ** 31 }, { extra: true }])
+    for (const patch of [{ kind: 'view' }, { kind: 'sample' }, { queryId: 'not-a-uuid' }, { resultId: 0 }, { resultId: 2 ** 32 }, { resultId: 1.5 }, { generation: 0 }, { generation: 1.5 }, { generation: 2 ** 31 }, { extra: true }])
       expect(() => validateRequest('results.remoteQuery', { ...load, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     expect(() => validateRequest('results.remoteQuery', { queryId: load.queryId, resultId: 7, kind: 'load' })).toThrow('Invalid request')
   })

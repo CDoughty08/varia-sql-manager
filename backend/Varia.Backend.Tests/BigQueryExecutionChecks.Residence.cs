@@ -992,6 +992,8 @@ internal static partial class BigQueryExecutionChecks
             var (badResidence, _, _) = await harness.Execute("SELECT 1", args => args["residence"] = "disk");
             var (badCache, _, _) = await harness.Execute("SELECT 1", args => args["windowCacheMiB"] = 8);
             check(badResidence == "INVALID_PARAMS" && badCache == "INVALID_PARAMS", $"an unknown residence or a cache outside 16..4,096 MiB is refused: {badResidence} {badCache}");
+            var (bigCache, _, _) = await harness.Execute("SELECT 1", args => args["windowCacheMiB"] = 4097);
+            check(bigCache == "INVALID_PARAMS", $"a cache above 4,096 MiB is refused: {bigCache}");
         }
         // The row cap: 32-bit row indexes show at most 2,147,483,647 rows, with a note.
         using (var harness = new Harness(Lines(1200)))

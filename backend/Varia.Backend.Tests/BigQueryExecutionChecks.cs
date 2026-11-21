@@ -842,6 +842,17 @@ internal static partial class BigQueryExecutionChecks
             ["database"] = "master", ["prices"] = false, ["maxRows"] = 0, ["timeoutSeconds"] = 0
         });
         check(sqlServerCap.Code == "INVALID_PARAMS" && sqlServerPrices.Code == "INVALID_PARAMS", $"maximum bytes billed and prices are refused for SQL Server: {sqlServerCap.Code} {sqlServerPrices.Code}");
+        var sqlServerResidence = await harness.Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = Guid.NewGuid().ToString(), ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1",
+            ["database"] = "master", ["residence"] = "memory", ["maxRows"] = 0, ["timeoutSeconds"] = 0
+        });
+        var sqlServerCache = await harness.Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = Guid.NewGuid().ToString(), ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1",
+            ["database"] = "master", ["windowCacheMiB"] = 64, ["maxRows"] = 0, ["timeoutSeconds"] = 0
+        });
+        check(sqlServerResidence.Code == "INVALID_PARAMS" && sqlServerCache.Code == "INVALID_PARAMS", $"residence and the window cache are refused for SQL Server: {sqlServerResidence.Code} {sqlServerCache.Code}");
         check(legacy.Code == "LEGACY_SQL" && badDataset.Code == "INVALID_PARAMS" && badSql.Code == "INVALID_PARAMS" && sqlServerDataset.Code == "INVALID_PARAMS" && noDatabase.Code == "INVALID_PARAMS"
             && jobs.InsertedIds.IsEmpty,
             $"legacy SQL, a bad dataset or script, a dataset for SQL Server and SQL Server without a database are refused before any job: {legacy.Code} {badDataset.Code} {badSql.Code} {sqlServerDataset.Code} {noDatabase.Code}");
