@@ -67,6 +67,10 @@ export class GridData {
   private readonly shortened = new Set<number>()
   private rows = 0
   private refetches: number[] = []
+  /** Tiles whose reads brought no rows they did not have (a windowed result's block rate limited, refused room, or shorter
+   *  than BigQuery said): each is read again only after a doubling wait, and after g.stallRetries not until the frames
+   *  stop wanting it (scrolled away) or Retry. A result that is complete sends no more events, so nothing else stops it. */
+  private readonly stalls = new Map<number, { count: number; due: number }>()
   private settleUntil = 0
   /** Frames in a row that moved more than 3 views. */
   private fastFrames = 0
@@ -129,6 +133,7 @@ export class GridData {
   retry(): void {
     this.errors.clear()
     this.retried.clear()
+    this.stalls.clear()
     this.changed()
   }
 
@@ -153,6 +158,7 @@ export class GridData {
     // joins of tiles this frame wants, so browsing on cannot hold more rows than the cache allows (a tile wanted again is
     // joined again from the parts the cache still has).
     for (const key of this.joined.keys()) if (!wanted.has(key)) this.joined.delete(key)
+    for (const key of this.stalls.keys()) if (!wanted.has(key)) this.stalls.delete(key)
     for (const [key, tile] of this.inflight) {
       if (wanted.has(key)) tile.missed = 0
       else if (++tile.missed >= g.abortAfterFrames) { tile.controller.abort(); this.inflight.delete(key) }
@@ -177,6 +183,8 @@ export class GridData {
       if (window) {
         this.counters.hits++
         if (isFrontier(window, rows, this.shape)) {
+          const stall = this.stalls.get(key)
+          if (stall && now < stall.due) { if (Number.isFinite(stall.due)) this.wake(stall.due - now); continue }
           // Rows that arrived since are read at most 10 times a second; rows the worker could not hold with the rest at once.
           const shortened = this.shortened.has(key)
           if (!shortened && !this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
@@ -285,6 +293,12 @@ export class GridData {
       this.retried.delete(key)
       // Fewer rows than were there: the worker could not hold them all (a still arriving tile ends at the rows available).
       if (window.count > 0 && window.first + window.count < Math.min(end, this.rows)) this.shortened.add(key)
+      // No rows past where it read from: wait longer before reading it again, then stop.
+      if (window.first + window.count > from) this.stalls.delete(key)
+      else {
+        const count = (this.stalls.get(key)?.count ?? 0) + 1
+        this.stalls.set(key, { count, due: count > g.stallRetries ? Number.POSITIVE_INFINITY : this.now() + g.busyRetryMs * 2 ** (count - 1) })
+      }
       if (!this.disposed) this.changed()
     }, error => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)

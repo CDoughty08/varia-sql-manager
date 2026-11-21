@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GridData } from '../src/renderer/src/grid/data'
+import { gridLimits } from '../src/renderer/src/grid/constants'
 import { planTiles, tileColumnOf, tileKey, tileRowOf, type TileShape } from '../src/renderer/src/grid/tiles'
 import type { RowWindow, WindowOptions, WindowShape } from '../src/renderer/src/results/ResultClient'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
@@ -342,6 +343,25 @@ describe('grid data', () => {
     data.ensure(range(1030, 1145, 0, 7), 10_000, 0, 30)
     expect(handle.prefetch).toHaveBeenCalledOnce()
   })
+  it('reads a tile that keeps answering no rows again after doubling waits, then not until the view leaves it or Retry', async () => {
+    const { data, reads, settle, advance } = fixture(8)
+    // A windowed result's tile answers empty every time (rate limited, or its table shorter than BigQuery said), cached as such.
+    const frame = () => data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    frame()
+    for (let second = 0; second < 600; second++) {
+      for (const read of reads) if (!read.aborted()) read.resolve(0)
+      await settle()
+      advance(100)
+      frame()
+    }
+    const own = () => reads.filter(read => read.first < 128).length
+    expect(own()).toBe(gridLimits.stallRetries + 1)
+    // Retry reads it again at once.
+    data.retry()
+    frame()
+    expect(own()).toBe(gridLimits.stallRetries + 2)
+  })
+
   it('aborts its reads and timers when disposed', () => {
     const { data, reads, timers } = fixture()
     data.ensure(range(0, 10), 10_000, 0, 30)

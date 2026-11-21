@@ -550,6 +550,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private scheduled = false
   private disposed = false
   private announcedCount = 0
+  /** Residence switches said by tab whose announcement has not been read out yet: the run's end, within the live region's
+   *  delay, would replace it, so it says them too. */
+  private readonly unheardSwitches = new Map<string, string[]>()
   private minted = 0
 
   constructor(o: {
@@ -621,8 +624,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.subscription?.dispose()
     run.subscription = undefined
     const { summary } = end
-    // Switches the summary carried, said with the run's end (one announcement replaces another).
-    let switchNotes: string[] = []
+    // Switches the summary carried, and those whose own announcement the run's end now replaces, said with the run's end
+    // (one announcement replaces another).
+    let switchNotes: string[] = this.unheardSwitches.get(tabId) ?? []
+    this.unheardSwitches.delete(tabId)
     if (summary) {
       // A summary that overtook a set's residence event (which now arrives after the run, and is ignored) switches it here.
       const switched = summary.resultSets.filter(descriptor => {
@@ -630,7 +635,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         return entry !== undefined && (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
       })
       this.client.applySummary(summary)
-      switchNotes = switched.map(descriptor => this.switched(tabId, run, descriptor, false))
+      switchNotes = [...switchNotes, ...switched.map(descriptor => this.switched(tabId, run, descriptor, false))]
       for (const descriptor of summary.resultSets) {
         this.opened(run, descriptor)
         this.settle(run, descriptor)
@@ -1392,6 +1397,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (previous !== undefined) this.timers.clearTimeout(previous)
     this.announcements.set(tabId, this.timers.setTimeout(() => {
       this.announcements.delete(tabId)
+      this.unheardSwitches.delete(tabId)
       const run = this.runs.get(tabId)
       if (!run) return
       // The same sentence again must still be read out: a zero-width space makes it a change.
@@ -1658,7 +1664,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const text = (descriptor.residence === 'remote'
       ? `${subject} is now windowed in BigQuery: rows are read as you scroll.`
       : `${subject} is loading into memory.`) + removed
-    if (announce) this.announce(tabId, text)
+    if (announce) {
+      this.unheardSwitches.set(tabId, [...this.unheardSwitches.get(tabId) ?? [], text])
+      this.announce(tabId, text)
+    }
     return text
   }
 

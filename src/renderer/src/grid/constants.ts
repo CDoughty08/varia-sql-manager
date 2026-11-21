@@ -34,6 +34,9 @@ export const gridLimits = {
   /** A first measure that read no rows (a windowed result's first block not read yet) is tried again this many times, each
    *  waiting on the backend's read, before the columns are sized from their headers. */
   measureRetries: 8,
+  /** A tile read again that brings no new rows is read again after 250 ms, doubling, this many times (about 8 s), then not
+   *  until the view leaves it or Retry. */
+  stallRetries: 5,
   scrollCap: 15_000_000, scrollCapPhysical: 30_000_000, rebaseRows: 4096,
   splitter: 5, stackMinRows: 4, stackBorder: 2, mountedGrids: 12, mountsPerFrame: 2,
   /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing
