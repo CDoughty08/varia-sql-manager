@@ -220,6 +220,19 @@ internal static class FloatExactChecks
         check(string.Join(",", crossed.Entries.Select(entry => entry.Kind)) == "Changed" && string.Join(",", byValue.Entries.Select(entry => entry.Kind)) == "Removed,Added",
             "a real and a float that show differently are a change by Id and no match by value, as their hashes say: "
             + string.Join(",", crossed.Entries.Select(entry => entry.Kind)) + " / " + string.Join(",", byValue.Entries.Select(entry => entry.Kind)));
+
+        // A column that is varchar in the first result compares by its text, so a float in the second that shows the same
+        // text is the same value, in its hash and cell by cell, exact text or not.
+        ResultColumn[] text = [new("Id", "int", "text"), new("F", "varchar(10)", "text", Collation: new ResultCollation(1033, 0, 1252, false, 16384))];
+        var texts = FillRows(store, budget, text, row => { row.AppendText("1"); row.AppendText("1"); });
+        var numbers = FillRows(store, budget, floats, row => { row.AppendText("1"); row.AppendFloat(High); });
+        foreach (var exact in new[] { false, true })
+            foreach (var match in new[] { new DiffMatch(DiffMatchMode.Rows, []), new DiffMatch(DiffMatchMode.Columns, [0]) })
+            {
+                var asText = ResultDiffer.Compare(texts, texts.SealedSnapshot(), numbers, numbers.SealedSnapshot(), exact, CancellationToken.None, match: match);
+                check(asText.Entries is [{ Kind: DiffKind.Same, CellCount: 0 }],
+                    $"a varchar compared with a float of the same text is unchanged ({match.Mode}{(exact ? ", exact text" : "")}): " + string.Join(",", asText.Entries.Select(entry => entry.Kind + "/" + entry.CellCount)));
+            }
     }
 
     private static void Comparison(Action<bool, string> check)

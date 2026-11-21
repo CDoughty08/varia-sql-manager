@@ -350,6 +350,10 @@ internal sealed class CellHasher
     /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
     public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;
 
+    /// <summary>Whether a column's cells are read with their exact values (float and real, by this hasher's types: a second
+    /// result's columns take the first's).</summary>
+    public bool ReadsExact(int column) => exacts[column];
+
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
         view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));

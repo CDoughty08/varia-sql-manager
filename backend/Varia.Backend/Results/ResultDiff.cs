@@ -887,9 +887,12 @@ internal static class ResultDiffer
                 continue;
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
-            // Equal text is the same value unless a float or real's exact value, kept apart from its text, differs.
-            var leftExact = leftView.TryExact(lc, l, out var x);
-            var rightExact = rightView.TryExact(rc, r, out var y);
+            // Equal text is the same value unless a float or real's exact value, kept apart from its text, differs: read only
+            // where the hashers read it (by the first result's types), so the cells compare as they hash.
+            var x = 0d;
+            var y = 0d;
+            var leftExact = leftHasher.ReadsExact(lc) && leftView.TryExact(lc, l, out x);
+            var rightExact = rightHasher.ReadsExact(rc) && rightView.TryExact(rc, r, out y);
             if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r)) && leftExact == rightExact && (!leftExact || x == y)) continue;
             var text = leftHasher.IsText(lc);
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
