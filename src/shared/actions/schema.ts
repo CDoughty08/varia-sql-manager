@@ -26,6 +26,7 @@ import { designerDescribeIds, designerLimits } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
+import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentPropertiesModel, type AgentPropertiesRequest } from './agent-properties.ts'
 import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
@@ -172,11 +173,12 @@ export interface TablePropertiesRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
-  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest
+  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest
 export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
+export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 /** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. */
@@ -382,6 +384,8 @@ export interface ActionDescribeResult {
   readonly agentJob?: AgentJobFacts
   /** startAgent, stopAgent and restartAgent (AG-2): the service the dialog asks about. */
   readonly agentService?: AgentServiceFacts
+  /** agentProperties (AG-8a): SQL Server Agent Properties' settings, the server's clock and, for sysadmin, every job's history counts. */
+  readonly agentProperties?: AgentPropertiesModel
 }
 /** One step of a job, as sp_help_jobstep lists it. */
 export interface AgentJobStepFact { readonly id: number; readonly name: string }
@@ -782,7 +786,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   loginPropertiesSchema,
   tablePropertiesSchema,
   startJobSchema,
-  stopJobSchema
+  stopJobSchema,
+  agentPropertiesRequestSchema
 ]).superRefine((request, context) => {
   // A job's identity goes only with a job's verb.
   if ('agentIdentity' in request && request.agentIdentity !== undefined && request.target.kind !== 'agentJob') issue(context, 'agentIdentity', 'Only a SQL Server Agent job has an Agent identity.')
@@ -822,6 +827,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
     case 'tableProperties':
       tablePropertiesIssues(request, context)
+      break
+    case 'agentProperties':
+      for (const problem of agentPropertiesProblems(request)) issue(context, 'agentProperties', problem)
       break
   }
 }) satisfies z.ZodType<ActionRequest>

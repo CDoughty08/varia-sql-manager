@@ -722,7 +722,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
 | `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background'` |
-| `2_service` | Sto**p** | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
+| `2_service` | S**t**op | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
 | `2_service` | R**e**start | `explorer.restartAgent` | `explorerActionRestartAgent != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |

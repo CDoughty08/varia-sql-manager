@@ -1,12 +1,11 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { timelineIntervals, timelineIntervalSpecs, type BackupSetRow, type TimelineInterval } from '../../../shared/actions/restore.ts'
-import { pointAllowed } from '../../../shared/actions/restore-plan.ts'
 import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import SubDialog from '../dialogs/SubDialog'
 import { useForcedColors } from '../live/LiveChart'
-import { draftPlan, restoreToText, sourceSets } from './model'
+import { lastBackupOf, sourceSets, timelineCoverage, timelinePointAllowed } from './model'
 import type { SectionProps } from './fields'
-import { coverage, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
+import { coverage, followPoint, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
 
 const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`
 
@@ -48,12 +47,19 @@ function Swatch({ mark, fill }: { readonly mark: Mark; readonly fill?: CSSProper
  * (SSMS's sub-dialog, recalled).
  */
 export default function BackupTimeline({ state, draft, facts, service }: Pick<SectionProps, 'state' | 'draft' | 'facts' | 'service'>) {
-  const plan = draftPlan(draft, facts)
-  const sets = sourceSets(draft, facts)
+  // Once per history and source, not on every point or window change (a device source's sets are a fresh filter each call).
+  const { source, database, deviceDatabase, manual } = draft
+  const sets = useMemo(() => sourceSets(draft, facts), [facts, source, database, deviceDatabase]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The planner's coverage, or the checked sets' under Manual Selection: OK then allows only a point the document will accept.
+  const covered = useMemo(() => timelineCoverage(draft, facts), [facts, source, database, deviceDatabase, manual]) // eslint-disable-line react-hooks/exhaustive-deps
+  const lastBackup = lastBackupOf(draft, facts)
   const lastFinish = Math.max(...sets.map(set => timeMs(set.finish) ?? 0))
   const [specific, setSpecific] = useState(draft.stopAt !== undefined)
-  const [point, setPoint] = useState(timeMs(draft.stopAt ?? '') ?? lastFinish)
-  const [interval, chooseInterval] = useState<TimelineInterval>('day')
+  // Without a point, start at the last backup taken (the checked sets' under Manual Selection), where OK is allowed.
+  const [point, setPoint] = useState(timeMs(draft.stopAt ?? lastBackup ?? '') ?? lastFinish)
+  const [interval, pickInterval] = useState<TimelineInterval>('day')
+  // The window opens around the point and then stays put until the point leaves it (followPoint); an interval change opens it afresh.
+  const [span, setSpan] = useState(() => timelineWindow(sets, 'day', point))
   const [width, setWidth] = useState<number>(track.fallbackWidth)
   const box = useRef<HTMLDivElement>(null)
   const forced = useForcedColors()
@@ -67,13 +73,13 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const span = timelineWindow(sets, interval, point)
-  const text = timeText(point), allowed = pointAllowed(sets, text)
+  const text = timeText(point), allowed = timelinePointAllowed(draft, facts, text, covered)
   const id = (key: string) => fieldId(state.id, `timeline-${key}`)
   // Inset by half the widest glyph, so marks at the window's ends show whole.
   const scale = width - 2 * track.inset, at = (fraction: number) => track.inset + fraction * scale
   const fill = (mark: Mark): CSSProperties | undefined => forced ? undefined : { fill: `var(${cssVariable(marks[mark].key)})` }
-  const move = (ms: number) => { setSpecific(true); setPoint(Math.round(ms / 1000) * 1000) }
+  const move = (ms: number) => { const next = Math.round(ms / 1000) * 1000; setSpecific(true); setPoint(next); setSpan(current => followPoint(current, next)) }
+  const chooseInterval = (value: TimelineInterval) => { pickInterval(value); setSpan(timelineWindow(sets, value, point)) }
   const keyDown = (event: KeyboardEvent<SVGSVGElement>) => {
     const next = stepPoint(event.key, event.shiftKey, point, span)
     if (next === undefined) return
@@ -91,10 +97,10 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
     .sort((a, b) => order[kind(a.set)] - order[kind(b.set)])
   return <SubDialog title="Backup Timeline" okDisabled={specific && !allowed} onCancel={() => service.openDialog(state.id, undefined)} className="restore-timeline"
     onOk={() => { service.openDialog(state.id, undefined); service.updateDraft(state.id, { stopAt: specific ? text : undefined }) }}
-    status={specific && !allowed ? 'No backup reaches this point in time.' : undefined}>
+    status={specific && !allowed ? manual ? 'The checked backup sets do not stop at this point in time.' : 'No backup reaches this point in time.' : undefined}>
     <fieldset className="restore-timeline-mode">
       <legend>Restore to:</legend>
-      <label className="checkbox-label"><input type="radio" name={id('mode')} checked={!specific} onChange={() => setSpecific(false)} />Last backup taken{plan.ids.length > 0 ? ` (${restoreToText({ ...draft, stopAt: undefined }, facts, plan).replace(/^The last backup taken \(|\)$/g, '')})` : ''}</label>
+      <label className="checkbox-label"><input type="radio" name={id('mode')} checked={!specific} onChange={() => setSpecific(false)} />Last backup taken{lastBackup ? ` (${lastBackup.replace('T', ' ')})` : ''}</label>
       <label className="checkbox-label"><input type="radio" name={id('mode')} checked={specific} onChange={() => setSpecific(true)} />Specific date and time</label>
     </fieldset>
     <div className="property-row"><label htmlFor={id('date')}>Date:</label><input id={id('date')} type="date" value={text.slice(0, 10)} disabled={!specific}
@@ -111,7 +117,7 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
         aria-valuemin={Math.floor(span.from / 60_000)} aria-valuemax={Math.ceil(span.to / 60_000)} aria-valuenow={Math.floor(point / 60_000)} aria-valuetext={text.replace('T', ' ')}
         aria-invalid={specific && !allowed ? true : undefined} onKeyDown={keyDown} onPointerDown={pointer}>
         <rect className="restore-timeline-base" x={track.inset} y={track.bandTop + 2} width={scale} height={track.bandHeight - 4} />
-        {coverage(sets, span).map((stretch, index) => <rect key={index} className="restore-timeline-covered" style={fill('covered')} x={at(stretch.from)} y={track.bandTop} width={Math.max(2, (stretch.to - stretch.from) * scale)} height={track.bandHeight} />)}
+        {coverage(sets, span, covered).map((stretch, index) => <rect key={index} className="restore-timeline-covered" style={fill('covered')} x={at(stretch.from)} y={track.bandTop} width={Math.max(2, (stretch.to - stretch.from) * scale)} height={track.bandHeight} />)}
         {placed.map(({ set, x }) => <Glyph key={set.id} mark={kind(set)} x={x} fill={fill(kind(set))} />)}
         {specific && <rect className="restore-timeline-point" x={at(position(point, span)) - 1.5} y={0} width={3} height={track.height} />}
       </svg>
