@@ -76,6 +76,7 @@ export const contextKeys = {
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
   activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
   activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: 'The active document is Integration Services Operations.' },
+  activeDocumentIsJobActivity: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Job Activity Monitor." },
   ssisOperationStoppable: { type: 'boolean', scope: 'state', description: 'The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way.' },
   ssisOperationsPaused: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document is paused (Pause): it reads nothing until resumed.' },
   ssisOperationsRefreshable: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog).' },

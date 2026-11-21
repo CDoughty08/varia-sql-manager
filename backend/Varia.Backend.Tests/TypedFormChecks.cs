@@ -20,6 +20,32 @@ internal static class TypedFormChecks
         Damaged(check);
         BeforeDayOne(check);
         Stored(check);
+        Scratch(check);
+    }
+
+    /// <summary>Packing rents from the shared pool only what a page needs: a page with no typed column (one 8 MiB row of four
+    /// XML documents) the form and one frame's bound, as before the typed form, where it rented a second frame's bound and a
+    /// room for values none of its columns has; a typed page also rents its values' room and their frame's bound.</summary>
+    private static void Scratch(Action<bool, string> check)
+    {
+        var builder = new PageBuilder(1, [.. Enumerable.Repeat(WireKind.Text, 4)]);
+        var document = "<x>" + new string('x', 2_097_152 - 7) + "</x>";
+        builder.BeginRow();
+        for (var c = 0; c < 4; c++) builder.AppendText(document);
+        builder.CommitRow();
+        var wide = builder.Seal();
+        PageCodec.Rented = 0;
+        var packed = PageCodec.Pack(wide);
+        var rented = PageCodec.Rented;
+        var bound = ZstandardEncoder.GetMaxCompressedLength(wide.Length);
+        var typedPage = Page(4096, [(b, row) => b.AppendText((40_000_000_000L + 17 * row).ToString(Invariant))], holes: false);
+        PageCodec.Rented = 0;
+        var typedPacked = PageCodec.Pack(typedPage);
+        var typedRented = PageCodec.Rented;
+        check(packed is not null && PageCodec.Unpack(packed, wide.Length).AsSpan().SequenceEqual(wide) && rented <= wide.Length + bound + 64
+            && typedPacked is { Length: > 0 } && typedPacked[0] == 2 && PageCodec.Unpack(typedPacked, typedPage.Length).AsSpan().SequenceEqual(typedPage)
+            && typedRented > 2L * typedPage.Length && typedRented <= 2L * typedPage.Length + 2 * ZstandardEncoder.GetMaxCompressedLength(typedPage.Length) + 64,
+            "packing rents the form and the frames' bounds, and a values room only for a typed page: " + rented + " for an " + wide.Length + "-byte page, " + typedRented + " for a typed " + typedPage.Length);
     }
 
     private delegate void Cell(PageBuilder builder, int row);

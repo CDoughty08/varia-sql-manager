@@ -68,6 +68,8 @@ internal sealed class ObjectSearchService : IDisposable
         public int Indexed;
         public SkipList Skipped = new(MaxSkipped);
         public DateTime? BuiltAt;
+        /// <summary>What the editor's lookup needs of the builds: each database's last outcome, kept across builds.</summary>
+        public readonly LookupLedger Ledger = new();
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -99,8 +101,8 @@ internal sealed class ObjectSearchService : IDisposable
     /// <summary>The set a memory detail walk dedupes texts in, kept between walks (empty in between).</summary>
     private readonly HashSet<object> walkSeen = new(ReferenceEqualityComparer.Instance);
     public long Finished => Interlocked.Read(ref finished);
-    /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
-    /// only after a build ends (or the budget moves).</summary>
+    /// <summary>Ended builds, finished, stopped or failed, and lookup arrays built (<see cref="Changed"/>): a search changes nothing the
+    /// index holds, so the memory report walks again only after one of these (or the budget moves).</summary>
     public long Builds => Interlocked.Read(ref builds);
     /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
     public long Forgets => Interlocked.Read(ref forgets);
@@ -154,6 +156,14 @@ internal sealed class ObjectSearchService : IDisposable
         else Interlocked.Increment(ref finished);
     }
 
+    /// <summary>Records that what the index holds changed beside the budget's figure (lookup arrays built for the editor): the memory
+    /// report walks again, so they show with the records rather than as reading.</summary>
+    internal void Changed()
+    {
+        Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref finished);
+    }
+
     /// <summary>Records that a build ended: a stopped or failed one keeps no time, but what its reads left is walked again, so no
     /// read shows as still running.</summary>
     internal void Ended()
@@ -186,11 +196,16 @@ internal sealed class ObjectSearchService : IDisposable
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
+            state.Ledger.Start();
         }
         try
         {
             var names = await ListAsync(args.ConnectionId, source.Token);
-            lock (state.Gate) state.Databases = names.Count;
+            lock (state.Gate)
+            {
+                state.Databases = names.Count;
+                state.Ledger.List(names);
+            }
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
@@ -204,6 +219,7 @@ internal sealed class ObjectSearchService : IDisposable
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
                     if (skip is not null) state.Skipped.Add(at, skip);
+                    state.Ledger.Done(names[at], skip);
                 }
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
@@ -260,6 +276,15 @@ internal sealed class ObjectSearchService : IDisposable
 
     /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
     internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
+
+    /// <summary>The editor's lookup into a connection's index (<see cref="IndexLookup"/>), or null when it has none: a snapshot of
+    /// its build's state and the reads held now.</summary>
+    internal IndexLookup? Lookup(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return null;
+        lock (state.Gate)
+            return new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
+    }
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
     internal ConnectionIndex? IndexOf(string connectionId) => states.TryGetValue(connectionId, out var state) ? state.Index : null;
@@ -468,7 +493,12 @@ internal sealed class ObjectSearchService : IDisposable
     /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
     internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)
     {
-        if (!held && reader.Any) put(reader.Partial());
+        if (!held && reader.Any)
+        {
+            var partial = reader.Partial();
+            partial.FailedPart = true;
+            put(partial);
+        }
         else reader.Abandon();
     }
 
@@ -661,6 +691,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
     private readonly List<(int At, int Owner, bool History)> pending = [];
     private char[] buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
+    /// <summary>Whether the read asked for definitions, and its database's case rule once read: kept on whatever it hands over.</summary>
+    private bool definitionsRead = true;
+    private bool? caseSensitive;
+    private bool dottedI;
 
     /// <summary>A read past the budget.</summary>
     private sealed class TooLarge : Exception;
@@ -693,7 +727,11 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         foreach (var (at, _, _) in pending) objects.Remove(at);
         pending.Clear();
-        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true);
+        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
+        {
+            // A read that failed part way (KeepPartial) says what it read as much as a whole one.
+            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI
+        };
         objects.Clear();
         taken = 0;
         credited = 0;
@@ -705,6 +743,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <paramref name="children"/> the batch has no column, index, statistics or parameter result sets.</summary>
     public async Task<DatabaseIndex?> ReadAsync(DbDataReader reader, bool definitions, CancellationToken token, bool children = true)
     {
+        definitionsRead = definitions;
         try
         {
             var byId = new Dictionary<int, int>();
@@ -779,6 +818,22 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 await Keys(reader, byId, indexes, token);
             }
             await Definitions(reader, byId, definitions, token);
+            // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
+            // Best-effort: the objects are all read by now, so a probe that fails leaves the case rule unknown rather than losing
+            // them (a stop the caller asked for still stops).
+            try
+            {
+                if (await reader.NextResultAsync(token) && await reader.ReadAsync(token))
+                {
+                    caseSensitive = reader.GetBoolean(0);
+                    dottedI = reader.FieldCount > 1 && reader.GetBoolean(1);
+                }
+            }
+            catch (Exception error) when (error is DbException or InvalidOperationException && !token.IsCancellationRequested)
+            {
+                caseSensitive = null;
+                dottedI = false;
+            }
             return Partial();
         }
         catch (TooLarge)

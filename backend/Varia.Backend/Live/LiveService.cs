@@ -257,7 +257,7 @@ internal sealed class LiveSubscription : IDisposable
         foreach (var probe in Probes)
         {
             if (probe.Paused || probe.Gated) continue;
-            var due = probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
+            var due = RefreshDue(probe, now);
             if (probe.Stopped is not null)
             {
                 probe.Stopped = null;
@@ -266,6 +266,20 @@ internal sealed class LiveSubscription : IDisposable
             }
             else if (probe.Failures == 0) probe.DueAt = Math.Min(probe.DueAt, due);
         }
+    }
+
+    private static long RefreshDue(LiveProbeState probe, long now) =>
+        probe.LastSampleAt < 0 ? now : Math.Max(now, probe.LastSampleAt + Math.Max(probe.Spec.MinGapMs, probe.Spec.IntervalMs.Min));
+
+    /// <summary>A probe's view or filter changed: it reads again as a refresh would (within its minimum gap and interval), so the
+    /// rows match the new view without waiting a whole interval, but never sooner than its cost allows under the load guard's
+    /// duty cycle (typing in a filter box must not run a costly probe back to back). One paused, backing off, stopped or slowed
+    /// by the load guard keeps its schedule.</summary>
+    public void Reread(LiveProbeState probe, long now)
+    {
+        if (probe.Paused || probe.Gated || probe.Stopped is not null || probe.Failures != 0 || probe.EffectiveIntervalMs > probe.IntervalMs) return;
+        var costFloor = probe.LastSampleAt < 0 ? now : probe.LastSampleAt + (long)Math.Ceiling((probe.CostEwma ?? 0) / probe.Spec.MaxDutyCycle);
+        probe.DueAt = Math.Min(probe.DueAt, Math.Max(RefreshDue(probe, now), costFloor));
     }
 
     /// <summary>Every probe stopped for good: the first one's error, which ends the subscription failed.</summary>
@@ -616,6 +630,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     else if (setting == "view") state.View = null;
                     else state.Filter = null;
                 }
+                if (patch.View is not null || patch.Filter is not null || patch.Clear?.Any(setting => setting is "view" or "filter") == true) subscription.Reread(state, now);
             }
             foreach (var track in args.Track ?? []) subscription.Probes.Find(probe => probe.Spec.Id == track.Probe)!.Tracks[track.Table] = track;
             if (sourceArgs is not null) subscription.Sampler.Apply(sourceArgs);
@@ -753,6 +768,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
         "query.plan" => new Plans.LivePlanSampler(host, Gates, connectionId, args as Plans.LivePlanArgs ?? throw Invalid("A query id is required.")),
         SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
+        Agent.AgentJobsReader.Source when source.Scope == "server" && TestSql is null => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
+            new Agent.AgentJobsReader((Agent.AgentJobsLiveArgs?)args)),
         _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
             source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
@@ -824,6 +841,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 "query.plan" => Plans.LivePlanSampler.Check(element.Deserialize<Plans.LivePlanArgs>(json) ?? throw Invalid("A query id is required.")),
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
                 SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
+                Agent.AgentJobsReader.Source => Agent.AgentJobsArgs.Check(element.Deserialize<Agent.AgentJobsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Agent.AgentCatalog.Current),
                 _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };

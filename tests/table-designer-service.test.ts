@@ -23,7 +23,7 @@ class FocusableEditor extends TestEditor {
   hasTextFocus(): boolean { return false }
 }
 
-const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }
+const model: TableDesignerModel = { database: 'AppData', band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }
 const tables = (connectionId: string, database = 'AppData'): ExplorerMenuNode => ({
   id: 5, lost: false, kind: 'folder', folder: 'tables', connectionId, label: 'Tables', ref: { type: 'folder', owner: { kind: 'database', name: database }, folder: 'tables' }
 })
@@ -182,6 +182,23 @@ describe('table designer', () => {
     expect(await saving).toBe(false)
     expect(state()).toMatchObject({ phase: 'ready', error: 'An object named Orders already exists in schema dbo.', nameChosen: true })
     expect(documents.get(id)?.dirty).toBe(true)
+    expect(await designers.save(id)).toBe(true)
+    expect(state().prompt).toBeUndefined()
+    expect(requests()).toHaveLength(2)
+  })
+  it('makes the name cell current when the preflight finds a column name the catalog collation repeats', async () => {
+    const { designers, id, state, api, requests } = designer()
+    await settled()
+    designers.setCell(id, 0, 'name', 'Id')
+    designers.setCell(id, 1, 'name', 'ID')
+    designers.setCurrent(id, 0, 'type')
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The column name ID is used twice.', retryable: false, column: 1 } } })
+    const saving = designers.save(id)
+    designers.answerName(id, 'Orders')
+    expect(await saving).toBe(false)
+    expect(state()).toMatchObject({ phase: 'ready', error: 'The column name ID is used twice.', current: { row: 1, column: 'name' }, nameChosen: true })
+    // Renaming the column and saving again sends the chosen name without asking.
+    designers.setCell(id, 1, 'name', 'Name')
     expect(await designers.save(id)).toBe(true)
     expect(state().prompt).toBeUndefined()
     expect(requests()).toHaveLength(2)
@@ -349,14 +366,17 @@ describe('table designer', () => {
     expect(api.scriptObjectAction).toHaveBeenCalledWith(expect.objectContaining({ design: expect.objectContaining({ columns: [expect.objectContaining({ name: 'Only' })] }) }))
     editor.dispose()
   })
-  it('compares column names as the database\'s catalog does, and refuses a temporary table\'s name', async () => {
+  it('refuses column names only trailing spaces tell apart, and a temporary table\'s name', async () => {
     const { designers, id, state, requests } = designer()
     await settled()
-    // AppData's catalog is case-insensitive: Id and ID are the same name to SQL Server.
+    // Even in AppData's case-insensitive catalog, Id and ID are the backend preflight's to refuse (Czech_100_CI_AS tells
+    // ch from cH): the designer flags only trailing spaces, which no collation counts.
     designers.setCell(id, 0, 'name', 'Id')
     designers.setCell(id, 1, 'name', 'ID')
+    expect(TableDesignerService.design(state()).problems.filter(problem => problem.property === 'name')).toEqual([])
+    designers.setCell(id, 1, 'name', 'Id  ')
     expect(await designers.save(id)).toBe(false)
-    expect(state()).toMatchObject({ error: 'The column name ID is used twice.', current: { row: 1, column: 'name' } })
+    expect(state()).toMatchObject({ error: 'The column name Id   is used twice.', current: { row: 1, column: 'name' } })
     designers.setCell(id, 1, 'name', 'Name')
     const saving = designers.save(id)
     designers.answerName(id, '##Orders')

@@ -64,15 +64,21 @@ describe('catalogue providers', () => {
     const problems = entries.filter(entry => entry.providers.includes('bigquery'))
       .flatMap(entry => entry.methods.filter(method => !methodProviders(method).includes('bigquery')).map(method => `${entry.name} declares bigquery but runs ${method}`))
     expect(problems).toEqual([])
-    // Nothing that runs a SQL Server-only method is declared for BigQuery yet: no live source, action, Script As or Explorer kind.
-    for (const entry of entries.filter(entry => /^(live source|object action|server action|Script As kind|Explorer kind) /.test(entry.name))) expect(entry.providers, entry.name).toEqual(['sqlserver'])
+    // No live source or action is declared for BigQuery yet; Object Explorer's and Script As' BigQuery kinds (BQ-5) are BigQuery's
+    // alone, and the connection node serves both engines.
+    for (const entry of entries.filter(entry => /^(live source|object action|server action) /.test(entry.name))) expect(entry.providers, entry.name).toEqual(['sqlserver'])
+    for (const entry of entries.filter(entry => /^(Script As kind|Explorer kind) /.test(entry.name)))
+      expect(entry.providers, entry.name).toEqual(/ bq[A-Z]/.test(entry.name) ? ['bigquery'] : entry.name === 'Explorer kind server' ? ['sqlserver', 'bigquery'] : ['sqlserver'])
     // The methods named are real methods with policies.
     for (const entry of entries) for (const method of entry.methods) expect(() => methodProviders(method), `${entry.name} ${method}`).not.toThrow()
   })
 
   it('declares both engines on the provider-neutral commands and keeps the SQL Server ones to SQL Server', () => {
-    const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll']
-    const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.goToDefinition', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.refresh', 'explorer.scriptAs', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
+    const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll',
+      'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery']
+    const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.goToDefinition', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
+    // BigQuery's own Object Explorer commands (BQ-5).
+    for (const id of ['explorer.previewRows', 'explorer.bigQueryProperties'] as const) expect(commandProviders(id), id).toEqual(['bigquery'])
     for (const id of both) expect(commandProviders(id), id).toEqual(['sqlserver', 'bigquery'])
     for (const id of sqlServer) expect(commandProviders(id), id).toEqual(['sqlserver'])
     expect(providersOf(submenus['edit.advanced'])).toEqual(['sqlserver', 'bigquery'])
@@ -105,7 +111,8 @@ describe('catalogue providers', () => {
     expect(commandAllowsProvider('query.estimatePlan', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('query.estimatePlan', keys('', 'bigquery'))).toBe(true)
     expect(commandAllowsProvider('query.execute', keys('bigquery', ''))).toBe(true)
-    expect(commandAllowsProvider('explorer.refresh', keys('sqlserver', 'bigquery'))).toBe(false)
+    expect(commandAllowsProvider('explorer.modify', keys('sqlserver', 'bigquery'))).toBe(false)
+    expect(commandAllowsProvider('explorer.refresh', keys('sqlserver', 'bigquery'))).toBe(true)
     expect(commandAllowsProvider('explorer.collapseAll', keys('', 'bigquery'))).toBe(true)
     expect(commandAllowsProvider('output.copy', keys('bigquery', ''))).toBe(true)
   })
@@ -151,7 +158,10 @@ describe('catalogue providers', () => {
     expect(sqlServer).toContain('explorer.refresh')
     expect(sqlServer).toEqual(shown(''))
     const bigQuery = shown('bigquery')
-    expect(bigQuery).not.toContain('explorer.refresh')
+    // Refresh reloads a BigQuery tree too (BQ-5); Activity Monitor is SQL Server's.
+    expect(bigQuery).toContain('explorer.refresh')
+    expect(sqlServer).toContain('activity.open')
+    expect(bigQuery).not.toContain('activity.open')
     expect(bigQuery.every(id => commandProviders(id).includes('bigquery'))).toBe(true)
   })
 })

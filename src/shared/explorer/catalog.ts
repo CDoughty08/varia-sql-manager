@@ -7,7 +7,8 @@ import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { loginSubtypes } from '../actions/logins.ts'
 import { peekCatalogBlock } from './peek.ts'
 import { dependencyLimits } from './dependencies.ts'
-import type { ProviderId } from '../providers.ts'
+import { bothProviders, type ProviderId } from '../providers.ts'
+import { bigQueryFieldPathMax } from '../bigquery/names.ts'
 import { agentPlatform, agentPlatformGates, agentPlatforms, type AgentPlatform } from '../agent/catalog.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
@@ -21,32 +22,43 @@ export const nodeKinds = [
   'table', 'view', 'synonym', 'procedure', 'function', 'sequence', 'type', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
   'column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter', 'returnValue',
   'ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment',
-  'agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog'
+  'agent', 'agentJobActivity', 'agentJob', 'agentAlert', 'agentOperator', 'agentProxySubsystem', 'agentProxy', 'agentErrorLog',
+  // BigQuery (docs/bigquery.md, Object Explorer): a connection's projects, their datasets, and a dataset's objects.
+  'bqProject', 'bqDataset', 'bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine', 'bqModel', 'bqColumn'
 ] as const
 export type NodeKind = typeof nodeKinds[number]
 
 /**
  * Which identity fields a kind's refs carry (`scopeFields`). The `ssis*` scopes name SSIS Catalog objects by folder and
  * project (SSISDB names, not database objects): the catalog itself, a folder, a folder's project or environment, and a
- * project's package.
+ * project's package. The `bq*` scopes name BigQuery objects by `project` and `dataset` in place of database and schema: a
+ * project, a dataset, a dataset's object, and a column of one (`table`; `name` is the field's path, its parts joined by
+ * `.`, which no BigQuery column name holds).
  */
-export const kindScopes = ['server', 'serverObject', 'database', 'databaseObject', 'schemaObject', 'child', 'childUnnamed', 'ssisCatalog', 'ssisFolder', 'ssisFolderObject', 'ssisProjectObject'] as const
+export const kindScopes = ['server', 'serverObject', 'database', 'databaseObject', 'schemaObject', 'child', 'childUnnamed', 'ssisCatalog', 'ssisFolder', 'ssisFolderObject', 'ssisProjectObject',
+  'bqProject', 'bqDataset', 'bqObject', 'bqField'] as const
 export type KindScope = typeof kindScopes[number]
-export const refFields = ['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject'] as const
+export const refFields = ['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject', 'project', 'dataset', 'table'] as const
 export type RefField = typeof refFields[number]
 const ssisFields = ['ssisFolder', 'ssisProject'] as const
+const bqFields = ['project', 'dataset', 'table'] as const
+const sqlFields = ['database', 'schema', 'parent', ...ssisFields] as const
 export const scopeFields: { readonly [S in KindScope]: { readonly required: readonly RefField[]; readonly forbidden: readonly RefField[] } } = {
-  server: { required: [], forbidden: ['database', 'schema', 'name', 'parent', ...ssisFields] },
-  serverObject: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
-  database: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
-  databaseObject: { required: ['database', 'name'], forbidden: ['schema', 'parent', ...ssisFields] },
-  schemaObject: { required: ['database', 'schema', 'name'], forbidden: ['parent', ...ssisFields] },
-  child: { required: ['database', 'parent', 'name'], forbidden: ['schema', ...ssisFields] },
-  childUnnamed: { required: ['database', 'parent'], forbidden: ['schema', 'name', ...ssisFields] },
-  ssisCatalog: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
-  ssisFolder: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
-  ssisFolderObject: { required: ['ssisFolder', 'name'], forbidden: ['database', 'schema', 'parent', 'ssisProject'] },
-  ssisProjectObject: { required: ['ssisFolder', 'ssisProject', 'name'], forbidden: ['database', 'schema', 'parent'] }
+  server: { required: [], forbidden: ['database', 'schema', 'name', 'parent', ...ssisFields, ...bqFields] },
+  serverObject: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields, ...bqFields] },
+  database: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields, ...bqFields] },
+  databaseObject: { required: ['database', 'name'], forbidden: ['schema', 'parent', ...ssisFields, ...bqFields] },
+  schemaObject: { required: ['database', 'schema', 'name'], forbidden: ['parent', ...ssisFields, ...bqFields] },
+  child: { required: ['database', 'parent', 'name'], forbidden: ['schema', ...ssisFields, ...bqFields] },
+  childUnnamed: { required: ['database', 'parent'], forbidden: ['schema', 'name', ...ssisFields, ...bqFields] },
+  ssisCatalog: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields, ...bqFields] },
+  ssisFolder: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields, ...bqFields] },
+  ssisFolderObject: { required: ['ssisFolder', 'name'], forbidden: ['database', 'schema', 'parent', 'ssisProject', ...bqFields] },
+  ssisProjectObject: { required: ['ssisFolder', 'ssisProject', 'name'], forbidden: ['database', 'schema', 'parent', ...bqFields] },
+  bqProject: { required: ['name'], forbidden: [...sqlFields, ...bqFields] },
+  bqDataset: { required: ['project', 'name'], forbidden: [...sqlFields, 'dataset', 'table'] },
+  bqObject: { required: ['project', 'dataset', 'name'], forbidden: [...sqlFields, 'table'] },
+  bqField: { required: ['project', 'dataset', 'table', 'name'], forbidden: sqlFields }
 }
 /** The kinds that own child folders, and so can be a child ref's `parent`. */
 export const parentKinds = ['table', 'view', 'tableType', 'procedure', 'function'] as const
@@ -69,7 +81,8 @@ export const folderIds = [
   'alwaysEncryptedKeys', 'columnMasterKeys', 'columnEncryptionKeys', 'databaseAuditSpecifications', 'securityPolicies',
   'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
   'integrationServicesCatalogs', 'ssisProjects', 'ssisEnvironments', 'ssisPackages',
-  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'
+  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs',
+  'bqTables', 'bqViews', 'bqMaterializedViews', 'bqExternalTables', 'bqRoutines', 'bqModels', 'bqColumns'
 ] as const
 export type FolderId = typeof folderIds[number]
 
@@ -86,7 +99,9 @@ export const nodeSubtypes = [
   'input', 'output',
   'entryPoint', 'child',
   // Logins (src/shared/actions/logins.ts; 'system' and 'sql' are above).
-  'sa', 'windowsUser', 'windowsGroup', 'certificateMapped', 'asymmetricKeyMapped', 'externalUser', 'externalGroup'
+  'sa', 'windowsUser', 'windowsGroup', 'certificateMapped', 'asymmetricKeyMapped', 'externalUser', 'externalGroup',
+  // BigQuery: a routine's type (with 'scalar', 'tableValued' and 'aggregate' above), and a column with fields of its own.
+  'procedure', 'struct'
 ] as const
 export type NodeSubtype = typeof nodeSubtypes[number]
 
@@ -103,7 +118,10 @@ export const queryIds = [
   'databaseAuditSpecifications', 'securityPolicies',
   'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
   'ssisCatalogs', 'ssisFolders', 'ssisProjects', 'ssisPackages', 'ssisEnvironments',
-  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxySubsystems', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs'
+  'agentJobs', 'agentAlerts', 'agentOperators', 'agentProxySubsystems', 'agentProxies', 'agentUnassignedProxies', 'agentErrorLogs',
+  // BigQuery's REST listers (BigQueryService.Explorer): datasets.list, tables.list per folder, routines.list, models.list,
+  // and a table's or a STRUCT column's fields from tables.get. Their cursors carry a page token or an offset.
+  'bqDatasets', 'bqTables', 'bqViews', 'bqMaterializedViews', 'bqExternalTables', 'bqRoutines', 'bqModels', 'bqColumns', 'bqFields'
 ] as const
 export type QueryId = typeof queryIds[number]
 
@@ -196,7 +214,8 @@ export interface LaterFolder {
   /** Its own subfolders, by label. */
   readonly contents?: readonly string[]
 }
-export type InsertStyle = 'none' | 'onePart' | 'twoPart' | 'raw'
+/** `bqPath`: BigQuery's backtick-quoted path, `` `project.dataset.table` `` (a column's field path as it is, quoted when it must be). */
+export type InsertStyle = 'none' | 'onePart' | 'twoPart' | 'raw' | 'bqPath'
 /**
  * A child that is one node of its own kind rather than a folder (the server's SQL Server Agent, Agent's Job Activity
  * Monitor): its ref names only its kind (scope `server`), its label is its kind's title, and it sorts by `order` among its
@@ -248,6 +267,7 @@ export interface KindSpec {
   readonly platforms?: readonly AgentPlatform[]
 }
 
+const bq: readonly ProviderId[] = ['bigquery']
 const named = ['name'] as const, schemaNamed = ['name', 'schema'] as const
 const full = ['name', 'schema', 'owner', 'created'] as const
 const serverOnly: readonly Engine[] = ['box']
@@ -341,7 +361,17 @@ const folderData: { readonly [F in FolderId]: Omit<FolderSpec, 'id'> } = {
   agentOperators: { label: 'Operators', owner: 'object', order: 4, list: 'agentOperators', rows: ['agentOperator'], filter: named },
   agentProxies: { label: 'Proxies', owner: 'object', order: 5, list: 'agentProxySubsystems', rows: ['agentProxySubsystem'], platforms: agentPlatformGates.proxies.platforms },
   agentUnassignedProxies: { label: 'Unassigned Proxies', owner: 'object', parent: 'agentProxies', order: 1, list: 'agentUnassignedProxies', rows: ['agentProxy'], afterRows: true },
-  agentErrorLogs: { label: 'Error Logs', owner: 'object', order: 6, list: 'agentErrorLogs', rows: ['agentErrorLog'], platforms: agentPlatformGates.errorLogs.platforms }
+  agentErrorLogs: { label: 'Error Logs', owner: 'object', order: 6, list: 'agentErrorLogs', rows: ['agentErrorLog'], platforms: agentPlatformGates.errorLogs.platforms },
+
+  // BigQuery (docs/bigquery.md, Object Explorer): a dataset's folders, as BigQuery Studio groups its objects, and the Columns
+  // of a table, view, materialized view or external table. Snapshots and clones are tables (a snapshot is a subtype).
+  bqTables: { label: 'Tables', owner: 'object', order: 1, list: 'bqTables', rows: ['bqTable'] },
+  bqViews: { label: 'Views', owner: 'object', order: 2, list: 'bqViews', rows: ['bqView'] },
+  bqMaterializedViews: { label: 'Materialized Views', owner: 'object', order: 3, list: 'bqMaterializedViews', rows: ['bqMaterializedView'] },
+  bqExternalTables: { label: 'External Tables', owner: 'object', order: 4, list: 'bqExternalTables', rows: ['bqExternalTable'] },
+  bqRoutines: { label: 'Routines', owner: 'object', order: 5, list: 'bqRoutines', rows: ['bqRoutine'] },
+  bqModels: { label: 'Models', owner: 'object', order: 6, list: 'bqModels', rows: ['bqModel'] },
+  bqColumns: { label: 'Columns', owner: 'object', order: 1, list: 'bqColumns', rows: ['bqColumn'] }
 }
 export const folderSpecs = Object.fromEntries(folderIds.map(id => [id, { id, ...folderData[id] }])) as { readonly [F in FolderId]: FolderSpec }
 
@@ -374,8 +404,9 @@ const functionColumns = ['columns', 'parameters'] as const
 type KindData = Omit<KindSpec, 'kind' | 'folders' | 'scriptable'> & { readonly folders?: readonly FolderId[]; readonly scriptable?: false }
 // Most kinds are scriptable leaves; the data names only the exceptions.
 const kindData: { readonly [K in NodeKind]: KindData } = {
+  // Both engines' root: a SQL Server lists these folders, a BigQuery connection its projects (BigQueryService.Explorer).
   server: {
-    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none',
+    providers: bothProviders, title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none',
     singletons: [{ kind: 'agent', order: 9, platforms: agentPlatforms }]
   },
   // One icon for every login, as SSMS draws them (recalled).
@@ -492,7 +523,31 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     title: 'Proxy Subsystem', scope: 'serverObject', icon: 'folder', list: 'agentProxies', rows: ['agentProxy'], platforms: agentPlatformGates.proxies.platforms, scriptable: false, insert: 'none'
   },
   agentProxy: { title: 'Proxy', scope: 'serverObject', icon: 'agent-proxy', platforms: agentPlatformGates.proxies.platforms, smo: 'ProxyAccount', insert: 'raw' },
-  agentErrorLog: { title: 'Error Log', scope: 'serverObject', icon: 'output', platforms: agentPlatformGates.errorLogs.platforms, scriptable: false, insert: 'none' }
+  agentErrorLog: { title: 'Error Log', scope: 'serverObject', icon: 'output', platforms: agentPlatformGates.errorLogs.platforms, scriptable: false, insert: 'none' },
+  // BigQuery: a connection's root (the `server` kind) lists its billing project and its extra projects; a project lists its
+  // datasets; a dataset its folders. Names follow BigQuery's per-kind rules (bigQueryNameRules) up to `maxName`, and the
+  // backend lists everything through free REST calls (BigQueryService.Explorer), never a query.
+  bqProject: { providers: bq, title: 'Project', scope: 'bqProject', icon: 'project', list: 'bqDatasets', rows: ['bqDataset'], scriptable: false, insert: 'bqPath' },
+  bqDataset: {
+    providers: bq, title: 'Dataset', scope: 'bqDataset', icon: 'database', folders: ['bqTables', 'bqViews', 'bqMaterializedViews', 'bqExternalTables', 'bqRoutines', 'bqModels'],
+    maxName: 1024, scriptable: false, insert: 'bqPath'
+  },
+  bqTable: {
+    providers: bq, title: 'Table', scope: 'bqObject', icon: 'table', subtypes: ['snapshot'], subtypeIcons: { snapshot: 'device-camera' }, folders: ['bqColumns'], maxName: 1024, insert: 'bqPath'
+  },
+  bqView: { providers: bq, title: 'View', scope: 'bqObject', icon: 'view', folders: ['bqColumns'], maxName: 1024, insert: 'bqPath' },
+  bqMaterializedView: { providers: bq, title: 'Materialized View', scope: 'bqObject', icon: 'layers', folders: ['bqColumns'], maxName: 1024, insert: 'bqPath' },
+  bqExternalTable: { providers: bq, title: 'External Table', scope: 'bqObject', icon: 'cloud', folders: ['bqColumns'], maxName: 1024, insert: 'bqPath' },
+  bqRoutine: {
+    providers: bq, title: 'Routine', scope: 'bqObject', icon: 'symbol-function', subtypes: ['procedure', 'scalar', 'tableValued', 'aggregate'], subtypeIcons: { procedure: 'procedure' },
+    maxName: 256, insert: 'bqPath'
+  },
+  bqModel: { providers: bq, title: 'Model', scope: 'bqObject', icon: 'circuit-board', maxName: 1024, scriptable: false, insert: 'bqPath' },
+  // A column of the listed object; a STRUCT (RECORD) column lists its fields below itself, as nested columns.
+  bqColumn: {
+    providers: bq, title: 'Column', scope: 'bqField', icon: 'symbol-field', subtypes: ['struct'], subtypeIcons: { struct: 'symbol-structure' }, list: 'bqFields', rows: ['bqColumn'],
+    maxName: bigQueryFieldPathMax, scriptable: false, insert: 'bqPath'
+  }
 }
 export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
   const { folders = [], scriptable = true, ...rest } = kindData[kind]
@@ -516,7 +571,7 @@ export const explorerLimits = {
   pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
   cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
   typeAheadMax: 64, rowHeight: 22, serverRowHeight: 30, indent: 16, overscan: 10, deleteSlice: 10_000,
-  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260
+  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: bigQueryFieldPathMax
 } as const
 /** The name bound of a kind's refs: sysname's 128 UTF-16 code units unless the kind declares a longer one. */
 export const maxNameOf = (spec: Pick<KindSpec, 'maxName'>): number => spec.maxName ?? maxIdentifierLength

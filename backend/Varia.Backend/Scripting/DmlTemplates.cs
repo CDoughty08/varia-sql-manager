@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Varia.Backend.Scripting;
@@ -87,22 +88,118 @@ internal static class DmlTemplates
 
     /// <summary>EXECUTE To, in sqltoolsservice's layout: DECLAREs for the return code and every parameter, the TODO line,
     /// then the call with one parameter per line. The space after the object name is SSMS's. A CLR procedure is called
-    /// without a return code; a scalar function's return code has its return type.</summary>
+    /// without a return code; a scalar function's return code has its return type. The return code is @RC unless a
+    /// parameter could have that name under some collation: then @RC1, @RC2 and on (ReturnCodeName).</summary>
     public static string Execute(string obj, IReadOnlyList<ParameterRow> parameters, bool clr, bool schemaQualify)
     {
         var returnValue = parameters.FirstOrDefault(parameter => parameter.Id == 0);
         var inputs = parameters.Where(parameter => parameter.Id > 0).ToList();
-        var returnCode = returnValue is not null || !clr;
+        var rc = returnValue is not null || !clr ? ReturnCodeName(inputs) : null;
         var declares = new List<string>();
-        if (returnCode) declares.Add("DECLARE @RC " + (returnValue is null ? "int" : SqlTypeText.ForTemplate(returnValue.Type, schemaQualify)));
+        if (rc is not null) declares.Add("DECLARE " + rc + " " + (returnValue is null ? "int" : SqlTypeText.ForTemplate(returnValue.Type, schemaQualify)));
         declares.AddRange(inputs.Select(parameter => "DECLARE " + parameter.Name + " " + SqlTypeText.ForTemplate(parameter.Type, schemaQualify)));
         var text = new StringBuilder();
         foreach (var declare in declares) text.Append(declare).Append(NL);
         if (declares.Count > 0) text.Append(NL);
         text.Append("-- TODO: Set parameter values here.").Append(NL).Append(NL);
-        text.Append("EXECUTE ").Append(returnCode ? "@RC = " : "").Append(obj).Append(' ');
+        text.Append("EXECUTE ").Append(rc is null ? "" : rc + " = ").Append(obj).Append(' ');
         for (var i = 0; i < inputs.Count; i++) text.Append(NL).Append(i == 0 ? "   " : "  ,").Append(inputs[i].Name).Append(inputs[i].Output ? " OUTPUT" : "");
         return text.ToString();
+    }
+
+    /// <summary>Bounds the work names built to clash with every candidate can cost; past it the call has no return code.</summary>
+    internal const int MaxReturnCodeMatches = 20_000;
+
+    /// <summary>The first of @RC, @RC1, @RC2 and on that no parameter could equal under any collation, or null (no return
+    /// code, still a valid call) when parameters built to block them exhaust the bound.</summary>
+    /// <remarks>An all-ASCII name clashes case-insensitively: no collation ignores or equates the ASCII characters a name
+    /// may hold. A non-ASCII character may count as nothing (the default SQL_Latin1_General_CP1_CI_AS weighs thousands
+    /// zero, so @RC followed by U+0219 is @RC) or as its NFKD fold (a fullwidth R is R, Ç is C); a number may
+    /// also equal any one digit, and some symbols, Latin letters and marks any one character (U+0280 is R in the default collation, U+0661 is
+    /// 1 in accent-insensitive _100_ ones; NameChar.Of). A needless @RC1 is harmless.</remarks>
+    private static string? ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
+    {
+        var ascii = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var other = new List<NameChar[]>();
+        foreach (var parameter in inputs)
+            if (parameter.Name.All(char.IsAscii)) ascii.Add(parameter.Name);
+            // A name whose ASCII characters are not all in @RC0-9 can never match one.
+            else if (parameter.Name.All(c => !char.IsAscii(c) || c is '@' or 'R' or 'r' or 'C' or 'c' or (>= '0' and <= '9')))
+                other.Add([.. parameter.Name.Select(NameChar.Of)]);
+        var matches = 0;
+        // All-ASCII names block at most inputs.Count candidates; the bound ends the rest.
+        for (var suffix = 0; ; suffix++)
+        {
+            var name = suffix == 0 ? "@RC" : "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
+            if (ascii.Contains(name)) continue;
+            var clash = false;
+            foreach (var parameter in other)
+            {
+                if (++matches > MaxReturnCodeMatches) return null;
+                if (CouldBe(parameter, name)) { clash = true; break; }
+            }
+            if (!clash) return name;
+        }
+    }
+
+    /// <param name="Fold">Null for an ASCII character, which must match itself (uppercased); otherwise the letters and digits
+    /// of its NFKD form, uppercased, possibly empty.</param>
+    /// <param name="Any">May equal any one character.</param>
+    /// <param name="Digit">May equal any one digit.</param>
+    private readonly record struct NameChar(char Char, string? Fold, bool Any, bool Digit)
+    {
+        public static NameChar Of(char c)
+        {
+            if (char.IsAscii(c)) return new(char.ToUpperInvariant(c), null, false, false);
+            // Where a scan of every CI_AS and CI_AI collation found characters equal to R, C, @ or a digit beyond NFKD: numbers
+            // of any script, only ever equal to a digit; symbols (U+211E is R); letters only in the Latin and IPA extensions
+            // (never Greek, Cyrillic or CJK, so an ordinary name in those keeps @RC); the combining Latin letters and two
+            // Quranic marks.
+            var category = CharUnicodeInfo.GetUnicodeCategory(c);
+            var digit = category is UnicodeCategory.DecimalDigitNumber or UnicodeCategory.LetterNumber or UnicodeCategory.OtherNumber;
+            var any = category switch
+            {
+                UnicodeCategory.OtherSymbol => true,
+                UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter or UnicodeCategory.ModifierLetter
+                    or UnicodeCategory.OtherLetter => c is >= '\u0080' and <= '\u02FF' or >= '\u1D00' and <= '\u1EFF' or >= '\u2C60' and <= '\u2C7F'
+                        or >= '\uA720' and <= '\uA7FF' or >= '\uAB30' and <= '\uAB6F',
+                UnicodeCategory.NonSpacingMark => c is >= '\u0300' and <= '\u036F' or >= '\u1DC0' and <= '\u1DFF' or >= '\u06D6' and <= '\u06ED',
+                _ => false
+            };
+            string decomposed;
+            try { decomposed = c.ToString().Normalize(NormalizationForm.FormKD); }
+            catch (ArgumentException) { decomposed = ""; }
+            var fold = new StringBuilder(decomposed.Length);
+            foreach (var part in decomposed) if (char.IsAsciiLetterOrDigit(part)) fold.Append(char.ToUpperInvariant(part));
+            return new(c, fold.ToString(), any, digit);
+        }
+    }
+
+    private static bool CouldBe(NameChar[] name, string candidate)
+    {
+        Span<bool> reach = stackalloc bool[candidate.Length + 1], next = stackalloc bool[candidate.Length + 1];
+        reach.Clear();
+        reach[0] = true;
+        foreach (var (c, fold, any, digit) in name)
+        {
+            next.Clear();
+            var live = false;
+            for (var at = 0; at < reach.Length; at++)
+            {
+                if (!reach[at]) continue;
+                if (fold is null)
+                {
+                    if (at < candidate.Length && c == candidate[at]) live = next[at + 1] = true;
+                    continue;
+                }
+                live = next[at] = true;
+                if (at < candidate.Length && (any || digit && char.IsAsciiDigit(candidate[at]))) next[at + 1] = true;
+                if (fold.Length > 0 && candidate.AsSpan(at).StartsWith(fold, StringComparison.Ordinal)) next[at + fold.Length] = true;
+            }
+            if (!live) return false;
+            next.CopyTo(reach);
+        }
+        return reach[candidate.Length];
     }
 
     /// <summary>SELECT To on a function: FROM a table-valued one, or the value of a scalar one, with a placeholder per parameter.</summary>
