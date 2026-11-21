@@ -117,6 +117,18 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(uses(/\bBigQueryFetch\b/g)).toEqual(['SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
   const residence = files.find(({ file }) => file === 'SqlService.BigQueryResidence.cs')!.code
   expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
+  // ...and that Create is the only one: no second cache with a delegate of its own.
+  expect(uses(/\bRemoteResult\.Create\(/g)).toEqual(['SqlService.BigQueryResidence.cs'])
+  // A job's results are read where a query's own rows are (its first page, its pages under the budget) and by Load into
+  // memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
+  expect(uses(/\bQueryResultsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
+  const load = residence.indexOf('private async Task<QueryResult> RemoteQueryAsync(')
+  expect(load).toBeGreaterThan(0)
+  expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeGreaterThan(load)
+  expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeLessThan(residence.indexOf('\n    }\n', load))
+  // The cache fetches only for a read's own blocks and its read-ahead: results.rowBytes answers from the cache alone.
+  expect(count(remote, /\bEnsure\(/g)).toBe(4)
+  expect(count(between('public long[] RowBytes(', '\n    }\n'), /\b(?:Ensure|BlockLocked|FetchAsync)\(/g)).toBe(0)
   expect(residence).toMatch(/private RemoteFetch BigQueryFetch\(BigQueryWindow context\) =>/)
   // A table's rows are listed (tabledata.list) in TableRowsAsync alone, and that is called from the delegate alone (a query's
   // own rows, Load into memory's included, come through its job's results under the budget).

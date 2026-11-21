@@ -261,8 +261,10 @@ internal static partial class BigQueryExecutionChecks
             // Read-ahead from the seeded read may have started block 1's fetch; rowBytes itself never fetches.
             SpinWait.SpinUntil(() => remote.CachedBlocks() is var ahead && ahead.Contains(1) && ahead.Contains(2), 15_000);
             var before = remote.Fetches;
+            var listed = remote.ListedBlocks();
             remote.RowBytes(50_000, 100);
-            check(remote.Fetches == before, "rowBytes never fetches a block");
+            // A fetch starts after a yield, so the count alone could miss one rowBytes began: no block is even listed for it.
+            check(remote.Fetches == before && remote.ListedBlocks() == listed && remote.FetchingBlocks() == 0, "rowBytes never fetches a block");
         }
 
         // A read across two blocks fetches them (and its viewer's read-ahead), at most two at a time per result.
