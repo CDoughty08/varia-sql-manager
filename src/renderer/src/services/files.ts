@@ -151,7 +151,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!checkSqlFiles || !confirmReload) return
     const changes = new Map(unwrap(await checkSqlFiles()).map(change => [change.fileId, change.change]))
     const changeOf = (document: QueryDocument | undefined) => document?.file ? changes.get(document.file.id) : undefined
-    const silent = (document: QueryDocument) => !document.dirty && !!this.options.autoReload?.()
+    const silent = (document: QueryDocument) => !this.documents.hasUnsavedEdits(document.id) && !!this.options.autoReload?.()
     const ids = this.documents.getSnapshot().documents.filter(document => changeOf(document)).map(document => document.id)
     const deleted: string[] = [], failed: string[] = []
     let all: 'yes' | 'no' | undefined
@@ -175,13 +175,13 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
           if (answer === 'noToAll') all = 'no'
           return answer === 'yes' || answer === 'yesToAll'
         }
-        if (!(silent(document) || all === 'yes' || (!all && await ask(document.dirty)))) continue
+        if (!(silent(document) || all === 'yes' || (!all && await ask(this.documents.hasUnsavedEdits(id))))) continue
         // The read is awaited: an edit made meanwhile was covered by no answer (and a silent reload is only for a clean
-        // query), so the text read replaces it only once File changed asks again and the user says so.
-        const revision = this.documents.revision(id), read = await this.readAgain(id)
-        if (!read || this.disposed) continue
-        const current = this.documents.get(id)
-        if (!current || this.documents.revision(id) === revision || await ask(current.dirty)) this.applyReload(id, read)
+        // query), so the text read replaces it only once File changed asks again and the user says so. A large file's
+        // fill still appending is not an edit.
+        const revision = this.documents.editRevision(id), read = await this.readAgain(id)
+        if (!read || this.disposed || !this.documents.get(id)) continue
+        if (this.documents.editRevision(id) === revision || await ask(this.documents.hasUnsavedEdits(id))) this.applyReload(id, read)
       } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
     if (failed.length) throw new Error([...failed, ...deleted].join(' '))

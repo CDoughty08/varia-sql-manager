@@ -8,6 +8,7 @@ import { deferred, documentFixture, type SaveResponse } from './fixtures/documen
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import type { EditorGroupSnapshot } from '../src/renderer/src/services/editor-groups'
+import { gridLimits } from '../src/renderer/src/grid/constants'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -850,6 +851,33 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(api.reloadSqlFile).toHaveBeenCalledTimes(2)
     expect(model(query.id).getValue()).toBe('SELECT 9')
     expect(documents.get(query.id)?.dirty).toBe(false)
+  })
+  it('counts typing into a large file still filling as unsaved, and its fill\'s chunks as no edit, when reloading it', async () => {
+    const { documents, api, files, model, options, frame } = fixture()
+    options.autoReload = true
+    const big = 'SELECT 1\n'.repeat(gridLimits.documentFirstChunk)
+    const filling = documents.openText({ name: 'big.sql', text: big, file: registered('f1', 'big.sql') })
+    expect(documents.isFilling(filling.id)).toBe(true)
+    api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f1', change: 'modified' }] })
+    // A chunk appended while main reads the file is not an edit: the clean query reloads without asking.
+    const read = deferred<Awaited<ReturnType<VariaApi['reloadSqlFile']>>>()
+    api.reloadSqlFile.mockImplementationOnce(() => read.promise)
+    const checking = files.checkExternalChanges()
+    await vi.waitFor(() => expect(api.reloadSqlFile).toHaveBeenCalledTimes(1))
+    frame()
+    read.resolve({ ok: true, value: { ...openedFile('f1', 'C:/big.sql'), content: 'SELECT 9' } })
+    await checking
+    expect(api.confirmReload).not.toHaveBeenCalled()
+    expect(model(filling.id).getValue()).toBe('SELECT 9')
+    expect(documents.get(filling.id)?.dirty).toBe(false)
+    // Typing during a fill leaves the query clean until the last chunk, but it is still a change: File changed asks.
+    const other = documents.openText({ name: 'other.sql', text: big, file: registered('f2', 'other.sql') })
+    model(other.id).edit('-- mine\n' + model(other.id).getValue())
+    expect(documents.get(other.id)?.dirty).toBe(false)
+    api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f2', change: 'modified' }] })
+    await files.checkExternalChanges()
+    expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f2', dirty: true, more: false }])
+    expect(model(other.id).getValue().startsWith('-- mine\n')).toBe(true)
   })
   it('reloads as one undoable edit of what changed, with the file\'s line ending, leaving the query clean', async () => {
     const { documents, api, files, model } = fixture()
