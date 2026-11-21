@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Varia.Backend.Scripting;
@@ -87,22 +88,32 @@ internal static class DmlTemplates
 
     /// <summary>EXECUTE To, in sqltoolsservice's layout: DECLAREs for the return code and every parameter, the TODO line,
     /// then the call with one parameter per line. The space after the object name is SSMS's. A CLR procedure is called
-    /// without a return code; a scalar function's return code has its return type.</summary>
+    /// without a return code; a scalar function's return code has its return type. The return code is @RC unless a
+    /// parameter has that name (case-insensitively, as a case-insensitive collation compares it): then @RC1, @RC2 and on.</summary>
     public static string Execute(string obj, IReadOnlyList<ParameterRow> parameters, bool clr, bool schemaQualify)
     {
         var returnValue = parameters.FirstOrDefault(parameter => parameter.Id == 0);
         var inputs = parameters.Where(parameter => parameter.Id > 0).ToList();
         var returnCode = returnValue is not null || !clr;
+        var rc = ReturnCodeName(inputs);
         var declares = new List<string>();
-        if (returnCode) declares.Add("DECLARE @RC " + (returnValue is null ? "int" : SqlTypeText.ForTemplate(returnValue.Type, schemaQualify)));
+        if (returnCode) declares.Add("DECLARE " + rc + " " + (returnValue is null ? "int" : SqlTypeText.ForTemplate(returnValue.Type, schemaQualify)));
         declares.AddRange(inputs.Select(parameter => "DECLARE " + parameter.Name + " " + SqlTypeText.ForTemplate(parameter.Type, schemaQualify)));
         var text = new StringBuilder();
         foreach (var declare in declares) text.Append(declare).Append(NL);
         if (declares.Count > 0) text.Append(NL);
         text.Append("-- TODO: Set parameter values here.").Append(NL).Append(NL);
-        text.Append("EXECUTE ").Append(returnCode ? "@RC = " : "").Append(obj).Append(' ');
+        text.Append("EXECUTE ").Append(returnCode ? rc + " = " : "").Append(obj).Append(' ');
         for (var i = 0; i < inputs.Count; i++) text.Append(NL).Append(i == 0 ? "   " : "  ,").Append(inputs[i].Name).Append(inputs[i].Output ? " OUTPUT" : "");
         return text.ToString();
+    }
+
+    private static string ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
+    {
+        var taken = inputs.Select(parameter => parameter.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var name = "@RC";
+        for (var suffix = 1; taken.Contains(name); suffix++) name = "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
+        return name;
     }
 
     /// <summary>SELECT To on a function: FROM a table-valued one, or the value of a scalar one, with a placeholder per parameter.</summary>

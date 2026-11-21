@@ -144,6 +144,10 @@ internal static class ScriptingTemplateChecks
             == Lines("DECLARE @RC decimal(10,2)", "DECLARE @a decimal(10,2)", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC = [dbo].[f] ", "   @a", "  ,@b")
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true)], true, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
             "a scalar function's return code has its return type, CLR or not");
+        check(DmlTemplates.Execute(obj, [P(1, "@rc"), P(2, "@RC1", output: true), P(3, "@b")], false, true)
+            == Lines("DECLARE @RC2 int", "DECLARE @rc int", "DECLARE @RC1 int", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC2 = [dbo].[p] ", "   @rc", "  ,@RC1 OUTPUT", "  ,@b")
+            && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, "@RC")], false, true).StartsWith("DECLARE @RC1 int" + NL + "DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "EXECUTE To names the return code after any parameter called @RC, @RC1 and so on, compared case-insensitively, so the batch declares no variable twice");
     }
 
     private static ResolvedTarget Target(string kind, string subtype = "", string? objectType = null, IReadOnlyList<ColumnRow>? columns = null, IReadOnlyList<ParameterRow>? parameters = null,
