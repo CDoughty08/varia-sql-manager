@@ -7,7 +7,13 @@ import { expect, it } from 'vitest'
 // operations still work without their reservation, and only a machine short of memory would show it, so no behaviour
 // check sees one removed: this pins them in the source. Changing an operation's reservations means changing this table.
 // Comments and code compiled out are dropped first: a reservation commented out is a reservation removed.
-const strip = (code: string) => code.replace(/#if false\b[\s\S]*?#endif/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+// Strings are kept whole, so a // or /* inside one (a URL) does not drop the code after it.
+const strip = (code: string) => code.replace(/#if false\b[\s\S]*?#endif/g, '')
+  .replace(/(@"(?:[^"]|"")*"|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (_, text?: string) => text ?? '')
+it('drops comments but not code after a // inside a string', () => {
+  expect(strip('const string Docs = "https://example.com"; Interlocked.Add(ref held, -bytes); // gone')).toBe('const string Docs = "https://example.com"; Interlocked.Add(ref held, -bytes); ')
+  expect(strip('var a = @"x // ""y"""; b(); /* c */ d(\'/\');')).toBe('var a = @"x // ""y"""; b();  d(\'/\');')
+})
 const source = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.cs'), 'utf8'))
 
 const reservations: Record<string, RegExp> = {

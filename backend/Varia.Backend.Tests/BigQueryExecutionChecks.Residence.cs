@@ -37,6 +37,12 @@ internal static partial class BigQueryExecutionChecks
         Trace("DemoteAccounting");
         DemoteAccounting(check);
         FitsHalf(check);
+        // The figures docs/bigquery.md and docs/ipc.md state (the other checks refer to these by name, so would follow a change).
+        using (var figures = new Harness(Lines(1)))
+            check(RemoteResult.TargetBlockBytes == 4 << 20 && RemoteResult.MinBlockRows == 256 && RemoteResult.MaxBlockRows == 16_384
+                && RemoteResult.FetchesPerResult == 2 && RemoteResult.FetchesPerConnection == 4 && RemoteResult.DefaultCacheBytes == 64L << 20
+                && RemoteResult.MaxRows == 2_147_483_647 && figures.Service.RemoteReadWait == TimeSpan.FromSeconds(20),
+                "the windowed result figures are the documented 4 MiB blocks of 256-16,384 rows, 2 fetches per result and 4 per connection, a 64 MiB cache, 2,147,483,647 rows and a 20 s read wait");
         var limit = TimeSpan.FromSeconds(20);
         check(SqlService.ReadWait(limit, null) == limit && SqlService.ReadWait(limit, TimeSpan.FromSeconds(12)) == TimeSpan.FromSeconds(7)
             && SqlService.ReadWait(limit, TimeSpan.FromSeconds(3)) == TimeSpan.Zero && SqlService.ReadWait(limit, TimeSpan.FromMinutes(5)) == limit,

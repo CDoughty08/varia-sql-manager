@@ -361,6 +361,20 @@ describe('ResultsPortHost', () => {
     expect(port().posted).toEqual([{ t: 'backend', generation: 2, status: 'starting' }])
   })
 
+  it('does not own a closed result again when a load summary names it released', async () => {
+    const { host, backend, port, reads } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'close', rid: 1, generation: 1, resultIds: [7] })
+    await settle()
+    expect(backend.close).toHaveBeenCalledWith(1, [7])
+    expect(host.owns(1, 7)).toBe(false)
+    // The load stopped by the close answers a summary whose set is released (RemoteQueryAsync's finally/return).
+    host.querySummary(summaryOf([fullDescriptor(7, { state: 'released', residence: 'remote', revision: 2 })]))
+    const afterSummary = host.owns(1, 7)
+    port().send({ t: 'read', rid: 2, generation: 1, resultId: 7, firstRow: 0, maxRows: 100, credit: 4 * MiB })
+    expect({ afterSummary, forwarded: reads.length }).toEqual({ afterSummary: false, forwarded: 0 })
+  })
+
   it('closes only owned results of the current generation', async () => {
     const { host, backend, port } = fixture()
     host.own([descriptor(7), descriptor(8)])

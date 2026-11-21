@@ -409,6 +409,17 @@ describe('grid data', () => {
     expect(reads.length).toBeGreaterThan(before)
   })
 
+  it('reads as its own viewer, so two grids on one windowed result each get their own read-ahead', () => {
+    const a = fixture(8), b = fixture(8)
+    a.data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    b.data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
+    const viewer = (read: { o: { viewer?: number } }) => read.o.viewer
+    expect(viewer(a.reads[0])).toBe(a.data.viewer)
+    expect(viewer(b.reads[0])).toBe(b.data.viewer)
+    expect(a.data.viewer).not.toBe(b.data.viewer)
+    for (const id of [a.data.viewer, b.data.viewer]) expect(id >= 1 && id <= 0x7ffffffe).toBe(true)
+  })
+
   it('aborts its reads and timers when disposed', () => {
     const { data, reads, timers } = fixture()
     data.ensure(range(0, 10), 10_000, 0, 30)

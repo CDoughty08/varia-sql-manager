@@ -281,11 +281,13 @@ describe('results worker core', () => {
   })
 
   it('reads a cell again when a new revision ends its read, rather than saying the row is not available', () => {
-    const { core, reads, serve, posted } = fixture()
+    const { core, reads, serve, posted, sent } = fixture()
     core.handle({ type: 'cell', id: 70, key, wires, row: 10, col: 1 })
     expect(reads()).toHaveLength(1)
     core.handle({ type: 'revise', key })
     expect(reads()).toHaveLength(2)
+    // The read the new revision overtook is ended in the backend too, so its stream stops holding a results slot and credit.
+    expect(sent).toContainEqual({ t: 'cancel', rid: reads()[0].rid })
     expect(posted.some(message => 'id' in message && message.id === 70)).toBe(false)
     serve(reads()[1].rid)
     expect(posted.find(message => 'id' in message && message.id === 70)).toEqual({ type: 'cell', id: 70, text: 'name 10', isNull: false, truncated: false, error: false, formatted: false })

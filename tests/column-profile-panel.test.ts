@@ -175,6 +175,16 @@ describe('column profile panel', () => {
     view.unmount()
   })
 
+  it('drops the cards when the result switches residence (a new revision), rather than showing figures from rows that are gone', async () => {
+    const view = fixture()
+    await view.answer(0, 1000, 100)
+    await view.answer(1, 1000, 100)
+    expect(view.nulls('c39')).toBe('100 (10%)')
+    view.setSnapshot({ state: 'complete', rowsAvailable: 1000, revision: 1 } as { state: string; rowsAvailable: number })
+    expect(view.nulls('c39')).toBeUndefined()
+    view.unmount()
+  })
+
   it('profiles the entry it is given, else the one the stack says had the focus, and names it by its number', () => {
     const given = fixture(40, 'e1')
     expect(given.asked.map(request => request.columns.length)).toEqual([32])

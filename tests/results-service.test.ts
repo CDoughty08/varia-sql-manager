@@ -1059,6 +1059,26 @@ describe('results service sorting', () => {
     expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll. Its sort and filters were removed.')
     service.dispose()
   })
+  it('drops a sort still building when its result switches, rather than installing a view of the old revision when it lands', async () => {
+    const { service, client, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0 }) })
+    flush()
+    const handle = client.handle(1)!
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    const building = deferred<typeof view>()
+    handle.sort.mockReturnValueOnce(building.promise)
+    service.sortBy('t1', keyAt(service, 't1', 0), 1, 'descending')
+    await settle()
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    building.resolve(view)
+    await settle()
+    flush()
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(view.close).toHaveBeenCalled()
+    service.dispose()
+  })
   it('switches a result whose summary overtook its residence event: its sort goes, it is sized again and the change is said', async () => {
     const { service, client, flush, tab, timers } = fixture()
     service.begin('t1', 'q1')
@@ -1117,9 +1137,15 @@ describe('results service sorting', () => {
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 1, state: 'open', residence: 'memory', revision: 0 }) })
     flush()
     const windowed = (id: number, index: number) => descriptor(id, { index, state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })
+    // The grid's selection was over the older revision's rows: it goes, and the grid keeps its scroll.
+    const first = keyAt(service, 't1', 0)
+    service.selectAll('t1', first)
+    service.gridState('t1', first).topRow = 4_000
     client.emit('q1', { type: 'resultSet.residence', descriptor: windowed(1, 0) })
     client.emit('q1', { type: 'resultSet.residence', descriptor: windowed(2, 1) })
     flush()
+    expect(service.selection('t1', first)).toBeUndefined()
+    expect(service.gridState('t1', first).topRow).toBe(4_000)
     timers.advance(1_000)
     expect(tab().announcement).toMatch(/Result 1 is now windowed in BigQuery: rows are read as you scroll\. Result 2 is now windowed in BigQuery/)
     // Another sentence inside the delay (a selection's size) does not replace a switch: both are heard.
@@ -1128,6 +1154,10 @@ describe('results service sorting', () => {
     flush()
     timers.advance(1_000)
     expect(tab().announcement).toMatch(/Result 1 .*memory.*12 cells selected$/)
+    // A run started again forgets a switch of the run it replaces that was not read out yet.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: { ...windowed(1, 0), revision: 3 } })
+    service.begin('t1', 'q2')
+    expect((service as unknown as { unheardSwitches: Map<string, unknown> }).unheardSwitches.size).toBe(0)
     service.release('t1')
     expect((service as unknown as { unheardSwitches: Map<string, unknown> }).unheardSwitches.size).toBe(0)
     service.dispose()

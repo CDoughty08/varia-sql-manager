@@ -244,7 +244,9 @@ export class ResultsPortHost {
   }
 
   querySummary(summary: QueryResult): void {
-    this.own(summary.resultSets)
+    // A set the summary names released is gone (a load that Close Results stopped answers its set so): owning it again
+    // would send its reads to the backend rather than refuse them here.
+    this.own(summary.resultSets.filter(set => set.state !== 'released'))
     if (summary.planSets) this.own(summary.planSets)
     this.rememberMemory('results', summary.budget)
   }

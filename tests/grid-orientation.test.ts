@@ -154,8 +154,9 @@ describe('the name column\'s border', () => {
 })
 
 /** A GridView over a stand-in result, in a scroller that reports a size (happy-dom lays nothing out). */
-function mount(o: { rows: number; columns: number; transposed?: boolean; headerColumn?: number; state?: GridViewState; rowSize?: boolean; text?: (row: number, column: number) => string | null }) {
+function mount(o: { rows: number; columns: number; transposed?: boolean; headerColumn?: number; state?: GridViewState; rowSize?: boolean; text?: (row: number, column: number) => string | null; before?: (made: ReturnType<typeof source>) => void }) {
   const made = source(o.rows, o.columns, o.text)
+  o.before?.(made)
   const root = document.createElement('div'), scroller = document.createElement('div')
   for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
   root.append(scroller)
@@ -534,6 +535,17 @@ describe('a grid transposed', () => {
     grid.view.update({ resultCount: 1, showTypes: true })
     await grid.frame()
     expect([grid.nameWidth(), grid.names()[0].querySelector('.rg-ct')!.textContent]).toEqual([withTypes, 'nvarchar(max)'])
+    grid.view.dispose()
+  })
+  it('measures its shared width again when the first measure read no rows (a windowed result not read yet)', async () => {
+    const state: GridViewState = { ...freshState(), sized: false }
+    let calls = 0
+    const grid = mount({ rows: 50, columns: 6, state, before: made => made.measure.mockImplementation(async (_first: number, _count: number, colStart: number, colEnd: number) =>
+      ({ rows: calls++ === 0 ? 0 : 1, widths: Uint16Array.from({ length: colEnd - colStart }, () => calls === 1 ? 0 : 30) })) })
+    await grid.frame()
+    expect(grid.state.transposed!.sized).toBe(false)
+    await vi.waitFor(async () => { await grid.frame(); expect(grid.state.transposed!.sized).toBe(true) }, { timeout: 5000 })
+    expect(calls).toBe(2)
     grid.view.dispose()
   })
   it('gives the drawn columns one width, at most 240 px, and a dragged or fitted one a width of its own', async () => {

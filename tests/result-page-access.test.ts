@@ -74,9 +74,15 @@ describe('result page access', () => {
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
     ].sort())
     // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
-    const around = (text: string) => text.split('\n').filter(line => !/^\s*\/\//.test(line) && (/\.Sets\(\)/.test(line) || /\b(?:var|ResultStore)\s+\w+\s*=\s*(?:this\.)?\w*(?:[sS]tore|[rR]esults)\s*;/.test(line))).map(line => line.trim())
+    // A store held under a name the Find scan does not know: an alias, or a parameter, field or property of type ResultStore.
+    const otherName = (line: string) => [...line.matchAll(/\bResultStore\??\s+(\w+)\s*[,)=;{]/g)].some(match => !/^(?:\w*[sS]tore|Results)$/.test(match[1]))
+    const around = (text: string) => text.split('\n').filter(line => !/^\s*\/\//.test(line) && (/\.Sets\(\)/.test(line) || otherName(line) || /\b(?:var|ResultStore\??)\s+\w+\s*=\s*(?:this\.)?\w*(?:[sS]tore|[rR]esults)\s*;/.test(line))).map(line => line.trim())
     expect(around('var held = store; var x = held.Find(a);')).toHaveLength(1)
     expect(around('var held = Results; var x = held.Find(a);')).toHaveLength(1)
+    expect(around('ResultStore? lookup = store; var set = lookup.Find(id);')).toHaveLength(1)
+    expect(around('internal sealed class PageTally(ResultStore owner) {')).toHaveLength(1)
+    expect(around('private readonly ResultStore owner;')).toHaveLength(1)
+    expect(around('public SqlService(ResultStore? store = null, bool hooks = false)')).toHaveLength(0)
     expect(around('var set = store.Sets().FirstOrDefault(s => s.ResultId == id);')).toHaveLength(1)
     // Readers inside Results/ (ResultJobs, ResultSearch) too; only the store's own files list its sets, and the packer,
     // which packs the pages a set holds (a windowed one holds none).
@@ -86,6 +92,10 @@ describe('result page access', () => {
       'Results/ResultPacker.cs: if (!store.Sets().Any(set => ForRoom(set, global, [query]))) return false;',
       'Results/ResultPacker.cs: var candidates = store.Sets()'
     ])
+    // Nor through another accessor: the store hands out sets only by Find, Open (a new set) and Sets (listed above).
+    const storeFiles = service.filter(file => /\/Results\/ResultStore(?:\.[^/]+)?\.cs$/.test(file))
+    const handsOut = storeFiles.flatMap(file => [...readFileSync(file, 'utf8').matchAll(/^\s*(?:public|internal)\b[^=\n(]*\bResultSetBuffer\b[^=\n(]*?\s(\w+)\s*\(/gm)].map(match => match[1]))
+    expect(handsOut.sort()).toEqual(['Find', 'Open', 'Sets'])
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)
