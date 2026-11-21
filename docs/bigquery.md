@@ -305,8 +305,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of
   truncating: its pages are freed, the grid keeps its place and drops its selection, and a screen reader hears that the
   result is now windowed.
-- **Blocks.** About 4 MiB of measured rows each (256 – 16,384 rows, fewer for rows so wide that half the window cache
-  holds fewer), read with `tabledata.list` from the destination
+- **Blocks.** About 4 MiB of measured rows each (256 – 16,384 rows, fewer for rows so wide that half the window cache,
+  allowing the estimate's 25% margin, holds fewer), read with `tabledata.list` from the destination
   table, at most two at a time per result and four per connection, backing off on rate limits. The cache keeps the
   most recently used blocks within the window cache, reserving each block from the global result budget before it fetches
   (and any overrun after, never past the window cache: rows too wide for it answer that they are too wide), and

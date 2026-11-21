@@ -1101,7 +1101,7 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   scroll and clears its selection.
 - **Reading.** `results.read` sends the cached pages covering the window (whole pages, so it may send rows either side)
   and fetches the blocks it lacks with `tabledata.list` (free): about 4 MiB of measured rows each, 256 – 16,384 rows (fewer
-  when half the cache holds fewer, one at least); at
+  when half the cache, allowing the estimate's 25% margin, holds fewer, one at least); at
   most 2 fetches per result and 4 per connection; a 429 backs off with jitter. It waits up to 20 s (inside its deadline)
   and then answers with the rows it has; the grid draws the rest as loading and reads again. Each `viewer` reads ahead
   one block either side and one more in its direction of travel (only as many as the cache holds beside the read's own
