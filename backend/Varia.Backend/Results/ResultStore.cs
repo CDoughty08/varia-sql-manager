@@ -886,12 +886,18 @@ internal sealed partial class ResultStore
     /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Residence) to the global budget, as a live table
     /// is, not to a query's half: within the cache's own limit (<paramref name="limit"/>, what <paramref name="held"/> counts
     /// for that cache) and the global budget. The cache evicts its own blocks and asks again when this refuses.</summary>
-    public bool TryReserveCache(ref long held, long limit, long bytes)
+    public bool TryReserveCache(ref long held, long limit, long bytes) => TryReserveCache(ref held, limit, bytes, out _);
+
+    /// <param name="overLimit">On a refusal, whether the cache's own limit refused (else the global budget did), as the
+    /// reservation saw it: a caller deciding by its held bytes afterwards would race other fetches giving theirs back.</param>
+    public bool TryReserveCache(ref long held, long limit, long bytes, out bool overLimit)
     {
+        overLimit = false;
         if (bytes <= 0) return true;
         if (Interlocked.Add(ref held, bytes) > limit)
         {
             Interlocked.Add(ref held, -bytes);
+            overLimit = true;
             return false;
         }
         var global = Volatile.Read(ref figures).Global;

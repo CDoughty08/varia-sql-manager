@@ -310,11 +310,11 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   table, at most two at a time per result and four per connection, backing off on rate limits. The cache keeps the
   most recently used blocks within the window cache, reserving each block from the global result budget before it fetches
   (and any overrun after: a block too wide for the window cache answers that its rows are too wide; an overrun
-  waits for the result's other fetches to settle, and a read whose own blocks do not fit together may pass the window
-  cache by one block until it is done; past twice the window cache, the refusal says to raise it), and
+  waits for the result's other fetches to settle; blocks a read waits for that do not fit together may pass the window
+  cache, up to twice it, until the read is done; past that, the refusal says to raise it), and
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
-  way it is scrolling (fewer when the cache holds few blocks); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, or stops
-  where the cache is full, then the grid shows the rows it has and asks again.
+  way it is scrolling (fewer when the cache holds few blocks); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, then
+  the grid shows the rows it has and asks again; a block only read ahead stops where the cache is full.
 - **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, and a second load of a result already loading is refused. Closing the result stops the load,

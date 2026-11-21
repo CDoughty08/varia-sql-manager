@@ -112,12 +112,18 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   const residence = files.find(({ file }) => file === 'SqlService.BigQueryResidence.cs')!.code
   expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
   expect(residence).toMatch(/private RemoteFetch BigQueryFetch\(BigQueryWindow context\) =>/)
-  // BigQuery's table rows are read in that delegate alone.
+  // A table's rows are listed (tabledata.list) in TableRowsAsync alone, and that is called from the delegate alone (a query's
+  // own rows, Load into memory's included, come through its job's results under the budget).
+  expect(uses(/\bTabledata\b/g)).toEqual(['BigQuery/BigQueryService.Jobs.cs'])
+  const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
+  const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
+  expect(tableRows.slice(0, tableRows.indexOf('\n    internal ') < 0 ? undefined : tableRows.indexOf('\n    internal ')).includes('service.Tabledata.List(')).toBe(true)
   expect(uses(/\bTableRowsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Every mention of the writer type, however a writer is built (a target-typed new included), is one of these.
-  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(5).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])  // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
+  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(6).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
+  // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
   expect(uses(/new RemoteBlockWriter\(/g).sort()).toEqual(['Results/RemoteResult.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
   const decide = residence.slice(residence.indexOf('DecideResidenceAsync('), residence.indexOf('async Task<RemoteResult?> KeepInMemoryAsync()'))
   expect(count(decide, /new RemoteBlockWriter\(set\.ResultId, set\.Wires, (0|from)\);/g)).toBe(2)
@@ -125,9 +131,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
 })
 
 it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
-  const fetch = between('private async Task FetchAsync(', 'private void Reserve(')
-  expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
-  expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
+  const fetch = between('private async Task FetchAsync(', 'private bool Reserve(')
+  expect(fetch.indexOf('if (!Reserve(estimate, block))')).toBeGreaterThan(0)
+  expect(fetch.indexOf('if (!Reserve(estimate, block))')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
   // The block is read in one place, however it is spelled, so nothing reads one before its reservation.
   // The delegate appears only as its field, Create's parameter and its pass to the constructor, the constructor's parameter
   // and assignment (two), and that one call: never passed on, copied or called another way where a read could reach it
@@ -139,18 +145,22 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
-  // An overrun reserves through Reserve too; only when reads hold every other block may it pass the cache's own limit, by one
-  // block at most (OverLimit), and the global budget still refuses it.
-  const overrun = between('private async Task ReserveOverrunAsync(', 'private void Reserve(')
-  expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
-  expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
-  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes\)\) return;\n(\s*\/\/[^\n]*\n)*\s*if \(Interlocked\.Read\(ref held\) \+ bytes > OverLimit\) throw RemoteBlockWriter\.CacheTooSmall\(\);\n\s*throw;/)
+  // An overrun reserves through Reserve too; refused by the cache's own limit, it may pass it, up to twice it (OverLimit),
+  // and the global budget still refuses it. Which limit refused is what the reservation saw: never decided again from the
+  // cache's bytes afterwards, which other fetches change meanwhile.
+  const overrun = between('private async Task ReserveOverrunAsync(', 'private bool Reserve(')
+  expect(overrun).toMatch(/\{\n\s*if \(Reserve\(bytes, keep\)\) return;\n/)
+  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes, out var full\)\) return;\n(\s*\/\/[^\n]*\n)*\s*throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);/)
+  expect(remote).not.toMatch(/Interlocked\.Read\(ref held\) \+/)
+  const reserveBody = between('private bool Reserve(', 'private void EvictLocked(')
+  expect(reserveBody).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes, out var full\)\)/)
+  expect(reserveBody).toMatch(/if \(victim is null\) return full \? false : throw BudgetFull\(\);/)
   // A block's estimate the cache's own limit refuses: read ahead only, it stops with nothing fetched; one a read waits for
-  // passes the limit by one block at most (OverLimit, through the global budget), else TOO_LARGE naming the cache.
+  // passes the limit, up to twice it (OverLimit, through the global budget), else TOO_LARGE naming the cache.
   // What it reserves is the block's estimate, never less.
-  expect(fetch).toMatch(/var estimate = Math\.Min\(EstimateOf\(rows\), CacheLimit \/ 2\);\n(\s*\/\/[^\n]*\n)*\s*try \{ Reserve\(estimate, block\); \}/)
+  expect(fetch).toMatch(/var estimate = Math\.Min\(EstimateOf\(rows\), CacheLimit \/ 2\);\n(\s*\/\/[^\n]*\n)*\s*if \(!Reserve\(estimate, block\)\)/)
   expect(count(fetch, /\bestimate = /g)).toBe(1)
-  expect(fetch).toMatch(/try \{ Reserve\(estimate, block\); \}\n\s*catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ estimate > CacheLimit\)\n\s*\{\n\s*bool waited;\n\s*lock \(gate\) waited = block\.Waiters > 0;\n\s*if \(!waited\) throw new RemoteRetryException\(error\);\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate\)\)\n\s*\{\n\s*if \(Interlocked\.Read\(ref held\) \+ estimate > OverLimit\) throw RemoteBlockWriter\.CacheTooSmall\(\);\n\s*throw;\n\s*\}\n\s*\}/)
+  expect(fetch).toMatch(/if \(!Reserve\(estimate, block\)\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool waited;\n\s*lock \(gate\) waited = block\.Waiters > 0;\n\s*if \(!waited\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*\}/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)
@@ -160,7 +170,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A block that lands after the cache was disposed or the block replaced gives back what it cost.
   expect(fetch).toMatch(/cached != block\)\n\s*\{\n\s*store\.ReturnCache\(ref held, cost\);\n\s*return;/)
   // A trim evicts only what Reserve may: blocks no read waits for and no fetch is filling.
-  const trim = between('private void TrimLocked(', 'private void Reserve(')
+  const trim = between('private void TrimLocked(', 'private bool Reserve(')
   expect(trim).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)
   expect(trim).toMatch(/lru\.FirstOrDefault\(block => block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0\)/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
@@ -170,7 +180,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
   expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
   expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
-  expect(count(remote, /TryReserveCache\(/g)).toBe(count(remote, /TryReserveCache\(ref held, CacheLimit, /g) + count(overrun, /TryReserveCache\(ref held, OverLimit, /g) + count(fetch, /TryReserveCache\(ref held, OverLimit, estimate\)/g))
+  expect(count(remote, /TryReserveCache\(/g)).toBe(count(remote, /TryReserveCache\(ref held, CacheLimit, /g) + count(overrun, /TryReserveCache\(ref held, OverLimit, /g) + count(fetch, /TryReserveCache\(ref held, OverLimit, estimate, /g))
   expect(count(overrun, /TryReserveCache\(ref held, OverLimit, /g)).toBe(1)
   expect(count(remote, /TryReserveCache\(ref held, OverLimit, /g)).toBe(2)
   // The last page is checked too: no block costs more than its cache.
@@ -185,10 +195,10 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(count(remote, /\browBytes\s*=[^=]/g)).toBe(1)
   expect(remote).toMatch(/BlockRows = BlockRowsFor\(rowBytes, CacheLimit\);/)
   // The reservation is the cache's own limit and the global budget, evicting blocks no read waits for, else TOO_LARGE.
-  const reserve = between('private void Reserve(', 'private void EvictLocked(')
-  expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes\)\)/)
+  const reserve = between('private bool Reserve(', 'private void EvictLocked(')
+  expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes, out var full\)\)/)
   expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
-  expect(reserve).toMatch(/throw new RequestException\("TOO_LARGE"/)
+  expect(reserve).toMatch(/private static RequestException BudgetFull\(\) =>\n\s*new\("TOO_LARGE", /)
   const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeGreaterThan(0)
   // A refused reservation keeps no page.

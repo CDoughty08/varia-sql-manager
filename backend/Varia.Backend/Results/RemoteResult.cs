@@ -428,20 +428,15 @@ internal sealed class RemoteResult : IDisposable
                 // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min(EstimateOf(rows), CacheLimit / 2);
-                try { Reserve(estimate, block); }
-                catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + estimate > CacheLimit)
+                if (!Reserve(estimate, block))
                 {
                     // The cache's own limit, held by blocks reads wait for (this read's others, or another grid's). A block
                     // only read ahead stops, nothing fetched (a read that joins it answers short and asks again); one a read
-                    // waits for passes the limit by one block at most, as an overrun may, and the cache trims back after.
+                    // waits for passes the limit, up to twice it, as an overrun may, and the cache trims back after.
                     bool waited;
                     lock (gate) waited = block.Waiters > 0;
-                    if (!waited) throw new RemoteRetryException(error);
-                    if (!store.TryReserveCache(ref held, OverLimit, estimate))
-                    {
-                        if (Interlocked.Read(ref held) + estimate > OverLimit) throw RemoteBlockWriter.CacheTooSmall();
-                        throw;
-                    }
+                    if (!waited) throw new RemoteRetryException(RemoteBlockWriter.CacheTooSmall());
+                    if (!store.TryReserveCache(ref held, OverLimit, estimate, out var full)) throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
                 }
                 lock (gate) block.Holding = true;
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
@@ -496,42 +491,34 @@ internal sealed class RemoteResult : IDisposable
     /// <summary>A block's overrun (rows wider than measured). Refused by the cache's own limit while other fetches of this result
     /// hold its room, it stops read-ahead no read waits for, waits once for the rest, then evicts as usual. When reads still
     /// hold every other block (a read's own blocks that do not fit the cache together), the overrun passes the cache's limit,
-    /// by one block at most, for the global budget alone to refuse (TOO_LARGE): answering short instead would read the same
+    /// up to twice it (OverLimit), for the global budget alone to refuse (TOO_LARGE): answering short instead would read the same
     /// block again on every read. The cache trims back to its limit once no read holds those blocks (<see cref="TrimLocked"/>).</summary>
     private async Task ReserveOverrunAsync(long bytes, Block keep, CancellationToken token)
     {
         for (var round = 0; ; round++)
         {
-            try
+            if (Reserve(bytes, keep)) return;
+            Task[] others;
+            lock (gate)
             {
-                Reserve(bytes, keep);
-                return;
+                keep.Settling = true;
+                var holding = blocks.Values.Where(block => block != keep && block.Holding && !block.Settling && block.Fetching is not null).ToList();
+                foreach (var block in holding) if (block.Waiters == 0 && block.AheadOf != 0) block.Stop?.Cancel();
+                others = [.. holding.Select(block => block.Fetching!)];
             }
-            catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + bytes > CacheLimit)
+            if (others.Length == 0 || round > 0)
             {
-                Task[] others;
-                lock (gate)
-                {
-                    keep.Settling = true;
-                    var holding = blocks.Values.Where(block => block != keep && block.Holding && !block.Settling && block.Fetching is not null).ToList();
-                    foreach (var block in holding) if (block.Waiters == 0 && block.AheadOf != 0) block.Stop?.Cancel();
-                    others = [.. holding.Select(block => block.Fetching!)];
-                }
-                if (others.Length == 0 || round > 0)
-                {
-                    if (store.TryReserveCache(ref held, OverLimit, bytes)) return;
-                    // Past even that, the cache (not the global budget) is what refuses: say so, and how to raise it.
-                    if (Interlocked.Read(ref held) + bytes > OverLimit) throw RemoteBlockWriter.CacheTooSmall();
-                    throw;
-                }
-                // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
-                try { await Task.WhenAll(others).WaitAsync(token); }
-                catch (Exception) when (!token.IsCancellationRequested) { }
+                if (store.TryReserveCache(ref held, OverLimit, bytes, out var full)) return;
+                // Past even that, the cache (not the global budget) is what refuses: say so, and how to raise it.
+                throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
             }
+            // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
+            try { await Task.WhenAll(others).WaitAsync(token); }
+            catch (Exception) when (!token.IsCancellationRequested) { }
         }
     }
 
-    /// <summary>What the cache may hold while a read's own blocks pass its limit: one more block's worth.</summary>
+    /// <summary>What the cache may hold while blocks reads wait for pass its limit: twice it.</summary>
     private long OverLimit => CacheLimit * 2;
 
     /// <summary>Evicts the least recent blocks no read waits for while the cache is past its limit (after an overrun took room
@@ -546,11 +533,11 @@ internal sealed class RemoteResult : IDisposable
         }
     }
 
-    /// <summary>Reserves a block's bytes in the cache, evicting the least recent blocks no read waits for; TOO_LARGE when even an
-    /// empty cache has no room for it (the global budget is full).</summary>
-    private void Reserve(long bytes, Block keep)
+    /// <summary>Reserves a block's bytes in the cache, evicting the least recent blocks no read waits for. False when the cache's
+    /// own limit refuses with nothing left to evict (reads hold the rest); TOO_LARGE when the global budget is full.</summary>
+    private bool Reserve(long bytes, Block keep)
     {
-        while (!store.TryReserveCache(ref held, CacheLimit, bytes))
+        while (!store.TryReserveCache(ref held, CacheLimit, bytes, out var full))
         {
             Block? victim;
             lock (gate)
@@ -558,9 +545,13 @@ internal sealed class RemoteResult : IDisposable
                 victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0);
                 if (victim is not null) EvictLocked(victim);
             }
-            if (victim is null) throw new RequestException("TOO_LARGE", "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
+            if (victim is null) return full ? false : throw BudgetFull();
         }
+        return true;
     }
+
+    private static RequestException BudgetFull() =>
+        new("TOO_LARGE", "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
 
     private void EvictLocked(Block block)
     {

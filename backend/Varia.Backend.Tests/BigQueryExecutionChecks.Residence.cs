@@ -882,6 +882,39 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // Another grid's block refused by the cache's own limit while a read-ahead fetch fails and gives its room back: which
+        // limit refused is what the reservation saw, never decided again from the cache's bytes afterwards, so the read never
+        // answers "not enough result memory" while the global budget is nearly empty.
+        {
+            var refused = new Dictionary<string, int>();
+            var random = new Random(1);
+            for (var run = 0; run < 1000; run++)
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var fail = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var blockRows = 0;
+                using var remote = RemoteResult.Create(store, 1, OneText, 16_384L * 10, false, 78, 4L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), async (first, rows, writer, token) =>
+                {
+                    var index = first / blockRows;
+                    if (index == 1) { await fail.Task.WaitAsync(token); throw new InvalidOperationException("The fetch failed."); }
+                    if (index is not (0 or 5)) await Task.Delay(Timeout.Infinite, token);
+                    for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 60);
+                });
+                blockRows = remote.BlockRows;
+                await remote.ReadAsync(0, 10, 1, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(10), CancellationToken.None);
+                var held = remote.ReadAsync(0, 10, 1, async _ => await hold.Task, TimeSpan.FromSeconds(10), CancellationToken.None);
+                var spin = random.Next(0, 4000);
+                var release = Task.Run(() => { Thread.SpinWait(spin); fail.TrySetResult(); });
+                try { await remote.ReadAsync(5L * blockRows, 10, 2, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(10), CancellationToken.None); }
+                catch (RequestException error) { refused[error.Code] = refused.GetValueOrDefault(error.Code) + 1; }
+                hold.TrySetResult();
+                await held;
+                await release;
+            }
+            check(refused.Count == 0, "a block refused by the cache's own limit while another fetch gives room back is never refused by the budget: " + string.Join(", ", refused.Select(pair => $"{pair.Key} {pair.Value}x")));
+        }
+
         // Rows of about 200 KB (blocks near half the cache): a grid that scrolls up a few rows past two cached blocks reads
         // three blocks. The third passes the cache's limit for the read (trimmed back after) rather than answering no rows
         // again and again with nothing fetched.
