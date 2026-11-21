@@ -56,6 +56,13 @@ if (args is [PageCompressionBench.Argument, _, _, ..])
     return;
 }
 // The typed form over SQL Server's own catalog rows, run by hand against a server (read-only SELECTs): measures only.
+// Packing at seal, run by hand against a server (docs/page-compression-findings.md): measures only, no checks.
+if (args is [SealBench.Argument, var sealServer, ..])
+{
+    SealBench.Run(sealServer, args.Length > 2 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 4);
+    return;
+}
+
 if (args is [TypedFormBench.Argument, var typedServer])
 {
     TypedFormBench.Run(typedServer);
@@ -139,6 +146,12 @@ if (args is ["--diff-checks"])
 {
     DiffChecks.Run(Check);
     Console.WriteLine("Passed " + passed + " diff checks.");
+    return;
+}
+if (args is ["--seal-packing-checks"])
+{
+    SealPackingChecks.Run(Check);
+    Console.WriteLine("Passed " + passed + " seal packing checks.");
     return;
 }
 if (args is ["--result-name-checks"])
@@ -479,6 +492,7 @@ if (liveGroup is null)
         ("RoomPool", Sync(() => RoomPoolChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
+        ("SealPacking", Sync(() => SealPackingChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),

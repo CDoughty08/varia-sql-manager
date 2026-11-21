@@ -507,7 +507,17 @@ function reportIndexMemory() {
   const usedBytes = indexedConnections.size * 16 * 1024 * 1024
   if (lastIndexBytes === usedBytes) return
   lastIndexBytes = usedBytes
-  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq })
+  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq, detail: indexMemoryDetail(indexedConnections.size) })
+}
+/** What the index holds (IndexMemoryReport), per connection: 16 MiB of 2 records, 5 names and 9 definitions, its 1,200 packed
+ *  definitions 42 MiB of text in 6 MiB of frames. */
+function indexMemoryDetail(connections) {
+  const MiB = 1024 * 1024
+  return {
+    connections, objects: 24105 * connections, texts: 15500 * connections, references: 26350 * connections, definitions: 4700 * connections, packedDefinitions: 1550 * connections,
+    definitionTexts: 3000 * connections, packedTexts: 1200 * connections, packedBytes: 6 * MiB * connections, packedTextBytes: 42 * MiB * connections, cut: 0, childrenLeftOut: 0,
+    recordBytes: 2 * MiB * connections, nameBytes: 5 * MiB * connections, definitionBytes: 9 * MiB * connections, readingBytes: 0, ...connections > 0 ? { lastBuildMs: 920 } : {}
+  }
 }
 /** A summary's budget, which counts as reported (SqlService.SummaryBudget). */
 function summaryBudget() {

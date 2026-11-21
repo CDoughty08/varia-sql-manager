@@ -35,6 +35,7 @@ internal static class ProfileChecks
         Figures(check);
         Estimates(check);
         Pages(check);
+        ReadPages(check);
         Threads(check);
         Retried(check);
         Charged(check);
@@ -145,6 +146,36 @@ internal static class ProfileChecks
         var each = set.RowBytes(0, count);
         check(sizes.Columns.Length == 0 && sizes.Rows == count && sizes.RowBytes is { } bytes && bytes.Min == each.Min() && bytes.Max == each.Max() && bytes == result.RowBytes,
             "a profile of no columns sizes every row of every page, as one with columns does");
+    }
+
+    /// <summary>Pages with no set (a view read's, holding their own bytes) profile as the result's own, alone and beside
+    /// the result's packed pages, which are unpacked into rooms: the profiler reads a set-less page as it is, as the other
+    /// fused readers do (PageCompressionBench profiles its rehydrated pages this way).</summary>
+    private static void ReadPages(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.OnRequest };
+        const int count = 5000;
+        var set = Fill(store, [new("n", "int", "text"), new("name", "nvarchar", "text", Collation: Bin2)],
+            Enumerable.Range(0, count).Select(i => new object?[] { i % 10 == 0 ? null : i.ToString(CultureInfo.InvariantCulture), "v" + (i % 97).ToString(CultureInfo.InvariantCulture) }));
+        var expected = Profile(set, null, 0, 1);
+        set.Pack();
+        var view = store.AddView(set, [.. Enumerable.Range(0, count)], [], false, true, 0, null);
+        var copies = ViewPages.Stored(view, 0, count).ToArray();
+        var packed = set.SealedSnapshot();
+        ResultsProfileResult alone, mixed;
+        using (set.Pin())
+        {
+            alone = ColumnProfiler.Profile(set, copies, null, [0, 1], true, CancellationToken.None);
+            mixed = ColumnProfiler.Profile(set, [.. packed, .. copies], null, [0, 1], true, CancellationToken.None, workers: 1);
+        }
+        check(set.HasPacked && copies.All(page => page.Set is null) && copies.Length > 1
+            && alone.Columns[0] is { Values: 4500, Nulls: 500, Min: "1", Max: "4999" } && alone.Columns[1].Distinct == 97
+            && alone.Columns[0].Histogram?.Counts.SequenceEqual(expected.Columns[0].Histogram!.Counts) == true,
+            "a profile of a view read's pages, which have no set, reads them as the result's own: " + Describe(alone.Columns[0]));
+        check(mixed.Columns[0] is { Values: 9000, Nulls: 1000, Min: "1", Max: "4999" } && mixed.Columns[1].Distinct == 97
+            && mixed.Columns[0].Histogram?.Counts.Sum() == 9000,
+            "a profile of a view read's pages beside the result's packed pages reads both, unpacking only the packed ones: " + Describe(mixed.Columns[0]));
+        store.Release(set.ResultId);
     }
 
     /// <summary>A profile read on several threads is the profile one thread gives: every figure merges, and a lowest or
