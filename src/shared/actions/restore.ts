@@ -247,7 +247,7 @@ export interface RestoreServerFacts {
   readonly dataPath?: string
   readonly logPath?: string
   readonly backupPath?: string
-  /** CREATE ANY DATABASE, sysadmin or dbcreator: advisory, the run re-checks. */
+  /** CREATE DATABASE in master, CREATE ANY DATABASE, sysadmin or dbcreator: advisory, the run re-checks. */
   readonly canRestore: boolean
   readonly destinations: readonly RestoreDestination[]
   readonly destinationsTruncated: boolean

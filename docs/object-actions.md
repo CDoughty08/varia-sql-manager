@@ -760,6 +760,9 @@ RESTORE's STATS percent (`action.progress`), an overall percent (the sets done a
 alike) and the time. Answering the bar moves focus to the Run panel's title (Restore, Stop) or back to the verb (Cancel,
 Keep restoring).
 
+For a new destination, a login can restore with `CREATE DATABASE` in master, `CREATE ANY DATABASE` on the server,
+or membership in dbcreator or sysadmin.
+
 The backend first checks what the request names, on the action's own connection: the destination's identity (an
 existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
 tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
