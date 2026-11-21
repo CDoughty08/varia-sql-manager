@@ -231,7 +231,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
-  const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget, residence: snapshot.residence, rowsAvailable: snapshot.rowsAvailable })
+  const truncation = truncationText({ ...snapshot, budget })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   // A comparison's strip says what it found, with what its highlights or last change say after it.
   const compareNote = compared ? [compareText(compared, sources, notice), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined

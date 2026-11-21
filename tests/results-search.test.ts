@@ -306,6 +306,12 @@ describe('ResultsSearchService', () => {
     expect(searchCount(search(), String)).toBe('1 of 1+')
     advance(announceDelayMs)
     expect(search().announcement).toBe('1 of 1 matches. A result windowed in BigQuery was not searched')
+    // Columns mode searches names, which a windowed result has: it says nothing of a skipped grid.
+    service.setMode('t1', 'columns')
+    expect(search().skipped).toBeUndefined()
+    advance(announceDelayMs)
+    expect(search().announcement).not.toMatch(/not searched/)
+    service.setMode('t1', 'values')
     show([set(0, ['a'], [[1, 0]])], 'q2')
     service.setText('t1', 'y', true)
     await answerAll()

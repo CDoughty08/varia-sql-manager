@@ -445,6 +445,7 @@ const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
 // Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
 const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
+const windowedCopy = 'Could not copy the results: This result is windowed in BigQuery: its rows are not in memory, so they cannot be copied yet.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -1018,6 +1019,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
+    // Refused before it cancels the copy running (another grid's, perhaps): the backend would refuse it anyway.
+    if (set.handle.getSnapshot().residence === 'remote') return windowedCopy
     // A grid drawn transposed copies as drawn: the selection it shows, written turned.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     const parts = (turned ? transposedCopyPlan : copyPlan)(selection, set.descriptor.columns.length)

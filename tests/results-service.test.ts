@@ -479,6 +479,21 @@ describe('results service', () => {
       ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
     ])
   })
+  it('refuses to copy a windowed result before it cancels the copy running', async () => {
+    const { api, service } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    for (const index of [0, 1]) service.setSelection('t1', keyAt(service, 't1', index), selectAll(keyAt(service, 't1', index)))
+    const first = deferred<ApiResult<ResultsJobResult>>()
+    api.copyResults.mockReturnValueOnce(first.promise)
+    const copying = service.copy('t1', keyAt(service, 't1', 0), false)
+    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toMatch(/^Could not copy the results: This result is windowed in BigQuery/)
+    expect(api.copyResults).toHaveBeenCalledTimes(1)
+    expect(api.cancelResultsJob).not.toHaveBeenCalled()
+    first.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
+    expect(await copying).toBeUndefined()
+    service.dispose()
+  })
   it('refuses to save a windowed result before main shows the file dialog', async () => {
     const { api, service, flush } = fixture()
     service.begin('t1', 'q1')

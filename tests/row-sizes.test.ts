@@ -88,6 +88,27 @@ describe('row sizes', () => {
     sizes.dispose()
   })
 
+  it('backs off paint-driven re-asks of a windowed short block that does not grow, as its wakes do', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const { sizes, reads, settle, snapshot } = fixture(100_000)
+    snapshot.residence = 'remote'
+    const answer = async () => { reads.at(-1)!.resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] }); await settle() }
+    sizes.ensure(0, 10)
+    await answer()
+    vi.advanceTimersByTime(rowSizeLimits.retryMs + 1)
+    sizes.ensure(0, 10)
+    expect(reads).toHaveLength(2)
+    await answer()
+    // Unchanged once: the next ask waits twice as long, however often the grid paints.
+    vi.advanceTimersByTime(rowSizeLimits.retryMs + 1)
+    sizes.ensure(0, 10)
+    expect(reads).toHaveLength(2)
+    vi.advanceTimersByTime(rowSizeLimits.retryMs)
+    sizes.ensure(0, 10)
+    expect(reads).toHaveLength(3)
+    sizes.dispose()
+  })
+
   it('wakes a windowed block that grew at the plain wait while another backs off, and stops one whose rows come and go', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     const live = new Map<number, { callback: () => void; due: number }>()

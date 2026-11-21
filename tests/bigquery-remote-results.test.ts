@@ -7,6 +7,9 @@ import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { queryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
 import { resultRows, rowsFact } from '../src/renderer/src/results/status'
 import { nerdMetrics } from '../src/renderer/src/results/memory-details'
+import { NerdDetails } from '../src/renderer/src/results/NerdMetrics'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { skippedText } from '../src/renderer/src/results/search'
 import type { ResultMemoryDetail } from '../src/shared/contracts'
 
@@ -83,6 +86,8 @@ describe('BigQuery remote results', () => {
     expect(resultMemoryDetailSchema.safeParse({ ...detail, windowCacheBytes: -1 }).success).toBe(false)
     const model = nerdMetrics(detail, () => ({ result: 'Result 1' }))
     expect(model.memoryBytes).toBe(164 * MB)
+    // The bar's total is what it shows and reads out: the Window cache counted in.
+    expect(model.bars[1].total).toBe(164 * MB)
     expect(model.givenBack).toBe(0)
     expect(model.bars[1].segments.map(segment => [segment.part, segment.label, segment.bytes])).toEqual([['raw', 'Raw pages', 100 * MB], ['window', 'Window cache', 64 * MB]])
     expect(model.legend.map(segment => segment.part)).toEqual(['raw', 'window'])
@@ -102,6 +107,8 @@ describe('BigQuery remote results', () => {
     expect(windowedOnly.biggest).toEqual([])
     expect(windowedOnly.biggestEmpty).toBe('Only windowed results are open: their rows stay in BigQuery, and their blocks are the Window cache above.')
     expect(nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0, windowCacheBytes: 0 }, () => ({ result: 'Result 1' })).biggestEmpty).toBe('No results held.')
+    // ...and the panel shows that sentence.
+    expect(renderToStaticMarkup(createElement(NerdDetails, { model: windowedOnly }))).toContain('Only windowed results are open: their rows stay in BigQuery')
     expect(nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0, windowCacheBytes: 0 }, () => ({ result: 'Result 1' })).tiles[2].note).toBe('No rows held')
   })
 })
