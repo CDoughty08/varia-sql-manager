@@ -153,7 +153,7 @@ export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
   const bytes = panelBytes(Math.max(total, packedTextBytes))
   const shown = split(bytes(saved))
   const tiles: Tile[] = [
-    { label: 'Packed', ...definitionTexts > 0 ? { value: percent(packedTexts, definitionTexts), unit: '%' } : { value: dash }, note: definitionTexts > 0 ? `of ${plural(definitionTexts, 'definition', 'definitions')}` : 'No definitions held' },
+    { label: 'Packed', ...definitionTexts > 0 ? { value: percent(packedTexts, definitionTexts), unit: '%' } : { value: dash }, note: definitionTexts > 0 ? 'of definitions' : 'No definitions held' },
     { label: 'Ratio', ...packedBytes > 0 ? { value: (packedTextBytes / packedBytes).toFixed(2), unit: '×' } : { value: dash }, note: 'zstd frames' },
     { label: 'Saved', value: shown.value, unit: shown.unit, note: packedTextBytes > 0 ? `${percent(saved, packedTextBytes)}% of ${bytes(packedTextBytes)}` : 'Nothing packed yet', ...saved > 0 ? { tone: 'saved' as const } : {} }
   ]

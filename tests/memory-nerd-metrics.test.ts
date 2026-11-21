@@ -143,7 +143,7 @@ describe('Memory panel Nerd metrics', () => {
   it('shows what the Search Indexer packed and saved, where its budget goes, and its pool\'s sharing', () => {
     const model = indexNerdMetrics(indexed)
     expect(model.aside).toBe('2 connections · 48,210 objects')
-    expect(model.tiles.map(tile => `${tile.value}${tile.unit ?? ''} ${tile.note}`)).toEqual(['40% of 6,000 definitions', '7.00× zstd frames', '36MB 86% of 42 MB'])
+    expect(model.tiles.map(tile => `${tile.value}${tile.unit ?? ''} ${tile.note}`)).toEqual(['40% of definitions', '7.00× zstd frames', '36MB 86% of 42 MB'])
     expect(model.tiles[2].tone).toBe('saved')
     // The budget by what holds it, on one scale; reads still running show only while there are some.
     expect([model.bar.label, model.bar.total / MB, model.bar.segments.map(part => [part.part, part.bytes / MB])]).toEqual(['Budget used', 16, [['records', 3], ['names', 4], ['definitions', 9]]])

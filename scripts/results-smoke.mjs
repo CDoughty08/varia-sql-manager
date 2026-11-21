@@ -1772,6 +1772,8 @@ try {
   const indexMetrics = memoryDetails.getByRole('region', { name: 'Search Indexer metrics', exact: true })
   await expect(indexMetrics.getByRole('img', { name: /^Budget used: [1-9]\d* MB\. Records [1-9]\d* MB, Names [1-9]\d* MB, Definitions [1-9]\d* MB$/ })).toBeVisible()
   await expect(indexMetrics).toContainText(/Packed40%.*Ratio7\.00×zstd frames.*Saved[1-9][\d,]*MB/)
+  // No tile note, label or counter is cut short at the panel's width.
+  expect(await indexMetrics.evaluate(region => [...region.querySelectorAll('*')].filter(node => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow === 'ellipsis').map(node => node.textContent))).toEqual([])
   await indexMetrics.scrollIntoViewIfNeeded()
   await memoryDetails.screenshot({ path: resolve('artifacts', 'memory-nerd-metrics.png') })
   await page.keyboard.press('Space')
