@@ -355,10 +355,12 @@ explorer.context, for the SQL Server Agent node
   &Job Activity Monitor  -+++
   ---
   &Start  -+++
-  Sto&p  -+++
+  S&top  -+++
   R&estart  -+++
   ---
   Re&fresh  F5  -+++
+  ---
+  &Properties  -+++
 explorer.context, for a SQL Server Agent job
   S&tart Job at Step…  -+++
   Sto&p Job  -+++

@@ -247,8 +247,16 @@ internal sealed class DistinctSnapshot
                     var count = 0;
                     foreach (var mark in previous.Marks) if (mark != 0) count++;
                     var candidates = new int[count];
-                    for (int group = 0, at = 0; group < previous.Marks.Length; group++) if (previous.Marks[group] != 0) candidates[at++] = group;
-                    source.Each(count, item => reps[candidates[item]], (item, view, local) => Visit(candidates[item], view, local), token);
+                    // A packed result is read in row order: the candidates are taken in the groups' row order, kept from the
+                    // first search, rather than sorted again at every key (a short text keeps most groups).
+                    var inRowOrder = Set.HasPacked;
+                    if (inRowOrder)
+                    {
+                        byRow ??= KeptPages.ByRow(reps);
+                        for (int i = 0, at = 0; i < byRow.Length; i++) if (previous.Marks[byRow[i]] != 0) candidates[at++] = byRow[i];
+                    }
+                    else for (int group = 0, at = 0; group < previous.Marks.Length; group++) if (previous.Marks[group] != 0) candidates[at++] = group;
+                    source.Each(count, item => reps[candidates[item]], (item, view, local) => Visit(candidates[item], view, local), token, inRowOrder: inRowOrder);
                     LastNarrowed = true;
                 }
                 else source.Each(reps.Length, group => reps[group], Visit, token, () => byRow ??= KeptPages.ByRow(reps));
@@ -564,9 +572,13 @@ internal sealed class KeptPages
         blobStarts = new int[pages.Length];
     }
 
+    /// <summary>How many items the calling thread has sorted by row (<see cref="ByRow"/>), for the checks.</summary>
+    [ThreadStatic] internal static long Sorted;
+
     /// <summary>The items in the order of their rows (ties by item), for <see cref="Each"/>'s order.</summary>
     public static int[] ByRow(int[] rows)
     {
+        Sorted += rows.Length;
         var order = new int[rows.Length];
         for (var i = 0; i < order.Length; i++) order[i] = i;
         Array.Sort(order, (a, b) => rows[a] != rows[b] ? rows[a].CompareTo(rows[b]) : a.CompareTo(b));
@@ -580,9 +592,9 @@ internal sealed class KeptPages
     }
 
     /// <summary>Reads item 0 to <paramref name="count"/> - 1's rows (<paramref name="rowOf"/>), each with its page. With a
-    /// packed page among them they go in row order: <paramref name="order"/>'s when given (the items sorted by row), else
-    /// sorted here.</summary>
-    public void Each(int count, Func<int, int> rowOf, Visit visit, CancellationToken token, Func<int[]>? order = null)
+    /// packed page among them they go in row order: as numbered when <paramref name="inRowOrder"/> says their rows already
+    /// ascend, else <paramref name="order"/>'s when given (the items sorted by row), else sorted here.</summary>
+    public void Each(int count, Func<int, int> rowOf, Visit visit, CancellationToken token, Func<int[]>? order = null, bool inRowOrder = false)
     {
         using var pin = set.Pin();
         if (!set.HasPacked)
@@ -605,8 +617,9 @@ internal sealed class KeptPages
             }
             return;
         }
-        int[] items;
-        if (order is not null) items = order();
+        int[]? items;
+        if (inRowOrder) items = null;
+        else if (order is not null) items = order();
         else
         {
             var rows = new int[count];
@@ -618,10 +631,10 @@ internal sealed class KeptPages
         var current = -1;
         var blobStart = 0;
         ReadOnlySpan<byte> bytes = default;
-        for (var at = 0; at < items.Length; at++)
+        for (int at = 0, end = items?.Length ?? count; at < end; at++)
         {
             if ((at & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-            var item = items[at];
+            var item = items?[at] ?? at;
             var row = rowOf(item);
             var index = IndexOf(row);
             var page = pages[index];

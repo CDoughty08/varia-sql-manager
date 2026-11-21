@@ -171,14 +171,14 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
     private async Task<(Dictionary<Guid, DateTime> Starts, DateTime? Now)> StartsAsync(SqlConnection? connection, string prologue, string probe, List<LiveProbeError> errors, int[]? tables,
         CancellationToken token)
     {
-        var (results, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.Activities, AgentSql.Clock], NoValues, token).ConfigureAwait(false);
+        var (results, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.Activities, AgentSql.ServerClock], NoValues, token).ConfigureAwait(false);
         foreach (var error in failed) errors.Add(Error(probe, error) with { Tables = tables });
         var starts = new Dictionary<Guid, DateTime>();
         if (results.TryGetValue(AgentSql.Activities.Id, out var activity))
             foreach (var row in activity.Rows)
                 if (activity.Value(row, "job_id") is Guid id && activity.Value(row, "start_execution_date") is DateTime start && activity.Value(row, "stop_execution_date") is null)
                     starts[id] = start;
-        DateTime? now = results.TryGetValue(AgentSql.Clock.Id, out var clock) && clock.Rows.Count > 0 && clock.Value(clock.Rows[0], "server_now") is DateTime time ? time : null;
+        DateTime? now = results.TryGetValue(AgentSql.ServerClock.Id, out var clock) && clock.Rows.Count > 0 && clock.Value(clock.Rows[0], "server_now") is DateTime time ? time : null;
         return (starts, now);
     }
 
@@ -306,8 +306,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
         if (serverNow is null && jobs.Any(job => job is not null))
         {
             // A refused clock read leaves the series empty: the renderer then counts any newer run, as before it had the clock.
-            var (clock, _) = await Reader.ReadAsync(connection, prologue, [AgentSql.Clock], NoValues, token).ConfigureAwait(false);
-            if (clock.TryGetValue(AgentSql.Clock.Id, out var read) && read.Rows.Count > 0 && read.Value(read.Rows[0], "server_now") is DateTime time) serverNow = time;
+            var (clock, _) = await Reader.ReadAsync(connection, prologue, [AgentSql.ServerClock], NoValues, token).ConfigureAwait(false);
+            if (clock.TryGetValue(AgentSql.ServerClock.Id, out var read) && read.Rows.Count > 0 && read.Value(read.Rows[0], "server_now") is DateTime time) serverNow = time;
         }
         values[^1] = serverNow is { } stamp ? Stamp(stamp) : null;
         for (var slot = 0; slot < jobs.Length; slot++)

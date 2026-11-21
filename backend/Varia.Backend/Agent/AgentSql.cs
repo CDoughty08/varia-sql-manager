@@ -88,9 +88,13 @@ internal static partial class AgentSql
     public static readonly AgentStatement Activities = new("activities", "EXEC msdb.dbo.sp_help_jobactivity;", ["job_id", "start_execution_date", "stop_execution_date"], [], "listRows");
 
     /// <summary>The server's clock in its local time, which msdb's dates use, for a running job's elapsed time.</summary>
-    public static readonly AgentStatement Clock = new("clock", "SELECT CONVERT(datetime, SYSDATETIME()) AS server_now;", ["server_now"], [], "listRows");
+    public static readonly AgentStatement ServerClock = new("clock", "SELECT CONVERT(datetime, SYSDATETIME()) AS server_now;", ["server_now"], [], "listRows");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, JobActivity, WatchedJob, Activities, Clock, LastRunHistory];
+    /// <summary>Every setting the SQL Server Agent Properties dialog shows (AG-8a), from sp_get_sqlagent_properties (every Agent role may run it; 15281 while Agent XPs is off).</summary>
+    public static readonly AgentStatement AgentProperties = new("agentProperties", "EXEC msdb.dbo.sp_get_sqlagent_properties;",
+        ["auto_start", "startup_account", "sqlserver_restart", "monitor_autostart", "jobhistory_max_rows", "jobhistory_max_rows_per_job", "errorlog_file", "errorlogging_level"], [], "listRows");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

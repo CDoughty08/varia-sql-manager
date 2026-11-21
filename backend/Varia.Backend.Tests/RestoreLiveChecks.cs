@@ -191,7 +191,7 @@ internal static class RestoreLiveChecks
         for (var index = 0; index < goals.Length; index++)
         {
             var planned = Varia(goals[index].Name, chosen[index].Names);
-            var options = new RestoreOptionsDto([.. planned.Select(name => Named(sets, name) is { } set ? new RestorePlanSetDto(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name))],
+            var options = new RestoreOptionsDto([.. planned.Select(name => Named(sets, name) is { } set ? new RestorePlanSetDto(set.Id, [.. set.Devices], set.Position, set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name))],
                 relocated, false, false, false, "recovery", false, goals[index].StopAt);
             outcomes.Add(await Restored(RestoreSql.Statements(ActionsCatalog.Current.Restore, target, options, exists: false)));
         }
@@ -208,7 +208,7 @@ internal static class RestoreLiveChecks
 
         // Script: SMO's RestorePlan.Script() for the same sets and options is actions.script's text, SET  SINGLE_USER and SET  MULTI_USER
         // as the shared templates space them (critic A12).
-        RestorePlanSetDto Planned(string name) => Named(sets, name) is { } set ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name);
+        RestorePlanSetDto Planned(string name) => Named(sets, name) is { } set ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name);
         var lastChain = new List<RestorePlanSetDto> { Planned("full"), Planned("diff"), Planned("log3") };
         var dataFolder = history.Restore!.Server!.DataPath ?? folder;
         var logFolder = history.Restore.Server.LogPath ?? folder;
@@ -287,8 +287,8 @@ internal static class RestoreLiveChecks
         check(ff is not null && f1 is not null && f2 is not null && f3 is not null && f3.FirstForkGuid == f2.ForkGuid && f3.ForkGuid != f3.FirstForkGuid && f2.FirstForkGuid == f2.ForkGuid
             && f3.ForkPointLsn is { } forkLsn && L(forkLsn) > L(f2.FirstLsn) && L(forkLsn) < L(f2.LastLsn) && L(f3.FirstLsn) <= L(f1.LastLsn)
             && forkSets.All(set => set.FamilyGuid is { } family && family == ff.FamilyGuid) && m3 is not null && m3.ForkPointLsn == f3.ForkPointLsn && m3.FamilyGuid == f3.FamilyGuid
-            && m3.FirstForkGuid == f3.FirstForkGuid && m3.ForkGuid == f3.ForkGuid,
-            "after a restore to a point inside log2, msdb and the media's headers read log3 as starting on the old fork and forking inside log2 at its fork point, all of one family: "
+            && m3.FirstForkGuid == f3.FirstForkGuid && m3.ForkGuid == f3.ForkGuid && f3.BackupSetGuid == f3.Id && m3.BackupSetGuid == f3.BackupSetGuid,
+            "after a restore to a point inside log2, msdb and the media's headers read log3 as starting on the old fork and forking inside log2 at its fork point, all of one family, with one BackupSetGUID: "
             + string.Join(", ", forkSets.Select(set => set.Name + " " + set.FirstLsn + "-" + set.LastLsn + " fork " + set.ForkPointLsn)));
 
         var forkById = forkSets.ToDictionary(set => set.Id, StringComparer.OrdinalIgnoreCase);
@@ -327,7 +327,7 @@ internal static class RestoreLiveChecks
         // Restored under the scratch name: the planner's plan comes back ONLINE with every row (and the point's rows); the abandoned
         // branch's plan (log2, then log3) fails at a RESTORE LOG.
         var forkMoves = new List<RestoreMoveDto> { new(forkDb, (restoreFacts.DataPath ?? folder) + target + ".mdf"), new(forkDb + "_log", (restoreFacts.LogPath ?? folder) + target + "_log.ldf") };
-        RestoreOptionsDto ForkOptions(IEnumerable<string> names, string? stopAt) => new([.. names.Select(name => Named(forkSets, name) is { } set ? new RestorePlanSetDto(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name))],
+        RestoreOptionsDto ForkOptions(IEnumerable<string> names, string? stopAt) => new([.. names.Select(name => Named(forkSets, name) is { } set ? new RestorePlanSetDto(set.Id, [.. set.Devices], set.Position, set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name))],
             forkMoves, false, false, false, "recovery", false, stopAt);
         var forkOutcomes = new List<string>();
         foreach (var goal in forkGoals) forkOutcomes.Add(await Restored(RestoreSql.Statements(ActionsCatalog.Current.Restore, target, ForkOptions(forkVaria, goal.StopAt), exists: false)));
