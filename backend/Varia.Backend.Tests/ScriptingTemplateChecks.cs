@@ -159,6 +159,10 @@ internal static class ScriptingTemplateChecks
             "a letter NFKD leaves alone may still equal R (U+0280 is R in the default collation), but an ideograph, a Cyrillic or a Greek letter never equals R, C or a digit, so ordinary names keep @RC");
         check(DmlTemplates.Execute(obj, [P(1, "@\u0633\u0646\u0629\u0662\u0660\u0662\u0664"), P(2, "@\u0661\u0662\u0663\u0664\u0665\u0666\u0667")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
             "a non-ASCII digit stands only for a digit, never R or C, so names with Arabic-Indic digits keep @RC");
+        check(DmlTemplates.Execute(obj, [P(1, "@rc\u0219")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@RC"), P(2, "@RC1\u0219")], false, true).StartsWith("DECLARE @RC2 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@\uFF52\uFF43")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal),
+            "ASCII letters and digits beside non-ASCII ones, and a lowercase fullwidth fold, still match case-insensitively");
         var blocking = "@RC" + new string('\u0219', 125);
         check(DmlTemplates.Execute(obj, [P(1, blocking)], false, true) == Lines("DECLARE " + blocking + " int", "", "-- TODO: Set parameter values here.", "", "EXECUTE [dbo].[p] ", "   " + blocking)
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, blocking)], false, true).EndsWith("EXECUTE [dbo].[f] " + NL + "   " + blocking, StringComparison.Ordinal),
