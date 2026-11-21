@@ -140,8 +140,9 @@ describe('the restore planner', () => {
     expect(pointAllowed(sets, at(210))).toBe(true)
   })
   it('allows a point exactly where the planner has a plan, on histories with sets missing', () => {
+    // Park-Miller: its products stay below 2^53, so every draw is exact and the sequence does not cycle early.
     let seed = 7
-    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+    const random = () => (seed = seed * 48271 % 2147483647) / 2147483647
     for (let history = 0; history < 200; history++) {
       // A database's backups every 10 minutes (an unbroken log chain, fulls and differentials between), then some lost.
       const sets: BackupSetRow[] = []
@@ -156,6 +157,32 @@ describe('the restore planner', () => {
       }
       for (let minute = 0; minute <= 150; minute += 5)
         expect(pointAllowed(sets, at(minute)), `${sets.map(set => set.id).join()} @${minute}`).toBe(plannable(sets, at(minute)))
+    }
+  })
+  it('allows a point exactly where the planner has a plan, and covers only such points, on tangled histories', () => {
+    let seed = 11
+    const random = () => (seed = seed * 48271 % 2147483647) / 2147483647
+    const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)]
+    for (let history = 0; history < 1500; history++) {
+      // Overlapping LSNs, repeated finishes, differentials of other or no fulls, two families, forks, and sets the planner skips.
+      const sets: BackupSetRow[] = [], fulls: BackupSetRow[] = []
+      for (let index = 0, count = 1 + Math.floor(random() * 9); index < count; index++) {
+        const type = pick(['full', 'full', 'differential', 'log', 'log', 'log'] as const), first = Math.floor(random() * 10) * 10, last = first + Math.floor(random() * 4) * 10
+        const base = type === 'full' ? '0' : fulls.length > 0 && random() < 0.8 ? pick(fulls).checkpointLsn : String(Math.floor(random() * 10) * 10)
+        const set = row(`s${index}`, `s${index}`, type, 1, random() < 0.05 ? '' : String(first), String(last), String(first), base, at(Math.floor(random() * 12) * 5).slice(11), [], {
+          ...random() < 0.15 ? { familyGuid: pick(['a', 'b']) } : {},
+          ...random() < 0.2 ? { firstForkGuid: pick(['f1', 'f2']), forkGuid: pick(['f1', 'f2']), ...random() < 0.7 ? { forkPointLsn: String(first + Math.floor(random() * 4) * 5) } : {} } : {},
+          copyOnly: random() < 0.1, damaged: random() < 0.05, ...random() < 0.03 ? { problem: restoreMessages.notDisk } : {}
+        })
+        if (type === 'full') fulls.push(set)
+        sets.push(set)
+      }
+      const covered = logCoverage(sets)
+      for (let minute = 0; minute <= 60; minute += 5) {
+        const point = at(minute), plan = plannable(sets, point), label = `${JSON.stringify(sets)} @${minute}`
+        expect(pointAllowed(sets, point), label).toBe(plan)
+        if (covered.some(stretch => stretch.from <= point && point <= stretch.to)) expect(plan, label).toBe(true)
+      }
     }
   })
 })
