@@ -63,7 +63,8 @@ export const scriptAsTitleKeys = [
   'schema', 'user', 'databaseRole', 'applicationRole', 'login', 'serverRole', 'credential', 'linkedServer', 'backupDevice',
   'audit', 'serverAuditSpecification', 'databaseAuditSpecification', 'fullTextCatalog', 'fullTextStoplist', 'searchPropertyList',
   'partitionScheme', 'partitionFunction', 'planGuide',
-  'agentJob', 'agentAlert', 'agentOperator', 'agentProxy'
+  'agentJob', 'agentAlert', 'agentOperator', 'agentProxy',
+  'tableSnapshot', 'materializedView', 'externalTable', 'routine'
 ] as const
 export type ScriptAsTitleKey = typeof scriptAsTitleKeys[number]
 /** The object noun of each title, as in "Script Table as" and in the backend's messages. */
@@ -76,7 +77,8 @@ export const scriptObjectTitles: { readonly [K in ScriptAsTitleKey]: string } = 
   linkedServer: 'Linked Server', backupDevice: 'Backup Device', audit: 'Audit', serverAuditSpecification: 'Server Audit Specification',
   databaseAuditSpecification: 'Database Audit Specification', fullTextCatalog: 'Full-Text Catalog', fullTextStoplist: 'Full-Text Stoplist',
   searchPropertyList: 'Search Property List', partitionScheme: 'Partition Scheme', partitionFunction: 'Partition Function', planGuide: 'Plan Guide',
-  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'Proxy'
+  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'Proxy',
+  tableSnapshot: 'Table Snapshot', materializedView: 'Materialized View', externalTable: 'External Table', routine: 'Routine'
 }
 export const scriptAsTitles = Object.fromEntries(scriptAsTitleKeys.map(key => [key, `Script ${scriptObjectTitles[key]} as`])) as { readonly [K in ScriptAsTitleKey]: string }
 
@@ -93,11 +95,13 @@ export const smoUrnTypes = [
   'PartitionScheme', 'PartitionFunction', 'PlanGuide',
   'Login', 'Credential', 'LinkedServer', 'BackupDevice', 'Audit', 'ServerAuditSpecification',
   // SQL Server Agent's objects, below the server's JobServer (a job also by its category, which its preflight reads).
-  'Job', 'Alert', 'Operator', 'ProxyAccount'
+  'Job', 'Alert', 'Operator', 'ProxyAccount',
+  // BigQuery's kinds: no SMO; the backend's own templates and INFORMATION_SCHEMA script them (BigQueryService.Script.cs).
+  'BigQuery'
 ] as const
 export type SmoUrnType = typeof smoUrnTypes[number]
 /** The backend's one catalog query per job, by what it reads; `agentObject` reads msdb's Agent tables. */
-export const preflightIds = ['module', 'table', 'child', 'type', 'schemaObject', 'databaseObject', 'database', 'serverObject', 'agentObject'] as const
+export const preflightIds = ['module', 'table', 'child', 'type', 'schemaObject', 'databaseObject', 'database', 'serverObject', 'agentObject', 'bigquery'] as const
 export type PreflightId = typeof preflightIds[number]
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows verbs a kind does not support. */
@@ -107,7 +111,7 @@ export type VerbRow = Partial<Record<ScriptVerb, 'disabled' | 'enabled'>>
 export interface LaterKindSpec { readonly kind: NodeKind; readonly phase: 'later' }
 export interface ScriptKindSpec {
   readonly kind: NodeKind
-  /** The engines that script this kind (scripting.script serves SQL Server only); absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
+  /** The engines that script this kind; absent, SQL Server only (src/shared/providers.ts). tests/providers-catalog.test.ts checks it. */
   readonly providers?: readonly ProviderId[]
   readonly phase: 'pr5'
   readonly title: ScriptAsTitleKey
@@ -139,6 +143,8 @@ type Data = Omit<ScriptKindSpec, 'kind' | 'phase'>
 const later = 'later' as const
 const plain = (title: ScriptAsTitleKey, urn: SmoUrnType, preflight: PreflightId): Data => ({ title, urn, preflight, verbs: createDrop })
 const trigger = (title: ScriptAsTitleKey, urn: SmoUrnType, preflight: PreflightId): Data => ({ title, urn, preflight, verbs: verbRow(moduleVerbs), modifiable: true })
+const bqObject = ['create', 'drop', 'select'] as const
+const bigQuery = (title: ScriptAsTitleKey, verbs: readonly ScriptVerb[]): Data => ({ title, urn: 'BigQuery', preflight: 'bigquery', verbs: verbRow(verbs), providers: ['bigquery'] })
 
 // Every row is an SSMS observation to confirm (spec G8).
 const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
@@ -218,7 +224,17 @@ const kindData: { readonly [K in NodeKind]?: Data | typeof later } = {
   agentJob: plain('agentJob', 'Job', 'agentObject'),
   agentAlert: plain('agentAlert', 'Alert', 'agentObject'),
   agentOperator: plain('agentOperator', 'Operator', 'agentObject'),
-  agentProxy: plain('agentProxy', 'ProxyAccount', 'agentObject')
+  agentProxy: plain('agentProxy', 'ProxyAccount', 'agentObject'),
+  // BigQuery (docs/bigquery.md, Script As): CREATE reads the object's DDL from INFORMATION_SCHEMA (billed, behind the cost
+  // prompts); DROP, SELECT and a table's INSERT, UPDATE and DELETE are local templates. A snapshot's rows cannot change.
+  bqTable: {
+    ...bigQuery('table', [...bqObject, 'insert', 'update', 'delete']), subtypeTitles: { snapshot: 'tableSnapshot' },
+    subtypeVerbs: { snapshot: verbRow(bqObject, ['insert', 'update', 'delete']) }
+  },
+  bqView: bigQuery('view', bqObject),
+  bqMaterializedView: bigQuery('materializedView', bqObject),
+  bqExternalTable: bigQuery('externalTable', bqObject),
+  bqRoutine: bigQuery('routine', ['create', 'drop'])
 }
 /** One spec per kind Object Explorer marks scriptable; server, folders, columns, parameters and return values have none. */
 export const scriptKindSpecs = Object.fromEntries(nodeKinds.flatMap(kind => {
@@ -299,9 +315,12 @@ export interface ScriptCommandEntry {
   readonly precondition: string
   readonly unavailableHint: string
   readonly palette: false
+  readonly providers: readonly ProviderId[]
   readonly menus: readonly [{ readonly menu: ScriptVerbSubmenuId; readonly group: string; readonly order: number; readonly title: string; readonly mnemonic: string }]
 }
 export const scriptUnavailableHint = 'Select an object in Object Explorer that can be scripted.'
+/** The engines whose kinds Script As serves: every script command and submenu serves both. */
+export const scriptProviders: readonly ProviderId[] = ['sqlserver', 'bigquery']
 /**
  * The 30 verb × destination commands. Each sits only in its verb's submenu, so its native item id is the bare id, and
  * stays out of the palette, whose Script As… pick lists the enabled ones instead.
@@ -312,6 +331,8 @@ export function scriptCommandEntries(): { readonly [K in ScriptCommandId]: Scrip
     const entry: ScriptCommandEntry = {
       title: scriptCommandTitle(verb, destination), category: 'Object Explorer', icon: target.icon, keywords: ['script'],
       precondition: `backendReady && ${scriptVerbContextKey(verb)} == 'enabled'` + (target.documentTask ? ' && !documentBusy' : ''), unavailableHint: scriptUnavailableHint, palette: false,
+      // Both engines script (BigQuery's kinds since BQ-5); the selection's kind says which verbs show.
+      providers: scriptProviders,
       menus: [{ menu: scriptVerbSubmenuId(verb), group: '1_destination', order: target.order, title: target.title, mnemonic: target.mnemonic }]
     }
     return [scriptCommandId(verb, destination), entry]
@@ -319,6 +340,7 @@ export function scriptCommandEntries(): { readonly [K in ScriptCommandId]: Scrip
 }
 /** A submenu entry, in the shape of `SubmenuDescriptor`; `dynamicTitle` shows `scriptAsTitles[explorerScriptTitle]` instead of the title. */
 export interface ScriptSubmenuEntry {
+  readonly providers: readonly ProviderId[]
   readonly title: string
   readonly nativeId: string
   readonly dynamicTitle?: 'scriptAs'
@@ -328,13 +350,13 @@ export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuI
   const verbs = scriptVerbs.map(verb => {
     const spec = scriptVerbSpecs[verb], id = scriptVerbSubmenuId(verb)
     const entry: ScriptSubmenuEntry = {
-      title: scriptVerbTitle(verb), nativeId: id,
+      providers: scriptProviders, title: scriptVerbTitle(verb), nativeId: id,
       placements: [{ menu: scriptAsSubmenuId, group: spec.group, order: spec.order, mnemonic: spec.mnemonic, when: `${scriptVerbContextKey(verb)} != ''` }]
     }
     return [id, entry] as const
   })
   const scriptAs: ScriptSubmenuEntry = {
-    title: 'Script as', nativeId: scriptAsSubmenuId, dynamicTitle: 'scriptAs',
+    providers: scriptProviders, title: 'Script as', nativeId: scriptAsSubmenuId, dynamicTitle: 'scriptAs',
     // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out. A
     // Search Objects hit's menu stands in its own keys for the selection's (`selectionContextOf`).
     placements: [
@@ -357,7 +379,9 @@ export const scriptErrorRetryable = {
   // A pool connection that could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure that
   // may pass.
   AUTH_ENTRA: true,
-  AUTH_IDENTITY: false
+  AUTH_IDENTITY: false,
+  // BigQuery's CREATE runs a billed query: its maximum bytes billed refused it, a quota stopped it, or the sign-in expired.
+  COST_CAP: false, QUOTA: true, AUTH_EXPIRED: false
 } as const satisfies Record<string, boolean>
 export type ScriptErrorCode = keyof typeof scriptErrorRetryable
 export const scriptErrorCodes = Object.keys(scriptErrorRetryable) as ScriptErrorCode[]

@@ -3,6 +3,7 @@ import { displayText, refKey, type ExplorerTarget, type ObjectRef } from '../../
 import { scriptLimits, scriptMenuState, scriptUnavailableHint, type ScriptDestination, type ScriptVerb } from '../../../shared/scripting/catalog.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
 import type { ScriptResult } from '../../../shared/scripting/schema.ts'
+import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -29,6 +30,8 @@ export interface ScriptingServiceOptions {
   /** When batched cancels go out: a microtask by default, so they never wait for a hidden window's frames. */
   readonly schedule?: (callback: () => void) => void
   readonly newId?: () => string
+  /** BigQuery's cost prompts before Script As › CREATE runs its billed INFORMATION_SCHEMA query (BigQueryCostService.beforeScript). */
+  readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
 }
 
 export const scriptingMessages = {
@@ -50,7 +53,7 @@ export function scriptFileName(object: ObjectRef): string {
   return [...parts, object.name ?? 'Script'].join('.') + '.sql'
 }
 
-interface Job { readonly id: string; readonly key: string; readonly label: string; readonly connectionId: string; visible: boolean; cancelled: boolean; disconnected: boolean; timer?: unknown }
+interface Job { id: string; readonly key: string; readonly label: string; readonly connectionId: string; visible: boolean; cancelled: boolean; disconnected: boolean; timer?: unknown }
 class FlagStore extends SnapshotStore<boolean> {
   set(value: boolean) { if (value !== this.getSnapshot()) this.publish(value) }
   clear() { this.clearListeners() }
@@ -107,7 +110,19 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     this.changed()
     let result: ApiResult<ScriptResult>
     try {
-      result = await this.options.api.scriptObjects({ connectionId, requestId: job.id, targets: [object], verb, options: this.options.options.getSnapshot().options })
+      const request = { connectionId, targets: [object], verb, options: this.options.options.getSnapshot().options }
+      // A BigQuery object's CREATE is a billed query: its free estimate first, then the cost prompts, then the run under the cap.
+      let billed: { readonly maximumBytesBilled?: number } = {}
+      if (verb === 'create' && object.project !== undefined) {
+        const estimated = unwrap(await this.options.api.scriptObjects({ ...request, requestId: job.id, estimateOnly: true }))
+        if (job.cancelled || this.disposed) return
+        if (estimated.error) throw new Error(estimated.error.message)
+        const answer = estimated.estimate && this.options.billedGate ? await this.options.billedGate(connectionId, estimated.estimate) : { run: true }
+        if (!answer.run || job.cancelled || this.disposed) return
+        billed = answer.maximumBytesBilled === undefined ? {} : { maximumBytesBilled: answer.maximumBytesBilled }
+        job.id = this.newId()
+      }
+      result = await this.options.api.scriptObjects({ ...request, requestId: job.id, ...billed })
     } catch (error) {
       if (job.cancelled || this.disposed) return
       throw job.disconnected ? new Error(scriptingMessages.disconnected) : error
@@ -118,7 +133,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
     if (job.disconnected || !this.isLive(connectionId) || !result.ok && result.code === 'CANCELLED') throw new Error(scriptingMessages.disconnected)
     const value = unwrap(result)
     if (value.error) throw new Error(value.error.message)
-    if (value.text === undefined) throw new Error(`SQL Server Management Objects produced no script for ${job.label}.`)
+    if (value.text === undefined) throw new Error(`${object.project === undefined ? 'SQL Server Management Objects' : 'BigQuery'} produced no script for ${job.label}.`)
     const notice = await deliverScript({ destination, text: value.text, database: value.database, connectionId, fileName: scriptFileName(object) }, this.options)
     if (notice) this.notify({ text: notice, kind: 'info' }, scriptLimits.noticeMs)
     if (value.warnings.length) this.notify({ text: `Scripted ${job.label} with a warning: ${value.warnings[0]}`, title: value.warnings.join('\n'), kind: 'warning' }, scriptLimits.warningNoticeMs)

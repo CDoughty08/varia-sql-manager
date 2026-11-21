@@ -87,6 +87,7 @@ internal sealed class ScriptingService : IDisposable
             && (target.Parent is null || row.Parents.Contains(target.Parent.Kind))))
             throw Invalid("this object cannot be scripted with this verb.");
         var options = args.Options ?? throw Invalid("options.");
+        if (args.EstimateOnly is not null && args.EstimateOnly != true) throw Invalid("estimateOnly.");
         foreach (var (row, value) in catalog.Options.Where(row => row.Type == "enum").Select(row => (row, OptionValue(options, row.Key))))
             if (!row.Values.Contains(value)) throw Invalid("option " + row.Key + ".");
         return (target, verb);
@@ -104,6 +105,7 @@ internal sealed class ScriptingService : IDisposable
     {
         var watch = Stopwatch.StartNew();
         var (target, verb) = Validate(args);
+        if (args.EstimateOnly is not null || args.MaximumBytesBilled is not null) throw Invalid("an estimate and maximum bytes billed apply only to BigQuery connections.");
         var profile = host.Profile(args.ConnectionId);
         var database = ScriptPreflight.Home(target.Kind, target.Database);
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);

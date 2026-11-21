@@ -14,8 +14,9 @@ internal sealed record ExplorerRequest(string ConnectionId, string RequestId, No
 internal static class ExplorerRefs
 {
     public const int MaxIdentifier = 128;
-    /// <summary>The longest name any kind may declare (an SSIS package's 260); every other kind keeps 128.</summary>
-    public const int MaxName = 260;
+    /// <summary>The longest name any kind may declare (a BigQuery column's field path); SQL Server's kinds keep 128 but an
+    /// SSIS package's 260.</summary>
+    public const int MaxName = BigQuery.BqNames.FieldPath;
     public const int MaxPageSize = 2000;
     private static readonly string[] TextOps = ["contains", "equals", "notContains"];
     private static readonly string[] DateOps = ["equals", "lessThan", "lessOrEqual", "greaterThan", "greaterOrEqual", "between", "notBetween"];
@@ -122,13 +123,33 @@ internal static class ExplorerRefs
             "parent" => value.Parent is not null,
             "ssisFolder" => value.SsisFolder is not null,
             "ssisProject" => value.SsisProject is not null,
+            "project" => value.Project is not null,
+            "dataset" => value.Dataset is not null,
+            "table" => value.Table is not null,
             _ => throw new InvalidOperationException("Unknown ref field " + field)
         };
         if (scope.Required.Any(field => !Has(field)) || scope.Forbidden.Any(Has)) throw Invalid("the fields of a " + kind.Kind + ".");
         if (value.Database is not null && !Ident(value.Database) || value.Schema is not null && !Ident(value.Schema) || value.Name is not null && !Ident(value.Name, kind.MaxName)
-            || value.SsisFolder is not null && !Ident(value.SsisFolder) || value.SsisProject is not null && !Ident(value.SsisProject))
+            || value.SsisFolder is not null && !Ident(value.SsisFolder) || value.SsisProject is not null && !Ident(value.SsisProject) || !BigQueryNames(value, kind))
             throw Invalid("a name.");
         if (value.Parent is { } parent && (!kind.Parents.Contains(parent.Kind ?? "") || !Ident(parent.Schema) || !Ident(parent.Name))) throw Invalid("parent.");
+    }
+
+    /// <summary>A BigQuery ref's names follow BigQuery's rules (BqNames, as src/shared/explorer/schema.ts bigQueryProblems).</summary>
+    private static bool BigQueryNames(ObjectRefDto value, CatalogKind kind)
+    {
+        if (value.Project is not null && !BigQuery.BqNames.IsProject(value.Project) || value.Dataset is not null && !BigQuery.BqNames.IsDataset(value.Dataset)
+            || value.Table is not null && !BigQuery.BqNames.IsTable(value.Table)) return false;
+        return value.Name is not { } name || kind.Kind switch
+        {
+            "bqProject" => BigQuery.BqNames.IsProject(name),
+            "bqDataset" => BigQuery.BqNames.IsDataset(name),
+            "bqTable" or "bqView" or "bqMaterializedView" or "bqExternalTable" => BigQuery.BqNames.IsTable(name),
+            "bqRoutine" => BigQuery.BqNames.IsRoutine(name),
+            "bqModel" => BigQuery.BqNames.IsModel(name),
+            "bqColumn" => BigQuery.BqNames.IsFieldPath(name),
+            _ => true
+        };
     }
 
     private static void Filter(ExplorerFilterDto filter, IReadOnlyList<string> properties, CatalogFolder? folder)
@@ -156,6 +177,6 @@ internal static class ExplorerRefs
     public static void CheckServed(ExplorerRequest request, ExplorerCatalog catalog, ExplorerProfile profile)
     {
         if (request.Folder is { } folder && !catalog.Served(folder.Id, profile)) throw Invalid("this server has no " + folder.Id + " folder.");
-        if (!catalog.KindServed(request.Object.Kind, profile)) throw Invalid("this server has no " + request.Object.Kind + ".");
+        if (!catalog.KindServed(request.Object.Kind, profile) || !catalog.KindOf(request.Object.Kind).Serves(Providers.SqlServer)) throw Invalid("this server has no " + request.Object.Kind + ".");
     }
 }

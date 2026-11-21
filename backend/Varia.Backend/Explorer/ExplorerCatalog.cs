@@ -22,9 +22,13 @@ internal sealed record CatalogSchemaGroups(string List, IReadOnlyList<string> Ro
 internal sealed record CatalogKind(string Kind, string Title, string Scope, string Icon, IReadOnlyList<string> Subtypes, IReadOnlyDictionary<string, string> SubtypeIcons,
     IReadOnlyDictionary<string, string> VariantIcons, IReadOnlyList<string> Folders, IReadOnlyDictionary<string, IReadOnlyList<string>> SubtypeFolders,
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName, IReadOnlyList<CatalogSingleton>? Singletons = null,
-    string? Opens = null, IReadOnlyList<string>? Platforms = null)
+    string? Opens = null, IReadOnlyList<string>? Platforms = null, IReadOnlyList<string>? Providers = null)
 {
     public IReadOnlyList<CatalogSingleton> SingletonList => Singletons ?? [];
+    /// <summary>The kind belongs to this provider's tree (no providers: SQL Server's alone).</summary>
+    public bool Serves(string provider) => Providers is { } list ? list.Contains(provider) : provider == Varia.Backend.Providers.SqlServer;
+    /// <summary>A BigQuery kind: its listers pass names to REST, never as a sysname.</summary>
+    public bool BigQuery => Scope.StartsWith("bq", StringComparison.Ordinal);
 }
 /// <summary>A kind shown once below its owner, at its order among the owner's folders, on the platforms it lists (null: wherever
 /// its owner is).</summary>
@@ -85,7 +89,7 @@ internal sealed class ExplorerCatalog
     private sealed record SingletonJson(string Kind, int Order, List<string>? Platforms = null);
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
-        string? List, List<string> Rows, int MaxName, List<SingletonJson>? Singletons = null, string? Opens = null, List<string>? Platforms = null);
+        string? List, List<string> Rows, int MaxName, List<SingletonJson>? Singletons = null, string? Opens = null, List<string>? Platforms = null, List<string>? Providers = null);
     private sealed record PeekFactJson(string Id, string Format, int? Since, bool Optional = false);
     private sealed record PeekListJson(string Id, List<PeekFactJson> Columns);
     private sealed record PeekKindJson(string Kind, string Definition, bool Dependencies, string? OptionalGroup, List<PeekFactJson> Facts, List<PeekListJson> Lists);
@@ -112,7 +116,8 @@ internal sealed class ExplorerCatalog
         kinds = json.Kinds.ToDictionary(kind => kind.Kind, kind => new CatalogKind(kind.Kind, kind.Title, kind.Scope, kind.Icon, kind.Subtypes, kind.SubtypeIcons, kind.VariantIcons,
             kind.Folders, kind.SubtypeFolders.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value), kind.HistoryLookup, kind.Parents, kind.List, kind.Rows,
             kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range."),
-            kind.Singletons is { Count: > 0 } singletons ? [.. singletons.Select(item => new CatalogSingleton(item.Kind, item.Order, item.Platforms))] : null, kind.Opens, kind.Platforms),
+            kind.Singletons is { Count: > 0 } singletons ? [.. singletons.Select(item => new CatalogSingleton(item.Kind, item.Order, item.Platforms))] : null, kind.Opens, kind.Platforms,
+            kind.Providers),
             StringComparer.Ordinal);
         // A singleton is named by its kind alone, so it is an unnamed server-scope kind with one owner.
         foreach (var owner in kinds.Values)
@@ -120,8 +125,8 @@ internal sealed class ExplorerCatalog
                 if (!kinds.TryGetValue(item.Kind, out var single) || single.Scope != "server" || kinds.Values.Count(other => other.SingletonList.Any(entry => entry.Kind == item.Kind)) != 1)
                     throw new InvalidOperationException("A singleton must be a server-scope kind with one owner: " + item.Kind + ".");
         // Folders, history rows and listings name their owner through @object_name, a sysname: a longer owner name would
-        // reach them cut to 128 code units, and resolve another object.
-        if (kinds.Values.FirstOrDefault(kind => kind.MaxName > ExplorerRefs.MaxIdentifier && OwnsChildren(kind)) is { } longNamed)
+        // reach them cut to 128 code units, and resolve another object. BigQuery's listers pass names to REST instead.
+        if (kinds.Values.FirstOrDefault(kind => kind.MaxName > ExplorerRefs.MaxIdentifier && !kind.BigQuery && OwnsChildren(kind)) is { } longNamed)
             throw new InvalidOperationException("A kind whose names exceed 128 code units cannot own folders or rows: " + longNamed.Kind + ".");
         Queries = [.. json.Queries];
         SchemaGroups = json.SchemaGroups ?? throw new InvalidOperationException("The Object Explorer catalogue has no schema groups.");

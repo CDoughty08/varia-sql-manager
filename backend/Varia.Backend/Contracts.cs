@@ -44,7 +44,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, BigQuery.BigQueryPreviewTarget? Preview = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -340,9 +340,10 @@ internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestI
     ExplorerFilterDto? Filter = null, bool? GroupBySchema = null);
 /// <summary>An object node (Type "object", Object) or a folder below its nearest object (Type "folder", Owner, Folder).</summary>
 internal sealed record NodeRefDto(string Type, ObjectRefDto? Object = null, ObjectRefDto? Owner = null, string? Folder = null);
-/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); null elsewhere.</summary>
+/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); Project, Dataset and
+/// Table a BigQuery object's project, dataset and (for a column) table (the bq* scopes); null elsewhere.</summary>
 internal sealed record ObjectRefDto(string Kind, string? Database = null, string? Schema = null, string? Name = null, ParentRefDto? Parent = null, string? SsisFolder = null,
-    string? SsisProject = null);
+    string? SsisProject = null, string? Project = null, string? Dataset = null, string? Table = null);
 internal sealed record ParentRefDto(string Kind, string Schema, string Name);
 internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
 internal sealed record TextFilterDto(string Op, string Value);
@@ -424,7 +425,9 @@ internal sealed record ObjectSearchResult(List<ObjectSearchHit> Hits, int Total,
 
 /// <summary>scripting.script: one object for Script As (the wizard will send many), a verb of the catalogue, and every
 /// scripting option (src/shared/scripting/schema.ts). Cancellation is a CANCEL frame for the request.</summary>
-internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options);
+/// <summary>EstimateOnly and MaximumBytesBilled: a BigQuery CREATE's free estimate, and the cap its billed query runs under; SQL Server refuses them.</summary>
+internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options, bool? EstimateOnly = null,
+    long? MaximumBytesBilled = null);
 /// <summary>The 36 options of src/shared/scripting/options.ts in its order; a missing member fails deserialization.</summary>
 internal sealed record ScriptingOptionsDto
 {
@@ -469,7 +472,9 @@ internal sealed record ScriptingOptionsDto
 internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// <summary>The whole script (at most 4,000,000 characters) or an error. Database is where a new query window should
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
-internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
+/// <para>Estimate: a BigQuery CREATE's estimate, answered instead of Text when EstimateOnly asked for it.</para>
+internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null,
+    BigQuery.BigQueryDryRunResult? Estimate = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
 /// what an inline action reads first (renameDatabase), what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),

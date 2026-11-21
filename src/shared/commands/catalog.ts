@@ -398,7 +398,7 @@ export const commandCatalog = {
   // Object Explorer's commands act on the node a context menu was opened for, otherwise on the selected node (F5, the
   // toolbar, the palette). Refresh reloads the node (a leaf's parent); without a selection, or from the empty area, every server.
   'explorer.refresh': {
-    title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.children'],
+    title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.children'], providers: both,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
     menus: [{ menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost' }]
   },
@@ -491,7 +491,7 @@ export const commandCatalog = {
   ...ssisCommandEntries(),
   // The palette's way in: a quick pick of the enabled verbs and destinations for the selected node.
   'explorer.scriptAs': {
-    title: 'Script As…', category: 'Object Explorer', icon: 'file-code', keywords: ['script', 'create', 'alter', 'drop', 'select', 'insert', 'update', 'delete', 'execute'], methods: ['scripting.script'],
+    title: 'Script As…', category: 'Object Explorer', icon: 'file-code', keywords: ['script', 'create', 'alter', 'drop', 'select', 'insert', 'update', 'delete', 'execute'], methods: ['scripting.script'], providers: both,
     precondition: "backendReady && explorerScriptTitle != ''", unavailableHint: scriptUnavailableHint
   },
   // SSMS's Modify: ALTER to a new query window, for modules and triggers.
@@ -539,6 +539,20 @@ export const commandCatalog = {
     // The card has no state key of its own: the handler's condition asks whether one is open.
     precondition: 'backendReady', unavailableHint: 'Open Peek first.',
     keybindings: [{ key: 'f5', when: 'peekFocus || peekTabFocus' }]
+  },
+  // BigQuery's Preview Rows (docs/bigquery.md): a table's first 1,000 rows through tabledata.list, which is free and runs no
+  // job, into a new query tab whose text is the SELECT it stands for. Views and external tables offer Script As › SELECT.
+  'explorer.previewRows': {
+    title: 'Preview Rows', category: 'Object Explorer', icon: 'table', keywords: ['bigquery', 'preview', 'rows', 'tabledata', 'free', 'top'], methods: ['query.execute'], providers: ['bigquery'],
+    precondition: "backendReady && explorerSelectionKind == 'bqTable' && !documentBusy", unavailableHint: 'Select a BigQuery table in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" }]
+  },
+  // BigQuery's Properties: a table-like object's facts from tables.get in a read-only document tab.
+  'explorer.bigQueryProperties': {
+    title: 'BigQuery Properties', category: 'Object Explorer', icon: 'info', keywords: ['bigquery', 'properties', 'details', 'size', 'partitioning', 'clustering'], methods: ['bigquery.properties'], providers: ['bigquery'],
+    precondition: "backendReady && (explorerSelectionKind == 'bqTable' || explorerSelectionKind == 'bqView' || explorerSelectionKind == 'bqMaterializedView' || explorerSelectionKind == 'bqExternalTable')",
+    unavailableHint: 'Select a BigQuery table or view in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '9_properties', order: 2, title: 'Properties', mnemonic: 'r', when: "(explorerNode == 'bqTable' || explorerNode == 'bqView' || explorerNode == 'bqMaterializedView' || explorerNode == 'bqExternalTable') && !explorerServerLost" }]
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.', providers: both,

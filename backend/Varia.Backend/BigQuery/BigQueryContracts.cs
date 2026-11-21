@@ -126,3 +126,14 @@ internal sealed record BigQueryDryRunArgs(string ConnectionId, string Sql, strin
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
 /// whether emulator mode faked it. A refused query is an error value (SQL_ERROR with BigQuery's <c>[line:column]</c>).</summary>
 internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incomplete = null, string? StatementType = null, bool Faked = false);
+
+/// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
+/// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>
+internal sealed record BigQueryPreviewTarget(string Project, string Dataset, string Table);
+/// <summary>bigquery.properties: a table-like object's facts from tables.get (docs/bigquery.md, Properties).</summary>
+internal sealed record BigQueryPropertiesArgs(string ConnectionId, string RequestId, string Kind, string Project, string Dataset, string Name);
+internal sealed record BigQueryFact(string Label, string Value);
+internal sealed record BigQueryFactGroup(string Title, List<BigQueryFact> Facts);
+/// <summary>Type: tables.get's type in words ("table", "snapshot", "view"…). Groups: Table, Storage, Layout, History, in that
+/// order, each left out when it has no facts.</summary>
+internal sealed record BigQueryProperties(string Name, string Type, List<BigQueryFactGroup> Groups, long ElapsedMs);

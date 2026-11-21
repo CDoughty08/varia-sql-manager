@@ -23,7 +23,7 @@ const index = on({ kind: 'index', database: 'AppData', name: 'IX_Orders', parent
 const ok = (text: string, database = 'AppData', warnings: string[] = []): ApiResult<ScriptResult> => ({ ok: true, value: { text, database, warnings, commands: 3, elapsedMs: 5 } })
 
 /** The service over fakes: each request waits until the test settles it, and cancels go out when `tick` runs. */
-function setup() {
+function setup(billedGate?: ConstructorParameters<typeof ScriptingService>[0]['billedGate']) {
   const { timers, advance } = manualTimers()
   const scheduled: (() => void)[] = []
   const requests: { params: Parameters<VariaApi['scriptObjects']>[0]; settle: (result: ApiResult<ScriptResult>) => void }[] = []
@@ -40,7 +40,7 @@ function setup() {
   const store = { getSnapshot: () => options, subscribe: () => () => {} }
   const focusEditor = vi.fn()
   let ids = 0
-  const scripting = new ScriptingService({ api, documents, files, connections, options: store, focusEditor, timers, schedule: callback => { scheduled.push(callback) }, newId: () => `id-${++ids}` })
+  const scripting = new ScriptingService({ api, documents, files, connections, options: store, focusEditor, timers, schedule: callback => { scheduled.push(callback) }, newId: () => `id-${++ids}`, ...billedGate ? { billedGate } : {} })
   cleanups.push(() => scripting.dispose())
   const tick = () => scheduled.splice(0).forEach(callback => callback())
   const setOptions = (next: typeof defaultScriptingOptions) => { options = { options: next } }
@@ -214,6 +214,43 @@ describe('ScriptingService', () => {
     scripting.dispose()
     expect(api.cancelScripting.mock.calls).toEqual([[['id-1']]])
     expect(scripting.running.getSnapshot()).toBe(false)
+  })
+})
+
+describe('BigQuery Script As', () => {
+  const bqOrders: ObjectRef = { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }
+  const estimate = { bytesProcessed: 10_485_760, statementType: 'SELECT' }
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  it('asks for CREATE\'s estimate, then the cost prompts, then runs it under their cap with a new request id', async () => {
+    const gate = vi.fn(async () => ({ run: true, maximumBytesBilled: 20_000_000 }))
+    const { scripting, api, documents, requests } = setup(gate)
+    const running = scripting.run('create', 'newQuery', on(bqOrders))
+    expect(api.scriptObjects.mock.calls[0][0]).toMatchObject({ requestId: 'id-1', verb: 'create', estimateOnly: true, targets: [bqOrders] })
+    requests[0].settle({ ok: true, value: { database: 'sales', warnings: [], commands: 0, elapsedMs: 1, estimate } })
+    await flush()
+    expect(gate).toHaveBeenCalledWith('server-a', estimate)
+    expect(api.scriptObjects.mock.calls[1][0]).toMatchObject({ requestId: 'id-2', maximumBytesBilled: 20_000_000 })
+    expect(api.scriptObjects.mock.calls[1][0]).not.toHaveProperty('estimateOnly')
+    requests[1].settle(ok('CREATE TABLE `varia-alpha.sales.orders` (id INT64);', 'sales'))
+    await running
+    expect(documents.newQuery.mock.calls[0]).toEqual(['CREATE TABLE `varia-alpha.sales.orders` (id INT64);', undefined, 'server-a', 'sales', false])
+  })
+
+  it('runs nothing when the cost prompts decline, and sends a template verb straight away', async () => {
+    const gate = vi.fn(async () => ({ run: false }))
+    const { scripting, api, documents, requests } = setup(gate)
+    const declined = scripting.run('create', 'newQuery', on(bqOrders))
+    requests[0].settle({ ok: true, value: { database: 'sales', warnings: [], commands: 0, elapsedMs: 1, estimate } })
+    await declined
+    expect(api.scriptObjects).toHaveBeenCalledOnce()
+    expect(documents.newQuery).not.toHaveBeenCalled()
+    const select = scripting.run('select', 'newQuery', on(bqOrders))
+    expect(api.scriptObjects.mock.calls[1][0]).not.toHaveProperty('estimateOnly')
+    requests[1].settle(ok('SELECT * FROM `varia-alpha`.`sales`.`orders` LIMIT 1000;', 'sales'))
+    await select
+    expect(gate).toHaveBeenCalledOnce()
+    expect(documents.newQuery).toHaveBeenCalledOnce()
   })
 })
 
