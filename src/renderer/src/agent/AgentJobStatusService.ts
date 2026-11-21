@@ -27,7 +27,7 @@ export interface WatchedEntry {
   readonly created: string
   readonly job: WatchedJob
   readonly phase: WatchedPhase
-  /** When this window handed the job over (client ms): with a sample's server clock, the Start's time in server time. */
+  /** When the Start was sent (performance.now(), a monotonic clock): with a sample's server clock, the Start's time in server time. */
   readonly watchedAt: number
   /** A Stop Job is on its way for it. */
   readonly stopping?: true
@@ -69,13 +69,14 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
   constructor(private readonly options: AgentJobStatusServiceOptions) {
     super({ jobs: [], agent: {} })
     this.newId = options.newId ?? (() => crypto.randomUUID())
-    this.now = options.now ?? (() => Date.now())
+    // Monotonic: a client clock step between the Start and the first sample must not move the Start's server time.
+    this.now = options.now ?? (() => performance.now())
     // A closed or lost connection ends its jobs' following: their outcome is unknown from here.
     this.stopConnections = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
   }
 
   /** A job Job Activity Monitor started: followed from its last run before the start (a run counts only above it). */
-  watch(connectionId: string, job: { readonly id: string; readonly name: string; readonly created: string; readonly lastRun: string }): void {
+  watch(connectionId: string, job: { readonly id: string; readonly name: string; readonly created: string; readonly lastRun: string }, sentAt?: number): void {
     if (this.disposed) return
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId)
     if (!connection) return
@@ -83,7 +84,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     const others = this.getSnapshot().jobs.filter(entry => !(entry.connectionId === connectionId && entry.id === id))
     const entry: WatchedEntry = {
       key: this.newId(), connectionId, server: connection.displayName || connection.server, id, name: job.name, created: job.created,
-      job: { before: stampOf(job.lastRun), idleSamples: 0, seenRunning: false }, phase: { phase: 'starting' }, watchedAt: this.now()
+      job: { before: stampOf(job.lastRun), idleSamples: 0, seenRunning: false }, phase: { phase: 'starting' }, watchedAt: sentAt ?? this.now()
     }
     // At most agentLimits.watchedJobs followed per connection: the oldest still followed gives its slot up.
     const followed = others.filter(item => item.connectionId === connectionId && active(item))

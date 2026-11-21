@@ -174,6 +174,8 @@ describe("agent.jobs' shared rules", () => {
     const dated: WatchedJob = { before: 20261115023000, idleSamples: 0, seenRunning: false, requested: 20261115140000 }
     expect(watchedPhase(dated, { status: 4, steps: 3, lastOutcome: 0, lastRun: 20261115135955 }, 'running').phase).toEqual({ phase: 'starting' })
     expect(watchedPhase(dated, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115140001 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140001 })
+    // Seen running, the newer run is the Start's even when the clocks disagree (a DST jump put the Start after its run).
+    expect(watchedPhase({ ...dated, seenRunning: true }, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115135959 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115135959 })
     expect(stampOf('2026-11-15 02:30:00')).toBe(20261115023000)
     expect(stampOf('')).toBe(0)
   })
@@ -278,7 +280,12 @@ describe('Job Activity Monitor', () => {
     api.executeObjectAction.mockImplementation(async request => request.target.name === 'Backup'
       ? { ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'JOB_STATE', message: 'Backup is already running.', retryable: false } } } as never
       : { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    // The status bar dates the Start from when its request left, not from when the answer came.
+    let ticks = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => ticks++ === 0 ? 42 : 99)
     await commands.execute('agent.startJobs', { tabId: id }, 'api')
+    clock.mockRestore()
+    expect(agentJobs.getSnapshot().jobs[0].watchedAt).toBe(42)
     expect(api.executeObjectAction.mock.calls.map(([request]) => request)).toEqual([
       expect.objectContaining({ action: 'startJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }),
       expect.objectContaining({ action: 'startJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Backup' } })
@@ -367,7 +374,7 @@ describe("The status bar's running job", () => {
   })
   it("dates the Start by the first sample's server clock, so a run that ended just before it is not taken for its outcome", () => {
     // The hand-over and the first sample at the same client time: the Start is the clock less a second for rounding.
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000_000)
     cleanups.push(() => clock.mockRestore())
     const { agentJobs, handles } = monitor()
     agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })

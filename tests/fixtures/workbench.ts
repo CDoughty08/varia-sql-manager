@@ -440,7 +440,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
-  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job) => agentJobs.watch(connectionId, job) })
+  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})

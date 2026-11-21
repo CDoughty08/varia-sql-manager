@@ -77,7 +77,7 @@ export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
   readonly live: Pick<LiveService, 'open'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   /** A Start that went through: the status bar follows the job from here (AgentJobStatusService.watch). */
-  readonly started?: (connectionId: string, job: SelectedJob) => void
+  readonly started?: (connectionId: string, job: SelectedJob, sentAt: number) => void
   readonly focus?: (id: string) => void
   readonly newId?: () => string
 }
@@ -393,6 +393,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       const target = { kind: 'agentJob' as const, name: job.name }
       const agentIdentity = { created: job.created }
       let result: ApiResult<ActionExecuteResult> | undefined, thrown: unknown
+      // When the request left (monotonic): the status bar dates the Start in server time from it.
+      const sentAt = performance.now()
       try {
         result = await this.options.api.executeObjectAction(verb === 'startJob' ? { action: 'startJob', connectionId, requestId, target, agentIdentity }
           : verb === 'stopJob' ? { action: 'stopJob', connectionId, requestId, target, agentIdentity }
@@ -400,7 +402,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       } catch (failure) { thrown = failure }
       const outcome = bulkLine(verb, result, thrown)
       lines = lines.map((line, at) => at === index ? { ...line, ...outcome } : line)
-      if (verb === 'startJob' && outcome.state === 'done') this.options.started?.(connectionId, job)
+      if (verb === 'startJob' && outcome.state === 'done') this.options.started?.(connectionId, job, sentAt)
     }
     if (!this.get(id)) return
     publish(false)

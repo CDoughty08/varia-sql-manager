@@ -208,7 +208,8 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
     return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0, before: Math.max(job.before, prior) } }
   }
   const lastRun = sample.lastRun ?? 0
-  if (lastRun > job.before && (job.requested === undefined || lastRun >= job.requested) && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }
+  // Seen running since the Start, the newer run is the Start's (Start is refused while a job runs), whatever the clocks say.
+  if (lastRun > job.before && (job.seenRunning || job.requested === undefined || lastRun >= job.requested) && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }
   // An idle read without a newer run is not yet an end: msdb may show the job idle a sample before its last run is written.
   const next = { ...job, idleSamples: job.idleSamples + 1 }
   if (next.idleSamples > watchStartSamples) return { phase: { phase: 'unknown', reason: 'gone' }, job: next }

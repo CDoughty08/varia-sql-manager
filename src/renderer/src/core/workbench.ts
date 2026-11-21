@@ -508,7 +508,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    started: (connectionId, job) => agentJobs.watch(connectionId, job),
+    started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
