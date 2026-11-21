@@ -801,6 +801,16 @@ internal static partial class BigQueryExecutionChecks
                 && !Says(result, "larger than estimated") && Pages(harness) < 4096,
                 $"a load that does not fit goes back to windowed under another revision: {code} {message} {set?.Residence} {set?.Revision} {Texts(result?.Messages ?? [])}");
         }
+        // Automatic decides by the rows the result will show: one too large for memory whole fits once Maximum rows caps it.
+        foreach (var maxRows in new[] { 0, 500 })
+        {
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), new ResultStore(64L << 20, 4L << 20));
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => args["maxRows"] = maxRows);
+            var residence = executed?.ResultSets.Single().Residence;
+            check(code == "ok" && residence == (maxRows == 0 ? "remote" : "memory"),
+                $"Automatic decides residence by the rows Maximum rows ({maxRows}) lets it show: {code} {message} {residence} {executed?.ResultSets.Single().Revision} {Texts(executed?.Messages ?? [])}");
+        }
         // Stop part way: back to windowed, the load reported cancelled.
         using (var harness = new Harness(Lines(3000)))
         {
@@ -1192,6 +1202,18 @@ internal static partial class BigQueryExecutionChecks
                 SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             }
             check(refused.Count == 0, "rows wider than measured still read with a block ahead: " + string.Join(",", refused));
+        }
+
+        // An overrun is charged: once rows wider than measured are cached, the global budget holds what their pages cost.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 3000 };
+            using var remote = Remote(store, blocks, rows: 5000, rowBytes: 1000, cache: 64L << 20);
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var cost = remote.CachedPageCost();
+            check(cost > 0 && store.WindowCacheBytes == cost && remote.CachedBytes == cost && store.UsedBytes == cost,
+                $"rows wider than measured are charged what their pages cost: pages {cost}, window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, used {store.UsedBytes}");
         }
 
         // Rows of about 200 KB: a block holds what half of a 16 MiB cache holds, so the cache never passes its limit.

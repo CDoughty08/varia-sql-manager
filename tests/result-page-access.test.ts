@@ -73,6 +73,11 @@ describe('result page access', () => {
       // Load into memory is the one request that wants the windowed result.
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
     ].sort())
+    // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
+    const around = (text: string) => text.split('\n').filter(line => !/^\s*\/\//.test(line) && (/\.Sets\(\)/.test(line) || /\b(?:var|ResultStore)\s+\w+\s*=\s*(?:this\.)?\w*[sS]tore\s*;/.test(line))).map(line => line.trim())
+    expect(around('var held = store; var x = held.Find(a);')).toHaveLength(1)
+    expect(around('var set = store.Sets().FirstOrDefault(s => s.ResultId == id);')).toHaveLength(1)
+    expect(service.filter(file => !file.includes('/Results/')).flatMap(file => around(readFileSync(file, 'utf8')).map(line => `${file}: ${line}`))).toEqual([])
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)

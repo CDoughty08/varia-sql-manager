@@ -150,7 +150,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
-  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
+  expect(fetch).toMatch(/var cost = pages\.Sum\(page => page\.Cost\);\n\s*if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
   // An overrun reserves through Reserve too; refused by the cache's own limit, it may pass it, up to twice it (OverLimit),
   // and the global budget still refuses it. Which limit refused is what the reservation saw: never decided again from the
   // cache's bytes afterwards, which other fetches change meanwhile.

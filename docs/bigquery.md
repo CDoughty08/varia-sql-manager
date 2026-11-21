@@ -299,7 +299,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   windowed result keeps. Each query takes them as it starts.
 - **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,
   under Always in memory, when its destination table cannot be read, or when its rows (the first page's measured cost
-  per row, times the total) fit half of what the query may still take from the budget. Otherwise it is windowed, and the
+  per row, times the rows it will show within Maximum rows) fit half of what the query may still take from the budget. Otherwise it is windowed, and the
   first page seeds its first blocks. A windowed result counts at most 2,147,483,647 rows (the grid's 32-bit indexes);
   Messages says so when BigQuery holds more.
 - **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of

@@ -213,6 +213,12 @@ internal sealed class RemoteResult : IDisposable
     }
 
     /// <summary>The blocks cached, in order (checks).</summary>
+    /// <summary>Checks only: what the cached blocks' pages cost, counted from the pages themselves.</summary>
+    internal long CachedPageCost()
+    {
+        lock (gate) return blocks.Values.Sum(block => block.Pages.Sum(page => (long)page.Cost));
+    }
+
     internal long[] CachedBlocks()
     {
         lock (gate) return [.. blocks.Values.Where(block => block.Filled > block.First).Select(block => block.Index).Order()];
