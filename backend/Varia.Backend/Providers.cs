@@ -21,8 +21,8 @@ internal static class Providers
         "results.diffSeek"];
 
     /// <summary>Methods only BigQuery serves. Those without a connection handle (the pre-connect bigquery.account and
-    /// bigquery.projects) are BigQuery's by declaration, with nothing to resolve; bigquery.dryRun names its handle, and a
-    /// SQL Server handle is refused.</summary>
+    /// bigquery.projects, and results.remoteQuery, which names a windowed result) are BigQuery's by declaration, with
+    /// nothing to resolve; bigquery.dryRun names its handle, and a SQL Server handle is refused.</summary>
     internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun", "results.remoteQuery"];
     private static readonly string[] BigQueryOnly = [BigQuery];
 
