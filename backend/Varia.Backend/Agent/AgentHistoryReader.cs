@@ -205,7 +205,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         else if (checkedJobs.Count > 0)
         {
             // Each checked job is read by its id, so other jobs' rows never use up the cap; once the checked jobs' rows reach it, the
-            // jobs not yet read are left out and counted. By @job_id msdb answers a multi-server job with its target servers (NULL
+            // jobs not yet read are left out and counted (each read holds at most the cap, so a sample holds a few caps at most). By @job_id msdb answers a multi-server job with its target servers (NULL
             // instance and step), so those jobs' history comes from the every-job read instead.
             var statement = now.Days is null ? AgentSql.History : AgentSql.HistorySince;
             var cap = catalog.Limit("historyRows");
@@ -218,7 +218,12 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
                 if (rows.Count >= cap) { truncated = true; skipped = ordered.Count - index; break; }
                 var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement],
                     (_, parameter) => parameter.Name == "@job_id" ? one : parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
-                if (!history.TryGetValue(statement.Id, out var result)) { historyError = refused[0]; rows = null; break; }
+                // A checked job deleted since, or no longer the login's (14262, NOT_FOUND), has no history to show: the other jobs' still read.
+                if (!history.TryGetValue(statement.Id, out var result))
+                {
+                    if (refused[0].Code == "NOT_FOUND") continue;
+                    historyError = refused[0]; rows = null; break;
+                }
                 if (Distributed(result)) { distributed.Add(one); continue; }
                 rows.AddRange(Rows(result).Where(row => row.Job == one));
                 truncated |= result.Truncated;

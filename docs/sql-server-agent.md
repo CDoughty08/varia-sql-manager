@@ -79,7 +79,7 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   job the login may see, with All jobs; at most `historyJobs` may be checked unless all are. The runs grid (newest first) reads
   `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id (a multi-server job, which msdb answers by id with its target servers, from the every-job read) or for all, with
   `@start_run_date` for the window (24 h, Last 7 days, 30 days, All; the server's clock, read in the same sample), at most
-  `historyRows` rows in all (checked jobs not yet read once the cap is reached are left out, and the note says how many); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
+  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
   groups rows into runs by each job's outcome rows: the steps after one outcome row and up to the next belong to the next
   run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
   or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read

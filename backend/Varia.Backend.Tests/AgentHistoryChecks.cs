@@ -230,6 +230,23 @@ internal static class AgentHistoryChecks
         check(full.Count(id => id == "history") == 1 && stopped.Tables[0].More == 1 && stopped.Tables[0].Rows.Count == rowsCap
             && stopped.Status?.Any(status => status.Id == "historySkippedJobs" && Equals(status.Value, 1L)) == true,
             "once the checked jobs' rows reach historyRows the jobs not yet read are left out and the runs say they were cut: " + string.Join(", ", full));
+        // A checked job deleted since (msdb 14262 by @job_id, NOT_FOUND) is skipped: the other checked job's runs still show.
+        var gone = Guid.Parse("99999999-9999-9999-9999-999999999999");
+        var goneRan = new List<string>();
+        var goneFake = Fake(goneRan);
+        var goneReader = new AgentHistoryReader(new([gone.ToString(), Backup.ToString()]))
+        {
+            Reader = new AgentReader
+            {
+                TestRun = (statement, values, cap) => statement.Id == "history" && values["@job_id"] is Guid job && job == gone
+                    ? throw ConnectionFailureChecks.Sql(14262, 1, 16, "server", "The specified @job_id does not exist.")
+                    : goneFake.TestRun!(statement, values, cap)
+            },
+            TestService = () => (1, 4)
+        };
+        var goneSample = await goneReader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(goneSample.Errors.Count == 0 && goneSample.Tables[0].Rows.Count > 0 && goneSample.Tables[0].Rows.All(row => row.Cells[1].Text == "Backup"),
+            "a checked job that no longer exists is skipped and the other checked jobs' runs still read");
         reader.Apply(new AgentHistoryLiveArgs([]));
         ran.Clear();
         var none = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
