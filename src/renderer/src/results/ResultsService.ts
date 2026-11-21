@@ -443,6 +443,8 @@ const unavailable = 'These results are no longer available because the SQL backe
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
+// Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
+const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -1044,6 +1046,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
     if (snapshot.state !== 'complete') return stillLoading
+    if (set.descriptor.residence === 'remote') return windowedSave
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
     if (this.heldOff(tabId, set.key)) return stillSorting

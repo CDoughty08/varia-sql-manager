@@ -7,6 +7,7 @@ import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { queryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
 import { resultRows, rowsFact } from '../src/renderer/src/results/status'
 import { nerdMetrics } from '../src/renderer/src/results/memory-details'
+import { skippedText } from '../src/renderer/src/results/search'
 import type { ResultMemoryDetail } from '../src/shared/contracts'
 
 // Remote BigQuery results (docs/bigquery.md, Residence): results.remoteQuery's contract in main, the residence settings
@@ -211,5 +212,9 @@ describe('the user-facing text about windowed results', () => {
     for (const rule of ['charged to the global budget', 'REMOTE_RESULT', 'up to twice the limit', 'never builds a block past that limit']) expect(bullet).toContain(rule)
     const tools = readFileSync(join(__dirname, '..', 'docs', 'results-tools.md'), 'utf8')
     expect(tools).toMatch(/A BigQuery result can instead stay windowed in BigQuery[^]*refuse a windowed result/)
+    // Search skips a windowed grid rather than refusing the run, and the guide quotes what it announces.
+    expect(tools).toMatch(new RegExp(`skips a windowed one and\\s+says so \\("${skippedText}"\\)`))
+    expect(bigquery).toMatch(/\| `REMOTE_EXPIRED` \|[^\n]*a load into memory/)
+    expect(bigquery).toMatch(/\*\*Load into memory\.\*\*[^]*?a load after BigQuery's temporary\s+result table expired fails with `REMOTE_EXPIRED`/)
   })
 })

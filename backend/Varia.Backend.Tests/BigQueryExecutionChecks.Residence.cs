@@ -864,8 +864,14 @@ internal static partial class BigQueryExecutionChecks
         check(store.UsedBytes == 0 && store.WindowCacheBytes == 0, "releasing a demoted set gives back everything: " + store.UsedBytes);
         var released = TextChecks.Synthetic(store, "W1", 10);
         store.Release([released.ResultId]);
-        var late = RemoteResult.Create(store, released.ResultId, released.Wires, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
-        check(!store.Demote(released, late, 10) && store.UsedBytes == 0, "a released set does not demote");
+        // Seeded first, as the switch does: a refused Demote disposes the cache and gives its bytes back.
+        var late = RemoteResult.Create(store, released.ResultId, OneText, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var lateSeed = new RemoteBlockWriter(released.ResultId, OneText, 0);
+        for (var row = 0; row < 10; row++) Blocks.Write(lateSeed, row, 0);
+        late.Seed(lateSeed.Finish());
+        var seeded = store.WindowCacheBytes;
+        check(seeded > 0 && !store.Demote(released, late, 10) && store.UsedBytes == 0 && store.WindowCacheBytes == 0,
+            $"a released set does not demote, and the seeded cache it was given is freed: seeded {seeded}, then {store.UsedBytes} {store.WindowCacheBytes}");
 
         // A reader that found the set in memory and takes its hold after the switch is refused, never handed no pages.
         var switching = TextChecks.Synthetic(store, "W1", 2000);

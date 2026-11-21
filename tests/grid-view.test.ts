@@ -247,6 +247,22 @@ describe("the grid's accessible name", () => {
   })
 })
 
+describe('the first measure', () => {
+  it('measures again when it answered no rows (a windowed result not read yet), rather than sizing from headers for good', async () => {
+    let calls = 0
+    const grid = mount({ rows: 500, columns: 3, unsized: true, before: handle => {
+      vi.mocked(handle.measure).mockImplementation(async (_first: number, _count: number, colStart: number, colEnd: number) =>
+        ({ rows: calls++ === 0 ? 0 : 128, widths: Uint16Array.from({ length: colEnd - colStart }, () => calls === 1 ? 0 : 30) }))
+    } })
+    await grid.frame()
+    expect(grid.state.sized).toBe(false)
+    await vi.waitFor(async () => { await grid.frame(); expect(grid.state.sized).toBe(true) }, { timeout: 5000 })
+    expect(calls).toBe(2)
+    grid.view.dispose()
+    grid.root.remove()
+  })
+})
+
 describe('a disposed grid', () => {
   it('leaves no retry pending after a busy results port refused its measure', async () => {
     const busy = Object.assign(new Error('Busy.'), { code: 'TOO_MANY_REQUESTS' })

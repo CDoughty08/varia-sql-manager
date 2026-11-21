@@ -146,9 +146,10 @@ button goes and focus returns to the grid. The **Maximum rows kept per execution
 Cancel still stops the query.
 
 A BigQuery result can instead stay windowed in BigQuery: its rows are read into a bounded cache as the grid scrolls, and
-an Automatic result the budget refuses part way switches to windowed rather than stopping. Sorting, filtering, Search,
+an Automatic result the budget refuses part way switches to windowed rather than stopping. Sorting, filtering,
 profiles, pivots, comparisons, Copy and Save need its rows in memory and refuse a windowed result
-(docs/bigquery.md, [Residence](bigquery.md#residence)).
+(docs/bigquery.md, [Residence](bigquery.md#residence)); Search searches the run's other grids, skips a windowed one and
+says so ("A result windowed in BigQuery was not searched").
 
 After a splitter between results is dragged, a later result takes an average share; the others keep their proportions.
 

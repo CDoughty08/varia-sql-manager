@@ -1420,9 +1420,10 @@ export class GridView {
     if (this.rotated) { this.measureShared(rows); return }
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
+      if (measured <= 0) { this.measureShortly(); return }
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
         this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), withPrevious(widths[column] ?? 0, widths[this.previousOf(column)] ?? 0), this.charWidth))
@@ -1433,11 +1434,18 @@ export class GridView {
       this.measuring = false
       if (this.disposed) return
       // A full results port has room again shortly.
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       // The type hints stay; a released or lost result is shown as such by its shell.
       state.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
+  }
+
+  /** Measures again shortly: the results port was full, or a windowed result's rows were not read yet (the measure
+   *  answered none), and sizing from headers alone would stay for good. */
+  private measureShortly(): void {
+    this.measureAfter = performance.now() + g.busyRetryMs
+    this.later(() => this.schedule())
   }
 
   /** A one-row comparison's previous-value column of a pair that has changes, else -1. */
@@ -1457,9 +1465,10 @@ export class GridView {
     const kept = this.o.state.transposed!
     if (kept.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || kept.sized) return
+      if (measured <= 0) { this.measureShortly(); return }
       let chars = 0
       for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
       this.uniform!.setShared(this.sharedWidth(chars))
@@ -1468,7 +1477,7 @@ export class GridView {
     }, error => {
       this.measuring = false
       if (this.disposed) return
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       kept.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })

@@ -479,6 +479,15 @@ describe('results service', () => {
       ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
     ])
   })
+  it('refuses to save a windowed result before main shows the file dialog', async () => {
+    const { api, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    flush()
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
+    expect(api.saveResults).not.toHaveBeenCalled()
+    service.dispose()
+  })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
     const saved: unknown[] = []

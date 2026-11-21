@@ -317,7 +317,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   the grid shows the rows it has and asks again; a block only read ahead stops where the cache is full.
 - **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
-  result windowed, whole, and a second load of a result already loading is refused. Closing the result stops the load,
+  result windowed, whole, with an empty cache that reads its rows from BigQuery again; a load after BigQuery's temporary
+  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused. Closing the result stops the load,
   which then says the result was closed. Reads under way when it starts
   answer with the rows they have, and the grid reads again from memory.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
@@ -399,7 +400,7 @@ Messages).
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
 | `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
-| `REMOTE_EXPIRED` | Rows of a windowed result not cached once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
+| `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
 | `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs | Refused until that query has finished |
 
 ## Emulator mode
