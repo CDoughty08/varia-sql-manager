@@ -274,33 +274,59 @@ internal sealed class RemoteResult : IDisposable
                 var need = Math.Min(end, block.End);
                 while (true)
                 {
-                    Task? fetching;
+                    Task? fetching = null;
+                    var gone = false;
                     lock (gate)
                     {
                         if (block.Filled >= need) break;
-                        // The table is gone: the cached rows already sent are the answer; none sent is REMOTE_EXPIRED.
-                        if (expired) return next > firstRow ? next : throw new RemoteExpiredException();
+                        gone = expired;
                         // Released, or replaced by Load into memory: the rows sent so far are the answer (the caller tells a
                         // release apart), and the grid reads again under the new revision.
-                        if (disposed.IsCancellationRequested) return next;
-                        fetching = block.Fetching;
+                        if (!gone && disposed.IsCancellationRequested) return next;
+                        if (!gone) fetching = block.Fetching;
+                    }
+                    // The table is gone: the cached rows are the answer, a part-filled block's included (the seeded first
+                    // page); none at all is REMOTE_EXPIRED.
+                    if (gone)
+                    {
+                        next = await SendHeldAsync(block, next);
+                        return next > firstRow ? next : throw new RemoteExpiredException();
                     }
                     fetching ??= Ensure(block, 0, need);
                     // Nothing to wait for: the rows came meanwhile, the table is gone, or the cache was disposed; the loop says which.
                     if (fetching is null) continue;
                     try { await fetching.WaitAsync(limit.Token); }
-                    // The read's own wait passed: it answers with the rows it has, and the grid draws the rest as loading.
-                    catch (OperationCanceledException) when (limit.IsCancellationRequested && !token.IsCancellationRequested) { return next; }
+                    // The read's own wait passed: it answers with the rows it has, those of a part-filled block too, and the
+                    // grid draws the rest as loading.
+                    catch (OperationCanceledException) when (limit.IsCancellationRequested && !token.IsCancellationRequested) { return await SendHeldAsync(block, next); }
                     // A read-ahead fetch cancelled under this read (its viewer jumped), or the cache disposed under it: the loop
                     // asks again as the read's own, or answers with the rows sent.
                     catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
-                    // Gone under this read after it sent some rows, or refused room (a read across more blocks than the
-                    // cache holds): those rows are the answer, and the grid reads the rest again from there.
-                    catch (RemoteExpiredException) when (next > firstRow) { return next; }
-                    // Rate limited for longer than a read waits: the rows sent are the answer, never an error.
-                    catch (RemoteRetryException) { return next; }
-                    catch (RequestException) when (next > firstRow) { return next; }
+                    // Gone under this read, or refused room (a read across more blocks than the cache holds): the rows it has
+                    // are the answer, and the grid reads the rest again from there; none at all is the error.
+                    catch (RemoteExpiredException)
+                    {
+                        next = await SendHeldAsync(block, next);
+                        if (next > firstRow) return next;
+                        throw;
+                    }
+                    // Rate limited for longer than a read waits: the rows it has are the answer, never an error.
+                    catch (RemoteRetryException) { return await SendHeldAsync(block, next); }
+                    catch (RequestException)
+                    {
+                        next = await SendHeldAsync(block, next);
+                        if (next > firstRow) return next;
+                        throw;
+                    }
                 }
+                next = await SendHeldAsync(block, next);
+            }
+            return next;
+
+            // Sends the block's cached pages that continue the rows sent, up to the read's end: all of a filled block, the
+            // leading pages of a part-filled one. Answers where the rows sent now end.
+            async Task<long> SendHeldAsync(Block block, long next)
+            {
                 RemotePage[] pages;
                 lock (gate) pages = [.. block.Pages];
                 foreach (var page in pages)
@@ -311,8 +337,8 @@ internal sealed class RemoteResult : IDisposable
                     await send(page.Body);
                     next = page.FirstRow + page.Rows;
                 }
+                return next;
             }
-            return next;
         }
         finally
         {
@@ -591,7 +617,9 @@ internal sealed class RemoteResult : IDisposable
             // Only as many blocks as the cache holds beside the read's own: more would evict the rows on screen.
             var room = CacheLimit / BlockEstimate - (last - first + 1);
             var chosen = new List<long>();
-            foreach (var index in new[] { first - 1, last + 1, viewer.Direction > 0 ? last + 2 : first - 2 })
+            // The block ahead in the direction of travel comes first: with room for one, the one behind is usually cached already.
+            var order = viewer.Direction < 0 ? new[] { first - 1, last + 1, first - 2 } : new[] { last + 1, first - 1, last + 2 };
+            foreach (var index in order)
                 if (index >= 0 && index <= maxBlock && chosen.Count < room) chosen.Add(index);
             // A jump stops the earlier read-ahead, except blocks the new one wants: a cancelled fetch still running would be
             // joined by the new read-ahead and never fetch its block.

@@ -355,6 +355,32 @@ internal static partial class BigQueryExecutionChecks
             var cached = remote.CachedBlocks();
             check(next > 5L * remote.BlockRows && cached.Contains(5) && blocks.Calls.Count == 2 && remote.Evictions == 0,
                 $"a two-block cache reads ahead one block and keeps the one read: {string.Join(",", cached)} {blocks.Calls.Count} fetches, {remote.Evictions} evictions");
+            // Scrolling down one block, its one block of read-ahead is the next one down, not the one behind it (cached already).
+            await ReadRemote(remote, 6 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var starts = blocks.Calls.Select(call => call.First / remote.BlockRows).ToArray();
+            check(starts.Contains(7) && remote.CachedBlocks().Contains(7),
+                $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
+        }
+
+        // A read across the end of the seeded first page answers with its cached rows once it gives up on the rest: when
+        // the table has expired, and when the wait for the rest passes.
+        foreach (var expire in new[] { true, false })
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Expire = expire, Gate = expire ? null : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0; row < 100; row++) Blocks.Write(seed, row, 0);
+            remote.Seed(seed.Finish());
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 50, 100, viewer: 1, waitMs: 300); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            catch (RemoteExpiredException) { outcome = "expired"; }
+            blocks.Gate?.TrySetResult();
+            check(remote.BlockRows > 100 && outcome == "ok" && next == 100,
+                $"a read past the seeded rows answers with the cached ones when {(expire ? "the table expired" : "its wait passes")}: {outcome} next {next}");
         }
 
         // The cache evicts its least recent blocks within its limit, and gives every byte back when released.
