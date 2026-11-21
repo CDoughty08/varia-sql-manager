@@ -38,6 +38,8 @@ internal static partial class DiffChecks
         LowMemorySteps(check);
         Matches(check);
         IndexChecks(check);
+        LayoutChecks(check);
+        AllowanceChecks(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
@@ -600,9 +602,9 @@ internal static partial class DiffChecks
     private static void Refusals(Action<bool, string> check)
     {
         static string?[][] Rows(int count, string price, int pad = 0) => [.. Enumerable.Range(1, count).Select(i => new[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), new string('n', pad) + i.ToString(System.Globalization.CultureInfo.InvariantCulture), price })];
-        static string? Message(SqlService service, ResultSetBuffer left, ResultSetBuffer right)
+        static string? Message(SqlService service, ResultSetBuffer left, ResultSetBuffer right, int context = -1)
         {
-            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = -1 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
             catch (RequestException error) { return error.Code + ": " + error.Message; }
         }
         const string tooLarge = "TOO_LARGE: There is not enough result memory to show the differences. Close other results and try again.";
@@ -628,8 +630,11 @@ internal static partial class DiffChecks
             store.Release(part.ResultId);
             if (reserved) store.Return(left.Budget, working);
             var refused = Message(service, left, right);
-            check(written is { RowsStored: > 0 and < 800 } && written.RowsStored < written.RowsRead && refused == tooLarge && Held.Bytes(store) == used && left.Budget.Stopped == TruncationReason.None,
-                $"a diff the budget cuts short is refused whole, releases what it stored and leaves its query's budget open: {written.RowsStored}/{written.RowsRead} {refused} {Held.Bytes(store) - used} {left.Budget.Stopped}");
+            check(written is { RowsStored: > 0 and < 800 } && written.RowsStored < written.RowsRead && refused == "DIFF_ROWS_TOO_LARGE: " + SqlService.DiffRowsTooLarge && Held.Bytes(store) == used && left.Budget.Stopped == TruncationReason.None,
+                $"a diff of all rows the budget cuts short is refused whole as too many rows (DIFF_ROWS_TOO_LARGE), releases what it stored and leaves its query's budget open: {written.RowsStored}/{written.RowsRead} {refused} {Held.Bytes(store) - used} {left.Budget.Stopped}");
+            // Every row changed: Changes only stores the same rows, and its refusal offers nothing smaller.
+            var changesOnly = Message(service, left, right, context: 0);
+            check(changesOnly == tooLarge && Held.Bytes(store) == used, "the same refusal of a Changes only diff (context 0) stays TOO_LARGE: " + changesOnly);
         }
 
         // Low system memory: the diff's first page seals after 64 rows.

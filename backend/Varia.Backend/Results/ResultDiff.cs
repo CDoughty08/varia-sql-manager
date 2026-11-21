@@ -911,10 +911,16 @@ internal static class ResultDiffer
 /// data: the grid draws it in the row header, and only Save writes it (ResultJobs). Each data cell's bytes are its source
 /// cell's, so the row-size bar sums the values shown, not the suffix. Rows stop at the first one refused, and the set then
 /// says why it was truncated: a full budget never stops between a changed row's two halves, though a page sealed under low
-/// system memory can. results.diff refuses a diff cut short either way whole (SqlService.DiffAsync).</summary>
+/// system memory can. results.diff refuses a diff cut short either way whole (SqlService.DiffAsync).
+/// The one-row layout (<c>entry</c>) stores each entry once: a changed one as its second result's row with marker "~" and
+/// tone kind "changed", followed after the data by a previous-value column per pair (role old, Of its pair; the first
+/// result's type, collation and length rule) holding the first result's value in every changed cell, whether the tone lists
+/// it or not, and NULL elsewhere (soft cells are not changed). A previous value is not measured for the row-size bar, but
+/// counts toward the 8 MiB row limit: past it, it is truncated and marked so. Removed rows show the first result's values.
+/// A cut row's full changed-pair list goes into the change index (<see cref="DiffIndex.ChangedPairs"/>).</summary>
 internal static class UnifiedDiff
 {
-    public const string Removed = "−", Added = "+";
+    public const string Removed = "−", Added = "+", Changed = "~";
 
     /// <summary>The longest tone text: under the 512 characters a grid reads of a cell (src/renderer/src/grid/constants.ts
     /// maxCellChars), so the grid always reads it whole. Runs of adjacent columns are listed as ranges, which keeps a row
@@ -923,6 +929,29 @@ internal static class UnifiedDiff
 
     /// <summary>Hidden suffix columns after the data columns: marker, the two row numbers and the tone.</summary>
     public const int SuffixColumns = 4;
+
+    /// <summary>The most pairs the one-row layout takes: its data and previous-value columns and the suffix fill at most a
+    /// page's columns (2p + 4 &lt;= 4,096; limits.diff.maxEntryPairs).</summary>
+    public const int MaxEntryPairs = (PageBuilder.MaxColumns - SuffixColumns) / 2;
+
+    /// <summary>What a previous-value column is named: its data column's name and this.</summary>
+    public const string OldSuffix = " (old)";
+
+    /// <summary>The columns of a layout: the shared columns (the second result's), in the one-row layout
+    /// (<paramref name="entry"/>) a previous-value column per pair (the first result's column, role old), then the suffix.</summary>
+    public static IReadOnlyList<ResultColumn> Columns(ResultSetBuffer left, ResultSetBuffer right, DiffModel model, bool entry)
+    {
+        var unified = Columns(right, model);
+        if (!entry) return unified;
+        var pairs = model.Pairs.Length;
+        return [.. unified.Take(pairs), .. model.Pairs.Select((pair, p) => left.Columns[pair.Left] with { Name = right.Columns[pair.Right].Name + OldSuffix, Role = "old", Of = p }), .. unified.Skip(pairs)];
+    }
+
+    public static IReadOnlyList<WireKind> Wires(ResultSetBuffer left, ResultSetBuffer right, DiffModel model, bool entry) =>
+        entry ? [.. model.Pairs.Select(pair => right.Wires[pair.Right]), .. model.Pairs.Select(pair => left.Wires[pair.Left]), WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text] : Wires(right, model);
+
+    public static IReadOnlyList<ColumnLength> Lengths(ResultSetBuffer left, ResultSetBuffer right, DiffModel model, bool entry) =>
+        entry ? [.. model.Pairs.Select(pair => right.Lengths[pair.Right]), .. model.Pairs.Select(pair => left.Lengths[pair.Left]), ColumnLength.Utf16, ColumnLength.Utf16, ColumnLength.Utf16, ColumnLength.Utf16] : Lengths(right, model);
 
     public static IReadOnlyList<ResultColumn> Columns(ResultSetBuffer right, DiffModel model) =>
     [
@@ -958,13 +987,14 @@ internal static class UnifiedDiff
         return shown;
     }
 
-    /// <summary>The rows the unified result stores for <paramref name="context"/>: each entry shown, a changed one twice.</summary>
-    public static long StoredRows(DiffModel model, int context)
+    /// <summary>The rows the unified result stores for <paramref name="context"/>: each entry shown, a changed one twice
+    /// (once in the one-row layout, <paramref name="entry"/>).</summary>
+    public static long StoredRows(DiffModel model, int context, bool entry = false)
     {
         var shown = Shown(model, context);
         long rows = 0;
         for (var k = 0; k < shown.Length; k++)
-            if (shown[k]) rows += model.Entries[k].Kind == DiffKind.Changed ? 2 : 1;
+            if (shown[k]) rows += model.Entries[k].Kind == DiffKind.Changed && !entry ? 2 : 1;
         return rows;
     }
 
@@ -974,8 +1004,9 @@ internal static class UnifiedDiff
     /// read through: each side's rows are read fused, a few pages kept unpacked (<see cref="ResultDiffer.LeftSlots"/>), in
     /// about the order the comparison read them.</param>
     /// <param name="index">Records each row stored, in order (<see cref="DiffIndex.Builder"/>), sized by <see cref="StoredRows"/>.</param>
+    /// <param name="oneRow">The one-row layout (the set opened with its <see cref="Columns(ResultSetBuffer, ResultSetBuffer, DiffModel, bool)"/>).</param>
     public static long Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token,
-        string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null, DiffIndex.Builder? index = null)
+        string tooLarge = ResultDiffer.TooLarge, DiffStages? stages = null, DiffIndex.Builder? index = null, bool oneRow = false)
     {
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
@@ -985,6 +1016,8 @@ internal static class UnifiedDiff
         using var rightReader = new RowAccess(rightPages, right.Wires.Count).Reader(rightRooms, ResultDiffer.RightSlots);
         var sides = (Left: new Side(leftReader, model.Pairs, true, left.Lengths, right.Lengths),
             Right: new Side(rightReader, model.Pairs, false, right.Lengths, right.Lengths));
+        // The one-row layout's previous values: NULL in every pair but a changed entry's changed ones.
+        var none = oneRow ? new Old(sides.Left, -1, []) : null;
         var shown = Shown(model, context);
         // One thread writes the rows: each side's packed pages are unpacked ahead on the workers, in the order it reads them.
         IEnumerable<int> Read(bool isLeft)
@@ -1023,17 +1056,27 @@ internal static class UnifiedDiff
                 switch (entry.Kind)
                 {
                     case DiffKind.Same:
-                        stored = Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty && !repeated && gap == 0 ? null : Tone(tone, "same", Flags(repeated, -1, gap), cells));
+                        stored = Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty && !repeated && gap == 0 ? null : Tone(tone, "same", Flags(repeated, -1, gap), cells), none);
                         if (stored) index?.Add(DiffRowKind.Same, repeated, false, 0);
                         break;
                     case DiffKind.Added:
-                        stored = Row(set, sides.Right, entry.Right, Added, -1, entry.Right, Tone(tone, "added", Flags(repeated, partner, gap), []));
+                        stored = Row(set, sides.Right, entry.Right, Added, -1, entry.Right, Tone(tone, "added", Flags(repeated, partner, gap), []), none);
                         if (stored) index?.Add(DiffRowKind.Added, repeated, false, 1, DiffIndex.Builder.Key(entry.Right, true), partner < 0 ? -1 : DiffIndex.Builder.Key(partner, false));
                         break;
                     case DiffKind.Removed:
-                        stored = Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, Tone(tone, "removed", Flags(repeated, partner, gap), []));
+                        stored = Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, Tone(tone, "removed", Flags(repeated, partner, gap), []), none);
                         if (stored) index?.Add(DiffRowKind.Removed, repeated, false, 1, DiffIndex.Builder.Key(entry.Left, false), partner < 0 ? -1 : DiffIndex.Builder.Key(partner, true));
                         break;
+                    case DiffKind.Changed when none is not null:
+                    {
+                        // One row: the new values, the old ones after them, the units its tone lists and one more for a cut,
+                        // whose full list of changed pairs the index keeps (reserved first: refused, the diff stops).
+                        var changedTone = Tone(tone, "changed", Flags(repeated, -1, gap), cells, out var units, out var cut);
+                        if (cut && index is not null && !index.TryCut()) { stored = false; break; }
+                        stored = Row(set, sides.Right, entry.Right, Changed, entry.Left, entry.Right, changedTone, new Old(sides.Left, entry.Left, cells));
+                        if (stored) index?.Add(DiffRowKind.Changed, repeated, cut, units + (cut ? 1 : 0), changed: cells, keepsList: cut);
+                        break;
+                    }
                     default:
                         // The gap is on the first row stored after the run: the old half. The units are on the new half,
                         // where navigation lands: the cells its tone lists, and one more when it was cut.
@@ -1136,8 +1179,8 @@ internal static class UnifiedDiff
             return false;
         }
         // Both halves carry both row numbers: the gutter draws each half's own side.
-        return Row(set, sides.Left, entry.Left, Removed, entry.Left, entry.Right, removedTone)
-            && Row(set, sides.Right, entry.Right, Added, entry.Left, entry.Right, addedTone);
+        return Row(set, sides.Left, entry.Left, Removed, entry.Left, entry.Right, removedTone, null)
+            && Row(set, sides.Right, entry.Right, Added, entry.Left, entry.Right, addedTone, null);
     }
 
     /// <summary>At most what one row of the unified result stores: its cells' bytes, the marker, row numbers and tone, each
@@ -1154,9 +1197,19 @@ internal static class UnifiedDiff
         return bytes + (4L + PageLengths.CellBytes) * (side.Pairs.Length + 4) + 4;
     }
 
-    /// <summary>Copies one source row's shared cells, each measured with its source cell's characters and bytes, then its
-    /// marker, row numbers and tone (not measured); false once the set stores no more.</summary>
-    private static bool Row(ResultSetBuffer set, Side side, int row, string marker, int leftRow, int rightRow, string? tone)
+    /// <summary>The one-row layout's previous values for a row: the first result's row (-1 for none) and the entry's
+    /// differing cells (pair indexes in order, soft ones as ~index), whose changed ones get the first result's value.</summary>
+    private sealed class Old(Side left, int row, ReadOnlySpan<int> cells)
+    {
+        public Side Left { get; } = left;
+        public int Row { get; } = row;
+        public int[] Cells { get; } = cells.ToArray();
+    }
+
+    /// <summary>Copies one source row's shared cells, each measured with its source cell's characters and bytes, then in
+    /// the one-row layout (<paramref name="old"/>) its previous values (not measured), then its marker, row numbers and tone
+    /// (not measured); false once the set stores no more.</summary>
+    private static bool Row(ResultSetBuffer set, Side side, int row, string marker, int leftRow, int rightRow, string? tone, Old? old)
     {
         set.CountRow();
         var builder = set.BeginRow();
@@ -1185,6 +1238,7 @@ internal static class UnifiedDiff
             // Kept beside the page when the unified column's own rule would not give the source's size again.
             builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
+        if (old is not null) truncated += Previous(builder, old, side.Pairs.Length);
         builder.ReserveRowBytes(0);
         builder.AppendText(marker);
         Number(builder, leftRow);
@@ -1192,6 +1246,32 @@ internal static class UnifiedDiff
         if (tone is null) builder.AppendNull();
         else builder.AppendText(tone);
         return set.TryCommitRow(truncated);
+    }
+
+    /// <summary>Appends a row's previous values: the first result's value in each changed (not soft) pair, NULL in the
+    /// others; returns how many were stored truncated (by the source's cap, or by the row limit, which they meet before
+    /// the data does since they come after it).</summary>
+    private static int Previous(PageBuilder builder, Old old, int pairs)
+    {
+        var truncated = 0;
+        PageView view = default;
+        var at = 0;
+        if (old.Row >= 0) view = old.Left.Access.At(old.Row, out at);
+        var next = 0;
+        for (var p = 0; p < pairs; p++)
+        {
+            while (next < old.Cells.Length && (old.Cells[next] < 0 ? ~old.Cells[next] : old.Cells[next]) < p) next++;
+            var changed = old.Row >= 0 && next < old.Cells.Length && old.Cells[next] == p;
+            if (!changed) { builder.AppendNull(); continue; }
+            var c = old.Left.Column(p);
+            if (view.IsNull(c, at)) { builder.AppendNull(view.IsError(c, at)); continue; }
+            var span = view.Span(c, at);
+            var cut = view.IsTruncated(c, at);
+            if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
+            else builder.AppendUtf8(span, cut);
+            if (builder.LastTruncated) truncated++;
+        }
+        return truncated;
     }
 
     /// <summary>The most a row's suffix adds after its data: the marker and tone as UTF-8, and two row numbers, which

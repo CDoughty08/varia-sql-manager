@@ -245,10 +245,15 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   timers): the whole set when it changes and again on backend ready or results-port generation change, and, once main has
   reported a state, only while main and the port agree on the generation (until then the backend is taken as ready), ordered by `{ source, seq }`. The backend keeps it in `ResultVisibility`,
   outside page code, as a hint: it never releases, pins or changes a result by itself.
-- **Budget figures** change only through `ResultStore.Resize` (`results.setMemoryLimit`, sent by main alone when the
+- **Budget figures** change through `ResultStore.Resize` (`results.setMemoryLimit`, sent by main alone when the
   Options limit changes, as each generation becomes ready and after each successful settings read,
   `SettingsStore.onDidLoad`). They are replaced whole, each reservation reads them once, and a change never drops stored
-  results or undoes a query's stop (docs/ipc.md, Result store and memory budget). Every whole-result operation reserves
+  results or undoes a query's stop (docs/ipc.md, Result store and memory budget). The one other change is a replace's
+  allowance (`ResultStore.Allow`, `results.diff`'s `replaces`): it raises one query's limit by the replaced comparison's
+  whole charge until that comparison's bytes go back or nothing holds it. The limit is read only through
+  `ResultStore.QueryLimit`, so every reservation of the query (rows, working memory on any thread, rooms, waits for room,
+  spare memory) sees it; the query's other operations may use the raised limit meanwhile, and the global budget and the
+  memory-load check are never raised. Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
   of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
   memory, one a result, freed with it: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
@@ -261,12 +266,14 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   no other cell rule sets an image or the `background` shorthand outside forced colours (`tests/results-diff.test.ts`).
   Diffs (`Results/ResultDiff.cs`,
   `results.diff`) store the unified diff as a derived result of the same query: its data columns, then a hidden suffix
-  (roles `mark`, `leftRow`, `rightRow`, `tone`; `old` is reserved for previous values) that the grid draws as a gutter
-  in the row header and colours from. Hidden columns are one set, tested only by `isHiddenColumn`
+  (roles `mark`, `leftRow`, `rightRow`, `tone`) that the grid draws as a gutter in the row header and colours from; the
+  one-row layout (`layout: 'entry'`) adds a previous-value column a pair after the data (role `old`, `of` its pair, the
+  first result's type), holding the old value in each changed cell, at most 2,046 pairs. Hidden columns are one set, tested only by `isHiddenColumn`
   (`grid/hidden-columns.ts`) and `ResultTextWriter.Hidden`: never drawn, copied, searched, sorted, filtered or profiled,
   and the backend's sort keys, filters, distinct values, profiles, pivots and identify's column refuse them
   (`INVALID_PARAMS`), while search and Copy skip them and window reads serve them (the gutter reads them so); only Save
-  of a diff writes `Change`, `Old row`, `New row` first (`ResultJobs.SavedColumns`, from the kind). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
+  of a diff writes `Change`, `Old row`, `New row` first and each data column's previous values after it as `<name> (old)`
+  (`ResultJobs.SavedColumns`, from the kind; which cells changed from the tone or, for a cut row, the change index). `tests/result-hidden-columns.test.ts` lints `role === 'tone'`
   to the tone reader and the live readers. A diff's row identity is per entry (`RowIdentity.Entries`: its (input, row)
   pairs, ordered by input result id from `ResultSetBuffer.DiffInputs`), so both halves share it and a swap keeps it.
   Rows match by `results.diff`'s `match` (`ResultDiffer.Compare`: auto, position, whole rows, or a composite key over
@@ -275,8 +282,10 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `changedNew`; flags `dup`, `poss=<row>`, `gap=<n>`), kept within 500 characters, and readers ignore unknown flags.
   The look-alike search is bounded (1,000 rows a side, 4,000,000 comparisons) and skipped, not slowed, past its bounds.
   A diff keeps a change index (`Results/DiffIndex.cs`) beside its rows, charged with them and refused with them: each
-  stored row's kind, marks, change units and look-alike partner, with running totals per 4,096 rows that each view of
-  the diff keeps over its own order. The `kind` view filter, `results.diffSeek` and the answer's `overview` and `units`
+  stored row's kind, marks, change units and look-alike partner, a cut one-row entry's changed-pair bitset (found
+  through a sorted list of cut rows), with running totals per 4,096 rows that each view of the diff keeps over its own
+  order. A refusal of what grows with the rows stored, for All rows, is `DIFF_ROWS_TOO_LARGE` (`SqlService.DiffRefusal`);
+  every other refusal of a diff stays `TOO_LARGE`. The `kind` view filter, `results.diffSeek` and the answer's `overview` and `units`
   read only this index (a seek reads one tone, of the row it lands on), never the tone column's text row by row.
   Pivots (`Results/ResultPivot.cs`, `results.pivot`) store a derived set (`ResultStore.Open(derived: true)`).
 - **Derived sets** (diffs, pivots) take working memory from the query's budget, are stored whole or not at all (a pivot

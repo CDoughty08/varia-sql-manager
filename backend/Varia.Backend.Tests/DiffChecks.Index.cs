@@ -187,11 +187,18 @@ internal static partial class DiffChecks
             var used = Held.Bytes(tight);
             var count = tight.Count;
             string? refused;
-            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = -1 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
-            catch (RequestException error) { refused = error.Code + ": " + error.Message; }
-            check(used == sources && refused == "TOO_LARGE: There is not enough result memory to show the differences. Close other results and try again." && Held.Bytes(tight) == used && tight.Count == count
+            string? Refused(int context)
+            {
+                try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+                catch (RequestException error) { return error.Code + ": " + error.Message; }
+            }
+            refused = Refused(-1);
+            check(used == sources && refused == "DIFF_ROWS_TOO_LARGE: " + SqlService.DiffRowsTooLarge && Held.Bytes(tight) == used && tight.Count == count
                 && left.Budget.Stopped == TruncationReason.None,
-                $"a diff whose change index the budget refuses is refused whole and keeps nothing: {refused} {Held.Bytes(tight) - used}");
+                $"a diff of all rows whose change index the budget refuses is refused whole as too many rows (DIFF_ROWS_TOO_LARGE) and keeps nothing: {refused} {Held.Bytes(tight) - used}");
+            // Identical rows: Changes only stores none, so its small index fits and the diff is kept.
+            var changesOnly = Refused(0);
+            check(changesOnly is null, "the same diff showing changes only fits: " + changesOnly);
         }
     }
 

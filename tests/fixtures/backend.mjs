@@ -701,7 +701,7 @@ function buildIdentity(result, by, column) {
 // rows; position, rows and columns (a composite key, NULL matching NULL, repeats flagged dup) as asked. Text equal
 // case-insensitively without trailing spaces is a soft difference (the real backend's collation-aware comparison is
 // checked by its own checks), numbers compare by value. Look-alikes (poss) follow ResultDiffer.LookAlikes' rules.
-function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
+function buildDiff(left, right, exact, context, match = { mode: 'auto' }, layout = 'unified') {
   const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => !isHidden(item))
   const used = new Set(), pairs = []
   for (const { item, at } of visible(left)) {
@@ -803,7 +803,10 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
   // hidden suffix. A gap goes on the first row after its run: a change's old half.
   const tone = (kind, cells, flags) => [kind, ...flags, ...cells.map(cell => cell < 0 ? '~' + ~cell : String(cell))].join(' ')
   const flagsOf = (entry, gap) => [...entry.dup ? ['dup'] : [], ...entry.poss === undefined ? [] : ['poss=' + (entry.poss + 1)], ...gap > 0 ? ['gap=' + gap] : []]
-  const rowOf = (result, row, side, marker, r1, r2, toneText) => [...pairs.map(pair => result.rowAt(row)[pair[side]]), marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), toneText]
+  // The one-row layout (entry) puts each pair's previous value after the data: the old side's value in a changed cell, NULL elsewhere.
+  const oneRow = layout === 'entry'
+  const oldOf = (row, hard) => oneRow ? pairs.map((pair, p) => row >= 0 && hard.includes(p) ? left.rowAt(row)[pair[0]] : null) : []
+  const rowOf = (result, row, side, marker, r1, r2, toneText, old = oldOf(-1, [])) => [...pairs.map(pair => result.rowAt(row)[pair[side]]), ...old, marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), toneText]
   const rows = []
   let omitted = 0
   // The change index (DiffIndex): each stored row's kind, change units (a changed entry's on its new half; the fake lists
@@ -817,15 +820,18 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
     if (entry.kind === 'same') rows.push(rowOf(right, entry.right, 1, ' ', entry.left, entry.right, entry.cells.length || flags.length ? tone('same', entry.cells, flags) : null))
     else if (entry.kind === 'added') rows.push(rowOf(right, entry.right, 1, '+', -1, entry.right, tone('added', [], flags)))
     else if (entry.kind === 'removed') rows.push(rowOf(left, entry.left, 0, '−', entry.left, -1, tone('removed', [], flags)))
+    else if (oneRow) rows.push(rowOf(right, entry.right, 1, '~', entry.left, entry.right, tone('changed', entry.cells, flags), oldOf(entry.left, hard)))
     else rows.push(rowOf(left, entry.left, 0, '−', entry.left, entry.right, tone('changedOld', entry.cells, flags)), rowOf(right, entry.right, 1, '+', entry.left, entry.right, tone('changedNew', entry.cells, flagsOf(entry, 0))))
-    if (entry.kind === 'changed') index.push({ kind: 'changed', units: 0, cells: [] }, { kind: 'changed', units: hard.length, cells: hard })
+    if (entry.kind === 'changed' && oneRow) index.push({ kind: 'changed', units: hard.length, cells: hard })
+    else if (entry.kind === 'changed') index.push({ kind: 'changed', units: 0, cells: [] }, { kind: 'changed', units: hard.length, cells: hard })
     else index.push({ kind: entry.kind, units: entry.kind === 'same' ? 0 : 1, cells: [], ...entry.poss === undefined ? {} : { partnerKey: (entry.kind === 'removed' ? 'r' : 'l') + entry.poss } })
     if (entry.poss !== undefined) storedOf.set((entry.kind === 'removed' ? 'l' : 'r') + (entry.kind === 'removed' ? entry.left : entry.right), index.length - 1)
   })
   for (const item of index) if (item.partnerKey !== undefined) { item.partner = storedOf.get(item.partnerKey) ?? -1; delete item.partnerKey }
   const buckets = Math.min(512, index.length), overview = new Array(buckets).fill(0)
   index.forEach((item, row) => { overview[Math.floor(row * buckets / index.length)] |= item.kind === 'changed' ? 1 : item.kind === 'added' ? 2 : item.kind === 'removed' ? 4 : 0 })
-  const columns = [...pairs.map(pair => right.columns[pair[1]]), { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
+  const olds = oneRow ? pairs.map((pair, p) => ({ ...left.columns[pair[0]], name: right.columns[pair[1]].name + ' (old)', role: 'old', of: p })) : []
+  const columns = [...pairs.map(pair => right.columns[pair[1]]), ...olds, { ...column('Change', 'nvarchar(1)'), role: 'mark', maxLength: 1 }, { ...column('Old row', 'bigint'), role: 'leftRow' }, { ...column('New row', 'bigint'), role: 'rightRow' },
     { ...column('', 'nvarchar(500)'), role: 'tone', maxLength: 500 }]
   const count = kind => entries.filter(entry => entry.kind === kind).length
   const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
@@ -837,7 +843,7 @@ function buildDiff(left, right, exact, context, match = { mode: 'auto' }) {
     possible: entries.filter(entry => entry.kind === 'removed' && entry.poss !== undefined).length, possibleSkipped,
     nothingPaired: count('same') + count('changed') === 0 && leftRows > 0 && rightRows > 0,
     columnChanges: pairs.map((_, p) => ({ changed: cellsOf(cell => cell === p), soft: cellsOf(cell => cell === ~p) })), trailingHidden: omitted,
-    overview, units: index.reduce((sum, item) => sum + item.units, 0), index
+    overview, units: index.reduce((sum, item) => sum + item.units, 0), index, layout
   }
 }
 // results.pivot: a result's (or a view's) rows grouped by the row columns and the column group, values compared ordinally
@@ -1999,7 +2005,16 @@ async function workbench(id, method, params, credit) {
       if (left.kind !== 'rows' || right.kind !== 'rows') return fail(id, 'INVALID_PARAMS', "Only a query's own result sets can be compared: not a pivot, a comparison or an execution plan set.")
       if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
       if (await budgetStopped(id)) return
-      const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1, params.match)
+      // A replace names a comparison of the same two results, either way round (SqlService.Allowance); the fake has no budget to raise.
+      if (params.replaces !== undefined) {
+        const replaced = stored.get(params.replaces)
+        if (!replaced) return missing(id, params.replaces)
+        const inputs = replaced.inputs
+        if (!inputs || !((inputs.left === params.left && inputs.right === params.right) || (inputs.left === params.right && inputs.right === params.left)))
+          return fail(id, 'INVALID_PARAMS', 'Only a comparison of the same two results can be replaced.')
+      }
+      const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1, params.match, params.layout ?? 'unified')
+      if (diff && diff.layout === 'entry' && diff.columnChanges.length > 2046) return fail(id, 'INVALID_PARAMS', 'These results share more than 2,046 columns, too many to show one row per entry.')
       if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
       if (diff.invalid) return fail(id, 'INVALID_PARAMS', diff.invalid)
       if (diff.keyTruncated) return fail(id, 'DIFF_KEY_TRUNCATED', diff.keyTruncated)
