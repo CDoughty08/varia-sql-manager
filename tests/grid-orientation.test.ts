@@ -548,6 +548,14 @@ describe('a grid transposed', () => {
     expect(calls).toBe(2)
     grid.view.dispose()
   })
+  it('measures its shared width again a bounded number of times, then sizes from the headers and stops', async () => {
+    const state: GridViewState = { ...freshState(), sized: false }
+    let calls = 0
+    const grid = mount({ rows: 50, columns: 6, state, before: made => made.measure.mockImplementation(async (_first: number, _count: number, colStart: number, colEnd: number) => { calls++; return { rows: 0, widths: new Uint16Array(colEnd - colStart) } }) })
+    await vi.waitFor(async () => { await grid.frame(); expect(grid.state.transposed!.sized).toBe(true) }, { timeout: 10_000, interval: 50 })
+    expect(calls).toBe(gridLimits.measureRetries + 1)
+    grid.view.dispose()
+  })
   it('gives the drawn columns one width, at most 240 px, and a dragged or fitted one a width of its own', async () => {
     const state: GridViewState = { ...freshState(), sized: false }
     const grid = mount({ rows: 50, columns: 60, state })

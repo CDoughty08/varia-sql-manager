@@ -449,6 +449,9 @@ internal static partial class BigQueryExecutionChecks
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
             await ReadRemote(remote, 0, 10, viewer: 1);
+            // The second grid's read-ahead of block 21 starts once its own block 20 is cached, so the read takes its room
+            // first rather than racing it.
+            remote.AheadChosen = index => { if (index == 21) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(20), 15_000); };
             await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var after = remote.CachedBlocks();

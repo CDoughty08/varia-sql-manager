@@ -134,7 +134,7 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Every mention of the writer type, however a writer is built (a target-typed new included), is one of these.
-  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(6).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
+  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(7).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
   // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
   expect(uses(/new RemoteBlockWriter\(/g).sort()).toEqual(['Results/RemoteResult.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
   const decide = residence.slice(residence.indexOf('DecideResidenceAsync('), residence.indexOf('async Task<RemoteResult?> KeepInMemoryAsync()'))
@@ -156,13 +156,14 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
-  expect(fetch).toMatch(/var cost = pages\.Sum\(page => page\.Cost\);\n\s*if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
+  expect(fetch).toMatch(/var cost = pages\.Sum\(page => page\.Cost\);\n(\s*\/\/[^\n]*\n)*\s*if \(writer\.Rows > 0\) lock \(gate\) widestRowBytes = Math\.Max\(widestRowBytes, \(double\)cost \/ writer\.Rows\);\n\s*if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
   // An overrun reserves through Reserve too; refused by the cache's own limit, it may pass it, up to twice it (OverLimit),
   // and the global budget still refuses it. Which limit refused is what the reservation saw: never decided again from the
   // cache's bytes afterwards, which other fetches change meanwhile.
   const overrun = between('private async Task ReserveOverrunAsync(', 'private bool Reserve(')
   expect(overrun).toMatch(/\{\n\s*if \(Reserve\(bytes, keep\)\) return;\n/)
-  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes, out var full\)\) return;\n(\s*\/\/[^\n]*\n)*\s*throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);/)
+  // A block only read ahead stops there instead: only blocks reads wait for pass the limit.
+  expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool ahead;\n\s*lock \(gate\) ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*if \(ahead\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes, out var full\)\) \{ NotePeak\(\); return; \}\n(\s*\/\/[^\n]*\n)*\s*throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);/)
   // The cache's bytes are read in two places only, neither deciding a refusal: CachedBytes, and the trim's loop.
   expect(count(remote, /Interlocked\.Read\(ref held\)/g)).toBe(2)
   expect(remote).toMatch(/public long CachedBytes => Interlocked\.Read\(ref held\);/)
@@ -181,7 +182,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // What it reserves is the block's estimate, never less.
   expect(fetch).toMatch(/var estimate = Math\.Min\(EstimateOf\(rows\), CacheLimit \/ 2\);\n(\s*\/\/[^\n]*\n)*\s*if \(!Reserve\(estimate, block\)\)/)
   expect(count(fetch, /\bestimate = /g)).toBe(1)
-  expect(fetch).toMatch(/if \(!Reserve\(estimate, block\)\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool waited;\n\s*lock \(gate\) waited = block\.Waiters > 0;\n\s*if \(!waited\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*\}/)
+  expect(fetch).toMatch(/if \(!Reserve\(estimate, block\)\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool waited;\n\s*lock \(gate\) waited = block\.Waiters > 0;\n\s*if \(!waited\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*NotePeak\(\);\n\s*\}/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)

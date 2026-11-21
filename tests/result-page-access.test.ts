@@ -52,10 +52,13 @@ describe('result page access', () => {
     const finds = (file: string) => /\/ResultStore(?:\.[^/]+)?\.cs$/.test(file) ? new RegExp(`(?:^|[^\\w.]|\\bthis\\.)Find\\(|${anyStore.source}`, 'g') : anyStore
     // Each call is counted, not each line (a guarded Find does not excuse another on its line), and a call split before
     // its .Find is joined to its receiver's line first.
-    const unguardedIn = (file: string, text: string) => text.replace(/\s*\r?\n\s*(?=[?!]?\.Find\b)/g, '').split('\n')
+    // Spaces around the dot (store .Find) are dropped first. The guard is SqlService's own Stored (not a namesake elsewhere).
+    const unguardedIn = (file: string, text: string) => text.replace(/\s*([?!]?)\s*\.\s*(?=Find\b)/g, '$1.').split('\n')
       .filter(line => !/^\s*\/\//.test(line) && !/public ResultSetBuffer\? Find\(/.test(line)
-        && (line.match(finds(file)) ?? []).length > (line.match(/\bStored\(store\.Find\(/g) ?? []).length)
+        && (line.match(finds(file)) ?? []).length > (line.match(/(?<![\w.])Stored\(store\.Find\(/g) ?? []).length)
       .map(line => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = store .Find(id);')).toHaveLength(1)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Shim.Stored(store.Find(id));')).toHaveLength(1)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var left = Stored(store.Find(a) ?? throw U(a)); var right = store.Find(b)!;')).toHaveLength(1)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = store\n    .Find(id);')).toEqual(['X.cs: var set = store.Find(id);'])
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Stored(store.Find(id) ?? throw U(id));')).toEqual([])
@@ -94,8 +97,24 @@ describe('result page access', () => {
     ])
     // Nor through another accessor: the store hands out sets only by Find, Open (a new set) and Sets (listed above).
     const storeFiles = service.filter(file => /\/Results\/ResultStore(?:\.[^/]+)?\.cs$/.test(file))
-    const handsOut = storeFiles.flatMap(file => [...readFileSync(file, 'utf8').matchAll(/^\s*(?:public|internal)\b[^=\n(]*\bResultSetBuffer\b[^=\n(]*?\s(\w+)\s*\(/gm)].map(match => match[1]))
-    expect(handsOut.sort()).toEqual(['Find', 'Open', 'Sets'])
+    // Every member whose signature names a set, however it hands one out (a return, an out parameter, a property), is one of
+    // these: Find, Open and Sets hand one out, SealCompressed tells the checks of a set it packed, and the rest take one in.
+    const members = (text: string) => [...text.matchAll(/^[ \t]*(?:public|internal)\b[^{;]*?(?:\{|;)/gm)].map(match => match[0])
+      .filter(signature => /\bResultSetBuffer\b/.test(signature)).map(signature => signature.match(/(\w+)\s*(?:\(|\{|=>|;)/)?.[1])
+    expect(members('    internal bool TryGet(uint resultId,\n        out ResultSetBuffer? set)\n    {')).toEqual(['TryGet'])
+    expect(members('    internal Dictionary<uint, ResultSetBuffer> All { get; }')).toEqual(['All'])
+    expect(storeFiles.flatMap(file => members(readFileSync(file, 'utf8'))).sort()).toEqual(['AddView', 'Allow', 'ChargeOf', 'Demote', 'Find', 'Open', 'SealCompressed', 'Sealing', 'Sets'])
+    // Any other receiver of a .Find call is one of these collections, never a store reached another way (an alias, a
+    // parenthesised or indexed store, a lambda's parameter).
+    const receivers = new Set<string>()
+    for (const file of service) {
+      for (const line of readFileSync(file, 'utf8').replace(/\s*([?!]?)\s*\.\s*(?=Find\b)/g, '$1.').split('\n')) {
+        if (!/^\s*\/\//.test(line)) for (const match of line.matchAll(/([\w)\]]+)[?!]?\.Find\b/g)) receivers.add(match[1])
+      }
+    }
+    expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'store'])
+    // SqlService's Stored is the only one that takes a set.
+    expect(service.flatMap(file => [...readFileSync(file, 'utf8').matchAll(/\bStored\(ResultSetBuffer\b/g)]).length).toBe(1)
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)

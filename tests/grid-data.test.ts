@@ -363,12 +363,16 @@ describe('grid data', () => {
     await answer()
     expect(own()).toBe(2)
     await answer()
-    for (let step = 0; step < 80 && !data.error; step++) {
+    let steps = 0
+    for (; steps < 80 && !data.error; steps++) {
       changed.mockClear()
       advance(250)
       if (changed.mock.calls.length > 0) { frame(); await answer() }
     }
     expect(own()).toBe(gridLimits.stallRetries + 2)
+    // Each wait doubles from 250 ms: 250 + 500 + ... is about 8 s before it is marked failed, not 5 waits of 250 ms.
+    const waits = Array.from({ length: gridLimits.stallRetries }, (_, index) => gridLimits.busyRetryMs * 2 ** index).reduce((sum, ms) => sum + ms, 0)
+    expect(steps * 250).toBeGreaterThanOrEqual(waits - gridLimits.busyRetryMs * 2)
     expect(data.error).toBe(stalledText)
     // Retry reads it again at once.
     data.retry()

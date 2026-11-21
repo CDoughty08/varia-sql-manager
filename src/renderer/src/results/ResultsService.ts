@@ -552,6 +552,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private announcedCount = 0
   /** Residence switches said by tab whose announcement has not been read out yet: the run's end, within the live region's
    *  delay, would replace it, so it says them too. */
+  /** The other sentence waiting in the debounce with unheard switches (announce). */
+  private readonly unheardSentence = new Map<string, string>()
   private readonly unheardSwitches = new Map<string, string[]>()
   private minted = 0
 
@@ -589,6 +591,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.disposed) return
     // A switch of the run this replaces is not said with the new one's end.
     this.unheardSwitches.delete(tabId)
+    this.unheardSentence.delete(tabId)
     // The focus follows a group by its ordinal into the next run, as names and highlights do; nothing derived is rebuilt,
     // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
     // A run that ended before it returned that group passes the wish on.
@@ -721,6 +724,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (timer !== undefined) this.timers.clearTimeout(timer)
     this.announcements.delete(tabId)
     this.unheardSwitches.delete(tabId)
+    this.unheardSentence.delete(tabId)
     if (!Object.hasOwn(this.getSnapshot(), tabId)) return
     const next = { ...this.getSnapshot() }
     delete next[tabId]
@@ -1395,15 +1399,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The live region's sentence, after the 300 ms debounce; a copy's or save's outcome is read out again when repeated. */
-  announce(tabId: string, sentence: string): void {
-    // A switch not read out yet is said first: another sentence inside the debounce (a selection, a copy) replaces it.
-    const switches = (this.unheardSwitches.get(tabId) ?? []).join(' ')
-    const text = switches && !sentence.startsWith(switches) ? `${switches} ${sentence}` : sentence
+  announce(tabId: string, sentence: string, fromSwitch = false): void {
+    // Switches not read out yet are said first, then the other sentence waiting (a selection, a copy): neither kind replaces
+    // the other inside the debounce, while a later sentence of the same kind replaces an earlier one.
+    if (!fromSwitch) this.unheardSentence.set(tabId, sentence)
+    const text = [...this.unheardSwitches.get(tabId) ?? [], this.unheardSentence.get(tabId) ?? ''].filter(Boolean).join(' ')
     const previous = this.announcements.get(tabId)
     if (previous !== undefined) this.timers.clearTimeout(previous)
     this.announcements.set(tabId, this.timers.setTimeout(() => {
       this.announcements.delete(tabId)
       this.unheardSwitches.delete(tabId)
+      this.unheardSentence.delete(tabId)
       const run = this.runs.get(tabId)
       if (!run) return
       // The same sentence again must still be read out: a zero-width space makes it a change.
@@ -1672,9 +1678,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       : `${subject} is loading into memory.`) + removed
     if (announce) {
       // Said with any switch not yet read out (several results of a script switching at once): one replaces another.
-      const unheard = [...this.unheardSwitches.get(tabId) ?? [], text]
-      this.unheardSwitches.set(tabId, unheard)
-      this.announce(tabId, unheard.join(' '))
+      this.unheardSwitches.set(tabId, [...this.unheardSwitches.get(tabId) ?? [], text])
+      this.announce(tabId, text, true)
     }
     return text
   }

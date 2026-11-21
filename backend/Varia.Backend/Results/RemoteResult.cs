@@ -207,7 +207,7 @@ internal sealed class RemoteResult : IDisposable
     /// <summary>Checks only: the most the cache has held at once.</summary>
     internal long PeakBytes => Interlocked.Read(ref peak);
     private long peak;
-    private void NotePeak() { for (long now = Interlocked.Read(ref held), seen = Interlocked.Read(ref peak); now > seen && Interlocked.CompareExchange(ref peak, now, seen) != seen; seen = Interlocked.Read(ref peak)) { } }
+    private void NotePeak() { for (long now = CachedBytes, seen = Interlocked.Read(ref peak); now > seen && Interlocked.CompareExchange(ref peak, now, seen) != seen; seen = Interlocked.Read(ref peak)) { } }
     public long Fetches => Interlocked.Read(ref fetches);
     public long Evictions => Interlocked.Read(ref evictions);
     public bool Expired { get { lock (gate) return expired; } }
@@ -506,6 +506,7 @@ internal sealed class RemoteResult : IDisposable
                     throw;
                 }
                 var cost = pages.Sum(page => page.Cost);
+                // Recorded before the overrun is reserved: a read-ahead block too wide to keep still sizes the next read-ahead.
                 if (writer.Rows > 0) lock (gate) widestRowBytes = Math.Max(widestRowBytes, (double)cost / writer.Rows);
                 if (cost < estimate) store.ReturnCache(ref held, estimate - cost);
                 else if (cost > estimate)
