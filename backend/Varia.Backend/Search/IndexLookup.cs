@@ -214,7 +214,8 @@ internal sealed class LookupLedger
 /// databases it answers from are the reads held then, which never change. Make one per request and let it go: one kept across a
 /// rebuild or a disconnect keeps the reads it holds alive outside the index's memory budget.
 /// Names compare as the database's catalog collation does for case (<see cref="DatabaseIndex.CaseSensitive"/>; without case where
-/// that is unknown), ordinally otherwise: an accent- or kana-insensitive collation is not followed.
+/// that is unknown), ordinally otherwise: only case (and the Turkish i) is followed, not accent, kana or width insensitivity or
+/// characters a collation ignores.
 /// </summary>
 internal sealed class IndexLookup
 {

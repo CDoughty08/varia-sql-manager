@@ -111,8 +111,9 @@ the reads held when it is made:
 - Names compare as the database's catalog collation does for case: each database batch ends by comparing `a` with `A`,
   and `i` with `I`, under `CATALOG_DEFAULT`, which reads no catalog row. A Turkish or Azeri collation (`a` equals `A`
   but `i` does not equal `I`) pairs `i` with `İ` and `ı` with `I`. Where the rule is unknown (a batch that failed part
-  way, or failed at that comparison, which costs none of the objects read before it) names compare without case. Accent- and kana-insensitive collations are not followed. A database's own name matches exactly, else
-  the one known name that differs from it only in case.
+  way, or failed at that comparison, which costs none of the objects read before it) names compare without case. Only
+  case (and the Turkish i) is followed: accent, kana and width insensitivity, and characters a collation ignores, are
+  not. A database's own name matches exactly, else the one known name that differs from it only in case.
 - A database's answer (and every object lookup, which carries it) gives its state: `Ready` (its last read was whole);
   `Partial` with its gaps (children left out, definitions left out by the build, definitions cut, or system objects
   unknown because the connection's resource database read failed); `Building` (a running build has not reached it yet;
