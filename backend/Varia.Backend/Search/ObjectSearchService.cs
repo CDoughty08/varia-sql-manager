@@ -101,8 +101,8 @@ internal sealed class ObjectSearchService : IDisposable
     /// <summary>The set a memory detail walk dedupes texts in, kept between walks (empty in between).</summary>
     private readonly HashSet<object> walkSeen = new(ReferenceEqualityComparer.Instance);
     public long Finished => Interlocked.Read(ref finished);
-    /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
-    /// only after a build ends (or the budget moves).</summary>
+    /// <summary>Ended builds, finished, stopped or failed, and lookup arrays built (<see cref="Changed"/>): a search changes nothing the
+    /// index holds, so the memory report walks again only after one of these (or the budget moves).</summary>
     public long Builds => Interlocked.Read(ref builds);
     /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
     public long Forgets => Interlocked.Read(ref forgets);
@@ -145,6 +145,14 @@ internal sealed class ObjectSearchService : IDisposable
         Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
         if (build) Ended();
         else Interlocked.Increment(ref finished);
+    }
+
+    /// <summary>Records that what the index holds changed beside the budget's figure (lookup arrays built for the editor): the memory
+    /// report walks again, so they show with the records rather than as reading.</summary>
+    internal void Changed()
+    {
+        Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref finished);
     }
 
     /// <summary>Records that a build ended: a stopped or failed one keeps no time, but what its reads left is walked again, so no
@@ -266,7 +274,7 @@ internal sealed class ObjectSearchService : IDisposable
     {
         if (!states.TryGetValue(connectionId, out var state)) return null;
         lock (state.Gate)
-            return new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot());
+            return new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
     }
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
@@ -476,7 +484,12 @@ internal sealed class ObjectSearchService : IDisposable
     /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
     internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)
     {
-        if (!held && reader.Any) put(reader.Partial());
+        if (!held && reader.Any)
+        {
+            var partial = reader.Partial();
+            partial.FailedPart = true;
+            put(partial);
+        }
         else reader.Abandon();
     }
 

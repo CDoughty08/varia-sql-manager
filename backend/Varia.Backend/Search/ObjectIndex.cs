@@ -54,26 +54,33 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
+    /// <summary>Held after its read failed part way (KeepPartial): it has only what came before the failure, whatever the build
+    /// records of it (set before it is held, so a lookup never sees it as whole).</summary>
+    public bool FailedPart { get; set; }
     /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
     public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
 
     /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
     public long LookupBytes { get { lock (gate) return lookupBytes; } }
 
-    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped.
-    /// Null once it is dropped, or when the budget cannot take them: the lookup then scans the table.</summary>
-    public TableLookup? Lookup(IndexBudget budget)
+    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
+    /// <paramref name="built"/> is told when this call built them. Null once it is dropped, or when the budget cannot take them:
+    /// the lookup then scans the table.</summary>
+    public TableLookup? Lookup(IndexBudget budget, Action? built = null)
     {
-        if (Volatile.Read(ref lookup) is { } built) return built;
+        if (Volatile.Read(ref lookup) is { } held) return held;
+        TableLookup made;
         lock (gate)
         {
             if (lookup is not null || dropped) return lookup;
             var bytes = TableLookup.BytesFor(Table);
             if (!budget.TryTake(bytes)) return null;
             lookupBytes = bytes;
-            Volatile.Write(ref lookup, TableLookup.Build(Table));
-            return lookup;
+            made = TableLookup.Build(Table);
+            Volatile.Write(ref lookup, made);
         }
+        built?.Invoke();
+        return made;
     }
 
     /// <summary>Gives back its lookup arrays' share once the index no longer holds it; a later lookup builds none.</summary>

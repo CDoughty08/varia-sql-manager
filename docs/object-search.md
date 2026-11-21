@@ -113,11 +113,12 @@ the reads held when it is made:
   without case. Accent- and kana-insensitive collations are not followed. A database's own name matches exactly, else
   the one known name that differs from it only in case.
 - A database's answer (and every object lookup, which carries it) gives its state: `Ready` (its last read was whole);
-  `Partial` with its gaps (children left out, definitions left out by the build, definitions cut); `Building` (a running
-  build has not reached it yet, while an earlier read still answers); `Skipped` with the skip of its last read (a read
-  that failed part way, or an earlier one, still answers where there is one); `Absent`. Each database keeps its last
-  outcome across builds: a stopped build, or one whose listing fails, leaves the databases it did not reach as they were,
-  and only a whole read clears a skip. It also carries when the read it answers from finished, and the database's case
+  `Partial` with its gaps (children left out, definitions left out by the build, definitions cut, or system objects
+  unknown because the connection's resource database read failed); `Building` (a running build has not reached it yet,
+  while an earlier read still answers); `Skipped` with the skip of its last read (a read that failed part way, or an
+  earlier one, still answers where there is one); `Absent`. Each database keeps its last outcome across builds: a
+  stopped build, or one whose listing fails, leaves the databases it did not reach as they were; a later read (whole, or
+  without its children) clears a skip, and so does a listing that no longer names the database. It also carries when the read it answers from finished, and the database's case
   rule. Columns, keys and foreign keys are asked of an object found that way.
 - A lookup is a snapshot: make one per request. One kept across a rebuild or a disconnect keeps the reads it holds alive
   outside the memory budget.
@@ -152,7 +153,7 @@ the reads held when it is made:
   5 a key column and 16 a type. A database's first editor lookup builds its lookup arrays (names, children by parent,
   and foreign keys by the table they reference, 4 bytes per entry and per such foreign key), charged until its read is
   replaced or dropped; where the budget cannot take them, lookups scan the table instead. The Memory panel counts them
-  with the records. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
+  with the records, walking the index again once they are built. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
   840 key columns) beside about 195 KB of entries.
 - A database that does not fit with its children is read again without columns, indexes, statistics and parameters
   (status: `CHILDREN_LEFT_OUT`); one that still does not fit is skipped as `TOO_LARGE`. A read that runs out of room

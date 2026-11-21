@@ -40,6 +40,7 @@ internal static class SearchLookupChecks
         var index = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(SearchDetailChecks.Fixture(children, caseSensitive), false, CancellationToken.None))!;
         var connection = new ConnectionIndex(budget, null, pool);
         connection.Put(index);
+        connection.PutResource(SystemSet());
         return (index, budget, connection, pool);
     }
 
@@ -54,6 +55,11 @@ internal static class SearchLookupChecks
         try { await failing.ReadAsync(Broken(), false, CancellationToken.None); } catch (InvalidCastException error) { failure = error; }
         check(failure is not null && failing.Partial() is { DefinitionsLeftOut: true, CaseSensitive: null } partial && partial.Table.Count > 0,
             "a read kept after it failed part way keeps that it was read without definitions, and its case rule as unknown");
+        var again = new DatabaseReader("Sales", new ObjectIndexLimits(), new StringPool(new IndexBudget(1 << 24)));
+        try { await again.ReadAsync(Broken(), false, CancellationToken.None); } catch (InvalidCastException) { }
+        DatabaseIndex? kept = null;
+        ObjectSearchService.KeepPartial(again, held: false, value => kept = value);
+        check(kept is { FailedPart: true }, "the build marks a read it keeps after a failure part way before holding it");
         var lookup = new IndexLookup(connection, budget, false, Idle);
         var orders = lookup.Objects("Sales", "dbo", "Orders");
         check(orders is { Database: { State: LookupState.Partial, Gaps: LookupGaps.DefinitionsLeftOut, CaseSensitive: false }, Value: [{ Kind: "table", Schema: "dbo", Name: "Orders" }] },
@@ -168,6 +174,13 @@ internal static class SearchLookupChecks
         return index;
     }
 
+    /// <summary>A resource set with sys.objects and two of its columns, as a connection whose system objects were read holds.</summary>
+    private static ResourceSet SystemSet()
+    {
+        var view = new IndexedObject("view", "systemViews", "sys", "objects", System: true, Subtype: "system");
+        return new ResourceSet(new ResourceKey("17.0.1000.7", 3, 1, null, 1, false), ObjectTable.Of([view, ObjectSearchChild(view, "name"), ObjectSearchChild(view, "object_id")]), 0, 0);
+    }
+
     private static void Cases(Action<bool, string> check)
     {
         var budget = new IndexBudget(1 << 20);
@@ -197,6 +210,7 @@ internal static class SearchLookupChecks
         var first = new DateTime(2026, 11, 20, 11, 0, 0, DateTimeKind.Utc);
         var started = new DateTime(2026, 11, 20, 12, 0, 0, DateTimeKind.Utc);
         var item = new IndexedObject("table", "tables", "dbo", "Item");
+        connection.PutResource(SystemSet());
         // The first build: Old and Cut read, Timed read then a rebuild of it timed out (its read kept), Broken failed part way (its
         // partial read held), Denied refused, Left read without its children.
         var ledger = new LookupLedger();
@@ -244,6 +258,20 @@ internal static class SearchLookupChecks
         ledger.List(["Old", "Timed", "Broken", "Left", "Cut", "New"]);
         check(At(false, "Broken") is { State: LookupState.Ready, Skip: null } && At(false, "Denied") is { State: LookupState.Absent, Skip: null },
             "a whole read clears a database's skip, and a listing that no longer names a database drops its skip");
+
+        // The build holds a read just before it records the outcome: a lookup between the two never sees a stale skip on a whole
+        // read, nor a read kept after it failed part way as whole.
+        connection.Put(Held("Timed", false, started.AddMinutes(6), item));
+        var kept = Held("Fresh", false, started.AddMinutes(6), item);
+        kept.FailedPart = true;
+        connection.Put(kept);
+        check(At(false, "Timed") is { State: LookupState.Ready, Skip: null } && At(true, "Fresh") is { State: LookupState.Skipped, Held: not null },
+            "a read held since a database's skip supersedes it, and one kept after failing part way is skipped before its skip is recorded");
+        // Without the resource set (its read failed) a database cannot say sys objects do not exist.
+        connection.PutResource(null);
+        check(At(false, "Old") is { State: LookupState.Partial, Gaps: LookupGaps.SystemObjectsLeftOut }
+            && new IndexLookup(connection, budget, false, ledger.Snapshot()).Objects("Old", "sys", "objects") is { Database.Gaps: LookupGaps.SystemObjectsLeftOut, Value.Count: 0 },
+            "a connection without its system objects answers each database partial, with that gap");
     }
 
     private static void Resource(Action<bool, string> check)
@@ -279,8 +307,11 @@ internal static class SearchLookupChecks
         var index = (await new DatabaseReader("Sales", service.Limits, service.Pool).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: false), false, CancellationToken.None))!;
         held.Put(index);
         var lookup = service.Lookup(id)!;
+        var builds = service.Builds;
         check(lookup.Objects("Sales", "dbo", "Orders") is { Database.State: LookupState.Partial, Value: [{ Name: "Orders" }] } && index.LookupBytes > 0,
             "the service answers lookups from the connection's index, charging the shared budget");
+        lookup.Objects("Sales", "dbo", "Customers");
+        check(service.Builds == builds + 1, "building the lookup arrays (once) makes the Memory panel walk the index again, so they never show as reading");
         service.Forget(id);
         check(service.MemoryUsed == 0 && service.Lookup(id) is null, "a disconnect drops the index and its lookup arrays");
     }

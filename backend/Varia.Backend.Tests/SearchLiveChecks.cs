@@ -220,9 +220,28 @@ internal static class SearchLiveChecks
         // after this one, against the same server.
         using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
         {
-            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            // The editor's lookup follows the service's builds: building once listed, skipped with the build's reason after.
+            LookupDatabase? during = null;
+            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, _ => during ??= tight.Lookup(connectionId)?.Database(database));
             check(small.Status.State == "ready" && small.Status.Skipped.Any(skip => skip.Database == database && skip.Code == "TOO_LARGE"),
                 "a database past the memory budget stops its read, is skipped as TOO_LARGE, and the build ends ready (" + small.ElapsedMs + " ms)");
+            check(during is { State: LookupState.Building, Held: null } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a lookup during a real build sees a listed database as building, and after it as skipped with its reason: " + during + " then " + tight.Lookup(connectionId)?.Database(database));
+            // A build stopped once it has listed the databases leaves each one it did not reach as its last read left it.
+            using var stop = new CancellationTokenSource();
+            LookupDatabase? stopping = null;
+            var stopped = false;
+            try
+            {
+                await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token, _ =>
+                {
+                    stopping ??= tight.Lookup(connectionId)?.Database(database);
+                    stop.Cancel();
+                });
+            }
+            catch (RequestException error) when (error.Code == "CANCELLED") { stopped = true; }
+            check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
         }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing

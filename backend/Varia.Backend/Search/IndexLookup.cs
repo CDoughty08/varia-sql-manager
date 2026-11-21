@@ -25,7 +25,9 @@ internal enum LookupGaps : byte
     /// <summary>Read by a build without definitions.</summary>
     DefinitionsLeftOut = 2,
     /// <summary>Some definitions cut at the per-module limit, or left out once the budget was spent.</summary>
-    DefinitionsCut = 4
+    DefinitionsCut = 4,
+    /// <summary>The connection holds no resource database set (its read failed), so sys and INFORMATION_SCHEMA objects are unknown.</summary>
+    SystemObjectsLeftOut = 8
 }
 
 /// <summary>What the index knows of one database: its state and gaps, the skip of its last read, when the read it answers from
@@ -202,10 +204,12 @@ internal sealed class IndexLookup
     private readonly DateTime? buildStarted;
     private readonly IReadOnlySet<string> listed;
     private readonly IReadOnlyDictionary<string, (ObjectIndexSkip Skip, DateTime At)> skipped;
+    private readonly Action? arraysBuilt;
 
-    internal IndexLookup(ConnectionIndex index, IndexBudget budget, bool building, LookupLedger.View builds)
+    internal IndexLookup(ConnectionIndex index, IndexBudget budget, bool building, LookupLedger.View builds, Action? arraysBuilt = null)
     {
         this.budget = budget;
+        this.arraysBuilt = arraysBuilt;
         held = index.Databases.ToDictionary(value => value.Database, StringComparer.Ordinal);
         resource = index.Resource;
         this.building = building;
@@ -225,13 +229,16 @@ internal sealed class IndexLookup
         var database = Resolve(name);
         held.TryGetValue(database, out var read);
         var failed = skipped.TryGetValue(database, out var last) ? last : ((ObjectIndexSkip Skip, DateTime At)?)null;
+        // A read held since the skip was recorded supersedes it (the build records its outcome just after holding it).
+        if (failed is { } skip && read is not null && skip.At < read.ReadAt) failed = null;
         var gaps = read is null ? LookupGaps.None
-            : (read.ChildrenLeftOut ? LookupGaps.ChildrenLeftOut : 0) | (read.DefinitionsLeftOut ? LookupGaps.DefinitionsLeftOut : 0) | (read.Cut > 0 ? LookupGaps.DefinitionsCut : 0);
+            : (read.ChildrenLeftOut ? LookupGaps.ChildrenLeftOut : 0) | (read.DefinitionsLeftOut ? LookupGaps.DefinitionsLeftOut : 0) | (read.Cut > 0 ? LookupGaps.DefinitionsCut : 0)
+                | (resource is null ? LookupGaps.SystemObjectsLeftOut : 0);
         // A running build has reached a database once it has an outcome in it: a read, or a skip, since it started.
         var reached = buildStarted is not { } started || read?.ReadAt >= started || failed?.At >= started;
         var known = read is not null || failed is not null || listed.Contains(database);
         var state = building && known && !reached ? LookupState.Building
-            : failed is not null ? LookupState.Skipped
+            : failed is not null || read?.FailedPart == true ? LookupState.Skipped
             : read is null ? LookupState.Absent
             : gaps != LookupGaps.None ? LookupState.Partial : LookupState.Ready;
         return new(database, state, gaps, failed?.Skip, read?.ReadAt, read?.CaseSensitive) { Held = read };
@@ -252,13 +259,13 @@ internal sealed class IndexLookup
                     && (kinds is null || kinds.Contains(table.Kind(at))))
                     found.Add(new(known.Database, table, at, source));
         }
-        if (known.Held is { } read) Collect(read.Table, read.Lookup(budget) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(read.Table, name), read);
+        if (known.Held is { } read) Collect(read.Table, read.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(read.Table, name), read);
         if (resource is not null && known.State != LookupState.Absent) Collect(resource.Table, TableLookup.ScanNamed(resource.Table, name), null);
         return new(known, found);
     }
 
     private IEnumerable<int> Children(LookupObject owner) =>
-        owner.Source?.Lookup(budget) is { } lookup ? lookup.Children(owner.At) : TableLookup.ScanChildren(owner.Table, owner.At);
+        owner.Source?.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Children(owner.At) : TableLookup.ScanChildren(owner.Table, owner.At);
 
     private List<LookupColumn> Typed(LookupObject owner, string kind) =>
         [.. Children(owner).Where(at => owner.Table.Kind(at) == kind)
@@ -300,7 +307,7 @@ internal sealed class IndexLookup
     /// <summary>The foreign keys of other tables (and the table's own, if it references itself) that reference a table.</summary>
     public IReadOnlyList<LookupForeignKey> ReferencedBy(LookupObject owner)
     {
-        var keys = owner.Source?.Lookup(budget) is { } lookup ? lookup.Referencing(owner.At) : TableLookup.ScanReferencing(owner.Table, owner.At);
+        var keys = owner.Source?.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Referencing(owner.At) : TableLookup.ScanReferencing(owner.Table, owner.At);
         return [.. keys.Select(at => ForeignKey(owner with { At = owner.Table.Parent(at) }, at))];
     }
 
