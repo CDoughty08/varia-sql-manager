@@ -905,11 +905,11 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect([query, two, three].map(document => model(document.id).getValue())).toEqual(["SELECT 'f1 from disk'", 'SELECT 2 -- mine', "SELECT 'f3 from disk'"])
     expect(api.keepSqlFile.mock.calls).toEqual([['f2']])
   })
-  it('counts typing into a large file still filling as unsaved, and its fill\'s chunks as no edit, when reloading it', async () => {
+  it('counts typing into a large plan file still filling as unsaved, and its fill\'s chunks as no edit, when reloading it', async () => {
     const { documents, api, files, model, options, frame } = fixture()
     options.autoReload = true
     const big = 'SELECT 1\n'.repeat(gridLimits.documentFirstChunk)
-    const filling = documents.openText({ name: 'big.sql', text: big, file: registered('f1', 'big.sql') })
+    const filling = documents.openText({ name: 'big.sqlplan', text: big, kind: 'sqlplan', file: registered('f1', 'big.sqlplan') })
     expect(documents.isFilling(filling.id)).toBe(true)
     api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f1', change: 'modified' }] })
     // A clean query still filling reloads without asking, though a chunk is appended while main reads the file (with
@@ -925,7 +925,7 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(model(filling.id).getValue()).toBe('SELECT 9')
     expect(documents.get(filling.id)?.dirty).toBe(false)
     // Typing during a fill leaves the query clean until the last chunk, but it is still a change: File changed asks.
-    const other = documents.openText({ name: 'other.sql', text: big, file: registered('f2', 'other.sql') })
+    const other = documents.openText({ name: 'other.sqlplan', text: big, kind: 'sqlplan', file: registered('f2', 'other.sqlplan') })
     model(other.id).edit('-- mine\n' + model(other.id).getValue())
     expect(documents.get(other.id)?.dirty).toBe(false)
     api.checkSqlFiles.mockResolvedValue({ ok: true, value: [{ fileId: 'f2', change: 'modified' }] })
