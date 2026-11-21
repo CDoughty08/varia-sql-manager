@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (358)
+## Commands (365)
 
 ### File
 
@@ -162,7 +162,7 @@ keys it uses are listed below.
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
-| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As… |
+| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As…; Results toolbar › More results tools › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results; Results toolbar › More results tools › Close Results |
 | Close Result | `output.closeResult` | — | — | — | `!documentBusy` | Query Output context menu › Close Just This Result |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs; Results toolbar › More results tools › Show Spaces and Tabs |
@@ -205,6 +205,13 @@ keys it uses are listed below.
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
+| Match Rows By… | `output.compareMatch` | — | — | — | Always | Results toolbar › More results tools › Match Rows By… |
+| Changes Only | `output.compareChangesOnly` | — | — | — | Always; checked when `comparisonChangesOnly` | Results toolbar › More results tools › Changes Only |
+| One Row per Entry | `output.compareOneRow` | — | — | — | Always; checked when `comparisonOneRow` | Results toolbar › More results tools › One Row per Entry |
+| Exact Text | `output.compareExactText` | — | — | — | Always; checked when `comparisonExactText` | Results toolbar › More results tools › Exact Text |
+| Swap Sides | `output.compareSwapSides` | — | — | — | Always | Results toolbar › More results tools › Swap Sides |
+| Go to Old Result | `output.compareGoToOld` | — | — | — | Always | Results toolbar › More results tools › Go to Old Result |
+| Go to New Result | `output.compareGoToNew` | — | — | — | Always | Results toolbar › More results tools › Go to New Result |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
 | Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
@@ -1056,6 +1063,14 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `4_text` | Show All **W**hite Space | `output.showAllWhitespace` | Always |
 | `4_text` | So**r**t Text by Characters | `output.sortTextByChars` | Always |
 | `4_text` | Sort Text b**y** Bytes | `output.sortTextByBytes` | Always |
+| `5_compare` | **M**atch Rows By… | `output.compareMatch` | `resultsGridComparison` |
+| `5_compare` | Chang**e**s Only | `output.compareChangesOnly` | `resultsGridComparison` |
+| `5_compare` | O**n**e Row per Entry | `output.compareOneRow` | `resultsGridComparison` |
+| `5_compare` | E**x**act Text | `output.compareExactText` | `resultsGridComparison` |
+| `5_compare` | Sw**a**p Sides | `output.compareSwapSides` | `resultsGridComparison` |
+| `5_compare` | Go to Ol**d** Result | `output.compareGoToOld` | `resultsGridComparison` |
+| `5_compare` | Go to New Res**u**lt | `output.compareGoToNew` | `resultsGridComparison` |
+| `5_compare` | Sa**v**e Results As… | `output.saveResultsAs` | `resultsGridComparison` |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 #### Peek Properties context menu (`peek.properties.context`)
@@ -1083,7 +1098,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (177)
+## Context keys (180)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1269,6 +1284,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsGridComparison` | boolean | state | The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is. |
 | `comparisonInputsOpen` | boolean | state | Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable. |
 | `outputGridComparison` | boolean | target | The menu is for a comparison's results grid. |
+| `comparisonExactText` | boolean | state | That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle). |
+| `comparisonOneRow` | boolean | state | That comparison shows one row per entry (its Layout is One row). |
+| `comparisonChangesOnly` | boolean | state | That comparison shows only its changed, added and removed rows (its Rows choice is Changes only). |
 
 ## Reserved keys
 

@@ -10,6 +10,8 @@ import { EventBus } from '../src/renderer/src/core/events'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import ComparisonToolbar, { useLiveText } from '../src/renderer/src/results/ComparisonToolbar'
+import CompareNotice from '../src/renderer/src/results/CompareNotice'
+import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { CompareService, compareSources, fallbackText, type CompareInfo } from '../src/renderer/src/results/CompareService'
 import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
@@ -38,7 +40,9 @@ async function fixture() {
   await act(async () => { await compare.comparePair('t1', keys[0], keys[1], { exact: false }) })
   const replace = vi.spyOn(compare, 'replace').mockResolvedValue(undefined)
   const goTo = vi.fn()
-  const workbench = { results, compare } as unknown as Workbench
+  const settingsSnapshot = { values: {} }, settings = { subscribe: () => () => {}, getSnapshot: () => settingsSnapshot }
+  const commands = { execute: vi.fn() }
+  const workbench = { results, compare, settings, commands } as unknown as Workbench
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
@@ -52,7 +56,7 @@ async function fixture() {
   const button = (name: string) => [...toolbar().querySelectorAll('button')].find(item => (item.getAttribute('aria-label') ?? item.textContent) === name)
   const unmount = () => { if (!drawn.delete(unmount)) return; act(() => { root.unmount(); container.remove() }) }
   drawn.add(unmount)
-  return { results, compare, keys, replace, goTo, draw, toolbar, button, slot, container }
+  return { results, compare, keys, replace, goTo, draw, toolbar, button, slot, container, workbench, unmount }
 }
 
 describe('a comparison\'s toolbar', () => {
@@ -87,13 +91,29 @@ describe('a comparison\'s toolbar', () => {
     act(() => { view.results.removeEntry('t1', view.keys[0]) })
     view.draw()
     expect(view.toolbar().querySelector('[aria-label="Sides"]')?.textContent).toContain('Result 1 (closed)')
-    for (const name of ['Swap sides', 'One row', 'Two rows', 'Exact text']) {
+    for (const name of ['Swap sides', 'One row', 'Two rows', 'Exact text', 'All rows', 'Changes only', 'Match rows: Automatic: Id']) {
       const control = view.button(name)!
+      expect(control, name).toBeDefined()
       expect(control.getAttribute('aria-disabled'), name).toBe('true')
       expect(control.title, name).toMatch(/unavailable because Result 1 is closed$/)
       act(() => { control.click() })
     }
     expect(view.replace).not.toHaveBeenCalled()
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    // So are the notices' buttons; Dismiss is not, since it changes nothing.
+    view.draw({ same: 0, changed: 0, added: 1, removed: 1, nothingPaired: true, leftRows: 1, rightRows: 1 })
+    const notices = view.container.querySelector('[role="group"][aria-label="Comparison notices"]')!
+    const actions = [...notices.querySelectorAll<HTMLButtonElement>('button[data-action]')]
+    expect(actions.map(button => button.textContent)).toEqual(['Choose key columns…', 'Match by row position'])
+    for (const action of actions) {
+      expect(action.getAttribute('aria-disabled')).toBe('true')
+      expect(action.title).toMatch(/unavailable because Result 1 is closed$/)
+      act(() => { action.click() })
+    }
+    expect(view.replace).not.toHaveBeenCalled()
+    expect(notices.querySelector('button[aria-label="Dismiss notice"]')?.getAttribute('aria-disabled')).toBeNull()
+    // The chips only filter what the comparison holds, so they stay available.
+    expect(view.button('1 added')!.getAttribute('aria-disabled')).toBeNull()
     // The open side still links to its input.
     act(() => { view.button('+ Result 2')!.click() })
     expect(view.goTo).toHaveBeenCalledWith(view.keys[1])
@@ -148,5 +168,113 @@ describe('a comparison\'s toolbar', () => {
     }
     expect(said.map(text => text.trim())).toEqual(['The change was cancelled.', 'The change was cancelled.'])
     expect(said[0]).not.toBe(said[1])
+  })
+
+  it('sets Rows in place, and filters by kind with its chips', async () => {
+    const view = await fixture()
+    expect(view.button('All rows')!.getAttribute('aria-pressed')).toBe('true')
+    act(() => { view.button('All rows')!.click() })
+    expect(view.replace).not.toHaveBeenCalled()
+    act(() => { view.button('Changes only')!.click() })
+    expect(view.replace).toHaveBeenLastCalledWith('t1', view.slot().key, { context: 0 })
+    // A chip filters by its kind; one with no rows says so and does nothing.
+    const toggleKind = vi.spyOn(view.compare, 'toggleKind').mockImplementation(() => {})
+    expect(view.button('1 changed')!.getAttribute('aria-pressed')).toBe('false')
+    act(() => { view.button('1 changed')!.click() })
+    expect(toggleKind).toHaveBeenLastCalledWith('t1', view.slot().key, 'changed')
+    const none = view.button('0 removed')!
+    expect(none.getAttribute('aria-disabled')).toBe('true')
+    expect(none.title).toBe('No removed rows')
+    act(() => { none.click() })
+    expect(toggleKind).toHaveBeenCalledTimes(1)
+    expect(view.toolbar().textContent).toContain('1 unchanged')
+  })
+
+  it('picks key columns in its match menu, by keyboard too, and changes the comparison in place', async () => {
+    const view = await fixture()
+    const match = view.toolbar().querySelector<HTMLButtonElement>('[data-control="match"]')!
+    expect(match.getAttribute('aria-haspopup')).toBe('dialog')
+    // Its name holds what it shows (label in name).
+    expect(match.getAttribute('aria-label')).toBe('Match rows: Automatic: Id')
+    expect(match.textContent).toBe('Automatic: Id')
+    act(() => { match.click() })
+    expect(view.compare.getSnapshot().matchMenu).toEqual({ tabId: 't1', key: view.slot().key, from: 'toolbar' })
+    view.draw()
+    const dialog = () => document.querySelector<HTMLFormElement>('[role="dialog"][aria-label="Match rows by"]')
+    expect(dialog()).not.toBeNull()
+    expect(match.getAttribute('aria-expanded')).toBe('true')
+    const list = dialog()!.querySelector<HTMLElement>('[role="listbox"]')!
+    // The checklist is unavailable until Key columns is chosen; Apply is unavailable while none is ticked.
+    expect(list.getAttribute('aria-disabled')).toBe('true')
+    const radio = (label: string) => [...dialog()!.querySelectorAll('label')].find(item => item.textContent?.startsWith(label))!.querySelector('input')!
+    act(() => { radio('Key columns').click() })
+    expect(list.getAttribute('aria-disabled')).toBeNull()
+    // Automatic's column starts ticked.
+    const options = () => [...list.querySelectorAll('[role="option"]')]
+    expect(options().map(option => option.getAttribute('aria-checked'))).toEqual(['true', 'false'])
+    act(() => { list.focus(); list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })) })
+    act(() => { list.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })) })
+    expect(options().map(option => option.getAttribute('aria-checked'))).toEqual(['true', 'true'])
+    expect(dialog()!.textContent).toContain('A row matches when all 2 columns are equal.')
+    // Enter in the checklist applies, as Apply does.
+    act(() => { list.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(view.replace).toHaveBeenLastCalledWith('t1', view.slot().key, { match: { mode: 'columns', columns: [0, 1] } })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    view.draw()
+    expect(dialog()).toBeNull()
+  })
+
+  it('closes its match menu from its Match button, a press there not counting as one outside', async () => {
+    const view = await fixture()
+    const match = () => view.toolbar().querySelector<HTMLButtonElement>('[data-control="match"]')!
+    act(() => { match().click() })
+    view.draw()
+    expect(view.compare.getSnapshot().matchMenu).toBeDefined()
+    act(() => { match().dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); match().click() })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    // Unmounted while open (its pane hidden), it closes rather than showing again later.
+    act(() => { view.compare.openMatchMenu('t1', view.slot().key, 'toolbar') })
+    view.draw()
+    view.unmount()
+    await act(async () => { await Promise.resolve() })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+  })
+
+  it('closes its match menu with Escape, changing nothing', async () => {
+    const view = await fixture()
+    act(() => { view.compare.openMatchMenu('t1', view.slot().key, 'toolbar') })
+    view.draw()
+    const dialog = document.querySelector<HTMLFormElement>('[role="dialog"][aria-label="Match rows by"]')!
+    act(() => { dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    expect(view.replace).not.toHaveBeenCalled()
+  })
+
+  it('says a first run All rows could not fit in the results toolbar, past a later notice, until acted on or dismissed', async () => {
+    const view = await fixture()
+    const diff = vi.mocked(view.results.getSnapshot().t1.sets[1].handle.diff)
+    diff.mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    await act(async () => { await view.compare.comparePair('t1', view.keys[1], view.keys[2], { exact: false }) })
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const draw = () => act(() => { root.render(createElement(WorkbenchProvider, { workbench: view.workbench, children: createElement(CompareNotice, { tabId: 't1' }) })) })
+    draw()
+    const notice = () => host.querySelector<HTMLElement>('[role="group"][aria-label="Comparison notice"]')
+    expect(notice()?.textContent).toContain('Compare Result 2 with Result 3: Not enough result memory for all rows.')
+    act(() => { view.results.notify('t1', 'Copied 3 rows.') })
+    draw()
+    expect(notice()).not.toBeNull()
+    act(() => { notice()!.querySelector<HTMLButtonElement>('button[aria-label="Dismiss comparison notice"]')!.click() })
+    expect(notice()).toBeNull()
+    // Again, and Show changes only compares them with Changes only.
+    diff.mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    await act(async () => { await view.compare.comparePair('t1', view.keys[1], view.keys[2], { exact: false }) })
+    const show = [...notice()!.querySelectorAll('button')].find(button => button.textContent === 'Show changes only')!
+    expect(show.getAttribute('aria-disabled')).toBeNull()
+    await act(async () => { show.click(); for (let i = 0; i < 12; i++) await Promise.resolve() })
+    expect(diff).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ context: 0 }))
+    expect(notice()).toBeNull()
+    act(() => { root.unmount(); host.remove() })
   })
 })

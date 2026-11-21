@@ -1229,6 +1229,32 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-df { flex: none; min-width: 1ch; color: var(--varia-warningForeground); }
 .rg-rn.tone-added { --rg-tint: var(--varia-resultsGrid-diffAddedBackground); }
 .rg-rn.tone-removed { --rg-tint: var(--varia-resultsGrid-diffRemovedBackground); }
+/* A comparison's cues. Headers (GridView.paintHeaders): a column with changes is underlined in the changed colour with a
+   dot after its name, a key column starts with ⚷; both are glyphs, so forced colours keep them, with empty alt text since
+   the header's description says it. Rows (paintGutter): in Changes only a dashed rule marks a hidden run of unchanged rows,
+   over the row after it, or under the last row. Column Profile cards (ColumnProfilePanel): each column's changes as a
+   stacked bar, coloured as the gutter's kind bars. */
+.rg-ch.chg { box-shadow: inset 0 -2px 0 var(--varia-resultsGrid-diffChangedBackground); }
+.rg-ch.chg .rg-cn::after { content: '•' / ''; margin-left: 4px; color: var(--varia-charts-blue); }
+.rg-ch.key .rg-cn::before { content: '⚷' / ''; margin-right: 4px; color: var(--varia-warningForeground); }
+.rg-row[data-gap]::after, .rg-rn[data-gap]::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.rg-row[data-gap~='above']::after, .rg-rn[data-gap~='above']::after { border-top: 1px dashed var(--varia-resultsGrid-diffContextForeground); }
+.rg-row[data-gap~='below']::after, .rg-rn[data-gap~='below']::after { border-bottom: 1px dashed var(--varia-resultsGrid-diffContextForeground); }
+.profile-statistics { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); }
+.profile-statistics .profile-strip-action[aria-pressed='true'] { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
+.profile-card-title .profile-key { margin-left: 4px; color: var(--varia-warningForeground); }
+.profile-changes { display: flex; height: 6px; margin: 5px 0 3px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-resultsGrid-gridlines); }
+.profile-changes > i { display: block; height: 100%; }
+.profile-changes > .changed { background: var(--varia-resultsGrid-diffChangedBackground); }
+.profile-changes > .soft { background: var(--varia-resultsGrid-diffSoftUnderline); }
+.profile-changes > .added { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
+.profile-changes > .removed { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.profile-changes > .same { background: transparent; }
+.profile-change-counts { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+@media (forced-colors: active) {
+  .rg-ch.chg { border-bottom: 2px solid CanvasText; }
+  .profile-changes { border: 1px solid CanvasText; }
+}
 /* Highlighted rows (grid/highlights.ts): a translucent layer over each cell (below) and over the row's number. */
 .rg-row.hl-yellow, .rg-rn.hl-yellow { --rg-hl: var(--varia-resultsGrid-highlightYellowBackground); }
 .rg-row.hl-green, .rg-rn.hl-green { --rg-hl: var(--varia-resultsGrid-highlightGreenBackground); }
@@ -1368,6 +1394,44 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-compare-bar [aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .rg-compare-bar button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 @media (forced-colors: active) { .rg-compare-exact[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } .rg-compare-bar [aria-disabled="true"] { color: GrayText; opacity: 1; } }
+/* The comparison toolbar's Match, Rows, chips, Profile and Save; a narrow pane folds them away in order (comparisonFolds),
+   into More results tools; the chips first shrink to their sign and count. */
+.rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
+.rg-compare-match > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-compare-match:hover:not([aria-disabled="true"]), .rg-compare-match[aria-expanded="true"] { background: var(--varia-toolbar-hoverBackground); }
+.rg-compare-rows { flex-shrink: 0; }
+.rg-compare-chips { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; min-width: 0; }
+.rg-compare-chip { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-pill); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rg-compare-chip-sign { display: inline-grid; place-content: center; width: 12px; height: 12px; border-radius: var(--varia-radius-sm); color: var(--varia-resultsGrid-foreground); font: 700 var(--varia-size-xs)/1 var(--varia-font-mono); }
+.rg-compare-chip.is-added .rg-compare-chip-sign { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
+.rg-compare-chip.is-removed .rg-compare-chip-sign { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.rg-compare-chip.is-changed .rg-compare-chip-sign { background: var(--varia-resultsGrid-diffChangedBackground); }
+.rg-compare-chip:hover:not([aria-disabled="true"]) { background: var(--varia-toolbar-hoverBackground); }
+.rg-compare-chip[aria-pressed="true"] { border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; }
+.rg-compare-count { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.rg-compare-gap { flex: 1 1 auto; min-width: 0; }
+.rg-compare-bar .results-icon-toggle { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; }
+.rg-compare-bar .results-icon-toggle:hover { background: var(--varia-toolbar-hoverBackground); }
+.rg-compare-bar .results-icon-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); }
+.rg-compare-bar[data-fold~="chips"] .rg-compare-chip-word, .rg-compare-bar[data-fold~="chips"] .rg-compare-count { display: none; }
+.rg-compare-bar[data-fold~="exact"] [data-fold-group="exact"], .rg-compare-bar[data-fold~="layout"] [data-fold-group="layout"], .rg-compare-bar[data-fold~="rows"] [data-fold-group="rows"],
+.rg-compare-bar[data-fold~="match"] [data-fold-group="match"], .rg-compare-bar[data-fold~="sides"] [data-fold-group="sides"], .rg-compare-bar[data-fold~="profile"] [data-fold-group="profile"],
+.rg-compare-bar[data-fold~="save"] [data-fold-group="save"] { display: none; }
+.rg-compare-head { display: contents; }
+/* A comparison's notices, one line each under its toolbar, in the information or warning colour, each with its buttons. */
+.rg-compare-notices { flex-shrink: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--varia-panel-border); font: var(--varia-size-xs)/16px var(--varia-font-ui); }
+.rg-compare-notice { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; padding: 2px 4px 2px 8px; box-sizing: border-box; color: var(--varia-foreground); }
+.rg-compare-notice + .rg-compare-notice { border-top: 1px solid var(--varia-panel-border); }
+.rg-compare-notice.is-info > .codicon, .rg-compare-notice.is-info > svg { flex-shrink: 0; color: var(--varia-notificationsInfoIcon-foreground); }
+.rg-compare-notice.is-warning { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.rg-compare-notice.is-warning > .codicon, .rg-compare-notice.is-warning > svg { flex-shrink: 0; color: var(--varia-warningForeground); }
+.rg-compare-notice-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-compare-notice-action { flex-shrink: 0; height: 20px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); background: none; color: inherit; font: inherit; }
+.rg-compare-notice-action:hover:not([aria-disabled="true"]) { background: var(--varia-toolbar-hoverBackground); }
+.rg-compare-notice-action[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.rg-compare-notice-dismiss { flex-shrink: 0; width: 20px; height: 20px; padding: 2px; }
+.rg-compare-notices button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+@media (forced-colors: active) { .rg-compare-chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } .rg-compare-notice-action[aria-disabled="true"] { color: GrayText; opacity: 1; } }
 /* A live log scrolled up: rows that arrived since, and a way back to the tail (LiveGridPane). */
 .live-grid-new-rows { position: absolute; bottom: var(--varia-space-3); left: 50%; z-index: 5; transform: translateX(-50%); padding: var(--varia-space-0) var(--varia-space-3); border-radius: var(--varia-radius-pill); font: var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-ui); background: var(--varia-button-background); color: var(--varia-button-foreground); }
 .live-grid-new-rows:hover { background: var(--varia-button-hoverBackground); }
@@ -3105,6 +3169,28 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A Compare button whose comparison runs keeps the keyboard focus (aria-disabled, not disabled): its label is dimmed, not
    the whole button, so its focus ring stays at full strength. */
 .compare-foot button[aria-disabled="true"], .compare-foot button[aria-disabled="true"]:hover { color: var(--varia-disabledForeground); background: transparent; border-color: var(--varia-button-border); cursor: default; }
+/* A comparison's match menu: its modes, then a searchable checklist of its paired columns, enabled under Key columns. */
+.compare-match-modes { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.compare-match-modes legend { margin-bottom: 2px; padding: 0; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
+.compare-match-modes small { margin-left: auto; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.compare-match-search input { box-sizing: border-box; width: 100%; height: var(--varia-control); }
+.compare-match-list { display: flex; flex-direction: column; gap: 1px; max-height: 180px; min-height: 0; overflow: auto; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.compare-match-list:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.compare-match-list[aria-disabled="true"] { opacity: 0.6; }
+.compare-match-item { display: flex; align-items: center; gap: var(--varia-space-2); flex-shrink: 0; height: var(--varia-row); padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); cursor: default; }
+.compare-match-item input { margin: 0; pointer-events: none; }
+.compare-match-item small { margin-left: auto; flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-family: var(--varia-font-mono); }
+.compare-match-item:hover:not(.disabled) { background: var(--varia-list-hoverBackground); }
+.compare-match-item.active { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.compare-match-item.disabled { color: var(--varia-disabledForeground); }
+.compare-matching { align-items: baseline; }
+.compare-remembered { color: var(--varia-descriptionForeground); font-style: italic; }
+.compare-refused-action { align-self: flex-start; }
+/* A first comparison All rows could not fit, said in the results toolbar once its popover has gone. */
+.output-toolbar > .job-strip.compare-refused { flex-shrink: 1; min-width: 120px; color: var(--varia-warningForeground); }
+.job-strip.compare-refused > span { flex-shrink: 1; }
+.output-toolbar .job-strip.compare-refused button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.output-toolbar .job-strip.compare-refused .icon-button { width: 20px; height: 20px; padding: 2px; border: 0; }
 /* Object Explorer: a server dragged to a new place shows where it drops; Peek on Hover's modifier held shows the peek cursor. */
 .explorer-row[data-drop="before"] { box-shadow: inset 0 2px 0 var(--varia-focusBorder); }
 .explorer-row[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--varia-focusBorder); }

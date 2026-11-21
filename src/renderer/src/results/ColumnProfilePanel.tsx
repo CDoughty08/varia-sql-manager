@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ColumnProfile, ProfileLengths } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -6,11 +6,12 @@ import { sqlTypeLabel } from '../grid/measure'
 import { selectedColumns } from '../grid/selection'
 import Icon from '../Icon'
 import { ResultError, type OperationProgressListener, type ResultHandle, type ResultSnapshot, type ResultView } from './ResultClient'
-import { entryOf, entryTitle, filtersIdentity, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
-import { chunked, histogramCaptions, histogramHeights, profileLines, profileList, profileStrip, rowSizeText } from './profile-format'
+import { entryOf, entryTitle, filtersIdentity, setKey, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
+import { chunked, columnChangeCounts, columnChangeShares, columnChangeText, histogramCaptions, histogramHeights, profileLines, profileList, profileStrip, rowSizeText, type ColumnChangeCounts } from './profile-format'
 import { measureCards, playCardMoves, revealCard, type CardPlace } from './profile-motion'
 import { formatCount, plural } from './status'
-import { isHiddenColumn } from '../grid/hidden-columns'
+import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
+import { diffKeyFlags } from '../grid/diff-gutter'
 
 interface Profiled { readonly profile: ColumnProfile; readonly rows: number }
 
@@ -38,14 +39,23 @@ interface CardProps {
   readonly selected: boolean; readonly current: boolean; readonly tabStop: boolean; readonly cardRef: (element: HTMLElement | null) => void; readonly onPick: (column: number) => void
   /** The id of the panel's hidden hint that a card selects its column (Enter). */
   readonly hint: string
+  /** A comparison's column: its change counts (drawn as a stacked bar and said in a line), whether it is a key column,
+   *  and whether the panel shows value statistics (else the card has only its changes). */
+  readonly changes?: ColumnChangeCounts; readonly isKey?: boolean; readonly statistics?: boolean
 }
 // Memoised: a selection move re-renders the panel, and only the cards whose highlight or Tab stop changed redraw.
-const ProfileCard = memo(function ProfileCard({ column, name, type, profile, rows, selected, current, tabStop, cardRef, onPick, hint }: CardProps) {
-  const histogram = profile?.histogram
-  return <section ref={cardRef} className={'profile-card' + (selected ? ' selected' : '') + (current ? ' current' : '')} aria-label={name}
+const ProfileCard = memo(function ProfileCard({ column, name, type, profile, rows, selected, current, tabStop, cardRef, onPick, hint, changes, isKey, statistics = true }: CardProps) {
+  const histogram = statistics ? profile?.histogram : undefined
+  return <section ref={cardRef} className={'profile-card' + (selected ? ' selected' : '') + (current ? ' current' : '')} aria-label={isKey ? `${name}, key column` : name}
     aria-current={current || undefined} aria-describedby={hint} data-column={column} tabIndex={tabStop ? 0 : -1} onClick={() => onPick(column)}>
-    <div className="profile-card-title"><b>{name}</b>{selected && <span className="visually-hidden">Selected</span>}<span>{type}</span></div>
-    {profile ? <dl className="profile-figures">
+    <div className="profile-card-title"><b>{name}{isKey && <span className="profile-key" aria-hidden="true" title="Key column">⚷</span>}</b>{selected && <span className="visually-hidden">Selected</span>}<span>{type}</span></div>
+    {changes && <>
+      <div className="profile-changes" aria-hidden="true">
+        {columnChangeShares(changes).map(({ kind, share }) => <i key={kind} className={kind} style={{ width: share + '%' }} />)}
+      </div>
+      <div className="profile-change-counts">{columnChangeText(changes)}</div>
+    </>}
+    {!statistics ? null : profile ? <dl className="profile-figures">
       {profileLines(profile, rows).map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>)}
     </dl> : <div className="profile-pending">Profiling…</div>}
     {histogram && <>
@@ -97,10 +107,19 @@ export const profiledRows = (snapshot: ResultSnapshot | undefined, view: ResultV
 })
 
 export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { tabId: string; tab: TabResults; shown?: EntryKey }) {
-  const { results, commands, settings, profilePeek, gestures } = useWorkbench()
+  const { results, commands, settings, profilePeek, gestures, compare } = useWorkbench()
   useServiceSnapshot(results)
   // The grid the pane last saw take the focus, else the one the stack says had it (the first, before any did).
   const entry = entryOf(tab.sets, shownEntry) ?? entryOf(tab.sets, results.focusedEntry(tabId)?.key)
+  // A comparison's cards lead with each column's changes; its value statistics show only when asked for, remembered while
+  // the panel lives.
+  const compared = useSyncExternalStore(compare.subscribe, () => entry?.descriptor.kind === 'diff' ? compare.getSnapshot().info.get(setKey(entry.descriptor)) : undefined)
+  const [statistics, setStatistics] = useState(false)
+  const diffColumns = useMemo(() => {
+    if (!compared || !entry) return undefined
+    const keys = diffKeyFlags(compared.match, entry.descriptor.columns.slice(0, visibleColumnCount(entry.descriptor)).map(column => column.name))
+    return keys.map((isKey, column) => ({ isKey, changes: columnChangeCounts(compared, column) }))
+  }, [compared, entry])
   const base = entry?.handle
   const view = entry ? results.sortOf(tabId, entry.key)?.view : undefined
   const handle = view ?? base
@@ -283,7 +302,11 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
       {peeking && <Icon name="eye" />}<span>{strip}</span>
       {!peeking && <button type="button" className="profile-strip-action" onClick={() => void commands.execute('output.toggleProfileSelectedColumns', undefined, 'toolbar')}>Show all</button>}
     </div>}
-    {sizes && <div className="profile-note">{sizes}</div>}
+    {diffColumns && held && <div className="profile-statistics">
+      <button type="button" className="profile-strip-action" aria-pressed={statistics} onClick={() => setStatistics(on => !on)}>Show value statistics</button>
+      {statistics && <span>Values shown: new side, old side for removed rows</span>}
+    </div>}
+    {sizes && (!diffColumns || statistics) && <div className="profile-note">{sizes}</div>}
     {!held ? <div className="profile-note">{snapshot?.state === 'lost' ? 'These results are no longer available.' : 'These results were closed.'}</div>
       : shown?.error ? <div className="profile-note error" role="status">The profile could not be computed: {shown.error}</div>
       : list.only && list.columns.length === 0 ? <div className="profile-note">Select cells or columns in the grid to see their profiles here.</div> : null}
@@ -291,9 +314,10 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
       <div className="profile-ghosts" ref={ghosts} aria-hidden="true" />
       {entry && held && list.columns.map(column => {
         const info = entry.descriptor.columns[column]
-        const profiled = shown?.columns.get(column)
+        const profiled = shown?.columns.get(column), diff = diffColumns?.[column]
         return <ProfileCard key={column} column={column} name={info.name || '(No column name)'} type={sqlTypeLabel(info)} profile={profiled?.profile} rows={profiled?.rows ?? 0}
-          selected={selected.has(column)} current={column === active} tabStop={column === tabStop} cardRef={cardRef(column)} onPick={pick} hint={hint} />
+          selected={selected.has(column)} current={column === active} tabStop={column === tabStop} cardRef={cardRef(column)} onPick={pick} hint={hint}
+          {...diff ? { changes: diff.changes, isKey: diff.isKey } : {}} {...diffColumns ? { statistics } : {}} />
       })}
     </div>
     <div className="visually-hidden" role="status">{said}</div>
