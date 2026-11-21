@@ -111,7 +111,11 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
-  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ Reserve\(cost - estimate, block\); \}/)
+  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
+  // An overrun reserves through Reserve too; only the cache's own limit (never the global budget) turns into a short answer.
+  const overrun = between('private async Task ReserveOverrunAsync(', '/// <summary>Reserves a block')
+  expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
+  expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
   // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
   const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')

@@ -128,6 +128,9 @@ internal sealed class RemoteResult : IDisposable
         public int Waiters;
         /// <summary>The viewer whose read-ahead started the running fetch, or 0 for a read's own.</summary>
         public uint AheadOf;
+        /// <summary>The running fetch holds its estimate in the cache, and whether it is settling an overrun (an overrun waits
+        /// only for fetches holding room that are not themselves waiting, so two never wait for each other).</summary>
+        public bool Holding, Settling;
         public LinkedListNode<Block>? Node;
     }
 
@@ -387,7 +390,7 @@ internal sealed class RemoteResult : IDisposable
             {
                 lock (gate)
                 {
-                    if (block.Fetching == done) { block.Fetching = null; block.Stop = null; block.AheadOf = 0; }
+                    if (block.Fetching == done) { block.Fetching = null; block.Stop = null; block.AheadOf = 0; block.Holding = block.Settling = false; }
                     DropIfIdleLocked(block);
                 }
                 stop.Dispose();
@@ -417,6 +420,7 @@ internal sealed class RemoteResult : IDisposable
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min(EstimateOf(rows), CacheLimit / 2);
                 Reserve(estimate, block);
+                lock (gate) block.Holding = true;
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
                 List<RemotePage> pages;
@@ -441,7 +445,7 @@ internal sealed class RemoteResult : IDisposable
                 if (cost < estimate) store.ReturnCache(ref held, estimate - cost);
                 else if (cost > estimate)
                 {
-                    try { Reserve(cost - estimate, block); }
+                    try { await ReserveOverrunAsync(cost - estimate, block, token); }
                     catch
                     {
                         store.ReturnCache(ref held, estimate);
@@ -464,6 +468,37 @@ internal sealed class RemoteResult : IDisposable
             finally { connectionLane.Release(); }
         }
         finally { resultLane.Release(); }
+    }
+
+    /// <summary>A block's overrun (rows wider than measured). Refused by the cache's own limit while other fetches of this result
+    /// hold its room, it stops read-ahead no read waits for, waits once for the rest, then evicts as usual; when the read's own
+    /// blocks still cannot fit together, the read answers with the rows it has (<see cref="RemoteRetryException"/>), never
+    /// TOO_LARGE, which stays for a full global budget.</summary>
+    private async Task ReserveOverrunAsync(long bytes, Block keep, CancellationToken token)
+    {
+        for (var round = 0; ; round++)
+        {
+            try
+            {
+                Reserve(bytes, keep);
+                return;
+            }
+            catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + bytes > CacheLimit)
+            {
+                Task[] others;
+                lock (gate)
+                {
+                    keep.Settling = true;
+                    var holding = blocks.Values.Where(block => block != keep && block.Holding && !block.Settling && block.Fetching is not null).ToList();
+                    foreach (var block in holding) if (block.Waiters == 0 && block.AheadOf != 0) block.Stop?.Cancel();
+                    others = [.. holding.Select(block => block.Fetching!)];
+                }
+                if (others.Length == 0 || round > 0) throw new RemoteRetryException(error);
+                // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
+                try { await Task.WhenAll(others).WaitAsync(token); }
+                catch (Exception) when (!token.IsCancellationRequested) { }
+            }
+        }
     }
 
     /// <summary>Reserves a block's bytes in the cache, evicting the least recent blocks no read waits for; TOO_LARGE when even an

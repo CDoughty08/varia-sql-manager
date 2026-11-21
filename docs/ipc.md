@@ -1111,7 +1111,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
-  being built there). A read that already sent rows answers short with them instead of failing: when a later block is
+  being built there). An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
+  no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the read answers
+  short. A read that already sent rows answers short with them instead of failing: when a later block is
   refused room (a window wider than the cache), when the table expires, or when the cache goes (Load into memory); the
   grid reads on from there, under the new revision after a switch. After a release it is `RESULT_RELEASED`.
 - **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,

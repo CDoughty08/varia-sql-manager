@@ -122,10 +122,14 @@ internal static partial class BigQueryExecutionChecks
         public int MaxRunning;
         public int Cancelled;
         public int Written;
+        /// <summary>Fetches from this row on start this much later (another block settling first).</summary>
+        public long DelayFrom = long.MaxValue;
+        public int DelayMs;
 
         public RemoteFetch Fetch => async (first, rows, writer, token) =>
         {
             Calls.Enqueue((first, rows));
+            if (first >= DelayFrom) await Task.Delay(DelayMs, token);
             var now = Interlocked.Increment(ref running);
             lock (Calls) MaxRunning = Math.Max(MaxRunning, now);
             try
@@ -876,6 +880,36 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // Rows 1.3x wider than measured: a block's overrun finds the other block's fetch holding the cache's room. The read
+        // waits for it (or stops read-ahead) and never answers TOO_LARGE while the budget is nearly empty; a read whose own two
+        // blocks cannot fit together answers with the rows it has, and reading on from there reaches the rest.
+        {
+            var failures = new List<string>();
+            foreach (var (first, count) in new[] { (0L, 10), (30L, 10) })
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 260_000, DelayMs = 500 };
+                using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+                blocks.DelayFrom = remote.BlockRows;
+                var rows = new List<long>();
+                var at = first;
+                try
+                {
+                    for (var attempt = 0; attempt < 6 && at < first + count; attempt++)
+                    {
+                        var (next, got) = await ReadRemote(remote, at, (int)(first + count - at), viewer: 1);
+                        rows.AddRange(got.Where(row => row >= at && row < first + count));
+                        at = Math.Max(at, next);
+                    }
+                    if (!Consecutive(rows.Distinct().Order().ToList(), first, count)) failures.Add($"{first}: short {rows.Count}");
+                }
+                catch (RequestException error) { failures.Add($"{first}: {error.Code}"); }
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (remote.CachedBytes > remote.CacheLimit) failures.Add($"{first}: cache {remote.CachedBytes}");
+            }
+            check(failures.Count == 0, "rows wider than the estimate allows wait for the other fetch, never TOO_LARGE: " + string.Join(", ", failures));
+        }
+
         // Rows a little wider than measured, read with a block read ahead beside: the two still fit the cache, so the read's
         // own block is never refused TOO_LARGE while the budget is nearly empty.
         {
