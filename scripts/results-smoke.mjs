@@ -2889,6 +2889,9 @@ try {
   const changedTint = await tokenColor('resultsGrid.diffChangedAddedBackground')
   expect(await fill(cell(1, 2, diff))).toBe(changedTint)
   await expect.poll(() => layers(cell(1, 2, diff))).toContain(await tokenColor('resultsGrid.selectionOverlay'))
+  // Row 3 can sit at the grid's bottom edge (the comparison toolbar takes room): a click brings it into view first, as
+  // the grid scrolling to a right-clicked row's active cell closes the menu it opened.
+  await cell(3, 1, diff).click()
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
@@ -2920,6 +2923,7 @@ try {
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   await searchBox.click()
   await searchBox.press('Escape')
+  await cell(3, 1, diff).click()
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
