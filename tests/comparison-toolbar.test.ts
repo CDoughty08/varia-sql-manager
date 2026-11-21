@@ -264,6 +264,21 @@ describe('a comparison\'s toolbar', () => {
     expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
   })
 
+  it('gives the focus back to Match when the comparison closes its match menu while it holds the focus', async () => {
+    const view = await fixture()
+    const match = view.toolbar().querySelector<HTMLButtonElement>('[data-control="match"]')!
+    act(() => { match.click() })
+    view.draw()
+    const radio = document.querySelector<HTMLInputElement>('[role="dialog"][aria-label="Match rows by"] input[type="radio"]')!
+    act(() => { radio.focus() })
+    expect(document.activeElement).toBe(radio)
+    // A change refused or cancelled while it was open closes it from the service.
+    act(() => { view.compare.closeMatchMenu() })
+    view.draw()
+    expect(document.querySelector('[role="dialog"][aria-label="Match rows by"]')).toBeNull()
+    expect(document.activeElement).toBe(match)
+  })
+
   it('closes its match menu with Escape, changing nothing', async () => {
     const view = await fixture()
     act(() => { view.compare.openMatchMenu('t1', view.slot().key, 'toolbar') })

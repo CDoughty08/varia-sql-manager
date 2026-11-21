@@ -107,6 +107,14 @@ export default function MatchMenu({ tabId, entryKey, state, anchor, focusBack, o
       queueMicrotask(() => { if (!mounted.get(entryKey) && compare.getSnapshot().matchMenu?.key === entryKey) compare.closeMatchMenu() })
     }
   }, [compare, entryKey])
+  // Closed by the comparison rather than by the user (its change refused or cancelled, an input closed) while it holds
+  // the focus, it gives the focus back too, rather than dropping it to the page.
+  const back = useRef(focusBack)
+  back.current = focusBack
+  useLayoutEffect(() => {
+    const form = card.current
+    return () => { if (form?.contains(form.ownerDocument.activeElement)) back.current()?.focus({ preventScroll: true }) }
+  }, [host])
   // The active row stays in view.
   useLayoutEffect(() => { list.current?.querySelector<HTMLElement>(`[data-index="${shown[at] ?? -1}"]`)?.scrollIntoView?.({ block: 'nearest' }) }, [at, shown])
 
