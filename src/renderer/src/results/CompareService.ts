@@ -494,6 +494,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       // refusal of All rows offers Show changes only there, or in the results area's actionable notice.
       const rows = outcome.code === 'DIFF_ROWS_TOO_LARGE'
       if (same) this.update(tabId, rows ? { error: rowsRefusedText, refusedRows: true } : { error: outcome.error })
+      // A change of the pair's comparison is refused on that comparison, whose notice asks it again with Changes only.
+      else if (rows && shown) this.refuse(shown.key, { exact: picker.exact, ...context })
       else if (rows && outcome.options) this.setActionable(tabId, picker.queryId, sides.old.key, sides.neu.key, outcome.options)
       else this.results.notify(tabId, outcome.error)
       return undefined
@@ -657,6 +659,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     let items = this.inFlight.get(tabId)
     // A change still running is what this one changes further.
     const base: ChangeBase = this.pendingChange(tabId, key) ?? info
+    // Its match menu lists the pairs of the comparison as it was asked; a change makes them stale, so it closes.
+    if (this.getSnapshot().matchMenu?.key === key) this.closeMatchMenu()
     const [old, neu] = change.swap ? [base.right, base.left] : [base.left, base.right]
     const from = entryOf(tab.sets, old), to = entryOf(tab.sets, neu)
     if (!from || !to) return undefined
@@ -730,7 +734,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const message = error instanceof Error ? error.message : 'The results could not be compared.', code = error instanceof ResultError ? error.code : undefined
       if (o.quiet) return { error: message, ...code ? { code } : {}, options }
       // A refusal of All rows for memory offers Show changes only on the comparison (DIFF_ROWS_TOO_LARGE).
-      if (code === 'DIFF_ROWS_TOO_LARGE') { this.say(key, rowsRefusedText); this.refusedChanges.set(key, change); this.publish({ ...this.getSnapshot(), refused: new Set(this.getSnapshot().refused).add(key) }) }
+      if (code === 'DIFF_ROWS_TOO_LARGE') this.refuse(key, change)
       else this.say(key, `The comparison was not changed: ${message}`)
       return undefined
     } finally {
@@ -739,6 +743,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()
     }
+  }
+
+  /** Says on a comparison that a change of it was refused for memory, keeping the change for its Show changes only. */
+  private refuse(key: EntryKey, change: CompareChange): void {
+    this.say(key, rowsRefusedText)
+    this.refusedChanges.set(key, change)
+    this.publish({ ...this.getSnapshot(), refused: new Set(this.getSnapshot().refused).add(key) })
   }
 
   /** Whether a comparison's live region is to say its announcement `at`: once per announcement, so a toolbar mounted again

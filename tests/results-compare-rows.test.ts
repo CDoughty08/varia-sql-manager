@@ -124,6 +124,39 @@ describe('a comparison\'s rows', () => {
     view.compare.dismiss(key, notices[0])
     expect(view.compare.visibleNotices(key, view.info()).some(notice => notice.kind === 'change')).toBe(false)
   })
+
+  it('says a popover Update refused after the popover closed on the comparison, not in the results area', async () => {
+    const view = fixture()
+    const keys = view.run(2)
+    await view.compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    const key = view.slot().key
+    view.results.focusEntry('t1', keys[1])
+    view.compare.open('t1', keys[1])
+    view.compare.setExact('t1', true)
+    vi.mocked(view.handle(keys[0]).diff).mockRejectedValueOnce(new ResultError('DIFF_ROWS_TOO_LARGE', 'Too many rows.'))
+    const updating = view.compare.run('t1')
+    view.compare.close('t1')
+    await updating
+    await settle()
+    // The pair is already shown, so the results area's Show changes only would only focus it: the comparison says it.
+    expect(view.compare.getSnapshot().actionable.t1).toBeUndefined()
+    expect(view.compare.visibleNotices(key, view.info())[0]).toMatchObject({ kind: 'change', text: rowsRefusedText, actions: ['changesOnly'] })
+    expect(view.compare.refusedChange(key)).toEqual({ exact: true, context: 0 })
+  })
+
+  it('closes the comparison\'s match menu when a change of it starts, since its pairs go stale', async () => {
+    const view = fixture()
+    const keys = view.run(2)
+    await view.compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    const key = view.slot().key
+    view.compare.openMatchMenu('t1', key)
+    expect(view.compare.getSnapshot().matchMenu?.key).toBe(key)
+    const swapping = view.compare.replace('t1', key, { swap: true })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    await swapping
+  })
 })
 
 describe('a comparison\'s remembered match', () => {

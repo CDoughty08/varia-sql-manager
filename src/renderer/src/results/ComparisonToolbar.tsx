@@ -189,7 +189,7 @@ function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar }: {
   return <div ref={strip} className="rg-compare-notices" role="group" aria-label="Comparison notices">
     {notices.map((notice: ComparisonNotice, index) => <div key={noticeId(notice)} className={`rg-compare-notice is-${notice.tone}`} data-notice={notice.kind}>
       <Icon name={notice.tone === 'warning' ? 'warning' : 'info'} />
-      <span className="rg-compare-notice-text">{notice.text}</span>
+      <span className="rg-compare-notice-text" title={notice.text}>{notice.text}</span>
       {notice.actions?.map(action => <button key={action} type="button" className="rg-compare-notice-action" data-action={action} data-control={`notice-${action}`}
         {...reason ? { 'aria-disabled': true, title: `${actionLabels[action]}: unavailable because ${reason}` } : {}} onClick={() => act(action)}>{actionLabels[action]}</button>)}
       <button type="button" className="icon-button rg-compare-notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={event => { if (strip.current?.contains(event.currentTarget.ownerDocument.activeElement)) dismissed.current = index; compare.dismiss(entryKey, notice) }}><Icon name="close" /></button>

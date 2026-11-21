@@ -105,6 +105,8 @@ describe('a comparison\'s toolbar', () => {
     const notices = view.container.querySelector('[role="group"][aria-label="Comparison notices"]')!
     const actions = [...notices.querySelectorAll<HTMLButtonElement>('button[data-action]')]
     expect(actions.map(button => button.textContent)).toEqual(['Choose key columns…', 'Match by row position'])
+    // A notice's line is clipped in a narrow pane; its tooltip holds the whole of it.
+    for (const text of notices.querySelectorAll<HTMLElement>('.rg-compare-notice-text')) expect(text.title).toBe(text.textContent)
     for (const action of actions) {
       expect(action.getAttribute('aria-disabled')).toBe('true')
       expect(action.title).toMatch(/unavailable because Result 1 is closed$/)

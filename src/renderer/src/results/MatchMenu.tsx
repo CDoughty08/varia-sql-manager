@@ -99,7 +99,9 @@ export default function MatchMenu({ tabId, entryKey, state, anchor, onClose }: {
   useEffect(() => {
     mounted.set(entryKey, (mounted.get(entryKey) ?? 0) + 1)
     return () => {
-      mounted.set(entryKey, (mounted.get(entryKey) ?? 1) - 1)
+      const left = (mounted.get(entryKey) ?? 1) - 1
+      if (left > 0) mounted.set(entryKey, left)
+      else mounted.delete(entryKey)
       queueMicrotask(() => { if (!mounted.get(entryKey) && compare.getSnapshot().matchMenu?.key === entryKey) compare.closeMatchMenu() })
     }
   }, [compare, entryKey])
