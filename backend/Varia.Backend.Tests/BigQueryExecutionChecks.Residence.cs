@@ -161,6 +161,8 @@ internal static partial class BigQueryExecutionChecks
         /// <summary>Fetches from this row on start this much later (another block settling first).</summary>
         public long DelayFrom = long.MaxValue;
         public int DelayMs;
+        /// <summary>Awaited as each fetch starts (after its reservation), by first row: orders fetches without timing.</summary>
+        public Func<long, Task>? Before;
         /// <summary>Which fetches (by first row) wait on <see cref="Gate"/>: all when null.</summary>
         public Func<long, bool>? Holds;
         /// <summary>The table ends here, whatever BigQuery said: rows from it on are not written.</summary>
@@ -169,6 +171,7 @@ internal static partial class BigQueryExecutionChecks
         public RemoteFetch Fetch => async (first, rows, writer, token) =>
         {
             Calls.Enqueue((first, rows));
+            if (Before is { } before) await before(first);
             if (first >= DelayFrom) await Task.Delay(DelayMs, token);
             var now = Interlocked.Increment(ref running);
             lock (Calls) MaxRunning = Math.Max(MaxRunning, now);
@@ -419,10 +422,13 @@ internal static partial class BigQueryExecutionChecks
         // A read's own block overrunning while read-ahead holds the cache's room stops that read-ahead rather than waiting on it.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
-            var blocks = new Blocks { Pad = 32_000, DelayFrom = 0, DelayMs = 200, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            var blocks = new Blocks { Pad = 32_000, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
             var size = remote.BlockRows;
             blocks.Holds = first => first >= size;
+            // The read's own block is built only once the read-ahead holds its room (its fetch has begun).
+            var aheadHolds = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Before = first => { if (first >= size) { aheadHolds.TrySetResult(); return Task.CompletedTask; } return aheadHolds.Task.WaitAsync(TimeSpan.FromSeconds(15)); };
             blocks.PadOf = row => row < size ? 48_000 : 32_000;
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var (next, rows) = await ReadRemote(remote, 0, 10, viewer: 1, waitMs: 10_000);
