@@ -41,6 +41,9 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
+    /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
+    /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
+    public bool ChildrenLeftOut { get; set; }
 }
 
 /// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
@@ -139,6 +142,21 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Table.Count) + (resource?.Table.Count ?? 0) + (server?.Table.Count ?? 0) + (agent?.Table.Count ?? 0); } }
     /// <summary>SQL Server Agent's objects (jobs, alerts, operators), read apart from the server's, whose refs name no database.</summary>
     public DatabaseIndex? Agent { get { lock (gate) return agent; } }
+    /// <summary>Every database index it holds, the server's and Agent's included, read together (the Memory panel's Nerd metrics).</summary>
+    public List<DatabaseIndex> Held
+    {
+        get
+        {
+            lock (gate)
+            {
+                var held = new List<DatabaseIndex>(databases.Count + 2);
+                held.AddRange(databases.Values);
+                if (server is not null) held.Add(server);
+                if (agent is not null) held.Add(agent);
+                return held;
+            }
+        }
+    }
 
     /// <summary>Holds Agent's objects in place of those held before, as <see cref="PutServer"/>.</summary>
     public void PutAgent(DatabaseIndex value)

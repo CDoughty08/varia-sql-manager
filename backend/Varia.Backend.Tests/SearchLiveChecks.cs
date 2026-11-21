@@ -69,6 +69,12 @@ internal static class SearchLiveChecks
         check(who is [{ Object: { Kind: "procedure", Schema: "sys", Name: "sp_who", Database: "master" }, Folder: "systemStoredProcedures" }],
             "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
         check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
+        // The Memory panel's index detail: a real build and search record their times, and the server's long modules show as packed.
+        var memoryDetail = service.Search.MemoryDetail();
+        check(memoryDetail is { Connections: >= 1, LastBuildMs: not null, LastSearchMs: not null, PackedTexts: > 0 } && memoryDetail.Objects >= built.Status.Objects
+            && memoryDetail.ChildrenLeftOut == built.Status.Skipped.Count(skip => skip.Code == ObjectSearchService.ChildrenLeftOut)
+            && memoryDetail.DefinitionTexts >= memoryDetail.PackedTexts && memoryDetail.PackedTextBytes > memoryDetail.PackedBytes,
+            "the index detail carries the last build's and search's times and the server's packed definitions: " + memoryDetail);
         var memoryBefore = service.Search.MemoryUsed;
 
         // The editor metadata a build keeps beside the children, as a real server reports it: types with their lengths and flags,
@@ -174,10 +180,13 @@ internal static class SearchLiveChecks
         // Stop during a build answers CANCELLED and keeps what was read.
         using (var stop = new CancellationTokenSource())
         {
+            var ended = service.Search.Builds;
             var running = service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token);
             stop.Cancel();
             try { await running; check(true, "Stop ends a build (it had finished)"); }
             catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
+            // Stopped or finished, the build's end tells the memory report to walk again (no read left showing as running).
+            check(service.Search.Builds >= ended + 1, "a stopped build counts as ended for the memory report");
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
 

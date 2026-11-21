@@ -76,7 +76,7 @@ import type { LongRunState } from '../shared/long-runs.ts'
 import { isBigQueryOptions } from '../shared/connections'
 import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
-import { memoryEventSchema } from '../shared/ipc/port-messages'
+import { memoryEventSchema, memoryReport } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptCancelSchema } from '../shared/scripting/schema.ts'
 import { actionCancelSchema } from '../shared/actions/schema.ts'
@@ -830,7 +830,9 @@ app.whenReady().then(async () => {
     power: powerMonitor,
     onGlobalEvent: (event, generation) => {
       const memory = memoryEventSchema.safeParse(event)
-      if (memory.success) resultsPort?.memory(memory.data.type === 'results.memory' ? 'results' : 'index', { ...memory.data, generation })
+      if (!memory.success) return
+      const { feature, report } = memoryReport(memory.data, generation)
+      resultsPort?.memory(feature, report)
     },
     ...liveness
   })

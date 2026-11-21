@@ -120,7 +120,7 @@ Every frame is a 16-byte little-endian header followed by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq, detail }` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -906,7 +906,7 @@ authoritative; a query's events after it are ignored.
 | type | Emitted |
 | --- | --- |
 | `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
-| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample and changes in the shared index budget's use. Own sequence |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last), a build's end, a disconnect and a finished search (whose time `detail` carries). Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
 generation, keeps the latest per feature, and replays both when a results port opens.
@@ -923,6 +923,22 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
 | `heap` | After the last GC (`GC.GetGCMemoryInfo`): `committedBytes`, `freeBytes` |
+
+`explorer.index.memory`'s `detail` (`indexMemoryDetailSchema`, `IndexMemoryDetail`, worked out by `IndexMemoryReport`) is what
+every connection's Search Objects index holds, for the same panel. It is read only when an event goes out, never by a search:
+one walk of the held tables, each counted once (a shared resource set once, however many connections show it). A refused event's detail is kept for its retry, and the timer skips a check while another report is still walking. Main forwards
+it to the page as the report's `index`.
+
+| Field | Meaning |
+| --- | --- |
+| `connections`, `objects` | Connections whose index holds something, and the objects their held tables list |
+| `texts`, `references` | The shared pool's distinct names and definitions, and the references reads and resource sets hold to them |
+| `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
+| `definitionTexts`, `packedTexts` | The distinct definitions the held tables hold (modules, constraint and computed column expressions, plan guides: texts an object names as its definition, and packed ones, including one pooled for a row a read then left out), and how many are zstd frames (`PackedText`) |
+| `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
+| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts), names, definitions, and what reads still running have added (their records and pooled texts; a rebuild's records count against the table they replace until it is swapped in, so only growth beyond it shows). They add up to `usedBytes`. The walk behind them runs at once after a build's end (finished, stopped or failed) or a disconnect, else at the first check 5 s after the last: between walks a budget at or above the last walk's counts the change as reading, and a fall below it is sent with the next walk. A walk that still shows reading is repeated at the first check 5 s after it, though nothing moved (holding a read changes no byte), and sends an event only when the detail changed |
+| `cut`, `childrenLeftOut` | Definitions left out or cut short; held databases read without their children (`CHILDREN_LEFT_OUT`), whatever later builds reported |
+| `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 
 ## Result pages
 
@@ -1020,7 +1036,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Packing results.** A complete result of 1 MiB or more is packed when hidden for 5 s (stage 1) or shown but idle for
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
   Zstandard level 2 bytes of its lengths form with typed columns ([typed form](page-compression-findings.md#typed-form); a page
-  saving under a tenth stays raw), charged at its packed size. Never a result still
+  saving under a tenth stays raw), charged at its packed size. A query's own result is also packed as it stores, each
+  page as it seals once the result holds 1 MiB, on a thread of its own beside the reading thread
+  ([at seal](page-compression-findings.md#at-seal)). The policy never packs a result still
   storing, a live table, or one held by a read, operation, Copy or Save; a sorted or filtered grid does not keep its
   result raw, and sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
@@ -1031,7 +1049,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `ResultStore.RoomWaitMs`; 4 waits a row, `SqlService.MaxRoomWaits`; 30 s a query, `SqlService.MaxRoomWaitMs`; never
   a live table's or a derived set's row) while the packer packs other unheld complete results of 1 MiB or more on the
   results' workers (any query's for the global budget, only the query's own when its own half is full), except one an
-  operation unpacked and still uses; then it retries, or the query is truncated.
+  operation unpacked and still uses, and while its own pages queued for packing at seal pack; then it retries, or the
+  query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
   reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
