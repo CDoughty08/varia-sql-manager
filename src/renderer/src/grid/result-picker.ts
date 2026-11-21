@@ -1,7 +1,7 @@
 import { Emitter } from '../core/events'
 import type { Disposable } from '../core/types'
 import { formatCount } from '../results/status'
-import { entryName, entrySecondary, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
+import { entryName, entrySecondary, exactSuffix, pivotOutOfDate, selectedEntry, type EntryKey, type ResultGroup, type ResultSlot, type TabResults } from '../results/ResultsService'
 
 // The Tabs layout's navigation, without React: the top row's items, the view a group's tab selects, the next and previous
 // item and view (Next Result, Previous Result and their view commands), and the overflow picker's rows, filter and window
@@ -31,10 +31,11 @@ export function shortenMiddle(text: string, max: number): string {
   return chars.slice(0, head).join('') + '…' + chars.slice(chars.length - tail).join('')
 }
 /** A comparison's tab text: its inputs' names old side first, each shortened in the middle ("Result 1 → Result 3"),
- *  without the "Differences:" its icon already says. */
+ *  without the "Differences:" its icon already says, and " (exact text)" when it compares text exactly. */
 export function comparisonTabLabel(slot: Pick<ResultSlot, 'entry' | 'sources'>): string {
   const [old, neu] = slot.sources
-  return old && neu ? `${shortenMiddle(old.name, comparisonSideChars)} → ${shortenMiddle(neu.name, comparisonSideChars)}` : entryName(slot.entry)
+  const exact = entryName(slot.entry).endsWith(exactSuffix) ? exactSuffix : ''
+  return old && neu ? `${shortenMiddle(old.name, comparisonSideChars)} → ${shortenMiddle(neu.name, comparisonSideChars)}${exact}` : entryName(slot.entry)
 }
 /** The top row's items in the order drawn: the groups by ordinal, the comparisons after them. */
 export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopItem[] {
