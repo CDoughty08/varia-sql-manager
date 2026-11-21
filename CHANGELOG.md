@@ -52,7 +52,7 @@
 
 ### Fixes
 
-- **Find in Results keeps the active match highlighted:** Pressing Next right after Previous wrapped from the first match to the last no longer leaves the count on a match with no cell highlighted; with many grids of matches, each step is also quicker, as it moves only the active match instead of rebuilding every grid's matches.
+- **Find in Results keeps the active match highlighted:** Stepping back to a match already shown while the next page of matches was still loading \(for example Next right after Previous wrapped from the first match to the last\) no longer leaves the count on a match with no cell highlighted, or says the search failed when it had not; with many grids of matches, each step is also quicker, as it moves only the active match instead of rebuilding every grid's matches.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.
