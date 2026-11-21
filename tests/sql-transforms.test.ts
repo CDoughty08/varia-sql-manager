@@ -125,11 +125,17 @@ describe('Toggle Brackets', () => {
     expect(toggle('SELECT JSON_ARRAY(1, NULL ABSENT ON NULL)')).toBe('SELECT JSON_ARRAY(1, NULL ABSENT ON NULL)')
     expect(toggle("SELECT JSON_OBJECT('a':c ABSENT ON NULL RETURNING json) FROM t")).toBe("SELECT JSON_OBJECT('a':[c] ABSENT ON NULL RETURNING json) FROM [t]")
     expect(toggle('SELECT JSON_ARRAYAGG(v ORDER BY v NULL ON NULL RETURNING json), JSON_OBJECTAGG(k:v ABSENT ON NULL) FROM t'))
-      .toBe('SELECT JSON_ARRAYAGG([v] ORDER BY [v] NULL ON NULL RETURNING json), JSON_OBJECTAGG(k:[v] ABSENT ON NULL) FROM [t]')
+      .toBe('SELECT JSON_ARRAYAGG([v] ORDER BY [v] NULL ON NULL RETURNING json), JSON_OBJECTAGG([k]:[v] ABSENT ON NULL) FROM [t]')
     expect(toggle("SELECT JSON_OBJECT('a':JSON_ARRAY(c ABSENT ON NULL)) FROM t")).toBe("SELECT JSON_OBJECT('a':JSON_ARRAY([c] ABSENT ON NULL)) FROM [t]")
     expect(toggle("SELECT JSON_VALUE(doc, '$.a' RETURNING int) FROM t")).toBe("SELECT JSON_VALUE([doc], '$.a' RETURNING int) FROM [t]")
-    // The same words as names: a column called absent, inside a JSON function and out, and one called returning.
+    // The same words as names, which SQL Server reads as columns wherever an argument or an ORDER BY item goes.
     expect(toggle('SELECT JSON_ARRAY(absent ABSENT ON NULL), absent, returning FROM t')).toBe('SELECT JSON_ARRAY([absent] ABSENT ON NULL), [absent], [returning] FROM [t]')
+    expect(toggle("SELECT JSON_ARRAY(returning RETURNING json), JSON_OBJECT('a':returning), JSON_ARRAYAGG(absent ORDER BY returning ABSENT ON NULL) FROM t"))
+      .toBe("SELECT JSON_ARRAY([returning] RETURNING json), JSON_OBJECT('a':[returning]), JSON_ARRAYAGG([absent] ORDER BY [returning] ABSENT ON NULL) FROM [t]")
+    expect(toggle('SELECT returning date FROM t')).toBe('SELECT [returning] [date] FROM [t]')
+    // A JSON key before a colon is a name, not a label.
+    expect(toggle('SELECT JSON_OBJECT(k:v), JSON_OBJECTAGG(t.k:v) FROM t')).toBe('SELECT JSON_OBJECT([k]:[v]), JSON_OBJECTAGG([t].[k]:[v]) FROM [t]')
+    expect(toggle('SELECT JSON_OBJECT([k]:[v], [returning]:[absent] RETURNING json) FROM [t]')).toBe('SELECT JSON_OBJECT(k:v, returning:absent RETURNING json) FROM t')
     expect(toggle('SELECT [absent], [returning] FROM [t]')).toBe('SELECT absent, returning FROM t')
   })
   it('brackets the names after an option and in an index\'s or a later CTE\'s column list', () => {

@@ -172,7 +172,9 @@ function bracketableWords(text: string, tokens: readonly SqlToken[]): Set<SqlTok
       if (!named || (!dotted && adminTypeWords.has(name))) continue
     }
     // Labels (`retry:`, GOTO retry), static members (geography::Point), and the word after keywords that name a type or option.
-    if (next?.kind === 'colon' || next?.kind === 'scope' || previous?.kind === 'scope') continue
+    // JSON_OBJECT(k:v) and JSON_OBJECTAGG(k:v) put a key, not a label, before the colon.
+    const jsonKey = callerAt[index] === 'JSON_OBJECT' || callerAt[index] === 'JSON_OBJECTAGG'
+    if ((next?.kind === 'colon' && !jsonKey) || next?.kind === 'scope' || previous?.kind === 'scope') continue
     if (before === 'GOTO' || before === 'COLLATE' || before === 'DBCC' || before === 'NEXT') continue
     if (before !== undefined && typeKeywordAfter.has(before) && previous?.kind === 'word') continue
     if (before === 'OR' && beforeThat === 'CREATE') continue
@@ -185,9 +187,10 @@ function bracketableWords(text: string, tokens: readonly SqlToken[]): Set<SqlTok
     if (joinHints.has(name) && word(index + 1) === 'JOIN' && joinTypes.has(before ?? '')) continue
     if ((name === 'AT' && word(index + 1) === 'TIME' && word(index + 2) === 'ZONE') || (name === 'TIME' && before === 'AT' && word(index + 1) === 'ZONE') || (name === 'ZONE' && before === 'TIME' && beforeThat === 'AT')) continue
     if (previous?.kind === 'open' && datePartFunctions.has(beforeThat ?? '') && next?.kind === 'comma') continue
-    if (jsonClauseFunctions.has(callerAt[index] ?? '') && ((name === 'ABSENT' && word(index + 1) === 'ON' && word(index + 2) === 'NULL') || name === 'RETURNING')) continue
+    // A column may be called absent or returning: the clause words are the ones ON NULL or a type name follows.
+    if (jsonClauseFunctions.has(callerAt[index] ?? '') && ((name === 'ABSENT' && word(index + 1) === 'ON' && word(index + 2) === 'NULL') || (name === 'RETURNING' && systemTypeNames.has(word(index + 1) ?? '')))) continue
     if (systemTypeNames.has(name)) {
-      if (previous?.kind === 'variable' || before === 'RETURNS' || before === 'RETURNING') continue
+      if (previous?.kind === 'variable' || before === 'RETURNS' || (before === 'RETURNING' && jsonClauseFunctions.has(callerAt[index] ?? ''))) continue
       if (before === 'AS' && (sig[index - 2]?.kind === 'variable' || callerAt[index] === 'CAST' || callerAt[index] === 'TRY_CAST')) continue
       if (previous?.kind === 'open' && (beforeThat === 'CONVERT' || beforeThat === 'TRY_CONVERT')) continue
     }
