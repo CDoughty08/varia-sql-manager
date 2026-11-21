@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (360)
+## Commands (366)
 
 ### File
 
@@ -417,6 +417,17 @@ keys it uses are listed below.
 | Kill Process… | `activity.killProcess` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Kill Process… |
 | Close Activity Monitor | `activity.close` | Shift+Escape (`activityMonitorFocus`) | Shift+Escape (`activityMonitorFocus`) | ⇧⎋ (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !documentBusy` | — |
 
+### SQL Server Agent
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Job Activity Monitor | `agent.jobActivity` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Job Activity Monitor |
+| Refresh Jobs | `agent.refreshJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Start Jobs | `agent.startJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Stop Jobs | `agent.stopJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Enable Jobs | `agent.enableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+| Disable Jobs | `agent.disableJobs` | — | — | — | `agentEnabled && backendReady && activeDocumentIsJobActivity` | — |
+
 ### Preferences
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
@@ -708,6 +719,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
+| `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -1087,7 +1099,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (177)
+## Context keys (178)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1129,6 +1141,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
 | `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |

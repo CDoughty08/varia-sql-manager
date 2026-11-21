@@ -787,7 +787,7 @@ server changes, or it is lost.
   catalog is unchanged the server confirms it (`DB_ID() = DB_ID(@database)`); when it does not, nothing runs and the result is
   `failed` (batch 0) with `database` still the session's and a message naming the options that cause this.
 - **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
-  `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
+  `::` is T-SQL, and a line starting with the label `GO:` is part of its batch, as in sqlcmd). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
   repetition {k}, raised an error; execution continued with the next repetition." or "… next batch."). Severity 17–19
   errors do not stop the batch on the server either (SQL Server runs the whole batch; only SqlClient's view differs), but
@@ -1836,6 +1836,9 @@ with `BACKEND_ERROR`.
   acknowledged, paused or not) writes each table whose order changes as a new revision from those rows, with the same retire rule, its own
   budget (`BUDGET` if it does not fit), `diff`, `tracked`, `departed`, no facets, marked `resorted`. No statement runs; a
   table with nothing held waits for its next sample.
+- **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
+  (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
+  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).
@@ -2038,7 +2041,7 @@ behaviour.
   applies to views already hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) cancels
   (`dormant`, the backend releasing what it held); shown again it subscribes with a new id and the last resume token, its
   history continuing after a gap. `liveData.pauseWhenHidden` off keeps hidden views running. A source allowing
-  `hidden: 'statusOnly'` (none does yet; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
+  `hidden: 'statusOnly'` (agent.jobs does; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
   table-less probes at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never going dormant, with
   their table probes paused; the rest pause, and a view that ends, is lost, closes or shows hands its slot to the oldest
   view that paused only for want of one.

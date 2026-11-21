@@ -3,8 +3,8 @@
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
 Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
-and operators, and Script As scripts jobs, alerts, operators and proxies. Job Activity Monitor and the job documents arrive
-in later lanes, behind the same gate until 0.11.0.
+and operators, Script As scripts jobs, alerts, operators and proxies, and Job Activity Monitor follows the jobs live. The job
+documents arrive in later lanes, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -57,6 +57,31 @@ in later lanes, behind the same gate until 0.11.0.
   Linux server, Managed Instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
+- **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first item), Enter or double-click on its
+  Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
+  ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
+  (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
+  and a tone per row (last run failed, running, disabled). Tiles count Running, Last run failed, Between retries and
+  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box (the
+  job's own columns, never the last run) and the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
+  shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
+  `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
+  show, or that no finished run is among those rows; a job that left the list says so).
+  Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
+  the job's identity from the list, and list one result line per job; Stop on that list sends no more. A login msdb
+  refuses sees "No access to SQL Server Agent" with the roles that grant it; Agent stopped or Agent XPs off is a banner,
+  a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Opening a job
+  from the list waits for the job documents (AG-6a).
+- **Status bar.** A job Start started from Job Activity Monitor is followed in the status bar ("Nightly: running step 1
+  of 3", then its outcome and start in server time) with Stop and Dismiss, and +N for more; at most `watchedJobs` per
+  connection are followed, and as many ended items are kept (the oldest goes). Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
+  `whileHidden: 'statusOnly'`, so the job's end is seen while the window is hidden; a run counts only when its start is
+  later than the job's last run before the start (the list's, or the one a sample reads while the job runs) and not
+  before the Start itself, dated in server time by the watched probe's clock (unless the job was seen running since, as
+  Start is refused while a job runs). Agent
+  stopped (or its XPs off) on a server a monitor or a followed job reads shows as its own item, which opens that server's
+  Job Activity Monitor (with several such servers, a pick of them; a monitor whose connection is gone does not count); after a followed job ends that way, the service probe alone keeps reading Agent's state until it
+  runs again. The connection item is unchanged.
 - **SQL Server Agent Properties** (the Agent node's Properties, a modal dialog; object actions, docs/object-actions.md). General
   shows the service account and whether it starts automatically, SSMS's "Auto restart SQL Server if it stops unexpectedly"
   and "Auto restart SQL Server Agent if it stops unexpectedly", and the error log, read-only for now; Advanced, Alert System,
@@ -169,6 +194,11 @@ suite also runs the job verbs on its scratch job through `actions.describe` and 
 (`AgentScriptingLiveChecks`) script this run's job, operator, alert (Windows) and proxy, compare the job's script with
 SMO's own `Job.Script`, run the job's DROP And CREATE script, and script a `SQLAgentUserRole` login's own job (on Windows,
 its step that runs as a proxy comes without the proxy and with the warning).
+
+`AgentJobsChecks` checks the `agent.jobs` reader offline over a fake runner (rows, tones, views, filters, the last run,
+the watched slots, the service probe and each refusal) and, in the Agent live suite, subscribes to all three probes on
+the scratch job. The `agent-jobs` smoke suite drives Job Activity Monitor against the fake backend's jobs: opening it,
+a view chip, Start on two jobs with the status bar following them, the Last run chevron and reopening it from its node.
 
 The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
 the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
@@ -455,6 +485,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `stepsPerJob` | 50 | Steps one job save may hold |
 | `schedulesPerJob` | 16 | Schedules one job save may hold |
 | `scheduleJobChanges` | 64 | Jobs one schedule save may attach or detach |
+| `lastRunRows` | 202 | History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest |
 | `startJobs` | 100 | Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name |
 | `watchedJobs` | 3 | Jobs the status bar follows with live progress |
 | `serviceStatementMs` | 30,000 | One service Start or Stop statement, in ms |

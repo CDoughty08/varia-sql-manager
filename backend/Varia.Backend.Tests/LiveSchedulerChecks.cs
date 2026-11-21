@@ -157,8 +157,10 @@ internal static class LiveSchedulerChecks
             .Concat(queries.Where(query => query.Restricted is not null).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue, admin: false))
                 .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
         // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
-        // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints.
-        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe).ToList();
+        // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints, and
+        // agent.jobs runs msdb's procedures through AgentReader (AgentSql.LintRead) and explorer.agentService's text.
+        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe
+            && probe.Source != Agent.AgentJobsReader.Source).ToList();
         check(oneBatch.Count == 6 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
@@ -485,6 +487,44 @@ internal static class LiveSchedulerChecks
             check(budget.Errors[0].RetryInMs <= 1000 && budgetAgain.Errors[0].RetryInMs == 1000 && budgetFailures == 0 && gated && stopped.Errors[0].RetryInMs == 0 && all?.Code == "NOT_SUPPORTED" && idle == -1
                 && b.Stopped is null && b.DueAt == 5000 && a.Stopped is not null && subscription.WaitMs(5000) == 0,
                 "BUDGET retries at the interval without backing off; a terminal error stops its probe (all stopped ends the view with the first's code); a refresh restarts it, but never one the source opened unavailable");
+        }
+
+        // A view or filter change reads again within the probe's minimum gap and interval, not a whole interval later; a stopped
+        // probe stays stopped, and one the load guard slowed keeps its schedule.
+        using (var subscription = Subscription(sql, () => 0, ("fx.b", 5000)))
+        {
+            var probe = subscription.Probes[0];
+            subscription.Opened([], 0);
+            var first = subscription.TakeDue(0);
+            subscription.Complete(first, Echo(first), 10);
+            var at = probe.DueAt;
+            var second = subscription.TakeDue(at);
+            subscription.Complete(second, Sample("fx.b"), at + 5);
+            var scheduled = probe.DueAt;
+            subscription.Reread(probe, at + 100);
+            var soon = probe.DueAt;
+            probe.Stopped = LiveErrors.Create("fx.b", "NOT_SUPPORTED", "Stopped.");
+            probe.DueAt = 99_999;
+            subscription.Reread(probe, at + 200);
+            var stoppedDue = probe.DueAt;
+            probe.Stopped = null;
+            probe.EffectiveIntervalMs = probe.IntervalMs * 2;
+            probe.DueAt = 88_888;
+            subscription.Reread(probe, at + 300);
+            var slowedDue = probe.DueAt;
+            probe.EffectiveIntervalMs = probe.IntervalMs;
+            probe.Failures = 1;
+            subscription.Reread(probe, at + 300);
+            var failingDue = probe.DueAt;
+            probe.Failures = 0;
+            // A costly read (2 s at a 25 % duty cycle) comes again no sooner than 8 s after the last, whatever the gap.
+            var cost = probe.CostEwma;
+            probe.CostEwma = 2000;
+            subscription.Reread(probe, at + 300);
+            var costlyDue = probe.DueAt;
+            probe.CostEwma = cost;
+            check(scheduled >= at + 5000 && soon == at + 1000 && stoppedDue == 99_999 && slowedDue == 88_888 && failingDue == 88_888 && costlyDue == at + 8000,
+                "a view or filter change brings the probe's next read forward (within its gap), and leaves a stopped probe, or one the load guard slowed, alone: due " + scheduled + " then " + soon);
         }
 
         // One probe that fails in two ways beside its sample (a table cut by the budget, a statement that failed) reports both,

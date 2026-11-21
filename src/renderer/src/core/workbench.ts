@@ -112,6 +112,9 @@ import { TablePropertiesService } from '../properties/TablePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { JobActivityService } from '../agent/JobActivityService'
+import { AgentJobStatusService } from '../agent/AgentJobStatusService'
+import { agentContribution } from '../contributions/agent'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -268,6 +271,10 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
+  readonly jobActivity: JobActivityService
+  /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
+  readonly agentJobs: AgentJobStatusService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -501,6 +508,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const agentJobs = new AgentJobStatusService({ api, live, connections })
+  const jobActivity = new JobActivityService({
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
@@ -686,6 +699,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch,
     searchDetails,
     theme,
@@ -737,6 +752,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
+      jobActivity.dispose()
+      agentJobs.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -820,6 +837,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    agentContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)

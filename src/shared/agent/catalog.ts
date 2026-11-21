@@ -315,6 +315,9 @@ export const agentLimits = {
   schedulesPerJob: 16,
   /** Jobs one standalone schedule save may attach or detach. */
   scheduleJobChanges: 64,
+  /** History rows Job Activity Monitor's last run reads, newest first, then cancels the rest: the outcome row and up to 200 steps,
+   *  plus the previous run's outcome row, so a run that fits is known whole. */
+  lastRunRows: 202,
   /** Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name (one request per job). */
   startJobs: 100,
   /** Jobs the status bar watches with live progress; more join one summary item. */
