@@ -28,7 +28,8 @@ documented behaviour.
   the database's catalog collation compares them. While you type, the designer flags only names that differ in trailing
   spaces, which never count. Case, accents and language rules differ between collations (Turkish I is the capital of ı,
   not i; Czech_100_CI_AS tells ch from cH even ignoring case; a Swedish å is not an a even ignoring accents), so Save's
-  preflight asks SQL Server under the catalog collation before any DDL, and Generate Change Script warns about them.
+  preflight asks SQL Server under the catalog collation before any DDL, and Generate Change Script warns about them. A
+  name the preflight refuses becomes the current cell; on a first save that is after Choose Name, whose name stays chosen.
 - Column Properties shows the current column's properties by category, or alphabetically; Properties (F4) shows the
   table's. Edit › Undo and Redo act on the text field being edited only; undoing grid changes is a follow-up.
 - Save (File › Save, Ctrl+S, ⌘S) asks Choose Name the first time (verified: learn.microsoft.com, Create tables), with

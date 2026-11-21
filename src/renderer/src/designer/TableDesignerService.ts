@@ -377,8 +377,11 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       : !result.ok && result.code === 'CANCELLED' ? designerStrings.stoppedUnknown
         : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? unknownOutcomeMessage
           : value?.error?.message ?? error(result) ?? 'The table could not be saved.'
-    this.patch(id, { phase: 'ready', error: message })
+    // The preflight's refusal of a column (a name the catalog collation finds used twice) makes its name cell current.
+    const row = value?.error?.column === undefined ? -1 : state.rows.indexOf(TableDesignerService.columnRows(state)[value.error.column])
+    this.patch(id, { phase: 'ready', error: message, ...row >= 0 ? { current: { row, column: 'name' as const } } : {} })
     this.show(id)
+    if (row >= 0) this.options.focus?.(id)
     return false
   }
   /** The first problem refuses Save or Generate Change Script: it shows, and its cell becomes current. */

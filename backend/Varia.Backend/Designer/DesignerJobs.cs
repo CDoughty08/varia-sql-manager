@@ -97,9 +97,8 @@ internal sealed partial class ActionService
         // The statement lists dbo whenever the database has it, however many schemas sort before it; so does the cut here.
         var kept = schemas.Where(schema => schema != "dbo").Take(schemas.Contains("dbo") ? limit - 1 : limit).ToHashSet(StringComparer.Ordinal);
         var listed = schemas.Where(schema => schema == "dbo" || kept.Contains(schema)).ToList();
-        var comparison = sets.Count > 2 && sets[2].Count > 0 ? sets[2][0] : null;
         var model = new TableDesignerModelDto(database, band, listed, schemas.Count > limit, listed.Contains("dbo") ? "dbo" : listed.FirstOrDefault() ?? "dbo", filegroup,
-            comparison?.Bool("case_sensitive") ?? true, comparison?.Bool("accent_sensitive") ?? true, facts.NullableBool("can_create"));
+            facts.NullableBool("can_create"));
         return new(null, 0, TableDesigner: model);
     }
 
@@ -126,18 +125,18 @@ internal sealed partial class ActionService
         if (sets is null) return (null, missing, warnings);
         var row = sets[0][0];
         var schema = ScriptingErrors.Display(plan.Schema);
-        var problems = new List<(string Code, string Message)>();
-        if (!row.Bool("schema_exists")) problems.Add(("NOT_FOUND", "The schema " + schema + " does not exist."));
+        var problems = new List<(string Code, string Message, int? Column)>();
+        if (!row.Bool("schema_exists")) problems.Add(("NOT_FOUND", "The schema " + schema + " does not exist.", null));
         else
         {
-            if (row.Bool("name_in_use")) problems.Add(("NAME_IN_USE", "An object named " + ScriptingErrors.Display(plan.Name) + " already exists in schema " + schema + "."));
-            if (plan.PrimaryKey.Count > 0 && row.Bool("key_in_use")) problems.Add(("NAME_IN_USE", "An object named " + ScriptingErrors.Display(plan.PrimaryKeyName) + " already exists in schema " + schema + "."));
-            if (!row.Bool("can_alter")) problems.Add(("PERMISSION_DENIED", "You do not have permission to create a table in schema " + schema + " (ALTER on it)."));
+            if (row.Bool("name_in_use")) problems.Add(("NAME_IN_USE", "An object named " + ScriptingErrors.Display(plan.Name) + " already exists in schema " + schema + ".", null));
+            if (plan.PrimaryKey.Count > 0 && row.Bool("key_in_use")) problems.Add(("NAME_IN_USE", "An object named " + ScriptingErrors.Display(plan.PrimaryKeyName) + " already exists in schema " + schema + ".", null));
+            if (!row.Bool("can_alter")) problems.Add(("PERMISSION_DENIED", "You do not have permission to create a table in schema " + schema + " (ALTER on it).", null));
         }
         // Column names as the catalog collation compares them, which only SQL Server knows for every collation.
-        if (sets.Count > 1 && sets[1].Count > 0)
-            problems.Add(("NAME_IN_USE", "The column name " + ScriptingErrors.Display(plan.Columns[sets[1][0].Int("duplicate_column")].Name) + " is used twice."));
-        if (execute && problems.Count > 0) return (null, Error(problems[0].Code, problems[0].Message), warnings);
+        if (sets.Count > 1 && sets[1].Count > 0 && sets[1][0].Int("duplicate_column") is var duplicate)
+            problems.Add(("NAME_IN_USE", "The column name " + ScriptingErrors.Display(plan.Columns[duplicate].Name) + " is used twice.", duplicate));
+        if (execute && problems.Count > 0) return (null, Error(problems[0].Code, problems[0].Message) with { Column = problems[0].Column }, warnings);
         warnings.AddRange(problems.Take(8).Select(problem => problem.Message));
         return (row.Name("filegroup_name") is { Length: > 0 } filegroup ? filegroup : "PRIMARY", null, warnings);
     }

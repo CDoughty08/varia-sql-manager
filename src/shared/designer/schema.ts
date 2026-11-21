@@ -22,8 +22,7 @@ export interface TableDesign {
   readonly columns: readonly DesignColumn[]
   readonly primaryKey: readonly number[]
 }
-/** What the designer needs of the database: its schemas (dbo by default), the default filegroup, the band, and how its
- *  catalog compares names (column names are unique as the catalog collation compares them). */
+/** What the designer needs of the database: its schemas (dbo by default), the default filegroup and the band. */
 export interface TableDesignerModel {
   readonly database: string
   /** The version band (13 = SQL Server 2016 … 17 = 2025): json and vector need 17. */
@@ -33,9 +32,6 @@ export interface TableDesignerModel {
   /** dbo when the database has it, else its first schema. */
   readonly defaultSchema: string
   readonly defaultFilegroup: string
-  /** Whether the catalog collation tells Id from ID, and e from é. */
-  readonly caseSensitiveNames: boolean
-  readonly accentSensitiveNames: boolean
   /** HAS_PERMS_BY_NAME(CREATE TABLE): advisory; absent when SQL Server could not say. */
   readonly canCreate?: boolean
 }

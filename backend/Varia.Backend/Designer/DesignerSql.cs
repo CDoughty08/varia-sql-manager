@@ -219,13 +219,10 @@ internal static class DesignerSql
     public static string PaddedNames(IEnumerable<string> names) => string.Concat(names.Select(name => name.PadRight(128)));
 
     /// <summary>In the database (ModuleCall): at most @take schemas but sys and INFORMATION_SCHEMA, by name, dbo (schema 1)
-    /// always among them when it exists, as it is the default; then the default rows filegroup; then whether the catalog
-    /// collation, which keeps column names unique, tells case and accents apart.</summary>
+    /// always among them when it exists, as it is the default; then the default rows filegroup.</summary>
     public const string Describe = "SELECT x.schema_name FROM (SELECT TOP (@take) s.name AS schema_name FROM sys.schemas AS s WHERE s.schema_id NOT IN (3, 4) "
         + "ORDER BY CASE WHEN s.schema_id = 1 THEN 0 ELSE 1 END, s.name) AS x ORDER BY x.schema_name;\n"
-        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';\n"
-        + "SELECT CONVERT(bit, CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS case_sensitive, "
-        + "CONVERT(bit, CASE WHEN N'e' = NCHAR(233) COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS accent_sensitive;";
+        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';";
 
     /// <summary>In the database (ModuleCall, @schema, @name the table and @new the key's name): whether the schema exists,
     /// advisory ALTER on it, whether the table's or the key's name is taken in it, and the default rows filegroup. A check

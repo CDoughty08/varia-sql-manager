@@ -673,7 +673,8 @@ internal sealed record LoginMappingChangeDto(string Database, string Change, str
 internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
-internal sealed record ActionError(string Code, string Message, bool Retryable);
+/// <summary>Column: the table designer's column (index in the design) a refusal is about, such as a name used twice.</summary>
+internal sealed record ActionError(string Code, string Message, bool Retryable, int? Column = null);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
 /// Service (at most loginLimits.serviceName characters) is the guarded service lookup of the loginFacts, Delete Object and Login
 /// Properties describes only. The owned
@@ -817,7 +818,7 @@ internal sealed record DesignTypeDto(string System, int? Length = null, bool? Ma
 /// <summary>Whole numbers of at most 38 digits, as text (decimal(38, 0) does not fit a C# number).</summary>
 internal sealed record DesignIdentityDto(string Seed, string Increment);
 internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup,
-    bool CaseSensitiveNames, bool AccentSensitiveNames, bool? CanCreate = null);
+    bool? CanCreate = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
 /// <summary>One step of an action's reply (src/shared/actions/schema.ts ActionStep). Status: done, failed, skipped or cancelled;
 /// Title: what the step does (at most 64 characters, constant text); Message: SQL Server's text for a failed one; Detail: a name

@@ -97,7 +97,8 @@ internal static class DesignerLiveChecks
         check(collisions.Count == 0, "the designer's preflight finds a repeated column name exactly as each catalog collation compares names: " + string.Join("; ", collisions));
         var twin = await client.Script("master", design with { Columns = [Column("Name", "int"), Column("NAME", "int")], PrimaryKey = [] });
         var twinWarned = twin.Warnings.Contains("The column name NAME is used twice.");
-        check(twin is { Error: null } && twinWarned == !(described.TableDesigner?.CaseSensitiveNames ?? true),
+        var masterIgnoresCase = (await Sql("SELECT CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT THEN 1 ELSE 0 END;")).Scalar == "1";
+        check(twin is { Error: null } && twinWarned == masterIgnoresCase,
             "Generate Change Script warns about column names master's catalog collation finds equal, and only then (" + string.Join("; ", twin.Warnings) + ")");
 
         // SQL Server composes exactly the bracketed statements from @design for every hostile name at the sysname limit, and
@@ -130,14 +131,14 @@ internal static class DesignerLiveChecks
         // [x] would read as x. The describe brackets it, so a sysadmin may create tables there; the catalog is Turkish_100_CI_AI.
         var odd = await scratch.CreateDesignerOddAsync();
         var oddModel = await client.Describe(odd);
-        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, CaseSensitiveNames: false, AccentSensitiveNames: false, DefaultSchema: "dbo" } },
-            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it, and says its catalog ignores case and accents (" + oddModel.Error?.Message + ")");
+        check(oddModel is { Error: null, TableDesigner: { CanCreate: true, DefaultSchema: "dbo" } },
+            "the designer's describe checks CREATE TABLE in a database named with . and ] as SQL Server grants it (" + oddModel.Error?.Message + ")");
         // Turkish: I and i, and c and ç, are different column names; I and ı are the same, refused before any DDL.
         var legal = await client.Save(odd, new TableDesignDto("dbo", "TurkishLegal", [Column("I", "int"), Column("i", "int"), Column("c", "int"), Column("ç", "int")], []));
         var clash = await client.Save(odd, new TableDesignDto("dbo", "TurkishClash", [Column("I", "int"), Column("ı", "int")], []));
         var clashScript = await client.Script(odd, new TableDesignDto("dbo", "TurkishClash", [Column("I", "int"), Column("ı", "int")], []));
         var clashTable = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.TurkishClash') IS NULL THEN 0 ELSE 1 END;", odd)).Scalar;
-        check(Done(legal) && clash is { Error.Code: "NAME_IN_USE", Steps.Count: 0 } && clash.Error.Message == "The column name ı is used twice." && clashTable == "0"
+        check(Done(legal) && clash is { Error: { Code: "NAME_IN_USE", Column: 1 }, Steps.Count: 0 } && clash.Error.Message == "The column name ı is used twice." && clashTable == "0"
             && clashScript is { Error: null } && clashScript.Warnings.Contains("The column name ı is used twice."),
             "under Turkish_100_CI_AI the designer saves columns I, i, c and ç, and refuses I with ı before any DDL, which its script warns about (" + legal.Error?.Message + "; " + clash.Error?.Message + ")");
         await ScratchAsync(check, client, service, info, json, Sql, db, major);
@@ -316,9 +317,9 @@ internal static class DesignerLiveChecks
         await Sql("DECLARE @i int = 1, @s nvarchar(200);\nWHILE @i <= 2100 BEGIN SET @s = N'CREATE SCHEMA ' + QUOTENAME(N'a' + RIGHT(N'0000' + CONVERT(nvarchar(10), @i), 4)); EXEC (@s); SET @i = @i + 1; END;");
         var many = await client.Describe(db);
         var limit = (int)Catalog.Limit("schemas");
-        check(many is { Error: null, TableDesigner: { SchemasTruncated: true, DefaultSchema: "dbo", CaseSensitiveNames: true, AccentSensitiveNames: true } model } && model.Schemas.Count == limit
+        check(many is { Error: null, TableDesigner: { SchemasTruncated: true, DefaultSchema: "dbo" } model } && model.Schemas.Count == limit
             && model.Schemas.Contains("dbo") && model.Schemas.Contains("a0001") && !model.Schemas.Contains("sales"),
-            "the designer's describe keeps dbo, the default schema, among the " + limit + " schemas it lists, and says how the catalog compares names (" + many.Error?.Message + ")");
+            "the designer's describe keeps dbo, the default schema, among the " + limit + " schemas it lists (" + many.Error?.Message + ")");
     }
 
     /// <summary>Starts a save of a one-column keyed table, Stops it after 2 s of waiting (once <paramref name="blocked"/>, if

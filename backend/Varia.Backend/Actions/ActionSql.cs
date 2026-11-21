@@ -654,8 +654,8 @@ internal static partial class ActionSql
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
         // Table Properties' reads (TableProperties.cs): a value's base type, binary values as hexadecimal, and the tools-support mark.
         "'BaseType'", "N'binary'", "N'varbinary'", "N'varchar'", "N'char'", "N'microsoft_database_tools_support'",
-        // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
-        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'",
+        // The table designer's master facts (Designer/DesignerSql).
+        "N'CREATE TABLE'",
         // New Database's facts (CreateDatabaseSql.Facts) and Attach Databases' facts and preflight (AttachSql).
         "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'"
     ];
