@@ -1,6 +1,6 @@
 import { spawn, type SpawnOptions } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { rename, rm } from 'node:fs/promises'
+import { link, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { InstallKind } from '../shared/updates'
 import type { StagingPaths } from './update-staging'
@@ -103,6 +103,7 @@ function launchConfirmed(host: ApplyHost, command: string, env: NodeJS.ProcessEn
     child.once('error', finish)
     child.once('exit', () => { if (existsSync(previous)) finish(new Error('The updated AppImage stopped before it started.')); else finish() })
     child.once('spawn', () => {
+      if (settled) return
       child.unref()
       // Without a watch (an unusual filesystem) only an early exit or the end of the wait settles it.
       try { watcher = watch(dirname(previous), confirmed).on('error', () => {}) } catch { /* no watch */ }
@@ -147,8 +148,22 @@ export async function applyUpdate(kind: InstallKind, file: string, version: stri
     const target = name.includes(host.currentVersion) ? join(dirname(current), name.replace(host.currentVersion, version)) : current
     const previous = replacedAppImage(target)
     await rm(previous, { force: true })
-    await rename(current, previous)
-    try { await rename(file, target) } catch (error) { await rename(previous, current).catch(() => {}); throw error }
+    // A hard link keeps the previous image without the AppImage ever missing from its place; a filesystem without links
+    // moves it aside instead. Moved or deleted while Varia ran, there is nothing to keep, so it installs as it is.
+    const kept = await link(current, previous).then(() => 'linked' as const, async (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return 'gone' as const
+      await rename(current, previous)
+      return 'moved' as const
+    })
+    if (kept === 'gone') {
+      await rename(file, target)
+      return launch(host, target, [], relaunchEnv(host.env))
+    }
+    try { await rename(file, target) } catch (error) {
+      await (kept === 'moved' ? rename(previous, current) : rm(previous, { force: true })).catch(() => {})
+      throw error
+    }
+    if (kept === 'linked' && target !== current) await rm(current, { force: true }).catch(() => {})
     try { await launchConfirmed(host, target, relaunchEnv(host.env), previous) } catch (error) {
       try {
         await rename(previous, current)
