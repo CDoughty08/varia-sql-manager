@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { timelineIntervals, timelineIntervalSpecs, type BackupSetRow, type TimelineInterval } from '../../../shared/actions/restore.ts'
-import { pointAllowed } from '../../../shared/actions/restore-plan.ts'
+import { logCoverage, pointAllowed } from '../../../shared/actions/restore-plan.ts'
 import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import SubDialog from '../dialogs/SubDialog'
 import { useForcedColors } from '../live/LiveChart'
@@ -49,7 +49,10 @@ function Swatch({ mark, fill }: { readonly mark: Mark; readonly fill?: CSSProper
  */
 export default function BackupTimeline({ state, draft, facts, service }: Pick<SectionProps, 'state' | 'draft' | 'facts' | 'service'>) {
   const plan = draftPlan(draft, facts)
-  const sets = sourceSets(draft, facts)
+  // Once per history and source, not on every point or window change (a device source's sets are a fresh filter each call).
+  const { source, database, deviceDatabase } = draft
+  const sets = useMemo(() => sourceSets(draft, facts), [facts, source, database, deviceDatabase]) // eslint-disable-line react-hooks/exhaustive-deps
+  const covered = useMemo(() => logCoverage(sets), [sets])
   const lastFinish = Math.max(...sets.map(set => timeMs(set.finish) ?? 0))
   const [specific, setSpecific] = useState(draft.stopAt !== undefined)
   const [point, setPoint] = useState(timeMs(draft.stopAt ?? '') ?? lastFinish)
@@ -68,7 +71,7 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
     return () => observer.disconnect()
   }, [])
   const span = timelineWindow(sets, interval, point)
-  const text = timeText(point), allowed = pointAllowed(sets, text)
+  const text = timeText(point), allowed = pointAllowed(sets, text, covered)
   const id = (key: string) => fieldId(state.id, `timeline-${key}`)
   // Inset by half the widest glyph, so marks at the window's ends show whole.
   const scale = width - 2 * track.inset, at = (fraction: number) => track.inset + fraction * scale
@@ -111,7 +114,7 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
         aria-valuemin={Math.floor(span.from / 60_000)} aria-valuemax={Math.ceil(span.to / 60_000)} aria-valuenow={Math.floor(point / 60_000)} aria-valuetext={text.replace('T', ' ')}
         aria-invalid={specific && !allowed ? true : undefined} onKeyDown={keyDown} onPointerDown={pointer}>
         <rect className="restore-timeline-base" x={track.inset} y={track.bandTop + 2} width={scale} height={track.bandHeight - 4} />
-        {coverage(sets, span).map((stretch, index) => <rect key={index} className="restore-timeline-covered" style={fill('covered')} x={at(stretch.from)} y={track.bandTop} width={Math.max(2, (stretch.to - stretch.from) * scale)} height={track.bandHeight} />)}
+        {coverage(sets, span, covered).map((stretch, index) => <rect key={index} className="restore-timeline-covered" style={fill('covered')} x={at(stretch.from)} y={track.bandTop} width={Math.max(2, (stretch.to - stretch.from) * scale)} height={track.bandHeight} />)}
         {placed.map(({ set, x }) => <Glyph key={set.id} mark={kind(set)} x={x} fill={fill(kind(set))} />)}
         {specific && <rect className="restore-timeline-point" x={at(position(point, span)) - 1.5} y={0} width={3} height={track.height} />}
       </svg>

@@ -1,7 +1,7 @@
 // The Backup Timeline's arithmetic (D1e): server-local times as plain numbers (the server's clock, not this machine's
 // zone), the window an interval shows, and the keys that move the point. Pure, for vitest.
 import { timelineIntervalSpecs, type BackupSetRow, type TimelineInterval } from '../../../shared/actions/restore.ts'
-import { logCoverage } from '../../../shared/actions/restore-plan.ts'
+import { logCoverage, type Coverage } from '../../../shared/actions/restore-plan.ts'
 
 const pattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/
 /** A server-local yyyy-MM-ddTHH:mm:ss as milliseconds on a zone-free clock, or undefined. */
@@ -42,9 +42,9 @@ export function stepPoint(key: string, shift: boolean, point: number, window: Ti
 }
 /** The fraction of the window a time is at, clamped to it. */
 export const position = (ms: number, window: TimelineWindow): number => window.to === window.from ? 1 : Math.min(1, Math.max(0, (ms - window.from) / (window.to - window.from)))
-/** The green stretches log backups cover, as fractions of the window. */
-export function coverage(sets: readonly BackupSetRow[], window: TimelineWindow): { readonly from: number; readonly to: number }[] {
-  return logCoverage(sets).flatMap(stretch => {
+/** The green stretches log backups cover, as fractions of the window. Pass `covered` (logCoverage of the sets) to reuse it. */
+export function coverage(sets: readonly BackupSetRow[], window: TimelineWindow, covered: readonly Coverage[] = logCoverage(sets)): { readonly from: number; readonly to: number }[] {
+  return covered.flatMap(stretch => {
     const from = timeMs(stretch.from), to = timeMs(stretch.to)
     return from === undefined || to === undefined || to < window.from || from > window.to ? [] : [{ from: position(from, window), to: position(to, window) }]
   })

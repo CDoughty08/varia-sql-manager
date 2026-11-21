@@ -132,32 +132,66 @@ export function dependants(ids: readonly string[], id: string): string[] {
   return at < 0 ? [] : ids.slice(at + 1)
 }
 
-/** One stretch of the timeline a point may be in: from the finish of a backup to the finish of the last log continuing it. */
+/** One stretch of the timeline a point may be in: from the earliest point a log's chain allows to the log's finish. */
 export interface Coverage { readonly from: string; readonly to: string }
 /**
- * The Backup Timeline's covered areas: where log backups cover, each log from the earliest finish of the sets it continues
- * (a full, differential or log: a log after a differential also continues the log before it) to its own finish, touching
- * stretches merged. A point is allowed inside them, and at a full or differential backup's finish.
+ * The Backup Timeline's covered areas: the points planRestore reaches through a log. It restores to a point with the first log
+ * finishing at or after it whose chain back to a full has every earlier set finished by the point, so a log covers from the
+ * earliest point any of its full-rooted chains allows (the latest finish among that chain's earlier sets) to its own finish; a
+ * log that no full reaches (a log missing before it, or the full lost) covers nothing. Touching stretches are merged. Each
+ * set's earliest chain is found once, in LSN order, and a log looks only at the sets ending inside its LSN range.
  */
 export function logCoverage(sets: readonly BackupSetRow[]): Coverage[] {
   const candidates = sets.filter(usableSet)
-  const stretches = candidates.filter(set => set.type === 'log').flatMap(log => {
-    const from = candidates.filter(set => set !== log && continues(log, set) && set.finish <= log.finish).sort(latest).at(-1)
-    return from ? [{ from: from.finish, to: log.finish }] : []
-  }).sort((a, b) => a.from < b.from ? -1 : a.from > b.from ? 1 : 0)
+  const last = new Map(candidates.map(set => [set, lsn(set.lastLsn)]))
+  const byLast = [...candidates].sort((a, b) => { const d = last.get(a)! - last.get(b)!; return d === 0n ? 0 : d < 0n ? -1 : 1 })
+  const max = (a: string, b: string) => a > b ? a : b
+  // The earliest point a chain ending with each set (itself included) allows: the latest finish in its best chain.
+  const reach = new Map<BackupSetRow, string>()
+  const fulls = candidates.filter(set => set.type === 'full')
+  for (const full of fulls) reach.set(full, full.finish)
+  for (const differential of candidates.filter(set => set.type === 'differential')) {
+    const base = fulls.filter(full => basedOn(differential, full)).map(full => full.finish).sort()[0]
+    if (base !== undefined) reach.set(differential, max(base, differential.finish))
+  }
+  const stretches: Coverage[] = []
+  for (const log of byLast) {
+    if (log.type !== 'log') continue
+    // The sets a log may continue end in [its first LSN, its last LSN), and come before it in byLast.
+    const first = lsn(log.firstLsn), end = last.get(log)!
+    let low = 0, high = byLast.length
+    while (low < high) { const mid = (low + high) >> 1; if (last.get(byLast[mid])! < first) low = mid + 1; else high = mid }
+    let from: string | undefined
+    for (let index = low; index < byLast.length && last.get(byLast[index])! < end; index++) {
+      const set = byLast[index], allows = reach.get(set)
+      if (allows !== undefined && set !== log && continues(log, set) && (from === undefined || allows < from)) from = allows
+    }
+    if (from === undefined) continue
+    reach.set(log, max(from, log.finish))
+    if (from <= log.finish) stretches.push({ from, to: log.finish })
+  }
+  stretches.sort((a, b) => a.from < b.from ? -1 : a.from > b.from ? 1 : 0)
   const merged: Coverage[] = []
   for (const stretch of stretches) {
-    const last = merged[merged.length - 1]
-    if (last && stretch.from <= last.to) merged[merged.length - 1] = { from: last.from, to: stretch.to > last.to ? stretch.to : last.to }
+    const previous = merged[merged.length - 1]
+    if (previous && stretch.from <= previous.to) merged[merged.length - 1] = { from: previous.from, to: max(stretch.to, previous.to) }
     else merged.push(stretch)
   }
   return merged
 }
 
-/** Whether the Timeline may put its point here: inside log coverage, or at a full or differential backup's finish. */
-export function pointAllowed(sets: readonly BackupSetRow[], point: string): boolean {
-  return logCoverage(sets).some(stretch => stretch.from <= point && point <= stretch.to)
-    || sets.some(set => usableSet(set) && set.type !== 'log' && set.finish === point)
+/**
+ * Whether the Timeline may put its point here: exactly where planRestore has a plan for it. Inside log coverage, or at the
+ * finish of the base planRestore takes for the point (the latest full finished by it, or the latest differential of that full).
+ * Pass `coverage` (logCoverage of the same sets) to reuse it while the point moves.
+ */
+export function pointAllowed(sets: readonly BackupSetRow[], point: string, coverage: readonly Coverage[] = logCoverage(sets)): boolean {
+  if (coverage.some(stretch => stretch.from <= point && point <= stretch.to)) return true
+  const candidates = sets.filter(usableSet)
+  const full = candidates.filter(set => set.type === 'full' && set.finish <= point).sort(latest)[0]
+  if (!full) return false
+  const differential = candidates.filter(set => set.type === 'differential' && set.finish <= point && basedOn(set, full)).sort(latest)[0]
+  return (differential ?? full).finish === point
 }
 
 /** The last backup taken: the finish of the plan's last set. */

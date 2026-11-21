@@ -112,6 +112,52 @@ describe('the restore planner', () => {
     expect(lastBackupTaken(probe, ['1:1', '3:1', '2:3'])).toBe('2026-10-29T21:05:46')
     expect(lastBackupTaken(probe, [])).toBeUndefined()
   })
+  // A history with sets missing (from msdb or the media): the Timeline offers only the points the planner has a plan for.
+  const at = (minute: number) => `2026-10-29T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`
+  const gapSet = (id: string, type: BackupSetRow['type'], first: number, last: number, minute: number, base = 10) =>
+    row(id, id, type, 1, String(first), String(last), type === 'log' ? String(last) : String(first), type === 'full' ? '0' : String(base), at(minute).slice(11), [`C:\B\${id}.bak`])
+  const plannable = (sets: readonly BackupSetRow[], point: string) => planRestore(sets, { stopAt: point }).ids.length > 0
+  it('covers no log that a missing log cuts off from the full backup', () => {
+    const sets = [gapSet('full', 'full', 10, 20, 60), gapSet('l2', 'log', 30, 40, 180), gapSet('l3', 'log', 40, 50, 240)]
+    expect(logCoverage(sets)).toEqual([])
+    expect(pointAllowed(sets, at(210))).toBe(false)
+    expect(plannable(sets, at(210))).toBe(false)
+    expect(pointAllowed(sets, at(60))).toBe(true)
+  })
+  it('covers up to a gap between logs, and nothing after it', () => {
+    const sets = [gapSet('full', 'full', 10, 20, 60), gapSet('l1', 'log', 10, 30, 120), gapSet('l3', 'log', 40, 50, 240), gapSet('l4', 'log', 50, 60, 300)]
+    expect(logCoverage(sets)).toEqual([{ from: at(60), to: at(120) }])
+    expect([pointAllowed(sets, at(90)), plannable(sets, at(90))]).toEqual([true, true])
+    expect([pointAllowed(sets, at(270)), plannable(sets, at(270))]).toEqual([false, false])
+  })
+  it('covers again after a differential bridges a gap between logs', () => {
+    const sets = [gapSet('full', 'full', 10, 20, 60), gapSet('l1', 'log', 10, 30, 120), gapSet('diff', 'differential', 42, 45, 210), gapSet('l3', 'log', 40, 50, 240)]
+    expect(logCoverage(sets)).toEqual([{ from: at(60), to: at(120) }, { from: at(210), to: at(240) }])
+    expect([pointAllowed(sets, at(150)), plannable(sets, at(150))]).toEqual([false, false])
+    expect(planRestore(sets, { stopAt: at(225) })).toEqual({ ids: ['full', 'diff', 'l3'], stopAt: at(225) })
+    expect(pointAllowed(sets, at(225))).toBe(true)
+    expect(planRestore(sets, { stopAt: at(210) })).toEqual({ ids: ['full', 'diff'] })
+    expect(pointAllowed(sets, at(210))).toBe(true)
+  })
+  it('allows a point exactly where the planner has a plan, on histories with sets missing', () => {
+    let seed = 7
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+    for (let history = 0; history < 200; history++) {
+      // A database's backups every 10 minutes (an unbroken log chain, fulls and differentials between), then some lost.
+      const sets: BackupSetRow[] = []
+      let lsnAt = 100, logFrom = 100, full: BackupSetRow | undefined
+      for (let step = 1; step <= 14; step++) {
+        const next = lsnAt + 10, kind = step === 1 || random() < 0.15 ? 'full' : random() < 0.25 && full ? 'differential' : 'log'
+        const set = kind === 'log' ? gapSet(`l${step}`, 'log', logFrom, next, step * 10) : gapSet(`${kind[0]}${step}`, kind, lsnAt, next, step * 10, Number(full?.checkpointLsn ?? 0))
+        if (kind === 'log') logFrom = next
+        if (kind === 'full') full = set
+        lsnAt = next
+        if (random() > 0.25) sets.push(set)
+      }
+      for (let minute = 0; minute <= 150; minute += 5)
+        expect(pointAllowed(sets, at(minute)), `${sets.map(set => set.id).join()} @${minute}`).toBe(plannable(sets, at(minute)))
+    }
+  })
 })
 
 interface SmoFixture { readonly history: BackupSetRow[]; readonly media: BackupSetRow[]; readonly plans: { goal: string; stopAt: string | null; names: string[]; varia: string[] }[] }

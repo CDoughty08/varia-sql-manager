@@ -713,10 +713,12 @@ Until the plan's full backup's files are read, Script waits: "The files of the f
 
 The Backup Timeline shows the backups over an interval (Hour, Six Hours, Day, Week; Day first) ending at the last
 backup: a large triangle for a full backup, a small one for a differential, a tick for a log, and a band where log
-backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an
-hour, Home and End to the interval's ends. A point outside the covered band (other than a full or differential
-backup's finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup
-it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
+backups cover. The band and the allowed points come from the planner's own full-rooted chains, so a log that a missing
+log cuts off from every full backup covers nothing until a later differential bridges the gap. Its point is a slider:
+the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an hour, Home and End to the interval's
+ends. A point the planner has no plan for (outside the covered band, other than the finish of the full or differential
+backup it would restore) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log
+backup it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
 
 ### Options and script
 

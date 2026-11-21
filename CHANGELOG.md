@@ -52,6 +52,7 @@
 
 ### Fixes
 
+- **The Backup Timeline offers only points it can restore to:** When a log backup is missing, the logs after it are no longer shown as covered and their times can no longer be chosen, since no restore plan reaches them; coverage returns after a later differential that bridges the gap\. Moving the point on a long backup history is also quicker\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.
