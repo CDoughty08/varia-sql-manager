@@ -221,7 +221,11 @@ internal static class AgentJobDocumentChecks
         check(category is { Field: "category" } && category.Message.StartsWith("Saving the job's settings was refused: The specified '@category_name'", StringComparison.Ordinal),
             "a refusal naming an argument lands on its field, and says which part of the save was refused");
         var alert = service.JobSaveError(Exception((14262, 2, "The specified @name ('Log full') does not exist."), (50012, 2, AgentSql.RefusedMessage)), batch, null);
-        check(alert is { Code: "NOT_FOUND", Field: "alerts" } && alert.Message.StartsWith("Saving removing alert 'Log full' was refused", StringComparison.Ordinal), "a refused detach lands on the alerts, naming the alert");
+        check(alert is { Code: "SQL_ERROR", Retryable: false, Field: "alerts" } && alert.Message.StartsWith("Saving removing alert 'Log full' was refused", StringComparison.Ordinal), "a refused detach lands on the alerts, naming the alert");
+        var owned = ActionService.AgentJobSavePlan(Save(Changed(new(Owner: "bob", Description: "x"))), Job);
+        var owner = service.JobSaveError(Exception((14262, 1, "The specified @owner_login_name ('bob') does not exist."), (50012, 1, AgentSql.RefusedMessage)), owned, null);
+        check(owner is { Code: "SQL_ERROR", Retryable: false, Field: "owner" },
+            "msdb's unquoted 'does not exist' lands on its field and is not NOT_FOUND, which only the job itself is (the document opens the compare on it): " + owner.Code + " " + owner.Field);
         var renamed = ActionService.AgentJobSavePlan(Save(Changed(new(Name: "Taken"))), Job);
         check(service.JobSaveError(Exception((14261, 1, "The specified @name ('Taken') already exists."), (50012, 1, AgentSql.RefusedMessage)), renamed, null) is { Code: "NAME_IN_USE", Field: "name" },
             "a name in use lands on the name");

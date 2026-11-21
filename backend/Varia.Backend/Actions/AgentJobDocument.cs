@@ -280,8 +280,10 @@ internal sealed partial class ActionService
         return new(steps, messages.Collected(), 0, failure);
     }
 
-    [GeneratedRegex(@"'(?<arg>@[a-z_]+)'", RegexOptions.CultureInvariant)]
-    private static partial Regex QuotedArgument();
+    // 14234 quotes the argument ("The specified '@category_name' is invalid"), 14262 does not ("The specified @owner_login_name ('bob') does
+    // not exist"); either way the argument comes before any value msdb quotes back.
+    [GeneratedRegex(@"(?<arg>@[a-z_]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex NamedArgument();
 
     /// <summary>What a refused save says. 50011 is STALE; 50010 NOT_FOUND (another job has the name). Otherwise msdb's own error maps by number
     /// (ActionErrors), and the THROW's state names the call that failed: the message says which part, and the field is the argument msdb's text
@@ -295,10 +297,13 @@ internal sealed partial class ActionService
         if (first == 50010) return Error("NOT_FOUND", AgentSql.ChangedMessage);
         if (first == 15281) return Error("AGENT_STOPPED", AgentStoppedMessage);
         var mapped = ActionErrors.FromSql(catalog, error, connection, ddl: true, null);
+        // NOT_FOUND is the job itself (50010 above), which the document answers with the compare; msdb's own "does not exist" (14262: an owner,
+        // an operator, an alert) is a refused value, not retryable as it stands.
+        if (mapped.Code == "NOT_FOUND") mapped = mapped with { Code = "SQL_ERROR", Retryable = false };
         var text = string.Join(" ", errors.Where(item => item.Class > 10 && item.Number is not (50012 or 3621 or 3998)).Select(item => item.Message).Distinct());
         var thrown = errors.FirstOrDefault(item => item.Number == 50012);
         if (thrown is null || thrown.State < 1 || thrown.State > batch.Calls.Count)
-            return ActionErrors.Create(catalog, mapped.Code, JobSaveAbortedMessage + (text.Length > 0 ? " " + text : ""));
+            return ActionErrors.Create(catalog, mapped.Code, JobSaveAbortedMessage + (text.Length > 0 ? " " + text : "")) with { Retryable = mapped.Retryable };
         var call = batch.Calls[thrown.State - 1];
         var part = call.Procedure switch
         {
@@ -307,7 +312,7 @@ internal sealed partial class ActionService
             "sp_update_alert" => "removing alert '" + (call.Arguments.FirstOrDefault(argument => argument.Name == "@name")?.Value as string ?? "") + "'",
             _ => "the job's settings"
         };
-        string? field = QuotedArgument().Matches(text).Select(match => AgentSql.FieldOfArgument(match.Groups["arg"].Value)).FirstOrDefault(found => found is not null);
+        string? field = NamedArgument().Matches(text).Select(match => AgentSql.FieldOfArgument(match.Groups["arg"].Value)).FirstOrDefault(found => found is not null);
         if (field is null && mapped.Code == "NAME_IN_USE" && call.Procedure is "sp_add_job" or "sp_update_job") field = "name";
         if (field is null && call.Procedure == "sp_update_alert") field = "alerts";
         if (field is null && call.Procedure is "sp_update_job" or "sp_add_job")
@@ -316,7 +321,7 @@ internal sealed partial class ActionService
             if (changed.Count == 1) field = changed[0];
         }
         var message = "Saving " + part + " was refused: " + (text.Length > 0 ? text : AgentSql.RefusedMessage);
-        return ActionErrors.Create(catalog, mapped.Code, message) with { Field = field };
+        return ActionErrors.Create(catalog, mapped.Code, message) with { Field = field, Retryable = mapped.Retryable };
     }
 
     // --- Script ------------------------------------------------------------------------------------------------------------

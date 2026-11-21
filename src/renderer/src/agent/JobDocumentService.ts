@@ -355,7 +355,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     }
     // STALE, or NOT_FOUND (the job is not under the name it was read by: renamed or deleted since): the compare re-reads it, following a
     // rename by its id, and keeps the draft either way.
-    if (value?.error?.code === 'STALE' || (value?.error?.code === 'NOT_FOUND' && state.model.job)) { await this.compare(id, value.error); return false }
+    if (value?.error?.code === 'STALE' || (value?.error?.code === 'NOT_FOUND' && !value.error.field && state.model.job)) { await this.compare(id, value.error); return false }
     // One transaction: a refusal rolled every call back, so the job is as it was read.
     if (value?.error) { this.patch(id, { phase: 'ready', error: value.error }); return false }
     const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
@@ -602,8 +602,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private connectionsChanged(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       if (this.live(state.id)) continue
-      this.views.get(state.id)?.stop()
-      this.views.delete(state.id)
+      // The header's view stays open: its owner's connectionId() pauses it while the connection is lost and resumes it after a reconnect.
       const request = this.requests.get(state.id), preview = this.previews.get(state.id)
       if (preview) { this.previews.delete(state.id); this.cancel([preview]) }
       if (state.live) this.patch(state.id, { live: undefined })

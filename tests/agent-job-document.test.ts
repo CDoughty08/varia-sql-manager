@@ -249,6 +249,11 @@ describe('the job document', () => {
     expect([...jobDocuments.problemSections(id)]).toEqual(['general'])
     jobDocuments.updateDraft(id, { category: 'Database Maintenance' })
     expect(jobDocuments.get(id)?.error).toBeUndefined()
+    // A refused value that names its field is that field's problem, never the compare (which a job no longer under its name opens).
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: "The specified @owner_login_name ('bob') does not exist.", retryable: false, field: 'owner' } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', error: { field: 'owner' } })
+    expect(jobDocuments.get(id)?.stale).toBeUndefined()
 
     const other = opened(model({ sysadmin: false, login: 'dana', readOnly: 'Read-only.', alertsEditable: false }))
     const readOnly = other.jobDocuments.openJob('c1', 'Nightly load')
@@ -275,7 +280,7 @@ describe('the job document', () => {
     expect(api.describeObject.mock.calls.at(-1)?.[0]).toMatchObject({ target: { kind: 'agentJob', name: 'Copy of Nightly load' } })
   })
   it('follows the job live in its header, and starts it (at a step) and stops it with its identity', async () => {
-    const { jobDocuments, executes, live } = opened()
+    const { jobDocuments, executes, live, connections } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     const handle = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
@@ -288,6 +293,13 @@ describe('the job document', () => {
     expect(jobDocuments.canStart(id)).toBe(false)
     await jobDocuments.stop(id)
     expect(executes().at(-1)).toMatchObject({ action: 'stopJob', agentIdentity: { created: '2026-01-02T03:04:05' } })
+    // A lost connection clears the header's state but keeps its view, which LiveService resumes after a reconnect.
+    connections.markLostBefore(2)
+    expect(jobDocuments.get(id)?.live).toBeUndefined()
+    expect(handle.disposed).toBe(false)
+    expect(handle.owner.connectionId?.()).toBeUndefined()
+    handle.deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics: [1, 1, 2, 0, 1, 0] }] })
+    expect(jobDocuments.get(id)?.live).toMatchObject({ running: true, step: 1 })
     jobDocuments.closed(id)
     expect(handle.disposed).toBe(true)
   })

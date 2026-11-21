@@ -47,8 +47,8 @@ internal static class AgentJobDocumentLiveChecks
         // One transaction: an operator that does not exist fails the notification call after the description's, and nothing commits.
         var failed = await Save(job, current.Created, new AgentJobSaveDto(current.Version, current.Modified, Description: "rolled back", EmailLevel: 2, EmailOperator: "VariaNoSuchOperator_" + Guid.NewGuid().ToString("N")[..8]));
         var unchanged = await Describe(job);
-        check(failed.Error is not null && await Column("description") == marked && unchanged?.Job?.Version == current.Version,
-            "a job document save whose later call fails commits nothing: the description and version are as they were: " + Said(failed));
+        check(failed.Error is { Code: not "NOT_FOUND", Field: "email" } && await Column("description") == marked && unchanged?.Job?.Version == current.Version,
+            "a job document save whose later call fails commits nothing, lands on the operator's field and is not NOT_FOUND (the job is there): " + Said(failed));
 
         // A hostile name goes through as a parameter and comes back through sp_help_job; renaming back keeps the identity.
         var hostile = job + "]'; --é";

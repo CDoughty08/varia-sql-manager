@@ -89,7 +89,7 @@ later lanes, behind the same gate until 0.11.0.
   the job is resolved by name and creation time, the STALE guard compares `version_number` and `date_modified` under `UPDLOCK, HOLDLOCK` (so no other save lands
   before this one's) and THROWs 50011 when either moved, each removed alert is checked to still run this job before `sp_update_alert @job_id` detaches it
   (the zero GUID), and every call checks its return code (50012 with the call's index), so nothing commits unless all of it
-  does. A refusal lands on the field the failing call changed, the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id; a job deleted and created again under the name is not compared, and Reload opens it), opens a field-by-field
+  does. A refusal lands on the field the failing call changed (msdb's "does not exist" for an owner, operator or alert is a `SQL_ERROR` there, since `NOT_FOUND` means the job itself), the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id; a job deleted and created again under the name is not compared, and Reload opens it), opens a field-by-field
   compare of what the server and you changed, a field changed by both first with a choice each, offering Reload and keep my
   changes or Discard mine and reload. The Script drawer shows SSMS's shape (`BEGIN TRANSACTION`, each call followed by
   `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a
