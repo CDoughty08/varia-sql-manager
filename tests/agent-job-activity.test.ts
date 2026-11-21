@@ -343,13 +343,31 @@ describe("The status bar's running job", () => {
     agentJobs.dismiss(agentJobs.getSnapshot().jobs[0].key)
     expect(agentJobs.getSnapshot().jobs).toEqual([])
   })
+  it('keeps at most watchedJobs ended items per connection, dropping the oldest, so the list stays bounded', async () => {
+    const { agentJobs, handles } = monitor()
+    const empty = Array.from({ length: 12 }, () => null)
+    const ids = Array.from({ length: 6 }, (_, at) => `3333333${at}-3333-3333-3333-333333333333`)
+    for (const id of ids) {
+      agentJobs.watch('c1', { id, name: id, created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+      handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [4, null, 3, null, 1, 20261115140000, ...empty] }] })
+      await settled()
+    }
+    const jobs = agentJobs.getSnapshot().jobs
+    expect(jobs.every(entry => entry.phase.phase === 'ended')).toBe(true)
+    // Each Start keeps watchedJobs ended items beside the one it adds.
+    expect(jobs.map(entry => entry.id)).toEqual(ids.slice(-(agentLimits.watchedJobs + 1)).reverse())
+  })
   it('says the outcome is unknown when Agent stops mid-run, and Stop sends AG-2\'s Stop Job', async () => {
     const { agentJobs, handles, api } = monitor()
     agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '' })
     const key = agentJobs.getSnapshot().jobs[0].key
     await agentJobs.stop(key)
     expect(api.executeObjectAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'stopJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }))
-    handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] })
+    // Seen running first, so Agent stopping is mid-run.
+    handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [1, 1, 3, 20261115140000, null, null, ...Array.from({ length: 12 }, () => null), 20261115140005] }] })
+    expect(agentJobs.getSnapshot().jobs[0].phase).toMatchObject({ phase: 'running', step: 1, steps: 3 })
+    handles().at(-1)!.deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] })
+    expect(agentJobs.getSnapshot().jobs[0].phase).toEqual({ phase: 'unknown', reason: 'agentStopped' })
     const watchedView = handles().at(-1)!
     await settled()
     // Nothing left to follow: the watched view closes, and the service probe alone reads Agent's state while the job it ended

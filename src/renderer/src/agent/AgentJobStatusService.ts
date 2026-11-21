@@ -88,7 +88,9 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     }
     // At most agentLimits.watchedJobs followed per connection: the oldest still followed gives its slot up.
     const followed = others.filter(item => item.connectionId === connectionId && active(item))
-    const dropped = new Set(followed.slice(agentLimits.watchedJobs - 1).map(item => item.key))
+    // As many ended items are kept, so the list and its +N tooltip stay bounded: the oldest ended goes.
+    const ended = others.filter(item => item.connectionId === connectionId && !active(item))
+    const dropped = new Set([...followed.slice(agentLimits.watchedJobs - 1), ...ended.slice(agentLimits.watchedJobs)].map(item => item.key))
     this.publish({ ...this.getSnapshot(), jobs: [entry, ...others.filter(item => !dropped.has(item.key))] })
     this.follow(connectionId)
   }

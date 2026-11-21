@@ -74,10 +74,11 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   from the list waits for the job documents (AG-6a).
 - **Status bar.** A job Start started from Job Activity Monitor is followed in the status bar ("Nightly: running step 1
   of 3", then its outcome and start in server time) with Stop and Dismiss, and +N for more; at most `watchedJobs` per
-  connection are followed. Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
+  connection are followed, and as many ended items are kept (the oldest goes). Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
   `whileHidden: 'statusOnly'`, so the job's end is seen while the window is hidden; a run counts only when its start is
   later than the job's last run before the start (the list's, or the one a sample reads while the job runs) and not
-  before the Start itself, dated in server time by the watched probe's clock. Agent
+  before the Start itself, dated in server time by the watched probe's clock (unless the job was seen running since, as
+  Start is refused while a job runs). Agent
   stopped (or its XPs off) on a server a monitor or a followed job reads shows as its own item, which opens that server's
   Job Activity Monitor; after a followed job ends that way, the service probe alone keeps reading Agent's state until it
   runs again. The connection item is unchanged.
