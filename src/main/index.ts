@@ -86,7 +86,7 @@ import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 import { Updater } from './updater'
-import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
+import { applyUpdate, installTargetFor, relaunchEnv, removeReplaced, testUpdateTarget, type InstallTarget } from './update-install'
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 import { productLinkUrl, productName } from '../shared/product'
@@ -1436,7 +1436,7 @@ function startUpdater(settingsLoaded: Promise<unknown>): void {
     settings: () => ({ checkAutomatically: settings.current()['environment.updates.checkAutomatically'], downloadAutomatically: settings.current()['environment.updates.downloadAutomatically'] }),
     publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:updates-changed', state) }
   })
-  if (target.kind === 'portable' && !feed) void removeReplacedPortable(process.env)
+  if (!feed) void removeReplaced(target.kind, process.env)
   void settingsLoaded.catch(() => {}).finally(() => updater?.start())
 }
 

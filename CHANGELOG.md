@@ -56,8 +56,7 @@
 
 ### Fixes
 
-- BigQuery timestamp columns sort and group by their UTC instant, including values a microsecond apart.
-
+- **AppImage updates keep the working version:** If the updated AppImage cannot start \(for example on a system without a library the new release needs\) or stops within 30 seconds, before it has started, Restart to Update now puts the previous AppImage back instead of leaving only the new one\.
 - **Reloading a changed file keeps what you type meanwhile:** Text typed into a query while Varia reads its file again, after the file changed outside Varia, is no longer replaced without asking: File changed asks first, as it does for any query with unsaved changes\.
 - **Find in Results keeps the active match highlighted:** Stepping back to a match already shown while the next page of matches was still loading \(for example Next right after Previous wrapped from the first match to the last\) no longer leaves the count on a match with no cell highlighted, or says the search failed when it had not; with many grids of matches, each step is also quicker, as it moves only the active match instead of rebuilding every grid's matches.
 - **A GO: label runs:** A line that starts with the label `GO:` is now run as part of its batch, as SSMS and sqlcmd do, instead of being rejected as an invalid GO; `GO :`, with a space, is still rejected.
@@ -74,6 +73,7 @@
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.
 - **Consistent controls:** Query toolbars, Connect and Options share the same styles for selects, text fields and buttons, with compact variants in dense rows. Query connection pickers keep their focus rings flush with the connection pill. Narrow Object Explorer and Results panes give their tools a second row, and Connect opens wider with footer buttons sized to fit their labels.
 - **Esc closes Peek in the query editor:** Esc in a query now closes a Peek card opened by holding Ctrl (Cmd on macOS) over a name in it or over an Object Explorer row, which left focus in the query and ignored the key, and cancels an Alt+F12 peek still looking the name up. Suggestions and Find still close first.
+- BigQuery timestamp columns sort and group by their UTC instant, including values a microsecond apart.
 - **Find in a sorted grid keeps a compressed result compressed:** Find through a sorted grid no longer decompresses the whole result first, so it needs no room in result memory for the result's full size and is no longer refused for want of it.
 - **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, instead of cancelling the move. The drop line always shows where the server lands: below the tree's last row, and above an expanded server rather than under its name, and it no longer lingers over loading and error rows.
 - **Closing a query tab while it starts a command no longer leaves its connection open:** Closing a query tab, or disconnecting its server, just as an execute, commit, estimated plan or transaction check started on it could leave the tab's SQL Server connection open instead of closing it. It is now always closed.
