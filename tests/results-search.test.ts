@@ -329,6 +329,23 @@ describe('ResultsSearchService', () => {
     expect(search()).toMatchObject({ total: 2, current: 0 })
   })
 
+  it('forgets a skipped windowed result as soon as the text changes, while the box is empty or a new search waits', async () => {
+    const { service, searches, set, show, settle, search } = fixture()
+    show([set(0, ['a'], [[1, 0]]), set(1, ['b'], [[0, 0]])])
+    service.setText('t1', 'x', true)
+    searches.shift()!.resolve()
+    await settle()
+    searches.shift()!.reject(new ResultError('REMOTE_RESULT', 'This result is windowed in BigQuery.'))
+    await settle()
+    expect(search().skipped).toBe(true)
+    service.setText('t1', 'xy')
+    expect(search()).toMatchObject({ status: 'searching' })
+    expect(search().skipped).toBeUndefined()
+    service.setText('t1', '', true)
+    expect(search().text).toBe('')
+    expect(search().skipped).toBeUndefined()
+  })
+
   it('says when a windowed BigQuery result could not be searched while others were, and forgets it once none is skipped', async () => {
     const { service, searches, set, show, settle, advance, answerAll, search } = fixture()
     show([set(0, ['a'], [[1, 0]]), set(1, ['b'], [[0, 0]])])

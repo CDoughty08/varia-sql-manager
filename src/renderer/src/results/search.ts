@@ -225,6 +225,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     tab.grids = []
     tab.names = new Map()
     tab.error = undefined
+    tab.skipped = false
     tab.status = tab.text ? 'searching' : 'idle'
     // A new search empties the live region, so a count it settles on is said even when it is the last search's.
     tab.announcement = ''
