@@ -253,6 +253,11 @@ bidirectional-text characters are removed from names, and the window chrome only
 - Fonts are not theme keys either: `src/renderer/src/fonts.ts` fixes the stacks (Segoe UI Variable Text, then Segoe
   UI, for the UI; Cascadia Mono, then Consolas, for results and messages; Cascadia Code for the editor, without
   ligatures), and `tests/theme-css.test.ts` checks that `styles.css` uses them.
+- The shared control styles in `src/renderer/src/styles.css` give native inputs, selects and text areas `ui-field`,
+  and buttons `ui-button`. They share focus, disabled treatment and the control height token. Use
+  `data-control-size="dense"` for fields and actions in dense rows, and `data-control-variant="secondary"` for an
+  outlined button. Use `primary` for the main action and `icon-button` with a named icon-only action. The containing
+  layout supplies widths, label placement and space for long text.
 - Icons come from the registry in `src/shared/icons.ts` ([`icons.md`](../icons.md)): codicons, plus Varia's own stroke
   icons for database objects, drawn on the 16 px grid. Catalogues name icons by registry id, the renderer draws them
   only through `Icon.tsx` (or `codiconClass` where Monaco takes a class), and icons take their color from theme keys

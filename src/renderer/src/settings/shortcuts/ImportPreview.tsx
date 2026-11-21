@@ -49,8 +49,8 @@ export default function ImportPreview({ summary, problems, onImport, onCancel }:
     {blocked && <p className="shortcuts-message" data-kind="refused" role="alert">{refusal}</p>}
     <p className="shortcuts-muted">Imported shortcuts are staged like any change: review them, then choose OK.</p>
     <div className="shortcuts-sheet-actions">
-      <button type="button" className="primary" autoFocus disabled={blocked} onClick={() => onImport(mode)}>Import</button>
-      <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" className="ui-button primary" autoFocus disabled={blocked} onClick={() => onImport(mode)}>Import</button>
+      <button type="button" className="ui-button" data-control-variant="secondary" onClick={onCancel}>Cancel</button>
     </div>
   </Sheet>
 }

@@ -12,7 +12,7 @@ import { enlargeOutput, sizeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
   anyResultGrid, backendReady, captionFits, searchPlaceholderFit, fitsAcross, moreResultsTools, movePane, nameCut, namedResultGrid, dockPopoutBack, popoutTabs, resultsToolbarFit, resultsToolsMenu, resultTabsFold, resultToggle, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsOverflow, resultsPicker, resultsPickerFilter,
-  resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
+  paneMenuButton, resultsPickerOption, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel, resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -335,6 +335,7 @@ try {
   console.log('Grouped results checks: named results show their names on their tabs (a long one cut short, its whole name in the tooltip), unnamed ones their numbers, and two of one name are told apart by number in Go to Result and the Compare picker.')
 
   // 7. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
+  expect(await sizeOutput(page, 420)).toBeGreaterThanOrEqual(400)
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1')
   await expect(resultTabs(page).getByRole('tab')).toHaveText(['Result 1', 'Result 2'])
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
@@ -470,15 +471,42 @@ try {
   // ⋯ takes it, so Tab still reaches the toolbar.
   await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', /\bspace\b/.test((await resultsToolbarFit(popout)).fold) ? '0' : '-1')
   const popoutWidth = width => application.evaluate(({ BrowserWindow }, width) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(width, 480) }, width)
-  // At 400 px the whole toolbar fits, ⋯ and Close Results included: once every group has folded the field gives up its
-  // placeholder's width rather than push them past the toolbar's clipped edge. (At 360 px the views, the status's least
-  // width and the pane menu leave the toolbar no more than it needs on Windows; wider fonts tip it over.)
+  // At 400 px the toolbar fits with the views and summary on the same row.
   await popoutWidth(400)
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fits, { message: JSON.stringify(await resultsToolbarFit(popout)) }).toBe(true)
+  await expect.poll(() => resultsToolbarFit(popout)).toMatchObject({ fits: true, rows: tall })
   await expect(moreResultsTools(popout)).toBeInViewport({ ratio: 1 })
-  await popoutWidth(360)
-  await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toBe('layout tight view sort space show')
-  await expect(moreResultsTools(popout)).toHaveAttribute('tabindex', '0')
+  // At the supported minimum width the tools have a second row and remain usable, including with a search count.
+  await popoutWidth(240)
+  await expect.poll(() => popout.evaluate(() => innerWidth)).toBe(240)
+  await expect.poll(async () => (await resultsToolbarFit(popout)).rows).toBeGreaterThan(tall)
+  const narrowTools = resultsToolbar(popout)
+  await narrowTools.getByRole('button', { name: 'Columns', exact: true }).click()
+  const narrowFind = narrowTools.getByRole('textbox', { name: 'Search column names', exact: true })
+  await narrowFind.click()
+  await narrowFind.fill('unmatched_column')
+  await expect(resultsSearchCount(popout)).toHaveText(/^0 of [\d,]+ columns$/)
+  await expect.poll(async () => {
+    const fit = await resultsToolbarFit(popout)
+    if (fit.fits) return true
+    const widths = await narrowTools.evaluate(tools => ({
+      client: tools.clientWidth,
+      scroll: tools.scrollWidth,
+      groups: [...tools.children].map(group => [group.className, group.getBoundingClientRect().width, group.getBoundingClientRect().right])
+    }))
+    return JSON.stringify({ ...fit, ...widths })
+  }).toBe(true)
+  await expect(narrowFind).toBeInViewport({ ratio: 1 })
+  await narrowTools.getByRole('button', { name: 'Data', exact: true }).click()
+  await expect(narrowTools.getByRole('textbox', { name: 'Search results', exact: true })).toHaveValue('unmatched_column')
+  const closeResults = narrowTools.getByRole('button', { name: 'Close Results', exact: true })
+  await expect(closeResults).toBeInViewport({ ratio: 1 })
+  await closeResults.click({ trial: true })
+  await moreResultsTools(popout).click()
+  await expect(resultsToolsMenu(popout)).toBeVisible()
+  await popout.keyboard.press('Escape')
+  await paneMenuButton(popout, 'results').click()
+  await expect(popout.getByRole('menuitem', { name: 'Move Back into Main Window', exact: true })).toBeVisible()
+  await popout.keyboard.press('Escape')
   await dockPopoutBack(popout)
   await expect(resultTab(page, `${name128}, Result 1`)).toBeVisible()
   console.log('Grouped results checks: popped out, Results shows the same names, and its toolbar folds to the width of the popout with ⋯ opening there.')

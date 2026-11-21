@@ -292,7 +292,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const need = tab && showStrip && shown ? tabs ? tabsNeed(tab, results.viewState(tabId).grids) : stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
-  // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.
+  // The results tools share the views' row until the pane needs a second row to keep the controls available.
   const showTools = pane === 'results' && visible[pane] && shown
   /** Shows another output panel of this group; with `focus` (a click or a key on these tabs), focus moves to its tab, since the one pressed leaves with its panel. */
   const select = (view: OutputPaneId, focus = false) => {
@@ -336,7 +336,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
     <div className="output-toolbar">
       <div className="output-views" role="tablist" aria-label="Query output views" onKeyDown={tabKey}>
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
-        {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
+        {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}><span className="output-tab-label">{viewNames[view]}</span>{badges[view]}</button>)}
       </div>
       {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}

@@ -94,7 +94,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
       </td>
       const source = <td className="shortcuts-source-cell">
         <SourceChip source={binding?.source ?? (row.lock ? row.lock.source : 'unbound')} lock={row.lock?.reason} />
-        {binding && changed && !byPlatform && <button type="button" className="shortcuts-reset" tabIndex={-1} aria-label={`Reset ${binding.label.text} for ${row.title}`} onClick={event => { event.stopPropagation(); onReset(binding) }}>Reset</button>}
+        {binding && changed && !byPlatform && <button type="button" className="ui-button" data-control-size="dense" tabIndex={-1} aria-label={`Reset ${binding.label.text} for ${row.title}`} onClick={event => { event.stopPropagation(); onReset(binding) }}>Reset</button>}
       </td>
       const cells = byPlatform
         ? allPlatforms.map(item => {
