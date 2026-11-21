@@ -787,7 +787,7 @@ server changes, or it is lost.
   catalog is unchanged the server confirms it (`DB_ID() = DB_ID(@database)`); when it does not, nothing runs and the result is
   `failed` (batch 0) with `database` still the session's and a message naming the options that cause this.
 - **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
-  `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
+  `::` is T-SQL, and a line starting with the label `GO:` is part of its batch, as in sqlcmd). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
   repetition {k}, raised an error; execution continued with the next repetition." or "… next batch."). Severity 17–19
   errors do not stop the batch on the server either (SQL Server runs the whole batch; only SqlClient's view differs), but

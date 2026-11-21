@@ -56,6 +56,7 @@
 
 ### Fixes
 
+- **A GO: label runs:** A line that starts with the label `GO:` is now run as part of its batch, as SSMS and sqlcmd do, instead of being rejected as an invalid GO; `GO :`, with a space, is still rejected.
 - **Toggle Brackets keeps JSON functions valid:** Toggle Brackets no longer brackets `ABSENT` in `ABSENT ON NULL` or `RETURNING` in the JSON functions \(`JSON_ARRAY(1, NULL ABSENT ON NULL)` became `[ABSENT] ON NULL`, a syntax error\); a column named `absent` or `returning` is still bracketed, and so is now a key before its colon \(`JSON_OBJECT(k:v)` becomes `JSON_OBJECT([k]:[v])`\)\.
 - **Execute To with an @RC parameter:** Script As › EXECUTE To on a procedure or function with a parameter named `@RC`, or one a collation compares equal to it (such as a fullwidth `@ＲＣ`), now names the return code `@RC1` (or the next free number), instead of declaring `@RC` twice so the script failed with error 134.
 - **Table Designer follows the database's collation for column names:** The designer no longer refuses column names the database tells apart, such as `I` and `i` in a Turkish database, `c` and `ç` or a Swedish `a` and `å` in accent\-insensitive ones, or `ch` and `cH` in a Czech one\. Names the database treats as the same, such as `Id` and `ID` in a case\-insensitive database or `I` and `ı` in a Turkish one, are refused by Save before the table is created, with the cursor on the column to rename, and Generate Change Script warns about them; only names differing in trailing spaces are flagged as you type\.
