@@ -25,13 +25,13 @@ const sets = [
 ]
 const facts: RestoreFacts = { historyDatabases: ['Sales'], sets, setsTruncated: false, files: [] }
 
-function mount(change: Partial<RestoreDraft>) {
+function mount(change: Partial<RestoreDraft>, history: RestoreFacts = facts) {
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
-  const draft = { ...initialDraft('Sales', facts, new Date(Date.UTC(2026, 9, 30))), ...change }
+  const draft = { ...initialDraft('Sales', history, new Date(Date.UTC(2026, 9, 30))), ...change }
   const service = { openDialog: vi.fn(), updateDraft: vi.fn() } as unknown as RestoreService
-  act(() => root.render(createElement(BackupTimeline, { state: { id: 'r1' } as RestoreState, draft, facts, service })))
+  act(() => root.render(createElement(BackupTimeline, { state: { id: 'r1' } as RestoreState, draft, facts: history, service })))
   cleanups.push(() => { act(() => root.unmount()); host.remove() })
   const dialog = [...document.querySelectorAll('[role="dialog"]')].at(-1) as HTMLElement
   const radio = (name: string) => [...dialog.querySelectorAll('label')].find(label => label.textContent?.startsWith(name))!
@@ -65,6 +65,21 @@ describe('the Backup Timeline sub-dialog', () => {
     const planner = band(mount({}).slider)
     expect(planner).toHaveLength(1)
     expect(checked[0]).toBeGreaterThan(planner[0])
+  })
+  it('shows a start point older than the interval: the window ends at it, and the checked sets\' band shows', () => {
+    // The checked full and log are three days before a newer full, the newest backup: past the Day window that ends at it.
+    const older: RestoreFacts = { ...facts, sets: [
+      { ...sets[0], finish: '2026-10-25T10:00:00' }, { ...sets[1], finish: '2026-10-25T11:00:00' },
+      { ...sets[0], id: 'full2', firstLsn: '70000001', lastLsn: '71000001', checkpointLsn: '70000001', finish: '2026-10-28T10:00:00' }
+    ] }
+    const { dialog, radio, ok, slider } = mount({ manual: ['full', 'log1'] }, older)
+    act(() => { radio('Specific date and time').querySelector('input')!.click() })
+    expect(slider.getAttribute('aria-valuetext')).toBe('2026-10-25 11:00:00')
+    const [now, min, max] = ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map(name => Number(slider.getAttribute(name)))
+    expect(min <= now && now <= max).toBe(true)
+    expect([...dialog.querySelectorAll('.restore-timeline-ends span')].map(end => end.textContent)).toEqual(['2026-10-24 11:00:00', '2026-10-25 11:00:00'])
+    expect(slider.querySelectorAll('rect.restore-timeline-covered')).toHaveLength(1)
+    expect(ok().disabled).toBe(false)
   })
   it('allows the planner\'s points without Manual Selection', () => {
     const { radio, ok, slider } = mount({})

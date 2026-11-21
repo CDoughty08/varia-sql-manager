@@ -20,12 +20,15 @@ export function timeText(ms: number): string {
 }
 
 export interface TimelineWindow { readonly from: number; readonly to: number }
-/** The span the timeline shows: the interval, ending at the last backup's finish, or later when the point is after it. */
+/**
+ * The span the timeline shows: the interval, ending at the last backup's finish, or at the point when it is outside that (after
+ * the last backup, or before the interval, as a Manual Selection's older sets put it), so the point always shows.
+ */
 export function timelineWindow(sets: readonly BackupSetRow[], interval: TimelineInterval, point?: number): TimelineWindow {
   const finishes = sets.map(set => timeMs(set.finish)).filter((ms): ms is number => ms !== undefined)
-  const last = finishes.length > 0 ? Math.max(...finishes) : point ?? 0
-  const to = point !== undefined && point > last ? point : last
-  return { from: to - timelineIntervalSpecs[interval].ms, to }
+  const last = finishes.length > 0 ? Math.max(...finishes) : point ?? 0, ms = timelineIntervalSpecs[interval].ms
+  const to = point !== undefined && (point > last || point < last - ms) ? point : last
+  return { from: to - ms, to }
 }
 /** Where a key moves the point: a minute with the arrows, an hour with Shift, the window's ends with Home and End. */
 export function stepPoint(key: string, shift: boolean, point: number, window: TimelineWindow): number | undefined {

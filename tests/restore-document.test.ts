@@ -324,6 +324,9 @@ describe('the Backup Timeline', () => {
     expect(stepPoint('a', false, at, span)).toBeUndefined()
     // A point after the last backup moves the window's end with it.
     expect(timeText(timelineWindow(history, 'day', timeMs('2026-10-30T09:00:00')).to)).toBe('2026-10-30T09:00:00')
+    // A point before the interval (a Manual Selection's older sets) ends the window there, so it still shows; one inside keeps the last backup's end.
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T19:00:00')).to)).toBe('2026-10-29T19:00:00')
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T20:30:00')).to)).toBe('2026-10-29T21:05:46')
     // The logs cover from the full backup's finish to the last log's, as one stretch at the end of an hour's window.
     const stretches = coverage(history, span)
     expect(stretches).toHaveLength(1)
