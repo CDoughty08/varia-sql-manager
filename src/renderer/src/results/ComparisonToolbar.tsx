@@ -90,9 +90,12 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
   // The match menu is drawn beside Match, or beside ⋯ when it opened there or Match has folded away.
   const anchor = useCallback(() => {
     const button = matchButton.current
-    if (menu === 'toolbar' && button && button.getClientRects().length > 0) return button
+    if (menu !== 'more' && button && button.getClientRects().length > 0) return button
     return ref.current?.closest('[data-pane]')?.querySelector<HTMLElement>('.results-more') ?? button
   }, [menu])
+  // Opened from a notice, the focus goes back to that notice's button while it is there.
+  const opener = useRef<HTMLElement | null>(null)
+  const focusBack = useCallback(() => menu === 'notice' && opener.current?.isConnected ? opener.current : anchor(), [menu, anchor])
   const closeMenu = useCallback(() => compare.closeMatchMenu(), [compare])
   const rows = state.context === 0 ? 0 : -1
   const chip = (kind: Exclude<DiffKindName, 'same'>) => {
@@ -116,9 +119,9 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
           {...unavailable('Swap sides: compare the new side against the old one')} onClick={() => change({ swap: true })}><Icon name="arrow-swap" /></button>
         {side(sources?.[1], '+', 'new')}
       </span>
-      <button ref={matchButton} type="button" className="rg-compare-match" data-control="match" data-fold-group="match" tabIndex={-1} aria-haspopup="dialog" aria-expanded={!!menu} aria-label={`Match rows: ${label.text}`}
+      <button ref={matchButton} type="button" className="rg-compare-match" data-control="match" data-fold-group="match" tabIndex={-1} aria-haspopup="dialog" aria-expanded={!!menu} aria-label={label.key ? label.name : `Match rows: ${label.text}`}
         {...unavailable(`${label.name}. Choose how rows are paired`)} onClick={() => { if (reason) return; if (menu) compare.closeMatchMenu(); else compare.openMatchMenu(tabId, entry.key, 'toolbar') }}>
-        <span>{label.text}</span><Icon name="chevron-down" />
+        <span className={label.key ? 'rg-compare-key' : undefined}>{label.text}</span><Icon name="chevron-down" />
       </button>
       <div className="results-segments rg-compare-rows" role="group" aria-label="Rows" data-fold-group="rows">
         {rowChoices.map(choice => <button key={choice.context} type="button" data-control={`rows-${choice.context}`} tabIndex={-1} aria-pressed={rows === choice.context} {...unavailable(choice.title)}
@@ -147,8 +150,8 @@ export default function ComparisonToolbar({ tabId, entry, info, sources, goTo }:
         onClick={event => { focusGrid(); void commands.execute('output.saveResultsAs', { target: { kind: 'output', tabId, view: 'grid', entry: entry.key, selectedText: '', element: event.currentTarget } }, 'toolbar') }}><Icon name="save-as" /></button>
       <span className="visually-hidden" role="status" aria-live="polite">{spoken}</span>
     </div>
-    <NoticeStrip tabId={tabId} entryKey={entry.key} info={info} reason={reason} change={change} toolbar={ref} />
-    {menu && !reason && <MatchMenu tabId={tabId} entryKey={entry.key} state={pending ?? info} anchor={anchor} onClose={closeMenu} />}
+    <NoticeStrip tabId={tabId} entryKey={entry.key} info={info} reason={reason} change={change} toolbar={ref} opener={opener} />
+    {menu && !reason && <MatchMenu tabId={tabId} entryKey={entry.key} state={pending ?? info} anchor={anchor} focusBack={focusBack} onClose={closeMenu} />}
   </div>
 }
 
@@ -160,10 +163,11 @@ const actionLabels: Readonly<Record<NoticeAction, string>> = { changesOnly: 'Sho
  * warning colour, with its buttons (unavailable with the reason while an input is closed, D10) and a Dismiss button, so
  * each is dismissible by keyboard. A dismissed notice stays hidden while its kind and text are unchanged.
  */
-function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar }: {
+function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar, opener }: {
   readonly tabId: string; readonly entryKey: EntryKey; readonly info: CompareInfo; readonly reason: string | undefined
   change(o: Parameters<ReturnType<typeof useWorkbench>['compare']['replace']>[2]): void
   readonly toolbar: RefObject<HTMLDivElement | null>
+  readonly opener: RefObject<HTMLElement | null>
 }) {
   const { compare } = useWorkbench()
   const strip = useRef<HTMLDivElement>(null), dismissed = useRef<number | undefined>(undefined)
@@ -179,19 +183,19 @@ function NoticeStrip({ tabId, entryKey, info, reason, change, toolbar }: {
     next?.focus({ preventScroll: true })
   })
   if (notices.length === 0) return null
-  const act = (action: NoticeAction) => {
+  const act = (action: NoticeAction, button: HTMLElement) => {
     if (reason) return
     // Show changes only asks the refused change again with Changes only (a refused first run is the popover's).
     if (action === 'changesOnly') change(compare.refusedChange(entryKey) ?? { context: 0 })
     else if (action === 'byPosition') change({ match: { mode: 'position' } })
-    else compare.openMatchMenu(tabId, entryKey, 'toolbar')
+    else { opener.current = button; compare.openMatchMenu(tabId, entryKey, 'notice') }
   }
   return <div ref={strip} className="rg-compare-notices" role="group" aria-label="Comparison notices">
     {notices.map((notice: ComparisonNotice, index) => <div key={noticeId(notice)} className={`rg-compare-notice is-${notice.tone}`} data-notice={notice.kind}>
       <Icon name={notice.tone === 'warning' ? 'warning' : 'info'} />
       <span className="rg-compare-notice-text" title={notice.text}>{notice.text}</span>
       {notice.actions?.map(action => <button key={action} type="button" className="rg-compare-notice-action" data-action={action} data-control={`notice-${action}`}
-        {...reason ? { 'aria-disabled': true, title: `${actionLabels[action]}: unavailable because ${reason}` } : {}} onClick={() => act(action)}>{actionLabels[action]}</button>)}
+        {...reason ? { 'aria-disabled': true, title: `${actionLabels[action]}: unavailable because ${reason}` } : {}} onClick={event => act(action, event.currentTarget)}>{actionLabels[action]}</button>)}
       <button type="button" className="icon-button rg-compare-notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={event => { if (strip.current?.contains(event.currentTarget.ownerDocument.activeElement)) dismissed.current = index; compare.dismiss(entryKey, notice) }}><Icon name="close" /></button>
     </div>)}
   </div>

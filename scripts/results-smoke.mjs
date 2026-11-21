@@ -3079,7 +3079,7 @@ try {
   await expect(keyList.getByRole('option', { name: /^high/ })).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('Enter')
   await expect(matchMenu).toHaveCount(0)
-  await expect(wholeTools.getByRole('button', { name: /^Match rows/ })).toHaveText('⚷ high')
+  await expect(wholeTools.getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
   await expect(wholeTools.getByRole('status')).toContainText('Comparison updated: matched by high')
   // Closed and compared again, the pair matches by its remembered key column, and the popover says so. The click first
   // settles the grid's focus, which would otherwise close the menu the right-click opens.
@@ -3094,7 +3094,7 @@ try {
   await picker.getByRole('button', { name: 'Compare', exact: true }).click()
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 4')).toBeFocused()
-  await expect(comparisonTools(page, 'Result 4').getByRole('button', { name: /^Match rows/ })).toHaveText('⚷ high')
+  await expect(comparisonTools(page, 'Result 4').getByRole('button', { name: 'Match rows by key columns: high' })).toHaveText('high')
   console.log('Results checks: a comparison Changes only leaves its unchanged rows out and names them after the dashed rule, a chip shows only its kind, the match menu matches by row position and by a key column from the keyboard, the live region says each change, and the pair remembers its key column.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a

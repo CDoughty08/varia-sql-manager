@@ -157,6 +157,20 @@ describe('a comparison\'s rows', () => {
     expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
     await swapping
   })
+
+  it('closes a match menu opened while a change ran when that change is refused, since it listed the change\'s pairs', async () => {
+    const view = fixture()
+    const keys = view.run(2)
+    await view.compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    await settle()
+    const key = view.slot().key
+    vi.mocked(view.handle(keys[1]).diff).mockRejectedValueOnce(new ResultError('BACKEND_ERROR', 'Failed.'))
+    const swapping = view.compare.replace('t1', key, { swap: true })
+    view.compare.openMatchMenu('t1', key)
+    expect(view.compare.getSnapshot().matchMenu?.key).toBe(key)
+    await swapping
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+  })
 })
 
 describe('a comparison\'s remembered match', () => {

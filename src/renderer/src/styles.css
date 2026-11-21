@@ -1244,7 +1244,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .profile-statistics .profile-strip-action[aria-pressed='true'] { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .profile-card-title .profile-key { margin-left: 4px; color: var(--varia-warningForeground); }
 /* The key mark is a glyph of the column header's kind, drawn by CSS (its name is the card's "key column"). */
-.profile-card-title .profile-key::before { content: "B7" / ""; }
+.profile-card-title .profile-key::before { content: "\26B7" / ""; }
 .profile-changes { display: flex; height: 6px; margin: 5px 0 3px; overflow: hidden; border-radius: var(--varia-radius-pill); background: var(--varia-resultsGrid-gridlines); }
 .profile-changes > i { display: block; height: 100%; }
 .profile-changes > .changed { background: var(--varia-resultsGrid-diffChangedBackground); }
@@ -1400,6 +1400,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    into More results tools; the chips first shrink to their sign and count. */
 .rg-compare-match { flex-shrink: 1; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 200px; height: 22px; padding: 0 2px 0 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-activeForeground); font: inherit; }
 .rg-compare-match > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Key columns' ⚷, which the button's name says as "key columns". */
+.rg-compare-match > .rg-compare-key::before { content: "\26B7\00a0" / ""; }
 .rg-compare-match:hover:not([aria-disabled="true"]), .rg-compare-match[aria-expanded="true"] { background: var(--varia-toolbar-hoverBackground); }
 .rg-compare-rows { flex-shrink: 0; }
 .rg-compare-chips { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; min-width: 0; }

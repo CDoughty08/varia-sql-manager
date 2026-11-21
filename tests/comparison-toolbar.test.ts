@@ -226,6 +226,28 @@ describe('a comparison\'s toolbar', () => {
     expect(dialog()).toBeNull()
   })
 
+  it('names key columns on Match without reading out the key mark it draws', async () => {
+    const view = await fixture()
+    view.draw({ asked: { mode: 'columns', columns: [0, 1] }, match: { mode: 'columns', columns: ['Id', 'Name'] } })
+    const match = view.toolbar().querySelector<HTMLButtonElement>('[data-control="match"]')!
+    expect(match.getAttribute('aria-label')).toBe('Match rows by key columns: Id + Name')
+    expect(match.textContent).toBe('Id + Name')
+    expect(match.querySelector('.rg-compare-key')).not.toBeNull()
+  })
+
+  it('gives the focus back to a notice\'s Choose key columns… when its match menu closes', async () => {
+    const view = await fixture()
+    view.draw({ same: 0, changed: 0, added: 1, removed: 1, nothingPaired: true, leftRows: 1, rightRows: 1 })
+    const choose = view.container.querySelector<HTMLButtonElement>('button[data-action="chooseKeys"]')!
+    act(() => { choose.focus(); choose.click() })
+    expect(view.compare.getSnapshot().matchMenu).toEqual({ tabId: 't1', key: view.slot().key, from: 'notice' })
+    view.draw({ same: 0, changed: 0, added: 1, removed: 1, nothingPaired: true, leftRows: 1, rightRows: 1 })
+    const dialog = document.querySelector<HTMLFormElement>('[role="dialog"][aria-label="Match rows by"]')!
+    act(() => { dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(view.compare.getSnapshot().matchMenu).toBeUndefined()
+    expect(document.activeElement).toBe(choose)
+  })
+
   it('closes its match menu from its Match button, a press there not counting as one outside', async () => {
     const view = await fixture()
     const match = () => view.toolbar().querySelector<HTMLButtonElement>('[data-control="match"]')!

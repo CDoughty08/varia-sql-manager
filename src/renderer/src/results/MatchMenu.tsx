@@ -39,12 +39,14 @@ function startingKeys(state: ChangeBase & { readonly match: { readonly mode?: st
  * Drawn in its grid's window (a popout's too) beside the toolbar's Match button, or beside ⋯ when it folded away there.
  * Escape and Cancel close it and give the focus back to what opened it; a press outside closes it.
  */
-export default function MatchMenu({ tabId, entryKey, state, anchor, onClose }: {
+export default function MatchMenu({ tabId, entryKey, state, anchor, focusBack, onClose }: {
   readonly tabId: string
   readonly entryKey: EntryKey
   readonly state: ChangeBase & { readonly match: { readonly mode?: string } }
-  /** What it is drawn beside, and what takes the focus back when it closes. */
+  /** What it is drawn beside. */
   readonly anchor: () => HTMLElement | null
+  /** What takes the focus back when it closes: what opened it. */
+  readonly focusBack: () => HTMLElement | null
   onClose(): void
 }) {
   const { compare } = useWorkbench()
@@ -114,7 +116,7 @@ export default function MatchMenu({ tabId, entryKey, state, anchor, onClose }: {
     else if (!full) setKeys([...keys, index])
   }
   const dismiss = () => {
-    const target = anchor()
+    const target = focusBack()
     onClose()
     target?.focus()
   }
@@ -122,7 +124,7 @@ export default function MatchMenu({ tabId, entryKey, state, anchor, onClose }: {
     if (columns && keys.length === 0) return
     const match: DiffMatch = columns ? { mode: 'columns', columns: [...keys] } : { mode }
     const now = state.asked ?? { mode: 'auto' as const }
-    const target = anchor()
+    const target = focusBack()
     onClose()
     target?.focus()
     if (JSON.stringify(now) !== JSON.stringify(match)) void compare.replace(tabId, entryKey, { match })

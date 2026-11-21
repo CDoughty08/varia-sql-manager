@@ -109,8 +109,8 @@ export interface CompareSnapshot {
   readonly dismissed: ReadonlyMap<EntryKey, ReadonlySet<string>>
   /** Per tab, a first run refused for memory with no popover to say it in: the results area's actionable notice. */
   readonly actionable: Readonly<Record<string, ActionableNotice>>
-  /** The open match menu: the comparison it changes, and whether it opened from the toolbar's Match or from ⋯. */
-  readonly matchMenu?: { readonly tabId: string; readonly key: EntryKey; readonly from: 'toolbar' | 'more' }
+  /** The open match menu: the comparison it changes, and what opened it (the toolbar's Match, ⋯ or a notice). */
+  readonly matchMenu?: { readonly tabId: string; readonly key: EntryKey; readonly from: MatchMenuFrom }
 }
 /** A first run refused for memory (DIFF_ROWS_TOO_LARGE), said in the results area until it is acted on, dismissed, either
  *  input closes, the query runs again or a comparison of the pair is shown: its button runs it again with Changes only. */
@@ -739,6 +739,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       return undefined
     } finally {
       ticket.end(done ? 'done' : item.cancelled ? 'cancelled' : 'dropped')
+      // A menu opened while it ran lists the pairs it would have made: cancelled or refused, those pairs are stale.
+      if (!done && this.getSnapshot().matchMenu?.key === key) this.closeMatchMenu()
       if (items.get(item.id) === item) items.delete(item.id)
       if (items.size === 0 && this.inFlight.get(tabId) === items) this.inFlight.delete(tabId)
       this.publishRunning()
@@ -874,9 +876,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     return undefined
   }
 
-  /** Opens a comparison's match menu, from its toolbar's Match button or from ⋯ (More results tools), which it is drawn
-   *  beside; not while an input is closed (D10). */
-  openMatchMenu(tabId: string, key: EntryKey, from: 'toolbar' | 'more' = 'toolbar'): void {
+  /** Opens a comparison's match menu, from its toolbar's Match button or a notice (drawn beside Match) or from ⋯ (More
+   *  results tools, drawn beside it); not while an input is closed (D10). */
+  openMatchMenu(tabId: string, key: EntryKey, from: MatchMenuFrom = 'toolbar'): void {
     if (!this.infoOf(slotOf(this.results.getSnapshot()[tabId], key)?.entry) || this.closedReason(tabId, key) !== undefined) return
     this.publish({ ...this.getSnapshot(), matchMenu: { tabId, key, from } })
   }
@@ -1047,11 +1049,16 @@ export function resolveRemembered(match: RememberedMatch, pairing: ColumnPairing
   return columns.length > 0 && columns.length <= wire.diff.maxKeyColumns ? { mode: 'columns', columns } : null
 }
 
-/** What the toolbar's Match button shows ("⚷ id + status", "Row position", "Whole rows", "Automatic: id", "Automatic:
- *  whole rows") and its accessible name ("Match rows by key columns: id, status"), from what was asked and what was used. */
-export function matchLabel(state: { readonly asked?: DiffMatch; readonly match: { readonly mode?: DiffMatchUsed['mode']; readonly columns: readonly string[] } }): { readonly text: string; readonly name: string } {
+/** What opened a comparison's match menu: its Match button, ⋯ (More results tools), or a notice's Choose key columns…. */
+export type MatchMenuFrom = 'toolbar' | 'more' | 'notice'
+
+/** What the toolbar's Match button shows ("id + status" after a ⚷ it draws, "Row position", "Whole rows", "Automatic: id",
+ *  "Automatic: whole rows") and its accessible name ("Match rows by key columns: id + status"), from what was asked and
+ *  what was used; `key` when it is key columns. */
+export function matchLabel(state: { readonly asked?: DiffMatch; readonly match: { readonly mode?: DiffMatchUsed['mode']; readonly columns: readonly string[] } }): { readonly text: string; readonly name: string; readonly key?: boolean } {
   const mode = state.asked?.mode ?? 'auto', columns = state.match.columns
-  if (mode === 'columns') return { text: `⚷ ${columns.join(' + ')}`, name: `Match rows by key columns: ${columns.join(', ')}` }
+  // Key columns' ⚷ is drawn by the toolbar (CSS, not read out), so the name says "key columns" instead.
+  if (mode === 'columns') return { text: columns.join(' + '), name: `Match rows by key columns: ${columns.join(' + ')}`, key: true }
   if (mode === 'position') return { text: 'Row position', name: 'Match rows by row position' }
   if (mode === 'rows') return { text: 'Whole rows', name: 'Match rows by whole rows' }
   // Automatic, as it came out (a change in flight does not know yet).
