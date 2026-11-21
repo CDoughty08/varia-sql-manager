@@ -151,7 +151,7 @@ internal static class SearchLookupChecks
             "the arrays find every name, child and referencing key as a scan of the table does, in entry order");
 
         // A lookup that comes while another builds the arrays scans rather than building (and charging) them a second time.
-        var racing = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: true), false, CancellationToken.None))!;
+        var racing = (await new DatabaseReader("Sales", new ObjectIndexLimits(), new StringPool(new IndexBudget(1 << 24))).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: true), false, CancellationToken.None))!;
         var racingBudget = new IndexBudget(1 << 24);
         TableLookup? during = null;
         long chargedDuring = 0;
