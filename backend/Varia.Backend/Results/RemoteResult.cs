@@ -9,11 +9,12 @@ internal sealed record RemotePage(long FirstRow, int Rows, byte[] Body, PageLeng
 
 /// <summary>Builds a block's rows into pages for <see cref="RemoteResult"/>, from its first row on; the engine's reader writes
 /// each row's cells as a query's reader does (BigQueryColumnPlan).</summary>
-internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> wires, long firstRow)
+internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> wires, long firstRow, long maxBytes = long.MaxValue)
 {
     private readonly PageBuilder builder = new(resultId, wires, firstRow);
     private readonly List<RemotePage> pages = [];
     private bool open;
+    private long bytes;
 
     /// <summary>The rows written so far.</summary>
     public long Rows { get; private set; }
@@ -25,13 +26,19 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         return builder;
     }
 
+    /// <summary>Commits the row; past <c>maxBytes</c> of sealed pages (rows much wider than the first page's, which sized the
+    /// block) the block is refused before it grows further: TOO_LARGE.</summary>
     public void CommitRow()
     {
         builder.CommitRow();
         open = false;
         Rows++;
         if (builder.IsFull) Seal();
+        if (bytes > maxBytes) throw BlockTooLarge();
     }
+
+    internal static RequestException BlockTooLarge() =>
+        new("TOO_LARGE", "These rows are too wide for the window cache. Raise Block cache per windowed result in Options > Query Results > BigQuery > Results, or select fewer columns.");
 
     public void AbortRow()
     {
@@ -44,7 +51,9 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         var first = builder.FirstRow;
         var rows = builder.RowCount;
         var body = builder.Seal(out var lengths);
-        pages.Add(new RemotePage(first, rows, body, lengths));
+        var page = new RemotePage(first, rows, body, lengths);
+        pages.Add(page);
+        bytes += page.Cost;
     }
 
     /// <summary>The pages written, the last one sealed.</summary>
@@ -246,8 +255,10 @@ internal sealed class RemoteResult : IDisposable
                     // A read-ahead fetch cancelled under this read (its viewer jumped), or the cache disposed under it: the loop
                     // asks again as the read's own, or answers with the rows sent.
                     catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
-                    // Gone under this read after it sent some rows: those are the answer.
+                    // Gone under this read after it sent some rows, or refused room (a read across more blocks than the
+                    // cache holds): those rows are the answer, and the grid reads the rest again from there.
                     catch (RemoteExpiredException) when (next > firstRow) { return next; }
+                    catch (RequestException) when (next > firstRow) { return next; }
                 }
                 RemotePage[] pages;
                 lock (gate) pages = [.. block.Pages];
@@ -355,7 +366,8 @@ internal sealed class RemoteResult : IDisposable
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min((long)Math.Ceiling(rows * rowBytes * 1.25) + ResultStore.PageOverhead, CacheLimit / 2);
                 Reserve(estimate, block);
-                var writer = new RemoteBlockWriter(resultId, wires, from);
+                // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
+                var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
                 List<RemotePage> pages;
                 try
                 {

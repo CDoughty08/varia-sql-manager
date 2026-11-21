@@ -52,6 +52,7 @@ internal static partial class BigQueryExecutionChecks
         int running;
         public int MaxRunning;
         public int Cancelled;
+        public int Written;
 
         public RemoteFetch Fetch => async (first, rows, writer, token) =>
         {
@@ -66,7 +67,11 @@ internal static partial class BigQueryExecutionChecks
                     catch (OperationCanceledException) { Interlocked.Increment(ref Cancelled); throw; }
                 }
                 if (Expire) throw new RemoteExpiredException();
-                for (var row = first; row < first + rows; row++) Write(writer, row, Pad);
+                for (var row = first; row < first + rows; row++)
+                {
+                    Write(writer, row, Pad);
+                    Interlocked.Increment(ref Written);
+                }
             }
             finally { Interlocked.Decrement(ref running); }
         };
@@ -601,6 +606,14 @@ internal static partial class BigQueryExecutionChecks
             $"a set switched to windowed refuses a snapshot and a view, and an operation's release token is already cancelled: {sealedBefore} {snapshot} {switching.Released.IsCancellationRequested} {viewed}");
         pinned.Dispose();
         store.Release([switching.ResultId]);
+
+        // A search under way stops at its next checkpoint once its set switches residence, as on a release.
+        var searched = TextChecks.Synthetic(store, "W1", 2000);
+        var stopped = ResultSearcher.Stopped(store, searched, null);
+        var searchingBefore = stopped();
+        store.Demote(searched, new RemoteResult(store, searched.ResultId, searched.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+        check(!searchingBefore && stopped(), $"a search stops once its set switches to windowed: {searchingBefore} {stopped()}");
+        store.Release([searched.ResultId]);
     }
 
     /// <summary>The block cache under races: very wide rows, a table that expires part way through a read, a cache disposed
@@ -618,6 +631,33 @@ internal static partial class BigQueryExecutionChecks
             for (var i = 0; i < 50; i++) { most = Math.Max(most, remote.CachedBytes); Thread.Sleep(10); }
             check(next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
                 $"very wide rows read in blocks that fit the cache, which stays within its limit: {next} {remote.BlockRows} {most} {remote.CacheLimit}");
+        }
+        // Rows far wider than the first page's (which sized the blocks): the block stops being built at the cache's limit and
+        // is refused, rather than built whole first (the read and its two read-ahead blocks together write fewer rows than one
+        // block holds); the cache keeps nothing of it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 10_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16, cache: 16L << 20);
+            string outcome;
+            try { await ReadRemote(remote, 0, 10); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            SpinWait.SpinUntil(() => store.WindowCacheBytes == 0, 5000);
+            check(outcome == "TOO_LARGE" && remote.BlockRows == RemoteResult.MaxBlockRows && blocks.Written < remote.BlockRows && store.WindowCacheBytes == 0,
+                $"a block of rows far wider than estimated stops at the cache's limit and is refused: {outcome} {blocks.Written} of {remote.BlockRows} {store.WindowCacheBytes}");
+        }
+        // A read across more blocks than the cache holds answers with the rows that fit, and the grid reads on from there.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 16_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16_384, cache: 16L << 20);
+            string outcome;
+            long next = -1;
+            List<long> rows = [];
+            try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            check(outcome == "ok" && next > 0 && next < 10L * remote.BlockRows && Consecutive(rows, 0, (int)next) && remote.CachedBytes <= remote.CacheLimit,
+                $"a read across more blocks than the cache holds answers short with the rows that fit: {outcome} {next} {remote.BlockRows} {remote.CachedBytes}");
         }
         // The table expires after some blocks were cached: a read across them answers with the cached rows, not an error.
         {
@@ -651,6 +691,24 @@ internal static partial class BigQueryExecutionChecks
             catch (Exception error) { after = error.GetType().Name; }
             check(outcome == "ok" && next == 0 && after == "5" && store.WindowCacheBytes == 0,
                 $"a read waiting when the cache is disposed answers short, and so does a read after: {outcome} {next} {after} {store.WindowCacheBytes}");
+        }
+        // An operation over a set that switched to windowed and was loaded back before it noticed: REMOTE_RESULT, never a raw
+        // cancellation (which the host would answer as TIMEOUT).
+        using (var harness = new Harness(Lines(10)))
+        {
+            var results = harness.Service.Results;
+            var set = TextChecks.Synthetic(results, "W1", 2000);
+            using var gate = new ManualResetEventSlim();
+            var running = harness.Service.UntilReleased(work => { gate.Wait(TimeSpan.FromSeconds(15)); work.ThrowIfCancellationRequested(); return 1; }, CancellationToken.None, set);
+            results.Demote(set, new RemoteResult(results, set.ResultId, set.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+            set.Promote(2000);
+            gate.Set();
+            string outcome;
+            try { await running; outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            check(outcome == "REMOTE_RESULT", "an operation over a set switched to windowed and back answers REMOTE_RESULT: " + outcome);
+            results.Release([set.ResultId]);
         }
         // A block evicted after the read-ahead chose it, while a read asks for the same rows again: nothing stays charged.
         {

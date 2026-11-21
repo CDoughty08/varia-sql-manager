@@ -2109,6 +2109,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        var revision = set.Revision;
         using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         // A packed result is read fused, never unpacked whole: in page order through a view far from its pages' (a sort),
@@ -2116,7 +2117,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token), ResultSearcher.TooLarge);
         // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
-        if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        // Switched to windowed under the search (and perhaps back): its pages were the older revision's.
+        if (set.Revision != revision) throw RemoteRefused();
+        if (found is null && view is null) throw Unavailable(args.ResultId);
         if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
         return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
     }
@@ -2762,6 +2766,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// on the operation's flow, so the leases it takes count their items there).</summary>
     internal async Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets)
     {
+        var revisions = sets.Select(set => set.Revision).ToArray();
         using var work = CancellationTokenSource.CreateLinkedTokenSource([token, .. sets.Select(set => set.Released)]);
         try
         {
@@ -2775,8 +2780,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             throw Unavailable(released.ResultId);
         }
-        // A set switched to windowed under the operation (a misestimate): its pages are gone.
-        catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.Any(set => set.IsRemote))
+        // A set switched to windowed under the operation (a misestimate), perhaps loaded back already: its pages are gone.
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.Select((set, i) => set.IsRemote || set.Revision != revisions[i]).Any(moved => moved))
         {
             throw RemoteRefused();
         }

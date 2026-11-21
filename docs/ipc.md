@@ -1106,12 +1106,15 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   one block either side and one more in its direction of travel; a jump cancels that viewer's stale read-ahead.
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
-  limit (`TOO_LARGE` when the global budget has no room). A read under way when the cache goes (Load into memory) answers
-  with the rows it sent, and the grid reads again under the new revision; after a release it is `RESULT_RELEASED`.
+  limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
+  being built there). A read that already sent rows answers short with them instead of failing: when a later block is
+  refused room (a window wider than the cache), when the table expires, or when the cache goes (Load into memory); the
+  grid reads on from there, under the new revision after a switch. After a release it is `RESULT_RELEASED`.
 - **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,
   diffs, pivots, Copy and Save) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed
   after that check: the page snapshot, a new view, a lease and an operation's release token refuse a windowed set as they
-  take hold, and a copy the switch overtakes is refused rather than cut short. A 404 from `tabledata.list` (BigQuery's
+  take hold, a search or operation whose set switched (even one loaded back since) answers `REMOTE_RESULT`, and a copy
+  the switch overtakes is refused rather than cut short. Both codes are in the shared `errorCodes` list. A 404 from `tabledata.list` (BigQuery's
   result table expired) answers `REMOTE_EXPIRED` when no row of the window is cached; a read that sent cached rows first
   answers short with them.
 - **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result

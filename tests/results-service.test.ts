@@ -1003,6 +1003,25 @@ describe('results service sorting', () => {
     f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
     return { ...f, handle: f.client.handle(1)! }
   }
+  it('drops a sort and its filters when a running result switches residence, and says so', async () => {
+    const { service, client, flush, tab, timers } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { index: 0 }) })
+    flush()
+    const handle = client.handle(1)!
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    service.sortBy('t1', keyAt(service, 't1', 0), 1, 'descending')
+    await settle()
+    flush()
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toMatchObject({ view, sorting: false })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { index: 0, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    timers.advance(1_000)
+    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(tab().announcement).toBe('The result is now windowed in BigQuery: rows are read as you scroll. Its sort and filters were removed.')
+    service.dispose()
+  })
   it('sorts a grid by a column, keeps showing its rows while the view is built, and closes a view once the grid shows another', async () => {
     const { service, handle, flush, tab } = sorted()
     const first = deferred<ResultView>()

@@ -108,6 +108,10 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ Reserve\(cost - estimate, block\); \}/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
+  // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
+  expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
+  expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
+  expect(count(remote, /TryReserveCache\(/g)).toBe(count(remote, /TryReserveCache\(ref held, CacheLimit, /g))
   // A block's rows fit half its cache, so its capped estimate is what it should cost.
   expect(remote).toMatch(/var floor = \(int\)Math\.Clamp\(cacheLimit \/ 2 \/ bytes, 1, MinBlockRows\);/)
   // The reservation is the cache's own limit and the global budget, evicting blocks no read waits for, else TOO_LARGE.

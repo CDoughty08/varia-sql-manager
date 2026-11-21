@@ -222,6 +222,13 @@ describe('ResultClient', () => {
     await settle()
     serve()
     expect((await first).count).toBe(4)
+    // A sort view of the result, which the switch below ends with the old pages.
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const viewRequest = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'end', rid: viewRequest.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    expect(view.getSnapshot().state).toBe('complete')
     worker().fromWorker.splice(0)
     // The read is cached: asking again reads nothing.
     await handle.getWindow(0, 4)
@@ -232,6 +239,8 @@ describe('ResultClient', () => {
     await settle()
     expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, rowsAvailable: 10, state: 'complete' })
     expect(handle.getSnapshot().truncated).toBeUndefined()
+    expect(view.getSnapshot().state).toBe('released')
+    expect(client.trackedViews).toBe(0)
     expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
     const again = handle.getWindow(0, 4, { viewer: 5 })
     await settle()

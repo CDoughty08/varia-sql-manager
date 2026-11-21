@@ -123,6 +123,9 @@ export const errorCodes = [
   // Backend: a BigQuery commit or rollback close on a session whose job is still running (or, for a commit, a cancelled
   // job not yet DONE); the tab stays (decision 54).
   'JOB_RUNNING',
+  // Backend: a reader of stored pages asked of a windowed BigQuery result (its rows stay in BigQuery), and a windowed
+  // result whose destination table expired (docs/ipc.md, Remote results).
+  'REMOTE_RESULT', 'REMOTE_EXPIRED',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.

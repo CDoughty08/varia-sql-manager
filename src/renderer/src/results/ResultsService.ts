@@ -1418,9 +1418,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         const entry = run.sets.find(set => set.descriptor.resultId === event.descriptor.resultId)
         const grid = entry ? this.views.get(tabId)?.grids.get(entry.key) : undefined
         if (entry && grid?.selection) { grid.selection = undefined; this.controllers.get(entry.key)?.repaint(); this.selectionChanged() }
-        this.announce(tabId, event.descriptor.residence === 'remote'
+        // Its sort and filters went with the old pages (the backend dropped their views): the grid shows the result again.
+        const sort = entry ? run.sorts.get(entry.key) : undefined
+        if (entry) {
+          run.sorting.get(entry.key)?.abort()
+          run.sorting.delete(entry.key)
+          run.held.delete(entry.key)
+        }
+        if (entry && sort) {
+          for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+          const sorts = new Map(run.sorts)
+          sorts.delete(entry.key)
+          run.sorts = sorts
+        }
+        const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
+        this.announce(tabId, (event.descriptor.residence === 'remote'
           ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
-          : 'The result is loading into memory.')
+          : 'The result is loading into memory.') + removed)
         break
       }
       case 'progress':

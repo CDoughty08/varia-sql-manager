@@ -53,8 +53,11 @@ await import(${JSON.stringify(core)})`
     // Main turns a code it does not know into BACKEND_ERROR, so a new backend code must be added to errorCodes. Only codes
     // written where they are thrown are seen: one passed through a variable (a connection failure's) is not.
     const sources = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? (entry.name === 'bin' || entry.name === 'obj' ? [] : sources(join(directory, entry.name))) : entry.name.endsWith('.cs') ? [join(directory, entry.name)] : [])
-    const thrown = new Set(sources(join('backend', 'Varia.Backend')).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/RequestException\("([A-Z_]+)"/g)].map(match => match[1])))
+    const thrown = new Set(sources(join('backend', 'Varia.Backend')).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/RequestException\("([A-Z_]+)"|\bnew\("([A-Z][A-Z_]+)", \$?"/g)].map(match => match[1] ?? match[2])))
     expect(thrown).toContain('BUDGET_STOPPED')
+    // A target-typed new("CODE", "message") is seen too.
+    expect(thrown).toContain('REMOTE_RESULT')
+    expect(thrown).toContain('REMOTE_EXPIRED')
     expect([...thrown].filter(code => !(errorCodes as readonly string[]).includes(code))).toEqual([])
     const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
     expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])

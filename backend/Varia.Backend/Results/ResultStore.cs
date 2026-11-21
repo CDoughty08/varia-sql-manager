@@ -790,7 +790,7 @@ internal sealed partial class ResultStore
         var set = snapshot.Set;
         lock (gate)
         {
-            string? refusal = !sets.ContainsKey(set.ResultId) || set.IsReleased ? "RESULT_RELEASED" : nextSnapshotId == 0 ? "BACKEND_ERROR"
+            string? refusal = !sets.ContainsKey(set.ResultId) || set.IsReleased ? "RESULT_RELEASED" : set.IsRemote ? "REMOTE_RESULT" : nextSnapshotId == 0 ? "BACKEND_ERROR"
                 : snapshots.Values.Count(item => item.Set == set) >= ViewSorter.MaxDistinctSnapshots ? "TOO_LARGE" : null;
             if (refusal is null)
             {
@@ -802,6 +802,7 @@ internal sealed partial class ResultStore
             throw refusal switch
             {
                 "RESULT_RELEASED" => new RequestException(refusal, "These results were closed. Execute the query again to see them."),
+                "REMOTE_RESULT" => SqlService.RemoteRefused(),
                 "TOO_LARGE" => new RequestException(refusal, "These results keep as many value lists as they can. Remove some column filters and try again."),
                 _ => new RequestException(refusal, "Value list identifiers are exhausted. Restart the SQL backend.")
             };
@@ -861,6 +862,13 @@ internal sealed partial class ResultStore
     /// remote result is then disposed.</summary>
     public bool Demote(ResultSetBuffer set, RemoteResult remote, long totalRows, bool bump = true)
     {
+        // Windowed first, then what was built over its pages goes: AddView and AddSnapshot refuse a windowed set under this
+        // lock, so one finished meanwhile is either refused or dropped here.
+        if (!set.Demote(remote, totalRows, bump))
+        {
+            remote.Dispose();
+            return false;
+        }
         List<ResultView> dropped;
         lock (gate)
         {
@@ -868,9 +876,7 @@ internal sealed partial class ResultStore
             else dropped = DropViewsLocked([set]);
         }
         Free([], dropped);
-        if (set.Demote(remote, totalRows, bump)) return true;
-        remote.Dispose();
-        return false;
+        return true;
     }
 
     /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Block cache) to the global budget, as a live table

@@ -769,8 +769,8 @@ internal sealed class ResultSetBuffer
 
     private void CacheLocked(StoredPage page, byte[] body)
     {
-        // A freed set keeps no charge; a page unpacked meanwhile needs no copy.
-        if (gone || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
+        // A freed or windowed set keeps no charge (a switch cleared its cache); a page unpacked meanwhile needs no copy.
+        if (gone || remote is not null || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
         // The oldest page makes way first, so a full budget still keeps the newest read.
         if (cache.Count >= CachePages) DropCachedLocked(cache.Count - 1);
         if (!store.TryReserveSpare(Budget, body.Length, false)) return;

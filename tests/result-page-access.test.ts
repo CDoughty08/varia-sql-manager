@@ -74,6 +74,19 @@ describe('result page access', () => {
     expect(buffer).toMatch(/lock \(gate\) return remote is null \? \[\.\. pages\] : throw SqlService\.RemoteRefused\(\);/)
     expect(buffer).toMatch(/lock \(gate\) return state == 2 \|\| remote is not null \? new CancellationToken\(true\)/)
     expect(readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')).toMatch(/if \(set\.IsRemote\)\n\s*\{\n\s*Return\(set\.Budget, charged\);\n\s*throw SqlService\.RemoteRefused\(\);/)
+    // Demote marks the set windowed before it drops the views and snapshots, so one finished meanwhile is refused or dropped;
+    // a snapshot (filter lists) refuses a windowed set, and no page cache is kept for one.
+    const store = readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')
+    const demote = store.slice(store.indexOf('public bool Demote('), store.indexOf('return true;', store.indexOf('public bool Demote(')))
+    expect(demote.indexOf('set.Demote(remote, totalRows, bump)')).toBeGreaterThan(0)
+    expect(demote.indexOf('set.Demote(remote, totalRows, bump)')).toBeLessThan(demote.indexOf('DropViewsLocked([set])'))
+    expect(store).toMatch(/set\.IsRemote \? "REMOTE_RESULT"/)
+    expect(store).toMatch(/"REMOTE_RESULT" => SqlService\.RemoteRefused\(\),/)
+    expect(buffer).toMatch(/if \(gone \|\| remote is not null \|\| page\.Stored is not PackedPage/)
+    // A search and an operation over a set's pages stop on a switch (its revision moved), even one already loaded back.
+    expect(readFileSync('backend/Varia.Backend/Results/ResultSearch.cs', 'utf8')).toMatch(/set\.IsReleased \|\| set\.Revision != revision \|\|/)
+    expect(service2).toMatch(/if \(set\.Revision != revision\) throw RemoteRefused\(\);/)
+    expect(service2).toMatch(/sets\.Select\(\(set, i\) => set\.IsRemote \|\| set\.Revision != revisions\[i\]\)\.Any\(moved => moved\)/)
     expect(readFileSync('backend/Varia.Backend/SqlService.BigQueryResidence.cs', 'utf8')).toMatch(/internal static ResultSetBuffer Stored\(ResultSetBuffer set\) => set\.IsRemote \? throw RemoteRefused\(\) : set;/)
   })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {

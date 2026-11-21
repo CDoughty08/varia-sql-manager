@@ -1021,6 +1021,8 @@ export class ResultClient implements Disposable {
   private revise(state: ResultState, descriptor: ResultDescriptor): void {
     if ((descriptor.revision ?? 0) <= (state.snapshot.revision ?? 0) || !this.tracked(state)) return this.update(state, descriptor, false)
     this.windows.dropResult(state.id)
+    // The backend dropped the result's views with its old pages: theirs go too, and each reports itself released.
+    for (const view of [...this.views.values()]) if (view.key.generation === state.key.generation && view.key.resultId === state.key.resultId) this.endView(view, 'released')
     if (!this.failure && !this.disposed) void this.attached.then(() => this.worker.postMessage({ type: 'revise', key: state.key }), () => {})
     this.update(state, descriptor, false)
   }

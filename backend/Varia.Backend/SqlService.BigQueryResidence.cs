@@ -293,10 +293,12 @@ internal sealed partial class SqlService
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
         var status = "completed";
+        var loaded = -1;
         QueryFailure? failure = null;
         try
         {
             set.SwitchesOnRefusal = true;
+            loaded = set.Revision;
             events.Residence(set);
             var first = await bigQuery.QueryResultsAsync(connection, window.Project, window.JobId, window.Location, null, BigQueryFirstPageRows, 0, token);
             var loadArgs = window.Args;
@@ -313,13 +315,14 @@ internal sealed partial class SqlService
                 first.Dispose();
                 await ReadBigQueryArrowAsync(loadArgs, readSession, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
             }
-            if (set.IsOpen) set.Complete();
+            // Only the revision this load opened: one a later load promoted is that load's to finish.
+            if (set.IsOpen && set.Revision == loaded) set.Complete();
             messages.Add(set.IsRemote ? "The result did not fit in memory, so it stays windowed in BigQuery." : "The result was loaded into memory.");
         }
         catch (Exception error)
         {
             // Stopped or failed part way: the result goes back to windowed, whole, rather than staying a partial copy.
-            if (set.IsOpen && !set.IsReleased) SwitchBack();
+            if (set.IsOpen && !set.IsReleased && set.Revision == loaded) SwitchBack();
             if (token.IsCancellationRequested)
             {
                 status = "cancelled";
