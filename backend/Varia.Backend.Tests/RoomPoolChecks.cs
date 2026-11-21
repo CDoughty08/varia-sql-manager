@@ -15,6 +15,7 @@ internal static class RoomPoolChecks
     {
         Pool(check);
         ViewReads(check);
+        WideRows(check);
         HeldAcrossPages(check);
         Operations(check);
         Refused(check);
@@ -98,6 +99,43 @@ internal static class RoomPoolChecks
         check(set.HasPacked && Same(first, expected) && Same(second, expected) && made > 0 && store.Rooms.Made == made && store.Rooms.Reused > 0
             && store.Rooms.IdleRooms == made,
             $"a packed view's tiles read as unpacked, through rooms from the pool, all back after each read and none made a second time (made {made}, then {store.Rooms.Made})");
+        store.Release(set.ResultId);
+    }
+
+    /// <summary>A read lets its group of unpacked pages go with each output page, so it unpacks no more ahead than the output
+    /// page can take: through a sorted view of rows so wide a page holds one, a 128-row tile unpacks about one page a row (it
+    /// unpacked 48 a row, 6,129 a tile, when its group looked 64 pages ahead), and reads what the raw view reads.</summary>
+    private static void WideRows(Action<bool, string> check)
+    {
+        const int rows = 512, tile = 128, width = 55_705;
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = store.Open(store.BeginQuery("wide"), 0, 1, 1, "rows",
+            [new ResultColumn("key", "int", "text"), .. Enumerable.Range(1, 5).Select(i => new ResultColumn("payload" + i, "varchar", "text", MaxLength: -1))],
+            [.. Enumerable.Repeat(WireKind.Text, 6)])!;
+        var value = new byte[width];
+        value.AsSpan().Fill((byte)'x');
+        for (var row = 0; row < rows; row++)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            value[0] = (byte)('a' + row % 26);
+            builder.AppendText((row * 183 % rows).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            for (var c = 0; c < 5; c++) builder.AppendUtf8(value);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        int[] order = [.. Enumerable.Range(0, rows).Select(row => row * 263 % rows)];
+        var rawView = store.AddView(set, order, [], false, true, 0, null);
+        byte[][] Read(ResultView view) => [.. ViewPages.Build(view, tile, tile).Select(page => page.Body())];
+        var expected = Read(rawView);
+        set.Pack();
+        var view = store.AddView(set, order, [], false, true, 0, null);
+        var before = store.PackingSnapshot().PagesUnpacked;
+        var read = Read(view);
+        var unpacked = store.PackingSnapshot().PagesUnpacked - before;
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Rows == 1) && read.Length == expected.Length && read.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second))
+            && unpacked <= 2 * tile,
+            $"a read through a sorted view of wide rows unpacks about a page a row: {unpacked} pages for a {tile}-row tile, as the raw view reads");
         store.Release(set.ResultId);
     }
 

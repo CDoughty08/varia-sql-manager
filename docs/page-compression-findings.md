@@ -236,7 +236,10 @@ every complete result packed.
 - **Plain `results.read`:** the pages it needs, through a per-result cache of six unpacked pages charged as working
   memory, freed with the result. About 0.2 ms a 1,000-row read while scrolling `orders`, 0.8 ms on `log`, 0.4 to 1 ms
   for a jump: well inside a frame. A plain read never unpacks a result whole, so reading does not undo packing.
-- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers.
+- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers,
+  up to 64 at a time and no more than the output page being built can take (by row count and its rows' bytes): a read
+  lets them go with each output page, so through a sort of rows so wide a page holds one, a 128-row tile unpacks
+  128 pages.
 
 ### Fused per-page reads
 
