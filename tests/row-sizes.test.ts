@@ -28,6 +28,28 @@ function fixture(rowsAvailable = 1000, state = 'complete', timers?: { setTimeout
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
+  it('drops the sizes read under an older revision, and reads the block again under the new one', async () => {
+    const { sizes, reads, answer, settle, snapshot } = fixture()
+    sizes.ensure(0, 10)
+    answer(0, () => 100)
+    await settle()
+    expect(sizes.get(5)?.bytes).toBe(100)
+    snapshot.revision = 1
+    snapshot.residence = 'remote'
+    sizes.ensure(0, 10)
+    expect(sizes.get(5)).toBeUndefined()
+    expect(reads).toHaveLength(2)
+  })
+  it('keeps no answer of an older revision that lands after the new one was seen', async () => {
+    const { sizes, reads, answer, settle, snapshot } = fixture()
+    sizes.ensure(0, 10)
+    snapshot.revision = 1
+    sizes.ensure(300, 310)
+    answer(0, () => 100)
+    await settle()
+    expect(sizes.get(5)).toBeUndefined()
+    expect(reads.map(read => read.first)).toEqual([0, 256])
+  })
   it('wakes for each of several windowed short blocks once it has waited, so none is left unread', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     const live = new Map<number, { callback: () => void; due: number }>()
