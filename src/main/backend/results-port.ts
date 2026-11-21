@@ -239,7 +239,13 @@ export class ResultsPortHost {
   }
 
   queryEvent(queryId: string, event: QueryEvent): void {
-    if (event.type === 'resultSet.opened' || event.type === 'resultSet.residence') this.own([event.descriptor])
+    if (event.type === 'resultSet.opened') this.own([event.descriptor])
+    // A switch never opens a result: it refreshes one this renderer still owns, so a close that crossed it (or a set the
+    // backend released meanwhile) stays refused here.
+    else if (event.type === 'resultSet.residence' && this.owns(event.descriptor.generation, event.descriptor.resultId)) {
+      if (event.descriptor.state === 'released') this.owned.delete(event.descriptor.resultId)
+      else this.own([event.descriptor])
+    }
     this.post({ t: 'query', queryId, event })
   }
 

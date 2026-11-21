@@ -891,8 +891,8 @@ gets Cancel.
 ## Query events
 
 EVENT frames whose id is a running `query.execute` or `results.remoteQuery` request. Main validates each
-(`queryEventSchema`), stamps the generation on descriptors, registers the result as owned on `resultSet.opened` and
-`resultSet.residence`, and forwards it on the port (or drops it when no port is open).
+(`queryEventSchema`), stamps the generation on descriptors, registers the result as owned on `resultSet.opened` (a
+`resultSet.residence` only refreshes a result still owned, and disowns one it names released), and forwards it on the port (or drops it when no port is open).
 
 | type | Emitted |
 | --- | --- |
