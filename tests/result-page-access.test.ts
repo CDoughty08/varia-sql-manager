@@ -111,6 +111,17 @@ describe('result page access', () => {
     expect(remoteSource).toMatch(/\n\s*private RemoteResult\(ResultStore store,/)
     expect(remoteSource).not.toMatch(/\b(?:public|internal|protected)\s+RemoteResult\s*\(/)
     expect([...remoteSource.matchAll(/\bRemoteResult\s+(\w+)\s*\(/g)].map(match => match[1])).toEqual(['Create'])
+    // Whatever another factory inside the file returned (RemoteResult?, object, a Func field), it would build one with new
+    // and take a fetch delegate: the file has no new RemoteResult, Create's target-typed new is its only construction, and
+    // RemoteFetch appears only as its declaration, the field, and Create's and the constructor's parameters.
+    const remoteCode = remoteSource.split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n')
+    expect(remoteCode).not.toMatch(/\bnew\s+(?:[\w.]+\.)?RemoteResult\s*[({]/)
+    expect(remoteCode.match(/\bnew\s*\(\s*store\b/g)).toHaveLength(1)
+    expect(remoteCode).toMatch(/RemoteFetch fetch, object\? source = null\) => new\(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch\) \{ Source = source \};/)
+    expect(remoteCode.match(/\bRemoteFetch\b/g)).toHaveLength(4)
+    const bypass = remoteCode.replace('    private RemoteResult(ResultStore store,', '    internal static object Make(ResultStore s, RemoteFetch f) => new RemoteResult(s, 0, [], 0, false, 1, 0, new(1), f);\n    private RemoteResult(ResultStore store,')
+    expect(bypass.match(/\bRemoteFetch\b/g)).toHaveLength(5)
+    expect(bypass).toMatch(/\bnew\s+(?:[\w.]+\.)?RemoteResult\s*[({]/)
     expect(callers(/\bRemoteResult\.Create\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\.Promote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\bstore\.Demote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])

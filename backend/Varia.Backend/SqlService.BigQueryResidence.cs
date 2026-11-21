@@ -107,7 +107,7 @@ internal sealed partial class SqlService
 
     /// <summary>The row cap's note (decision 31): the grid's 32-bit row indexes show this many, and the rest are a filter away.</summary>
     internal static string CapNote(long total) => "The grid shows the first " + RemoteResult.MaxRows.ToString("N0", CultureInfo.InvariantCulture) + " of "
-        + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Add a WHERE clause or LIMIT to the query to see the rest.";
+        + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Add a WHERE clause to the query, or LIMIT with OFFSET, to see the rest.";
 
     /// <summary>The rows a result shows before the grid's own cap: BigQuery's total, within Maximum rows when one is set.</summary>
     private static long Wanted(QueryArgs args, long total) => args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
@@ -179,7 +179,7 @@ internal sealed partial class SqlService
     /// <summary>
     /// A block's rows through tabledata.list (free, random access): from its first row, following page tokens, decoded by the
     /// query's column plan. A 404 means BigQuery's result table is gone (REMOTE_EXPIRED). A rate limit backs off with jitter
-    /// and tries again, never as an error, for no longer in all (by the clock, each call's own retries included) than a read
+    /// and tries again, never as an error, for no longer in all (by the clock; the call itself does not retry a rate limit) than a read
     /// waits (<see cref="RemoteReadWait"/>) and within the attempts: past that it would hold a slot of the connection's lane
     /// for no one, so it stops (<see cref="RemoteRetryException"/>), a read that joined it answers short, and the next read
     /// asks again.
@@ -224,12 +224,7 @@ internal sealed partial class SqlService
         return false;
     }
 
-    private static bool RateLimited(Exception error)
-    {
-        for (var current = error; current is not null; current = current.InnerException)
-            if (current is GoogleApiException api) return api.HttpStatusCode == HttpStatusCode.TooManyRequests || api.Error?.Errors?.Any(item => item.Reason == "rateLimitExceeded") == true;
-        return false;
-    }
+    private static bool RateLimited(Exception error) => BigQueryService.RateLimited(error);
 
     /// <summary>
     /// results.read of a windowed result: the cached pages that cover the window, fetching the blocks it lacks (and its

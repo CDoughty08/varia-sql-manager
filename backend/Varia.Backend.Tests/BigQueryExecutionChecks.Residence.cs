@@ -490,7 +490,7 @@ internal static partial class BigQueryExecutionChecks
             await harness.ConnectAsync();
             var (_, result, _) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
-            check(set is { Residence: "remote", RowsTotal: 3_000_000_000, RowsAvailable: int.MaxValue } && Says(result, "the most it can address") && !Says(result, "Filter the result"),
+            check(set is { Residence: "remote", RowsTotal: 3_000_000_000, RowsAvailable: int.MaxValue } && Says(result, "the most it can address") && Says(result, "LIMIT with OFFSET") && !Says(result, "Filter the result"),
                 $"a result past the row cap shows the first 2,147,483,647 rows and says why: {set?.RowsTotal} {set?.RowsAvailable} {Texts(result?.Messages ?? [])}");
         }
     }
@@ -592,6 +592,27 @@ internal static partial class BigQueryExecutionChecks
             harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
             lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
             check(code == "ok" && read is { Rows: 0 } && stopped, $"a rate-limited block stops backing off once its reads have given up: {code} {read?.Rows} {remote.FetchingBlocks()}");
+        }
+
+        // A block's call does not retry a rate limit itself (its own backoff is uncounted): one table read, then the block's
+        // backoff, whose first delay already passes the read wait, stops it.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromSeconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            while (harness.Jobs.TableReads.TryDequeue(out _)) { }
+            var (code, _, _, _) = await ReadRows(harness, id, 2500, 1);
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 2500 && 2500 < start + read.MaxResults);
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && stopped && covering == 1, $"a block's call does not retry a rate limit itself, so its backoff stops by the read wait: {code} {stopped} {covering}");
         }
 
         // Reads that join a rate-limited fetch (the grid reading again) answer short, never with an error, when it stops; the

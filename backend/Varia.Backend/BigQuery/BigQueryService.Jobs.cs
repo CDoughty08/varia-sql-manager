@@ -97,14 +97,23 @@ internal sealed partial class BigQueryService
         return false;
     }
 
-    /// <summary>An idempotent read with bounded retries on transient failures.</summary>
-    async Task<T> ReadAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken token, TimeSpan extra = default)
+    /// <summary>An idempotent read with bounded retries on transient failures; with <paramref name="rateLimits"/> false a
+    /// rate limit reaches the caller at once, for a caller that backs off on its own clock (a windowed result's blocks).</summary>
+    async Task<T> ReadAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken token, TimeSpan extra = default, bool rateLimits = true)
     {
         for (var attempt = 1; ; attempt++)
         {
             try { return await CallAsync(call, token, extra); }
-            catch (Exception error) when (attempt < ReadAttempts && Transient(error, token)) { await Task.Delay(Backoff(attempt), token); }
+            catch (Exception error) when (attempt < ReadAttempts && Transient(error, token) && (rateLimits || !RateLimited(error))) { await Task.Delay(Backoff(attempt), token); }
         }
+    }
+
+    /// <summary>BigQuery refused a request for its rate limit: HTTP 429, or the rateLimitExceeded reason.</summary>
+    internal static bool RateLimited(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is GoogleApiException api) return api.HttpStatusCode == HttpStatusCode.TooManyRequests || api.Error?.Errors?.Any(item => item.Reason == "rateLimitExceeded") == true;
+        return false;
     }
 
     /// <summary>Creates a query job under its client job id, never twice (see the class summary). <paramref name="dataset"/>,
@@ -217,7 +226,7 @@ internal sealed partial class BigQueryService
             request.MaxResults = maxResults;
             request.FormatOptionsUseInt64Timestamp = true;
             return PageAsync(service, request.CreateRequest(), t);
-        }, token);
+        }, token, rateLimits: false);
 
     /// <summary>A page answer's body read into a parsed document (at most <see cref="MaxPageBytes"/>); a refusal throws
     /// Google's error.</summary>
