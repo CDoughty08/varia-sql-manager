@@ -114,8 +114,8 @@ internal static class DmlTemplates
     /// code, still a valid call) when parameters built to block them exhaust the bound.</summary>
     /// <remarks>An all-ASCII name clashes case-insensitively: no collation ignores or equates the ASCII characters a name
     /// may hold. A non-ASCII character may count as nothing (the default SQL_Latin1_General_CP1_CI_AS weighs thousands
-    /// zero, so @RC followed by U+0219 is @RC) or as its NFKD fold (a fullwidth R is R, Ç is C); some numbers,
-    /// symbols, Latin letters and marks may also equal any one character (U+0280 is R in the default collation, U+0661 is
+    /// zero, so @RC followed by U+0219 is @RC) or as its NFKD fold (a fullwidth R is R, Ç is C); a number may
+    /// also equal any one digit, and some symbols, Latin letters and marks any one character (U+0280 is R in the default collation, U+0661 is
     /// 1 in accent-insensitive _100_ ones; NameChar.Of). A needless @RC1 is harmless.</remarks>
     private static string? ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
     {
@@ -144,21 +144,26 @@ internal static class DmlTemplates
 
     /// <param name="Fold">Null for an ASCII character, which must match itself (uppercased); otherwise the letters and digits
     /// of its NFKD form, uppercased, possibly empty.</param>
-    private readonly record struct NameChar(char Char, string? Fold, bool Any)
+    /// <param name="Any">May equal any one character.</param>
+    /// <param name="Digit">May equal any one digit.</param>
+    private readonly record struct NameChar(char Char, string? Fold, bool Any, bool Digit)
     {
         public static NameChar Of(char c)
         {
-            if (char.IsAscii(c)) return new(char.ToUpperInvariant(c), null, false);
+            if (char.IsAscii(c)) return new(char.ToUpperInvariant(c), null, false, false);
             // Where a scan of every CI_AS and CI_AI collation found characters equal to R, C, @ or a digit beyond NFKD: numbers
-            // and symbols of any script, letters only in the Latin and IPA extensions (never Greek, Cyrillic or CJK, so an
-            // ordinary name in those keeps @RC), and the combining Latin letters and two Quranic marks.
-            var any = CharUnicodeInfo.GetUnicodeCategory(c) switch
+            // of any script, only ever equal to a digit; symbols (U+211E is R); letters only in the Latin and IPA extensions
+            // (never Greek, Cyrillic or CJK, so an ordinary name in those keeps @RC); the combining Latin letters and two
+            // Quranic marks.
+            var category = CharUnicodeInfo.GetUnicodeCategory(c);
+            var digit = category is UnicodeCategory.DecimalDigitNumber or UnicodeCategory.LetterNumber or UnicodeCategory.OtherNumber;
+            var any = category switch
             {
-                UnicodeCategory.DecimalDigitNumber or UnicodeCategory.LetterNumber or UnicodeCategory.OtherNumber or UnicodeCategory.OtherSymbol => true,
+                UnicodeCategory.OtherSymbol => true,
                 UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter or UnicodeCategory.TitlecaseLetter or UnicodeCategory.ModifierLetter
-                    or UnicodeCategory.OtherLetter => c is >= '\u0080' and <= '˿' or >= 'ᴀ' and <= 'ỿ' or >= 'Ⱡ' and <= 'Ɀ'
-                        or >= '꜠' and <= 'ꟿ' or >= 'ꬰ' and <= '꭯',
-                UnicodeCategory.NonSpacingMark => c is >= '̀' and <= 'ͯ' or >= '᷀' and <= '᷿' or >= 'ۖ' and <= 'ۭ',
+                    or UnicodeCategory.OtherLetter => c is >= '\u0080' and <= '\u02FF' or >= '\u1D00' and <= '\u1EFF' or >= '\u2C60' and <= '\u2C7F'
+                        or >= '\uA720' and <= '\uA7FF' or >= '\uAB30' and <= '\uAB6F',
+                UnicodeCategory.NonSpacingMark => c is >= '\u0300' and <= '\u036F' or >= '\u1DC0' and <= '\u1DFF' or >= '\u06D6' and <= '\u06ED',
                 _ => false
             };
             string decomposed;
@@ -166,7 +171,7 @@ internal static class DmlTemplates
             catch (ArgumentException) { decomposed = ""; }
             var fold = new StringBuilder(decomposed.Length);
             foreach (var part in decomposed) if (char.IsAsciiLetterOrDigit(part)) fold.Append(char.ToUpperInvariant(part));
-            return new(c, fold.ToString(), any);
+            return new(c, fold.ToString(), any, digit);
         }
     }
 
@@ -175,7 +180,7 @@ internal static class DmlTemplates
         Span<bool> reach = stackalloc bool[candidate.Length + 1], next = stackalloc bool[candidate.Length + 1];
         reach.Clear();
         reach[0] = true;
-        foreach (var (c, fold, any) in name)
+        foreach (var (c, fold, any, digit) in name)
         {
             next.Clear();
             var live = false;
@@ -188,7 +193,7 @@ internal static class DmlTemplates
                     continue;
                 }
                 live = next[at] = true;
-                if (any && at < candidate.Length) next[at + 1] = true;
+                if (at < candidate.Length && (any || digit && char.IsAsciiDigit(candidate[at]))) next[at + 1] = true;
                 if (fold.Length > 0 && candidate.AsSpan(at).StartsWith(fold, StringComparison.Ordinal)) next[at + fold.Length] = true;
             }
             if (!live) return false;

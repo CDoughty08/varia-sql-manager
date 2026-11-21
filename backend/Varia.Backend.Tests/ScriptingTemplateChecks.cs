@@ -154,6 +154,8 @@ internal static class ScriptingTemplateChecks
             && DmlTemplates.Execute(obj, [P(1, "@\u5BA2\u6237")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal)
             && DmlTemplates.Execute(obj, [P(1, "@\u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435"), P(2, "@\u039A\u03C9\u03B4\u03B9\u03BA\u03CC\u03C2")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
             "a letter NFKD leaves alone may still equal R (U+0280 is R in the default collation), but an ideograph, a Cyrillic or a Greek letter never equals R, C or a digit, so ordinary names keep @RC");
+        check(DmlTemplates.Execute(obj, [P(1, "@\u0633\u0646\u0629\u0662\u0660\u0662\u0664"), P(2, "@\u0661\u0662\u0663\u0664\u0665\u0666\u0667")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "a non-ASCII digit stands only for a digit, never R or C, so names with Arabic-Indic digits keep @RC");
         var blocking = "@RC" + new string('\u0219', 125);
         check(DmlTemplates.Execute(obj, [P(1, blocking)], false, true) == Lines("DECLARE " + blocking + " int", "", "-- TODO: Set parameter values here.", "", "EXECUTE [dbo].[p] ", "   " + blocking)
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, blocking)], false, true).EndsWith("EXECUTE [dbo].[f] " + NL + "   " + blocking, StringComparison.Ordinal),
