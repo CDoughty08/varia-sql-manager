@@ -263,10 +263,12 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     for (const state of Object.values(this.getSnapshot().documents)) {
       const connectionId = this.options.documents.get(state.id)?.connectionId
       if (connectionId === state.connectionId) continue
-      // Another server: its jobs, caps and the login's role are its own, so the old server's checked jobs and run go (not when the document only
-      // lost its connection), and the role is read again.
+      // A new connection (a reconnect, or another server): its jobs, caps and the login's role are read again, so the old connection's checked
+      // jobs and run go (not when the document only lost its connection). An open Delete History confirmation closes: its jobs were the old
+      // connection's, and All jobs would otherwise widen it to every job listed next.
       const moved = connectionId !== undefined && state.connectionId !== undefined
-      this.patch(state.id, { connectionId, selectedStep: undefined, message: undefined, profile: { status: 'unknown' }, ...moved ? { jobs: [], caps: undefined, note: undefined, pendingJob: undefined } : {} })
+      const confirm = state.confirm?.running ? state.confirm : undefined
+      this.patch(state.id, { connectionId, confirm, selectedStep: undefined, message: undefined, profile: { status: 'unknown' }, ...moved ? { jobs: [], caps: undefined, note: undefined, pendingJob: undefined } : {} })
       if (moved) this.setFilters(state.id, { checked: undefined, run: undefined })
       if (connectionId) void this.readProfile(state.id)
     }
