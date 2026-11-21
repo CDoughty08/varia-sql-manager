@@ -177,9 +177,9 @@ internal static class ExecutionLiveChecks
                 && afterNoExec.PlanSets is null && afterNoExec.ResultSets is [{ Kind: "rows" }],
                 "a captured run that leaves NOEXEC on does not leak plan result sets into later grids");
 
-            // With NOEXEC, PARSEONLY or FMTONLY on, SQL Server compiles the picker's USE without running it, so the script
-            // would run in the previous database; Varia refuses it and the session stays where it was.
-            foreach (var option in new[] { "NOEXEC", "PARSEONLY", "FMTONLY" })
+            // With NOEXEC, PARSEONLY, FMTONLY or SHOWPLAN_XML on, SQL Server compiles the picker's USE without running it,
+            // so the script would run in the previous database; Varia refuses it and the session stays where it was.
+            foreach (var option in new[] { "NOEXEC", "PARSEONLY", "FMTONLY", "SHOWPLAN_XML" })
             {
                 var switchTab = Guid.NewGuid().ToString();
                 await Run("SET " + option + " ON;", switchTab);

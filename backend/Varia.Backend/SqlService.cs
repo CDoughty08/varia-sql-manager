@@ -1375,10 +1375,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 var before = connection.Database;
                 await connection.ChangeDatabaseAsync(args.Database!, token);
-                // SqlClient learns the catalog only from SQL Server's change notice, and a session with NOEXEC, PARSEONLY
-                // or FMTONLY on compiles the USE without running it and sends none, so the script would run in the old
-                // database. An unchanged name is confirmed by the server: it is also what a case-only difference leaves.
-                if (string.Equals(connection.Database, before, StringComparison.Ordinal) && !await InDatabaseAsync(connection, args.Database!, token))
+                // SqlClient learns the catalog only from SQL Server's change notice, and a session with NOEXEC, PARSEONLY,
+                // FMTONLY or SHOWPLAN_* on compiles the USE without running it and sends none, so the script would run in
+                // the old database. So an unchanged catalog is confirmed by the server (a case-only difference from the
+                // session's name leaves it unchanged too). The confirmation is a query of Varia's own, not part of the
+                // switch, so its messages (SET STATISTICS TIME's) stay out of Messages.
+                bool confirmed;
+                connection.InfoMessage -= onInfo;
+                try { confirmed = !string.Equals(connection.Database, before, StringComparison.Ordinal) || await InDatabaseAsync(connection, args.Database!, token); }
+                finally { connection.InfoMessage += onInfo; }
+                if (!confirmed)
                 {
                     status = "failed";
                     var text = DatabaseNotChanged(args.Database!, before);
