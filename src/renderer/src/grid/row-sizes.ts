@@ -115,7 +115,9 @@ export class RowSizes {
         const last = this.woken.get(block)
         if (last === undefined || result.bytes.length > last) {
           this.woken.set(block, result.bytes.length)
-          this.wakeTimer ??= this.timers.setTimeout(() => {
+          // Due once this block has waited, which covers every block that armed it earlier.
+          if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+          this.wakeTimer = this.timers.setTimeout(() => {
             this.wakeTimer = undefined
             if (!this.disposed) this.changed()
           }, rowSizeLimits.retryMs + 1)

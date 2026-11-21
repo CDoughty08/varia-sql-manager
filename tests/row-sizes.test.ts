@@ -28,6 +28,30 @@ function fixture(rowsAvailable = 1000, state = 'complete', timers?: { setTimeout
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
+  it('wakes once the last of several windowed short blocks has waited, so none is left unread', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const live = new Map<number, { callback: () => void; due: number }>()
+    let id = 0
+    const timers = { setTimeout: (callback: () => void, ms: number) => { live.set(++id, { callback, due: performance.now() + ms }); return id }, clearTimeout: (handle: unknown) => { live.delete(handle as number) } }
+    const { sizes, reads, settle, snapshot } = fixture(100_000, 'complete', timers)
+    snapshot.residence = 'remote'
+    sizes.ensure(0, 400)
+    expect(reads.map(read => read.first)).toEqual([0, 256])
+    reads[0].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    vi.advanceTimersByTime(50)
+    reads[1].resolve({ firstRow: 256, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    // One wake, due after the later block's wait: when it fires, both blocks are asked again.
+    expect(live.size).toBe(1)
+    const [wake] = live.values()
+    vi.advanceTimersByTime(wake.due - performance.now())
+    wake.callback()
+    sizes.ensure(0, 400)
+    expect(reads.slice(2).map(read => read.first)).toEqual([0, 256])
+    sizes.dispose()
+  })
+
   it('wakes the grid once a windowed short block has waited, so its bars fill without a scroll', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     const scheduled: { callback: () => void; ms: number }[] = []
