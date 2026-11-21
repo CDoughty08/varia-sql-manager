@@ -7,7 +7,8 @@ namespace Varia.Backend.Search;
 /// entries name as definitions and its packed texts (<see cref="ObjectTable.DefinitionTexts"/>), so a long definition a read pooled
 /// for a row it then left out (a child whose parent the login cannot see) still counts as one, and that row's name stays a name.
 /// Names are the held tables' other texts. A running read's records and the texts it has pooled are in no held table yet, so they
-/// are what is left of the budget's use, shown as reading; with no read running, records, names and definitions add up to it.
+/// are what is left of the budget's use, shown as reading (a rebuild's records are charged against the table they replace, so only
+/// growth beyond it shows); with no read running, records, names and definitions add up to it.
 /// The used figure, when given, is the budget's use the event carries, so the parts add up to the figure sent beside them.
 /// </summary>
 internal static class IndexMemoryReport

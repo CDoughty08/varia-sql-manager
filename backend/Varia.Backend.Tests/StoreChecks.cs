@@ -711,6 +711,18 @@ internal static class StoreChecks
         service.ReportIndexMemory();
         lock (reports)
             check(service.Search.DetailWalks == grown + 2 && details[^1] == (0, 0L, 0L), "a fall in the budget walks the index at once");
+        // A build stopped or failed part way keeps no time, but its end walks the index again so no read is left showing as running.
+        var held = pool.TryAcquire("dbo.Refunds");
+        service.ReportIndexMemory();
+        var stopped = service.Search.DetailWalks;
+        var builds = service.Search.Builds;
+        service.Search.Ended();
+        service.ReportIndexMemory();
+        lock (reports)
+            check(stopped == grown + 2 && service.Search.DetailWalks == grown + 3 && service.Search.Builds == builds + 1 && sent[^1] is { LastBuildMs: 30 },
+                "a stopped build's end walks the index again, though the budget is unchanged, and keeps the last finished build's time");
+        pool.Release([held]);
+        service.ReportIndexMemory();
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

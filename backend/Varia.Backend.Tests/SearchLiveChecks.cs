@@ -135,10 +135,13 @@ internal static class SearchLiveChecks
         // Stop during a build answers CANCELLED and keeps what was read.
         using (var stop = new CancellationTokenSource())
         {
+            var ended = service.Search.Builds;
             var running = service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token);
             stop.Cancel();
             try { await running; check(true, "Stop ends a build (it had finished)"); }
             catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
+            // Stopped or finished, the build's end tells the memory report to walk again (no read left showing as running).
+            check(service.Search.Builds >= ended + 1, "a stopped build counts as ended for the memory report");
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
 

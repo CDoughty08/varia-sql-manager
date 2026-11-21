@@ -95,7 +95,8 @@ internal sealed class ObjectSearchService : IDisposable
     private long lastBuildMs = -1, lastSearchMs = -1, finished, builds;
     private int detailWalks;
     public long Finished => Interlocked.Read(ref finished);
-    /// <summary>Finished builds: a search changes nothing the index holds, so the memory report walks again only after a build.</summary>
+    /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
+    /// only after a build ends (or the budget moves).</summary>
     public long Builds => Interlocked.Read(ref builds);
     /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
     internal int DetailWalks => Volatile.Read(ref detailWalks);
@@ -134,8 +135,16 @@ internal sealed class ObjectSearchService : IDisposable
     internal void Finish(bool build, long ms)
     {
         Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
+        if (build) Ended();
+        else Interlocked.Increment(ref finished);
+    }
+
+    /// <summary>Records that a build ended: a stopped or failed one keeps no time, but what its reads left is walked again, so no
+    /// read shows as still running.</summary>
+    internal void Ended()
+    {
         // Builds before finished: a report that sees the finish sees the build.
-        if (build) Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref builds);
         Interlocked.Increment(ref finished);
     }
 
@@ -152,6 +161,7 @@ internal sealed class ObjectSearchService : IDisposable
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
+        var finishedBuild = false;
         lock (state.Gate)
         {
             // A newer build supersedes a running one, which answers CANCELLED and keeps what it read.
@@ -186,6 +196,7 @@ internal sealed class ObjectSearchService : IDisposable
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
             }
             Finish(build: true, watch.ElapsedMilliseconds);
+            finishedBuild = true;
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
@@ -206,6 +217,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             lock (state.Gate)
                 if (ReferenceEquals(state.Build, source)) { state.Build = null; state.Building = false; }
+            if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
     }
