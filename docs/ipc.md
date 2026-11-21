@@ -1097,7 +1097,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 - **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
   (16 – 4,096, default 64), BigQuery only: main (`optionsAllow`) and the backend refuse them for SQL Server. The backend
   decides after the first page, before `resultSet.opened`: memory when the rows arrived whole, under `memory`, or when
-  the first page's measured row cost times the rows fits half of what the query may still take; otherwise windowed, with
+  the first page's measured row cost times the rows within `maxRows` fits half of what the query and the global budget
+  may still take; otherwise windowed, with
   the first page kept in the cache. A result whose destination table cannot be read stays in memory.
 - **A misestimate.** An `automatic` result kept in memory that the budget refuses part way switches to windowed instead
   of truncating: its pages are freed, `revision` goes up, and `resultSet.residence` carries the new descriptor. The
@@ -1119,8 +1120,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit, up to twice it (the global budget still refusing it; past that, `TOO_LARGE` names the window cache
-  and its setting), and the cache trims back once no read holds them. A read that already sent rows answers short with them instead of failing: when a later block is
-  refused room (a window wider than the cache), when the table expires, or when the cache goes (Load into memory); the
+  and its setting), and the cache trims back once no read holds them. A read that already sent rows answers short with them instead of failing, whatever stops a later
+  block (refused room for a window wider than the cache, the table expiring, the cache going on Load into memory, or a
+  fetch error); a rate limit past the read's wait answers with the rows sent, none included, without an error. The
   grid reads on from there, under the new revision after a switch. After a release it is `RESULT_RELEASED`.
 - **Refusals.** Every other reader of stored pages (`results.view`, distinct values, profiles, search, row identities,
   diffs, pivots, Copy and Save) answers `REMOTE_RESULT` before any work, and so does one whose set switched to windowed

@@ -289,6 +289,14 @@ describe('results worker core', () => {
     expect(posted.some(message => 'id' in message && message.id === 70)).toBe(false)
     serve(reads()[1].rid)
     expect(posted.find(message => 'id' in message && message.id === 70)).toEqual({ type: 'cell', id: 70, text: 'name 10', isNull: false, truncated: false, error: false, formatted: false })
+    // Only once: a second read that ends without the row says it is not available rather than reading forever.
+    core.handle({ type: 'revise', key })
+    core.handle({ type: 'cell', id: 71, key, wires, row: 10, col: 1 })
+    core.handle({ type: 'revise', key })
+    const before = reads().length
+    core.handle({ type: 'revise', key })
+    expect(reads()).toHaveLength(before)
+    expect(posted.find(message => 'id' in message && message.id === 71)).toMatchObject({ code: 'RESULT_UNAVAILABLE' })
   })
 
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {

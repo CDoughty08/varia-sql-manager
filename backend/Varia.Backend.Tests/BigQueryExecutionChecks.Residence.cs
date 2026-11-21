@@ -37,6 +37,10 @@ internal static partial class BigQueryExecutionChecks
         Trace("DemoteAccounting");
         DemoteAccounting(check);
         FitsHalf(check);
+        var limit = TimeSpan.FromSeconds(20);
+        check(SqlService.ReadWait(limit, null) == limit && SqlService.ReadWait(limit, TimeSpan.FromSeconds(12)) == TimeSpan.FromSeconds(7)
+            && SqlService.ReadWait(limit, TimeSpan.FromSeconds(3)) == TimeSpan.Zero && SqlService.ReadWait(limit, TimeSpan.FromMinutes(5)) == limit,
+            "a windowed read waits within its deadline, less 5 s");
         Trace("RemoteRaces");
         await RemoteRacesAsync(check);
         Trace("TwoLoads");
@@ -362,6 +366,21 @@ internal static partial class BigQueryExecutionChecks
             var starts = blocks.Calls.Select(call => call.First / remote.BlockRows).ToArray();
             check(starts.Contains(7) && remote.CachedBlocks().Contains(7),
                 $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
+        }
+
+        // Scrolling up, the read-ahead takes the block above first, then the one below, then one more above.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var chosen = new List<long>();
+            await ReadRemote(remote, 10 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 9 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.SequenceEqual(new long[] { 8, 10, 7 }), $"scrolling up reads ahead the block above first: {string.Join(",", order)}");
         }
 
         // A fetch that fails with something other than a RequestException (a connection error past its retries): a read
@@ -820,6 +839,22 @@ internal static partial class BigQueryExecutionChecks
             var residence = executed?.ResultSets.Single().Residence;
             check(code == "ok" && residence == (maxRows == 0 ? "remote" : "memory"),
                 $"Automatic decides residence by the rows Maximum rows ({maxRows}) lets it show: {code} {message} {residence} {executed?.ResultSets.Single().Revision} {Texts(executed?.Messages ?? [])}");
+        }
+        // The room is what both budgets still have: a query budget with room to spare is not enough when other results fill
+        // the global budget.
+        foreach (var crowded in new[] { false, true })
+        {
+            var store = new ResultStore(8L << 20, 4L << 20);
+            long other = 0;
+            var reserved = !crowded || store.TryReserveCache(ref other, long.MaxValue, (15L << 20) / 2);
+            using var harness = new Harness(Lines(3000, i => new string('w', 1000)), store);
+            await harness.ConnectAsync();
+            var (code, executed, message) = await harness.Execute("SELECT n, s FROM t", args => args["maxRows"] = 500);
+            var residence = executed?.ResultSets.Single().Residence;
+            // Decided up front, not switched part way when the global budget refused a page.
+            var messages = Texts(executed?.Messages ?? []);
+            check(reserved && code == "ok" && residence == (crowded ? "remote" : "memory") && !messages.Contains("larger than estimated"),
+                $"Automatic decides by the room left in both budgets (global {(crowded ? "nearly full" : "free")}): {code} {message} {residence} {messages}");
         }
         // Stop part way: back to windowed, the load reported cancelled.
         using (var harness = new Harness(Lines(3000)))

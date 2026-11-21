@@ -299,9 +299,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   windowed result keeps. Each query takes them as it starts.
 - **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,
   under Always in memory, when its destination table cannot be read, or when its rows (the first page's measured cost
-  per row, times the rows it will show within Maximum rows) fit half of what the query may still take from the budget. Otherwise it is windowed, and the
+  per row, times the rows it will show within Maximum rows) fit half of what the query may still take from its budget and the global one. Otherwise it is windowed, and the
   first page seeds its first blocks. A windowed result counts at most 2,147,483,647 rows (the grid's 32-bit indexes);
-  Messages says so when BigQuery holds more.
+  Messages says so when more than that would show.
 - **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of
   truncating: its pages are freed, the grid keeps its place and drops its selection, and a screen reader hears that the
   result is now windowed.
@@ -313,8 +313,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   waits for the result's other fetches to settle; blocks a read waits for that do not fit together may pass the window
   cache, up to twice it, until the read is done; past that, the refusal says to raise it), and
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
-  way it is scrolling (fewer when the cache holds few blocks, the one ahead first); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, then
-  the grid shows the rows it has and asks again; a block only read ahead stops where the cache is full.
+  way it is scrolling (fewer when the cache holds few blocks, the one ahead first); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks (less near its
+  deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
+  after a few tries show Retry; a block only read ahead stops where the cache is full.
 - **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, with an empty cache that reads its rows from BigQuery again; a load after BigQuery's temporary

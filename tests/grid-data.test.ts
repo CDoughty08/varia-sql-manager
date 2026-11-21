@@ -344,23 +344,36 @@ describe('grid data', () => {
     expect(handle.prefetch).toHaveBeenCalledOnce()
   })
   it('reads a tile that keeps answering no rows again after doubling waits, then marks it failed so the grid offers Retry', async () => {
-    const { data, reads, settle, advance } = fixture(8)
+    const { data, reads, settle, advance, changed } = fixture(8)
     // A windowed result's tile answers empty every time (rate limited, or its table shorter than BigQuery said), cached as such.
+    // The grid draws only when told to (a complete result sends no more events), so each retry rides on the data's own wake.
     const frame = () => data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
-    frame()
-    for (let second = 0; second < 600; second++) {
+    const own = () => reads.filter(read => read.first < 128).length
+    // Each answer draws again, as the grid does when told the data changed.
+    const answer = async () => {
       for (const read of reads) if (!read.aborted()) read.resolve(0)
       await settle()
-      advance(100)
       frame()
     }
-    const own = () => reads.filter(read => read.first < 128).length
-    expect(own()).toBe(gridLimits.stallRetries + 1)
+    frame()
+    await answer()
+    expect(own()).toBe(1)
+    // Scrolled away and back: the frames stopped wanting it, so it is read again at once.
+    data.ensure(range(5_000, 5_040, 0, 7), 10_000, 0, 30)
+    await answer()
+    expect(own()).toBe(2)
+    await answer()
+    for (let step = 0; step < 80 && !data.error; step++) {
+      changed.mockClear()
+      advance(250)
+      if (changed.mock.calls.length > 0) { frame(); await answer() }
+    }
+    expect(own()).toBe(gridLimits.stallRetries + 2)
     expect(data.error).toBe(stalledText)
     // Retry reads it again at once.
     data.retry()
     frame()
-    expect(own()).toBe(gridLimits.stallRetries + 2)
+    expect(own()).toBe(gridLimits.stallRetries + 3)
   })
 
   it('reads a stalled tile again at once when more rows arrive, and never lets its long wait hold back another tile', async () => {

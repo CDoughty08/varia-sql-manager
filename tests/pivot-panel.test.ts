@@ -52,17 +52,22 @@ describe('pivot builder', () => {
     expect(container.textContent).toContain('Building again replaces Pivot of Totals (Result 1) once the new one is built.')
     act(() => { root.unmount() })
   })
-  it('says a result windowed in BigQuery cannot be pivoted yet, rather than offering to build it', () => {
+  it.each([
+    ['remote', 'complete', 'rows', windowedPivotText],
+    ['memory', 'complete', 'plan', 'This result cannot be pivoted.'],
+    ['memory', 'open', 'rows', 'Pivot this result after it finishes loading.']
+  ])('says why a result held %s, %s, of %s cannot be pivoted, rather than offering to build it', (residence, state, kind, note) => {
     const snapshot = { tabs: { t: { open: true, source: 'e1', sourceName: 'Result 1', draft: emptyDraft, running: false } as PivotTab }, info: new Map() }
     const pivot = { subscribe: () => () => {}, getSnapshot: () => snapshot, canPivot: () => false, cancel: vi.fn(), close: vi.fn(), run: vi.fn(), setDraft: vi.fn() }
     const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined }
-    const handle = { getSnapshot: () => ({ state: 'complete', residence: 'remote' }) }
-    const descriptor = { kind: 'rows', rowsStored: 0, columns: [{ name: 'Region', dataType: 'STRING', wire: 'text', nullable: true }] }
+    const handle = { getSnapshot: () => ({ state, residence }) }
+    const descriptor = { kind, rowsStored: 0, columns: [{ name: 'Region', dataType: 'STRING', wire: 'text', nullable: true }] }
     const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle, label: 'Result 1' }] } as unknown as TabResults
     const container = document.createElement('div')
     const root = createRoot(container)
     act(() => { root.render(createElement(WorkbenchProvider, { workbench: { pivot, results } as unknown as Workbench, children: createElement(PivotPanel, { tabId: 't', tab }) })) })
-    expect(container.textContent).toContain(windowedPivotText)
+    expect(container.textContent).toContain(note)
+    if (note !== windowedPivotText) expect(container.textContent).not.toContain(windowedPivotText)
     act(() => { root.unmount() })
   })
 })

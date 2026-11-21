@@ -1395,7 +1395,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The live region's sentence, after the 300 ms debounce; a copy's or save's outcome is read out again when repeated. */
-  announce(tabId: string, text: string): void {
+  announce(tabId: string, sentence: string): void {
+    // A switch not read out yet is said first: another sentence inside the debounce (a selection, a copy) replaces it.
+    const switches = (this.unheardSwitches.get(tabId) ?? []).join(' ')
+    const text = switches && !sentence.startsWith(switches) ? `${switches} ${sentence}` : sentence
     const previous = this.announcements.get(tabId)
     if (previous !== undefined) this.timers.clearTimeout(previous)
     this.announcements.set(tabId, this.timers.setTimeout(() => {

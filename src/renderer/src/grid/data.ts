@@ -71,8 +71,9 @@ export class GridData {
   private rows = 0
   private refetches: number[] = []
   /** Tiles whose reads brought no rows they did not have (a windowed result's block rate limited, refused room, or shorter
-   *  than BigQuery said): each is read again only after a doubling wait, and after g.stallRetries not until the frames
-   *  stop wanting it (scrolled away) or Retry. A result that is complete sends no more events, so nothing else stops it. */
+   *  than BigQuery said): each is read again after a doubling wait (its own wake: a complete result sends no more
+   *  events), at once when the frames stop wanting it (scrolled away) or more rows arrive, and after g.stallRetries it is
+   *  marked failed so the grid offers Retry. */
   private readonly stalls = new Map<number, { count: number; due: number; rows: number }>()
   private settleUntil = 0
   /** Frames in a row that moved more than 3 views. */

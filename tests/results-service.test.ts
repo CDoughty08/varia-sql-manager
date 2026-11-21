@@ -1122,7 +1122,12 @@ describe('results service sorting', () => {
     flush()
     timers.advance(1_000)
     expect(tab().announcement).toMatch(/Result 1 is now windowed in BigQuery: rows are read as you scroll\. Result 2 is now windowed in BigQuery/)
+    // Another sentence inside the delay (a selection's size) does not replace a switch: both are heard.
     client.emit('q1', { type: 'resultSet.residence', descriptor: { ...windowed(1, 0), residence: 'memory', revision: 2 } })
+    service.announceSelection('t1', '12 cells selected')
+    flush()
+    timers.advance(1_000)
+    expect(tab().announcement).toMatch(/Result 1 .*memory.*12 cells selected$/)
     service.release('t1')
     expect((service as unknown as { unheardSwitches: Map<string, unknown> }).unheardSwitches.size).toBe(0)
     service.dispose()

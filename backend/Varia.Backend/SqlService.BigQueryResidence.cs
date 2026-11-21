@@ -227,6 +227,11 @@ internal sealed partial class SqlService
 
     private static bool RateLimited(Exception error) => BigQueryService.RateLimited(error);
 
+    /// <summary>A windowed read waits for its blocks within <see cref="RemoteReadWait"/>, ending 5 s inside its deadline so its
+    /// rows go back before the request times out.</summary>
+    internal static TimeSpan ReadWait(TimeSpan limit, TimeSpan? remaining) =>
+        remaining is { } left ? TimeSpan.FromTicks(Math.Min(limit.Ticks, Math.Max(0, (left - TimeSpan.FromSeconds(5)).Ticks))) : limit;
+
     /// <summary>
     /// results.read of a windowed result: the cached pages that cover the window, fetching the blocks it lacks (and its
     /// viewer's read-ahead) on the fetch lane. It waits within <see cref="RemoteReadWait"/> and its credit, then answers with
@@ -234,7 +239,7 @@ internal sealed partial class SqlService
     /// </summary>
     private async Task<ResultsReadResult> ReadRemoteAsync(ResultsReadArgs args, ResultSetBuffer set, RemoteResult remote, RequestContext context)
     {
-        var wait = context.Remaining is { } left ? TimeSpan.FromTicks(Math.Min(RemoteReadWait.Ticks, Math.Max(0, (left - TimeSpan.FromSeconds(5)).Ticks))) : RemoteReadWait;
+        var wait = ReadWait(RemoteReadWait, context.Remaining);
         int pages = 0, rows = 0;
         long next;
         try
