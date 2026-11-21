@@ -494,6 +494,15 @@ describe('results service', () => {
     expect(await copying).toBeUndefined()
     service.dispose()
   })
+  it('says a windowed result still loading cannot be saved, rather than to wait for it', async () => {
+    const { api, client, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
+    flush()
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
+    expect(api.saveResults).not.toHaveBeenCalled()
+    service.dispose()
+  })
   it('refuses to save a windowed result before main shows the file dialog', async () => {
     const { api, service, flush } = fixture()
     service.begin('t1', 'q1')

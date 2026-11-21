@@ -239,7 +239,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
-  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
+  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot', snapshot.residence === 'remote') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).

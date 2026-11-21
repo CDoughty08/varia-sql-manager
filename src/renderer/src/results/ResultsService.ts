@@ -1060,9 +1060,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set) return undefined
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
-    if (snapshot.state !== 'complete') return stillLoading
-    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence).
+    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence). Before the
+    // loading check: waiting would not help.
     if (snapshot.residence === 'remote') return windowedSave
+    if (snapshot.state !== 'complete') return stillLoading
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
     if (this.heldOff(tabId, set.key)) return stillSorting
@@ -2272,8 +2273,11 @@ const headerable = (set: ResultSetEntry, column: number): boolean => Number.isIn
 export const beyondCapText = (row: number): string =>
   `The match is in row ${formatCount(row + 1)}, and a transposed grid draws only the first ${formatCount(wire.transpose.maxRows)} rows. Filter the rows, or turn Transposed off, to see it.`
 /** A transposed grid's strip when the view has more rows than it draws as columns. */
-export const capStripText = (rows: number, pivot: boolean): string =>
-  `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns. Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`
+export const capStripText = (rows: number, pivot: boolean, windowed = false): string =>
+  `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns.${windowed
+    // A windowed result refuses filters (REMOTE_RESULT): the strip offers no way to the rest that cannot work.
+    ? ' A result windowed in BigQuery cannot be filtered yet.'
+    : ` Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`}`
 
 /** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
 export function lengthSortable(column: ResultColumn): boolean {
