@@ -151,6 +151,25 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Follows the SET prologue in the same command, so opening a session costs no extra round trip. The login
     /// is the session's as it opened, as SSMS shows it from the connection.</summary>
     internal const string LoginSql = "SELECT SUSER_SNAME(), (SELECT connection_id FROM sys.dm_exec_requests WHERE session_id=@@SPID);";
+    /// <summary>Confirms a query session's catalog after a database change SqlClient saw no notice for. It reads no row (or
+    /// a plan) when SET NOEXEC, PARSEONLY, FMTONLY or SHOWPLAN_* is on, which also kept the USE from running.</summary>
+    internal const string InDatabaseSql = "SELECT CONVERT(bit, CASE WHEN DB_ID() = DB_ID(@database) THEN 1 ELSE 0 END);";
+
+    private static async Task<bool> InDatabaseAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = InDatabaseSql;
+        command.CommandTimeout = 0;
+        command.Parameters.Add(new SqlParameter("@database", System.Data.SqlDbType.NVarChar, 128) { Value = database });
+        return await command.ExecuteScalarAsync(token) is true;
+    }
+
+    /// <summary>The answer when a query session stayed in <paramref name="current"/> after Varia asked for
+    /// <paramref name="requested"/>; no batch of the script was sent.</summary>
+    internal static string DatabaseNotChanged(string requested, string current) =>
+        "The session is still using database '" + current + "', not '" + requested + "': SQL Server did not run the database change, "
+        + "which happens while SET NOEXEC, PARSEONLY, FMTONLY or SHOWPLAN is on in this tab. This script was not executed. "
+        + "Turn the option off (for example, run SET NOEXEC OFF) with '" + current + "' selected, then execute again.";
     /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
     /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
     internal string CommitSql { get; set; } = DefaultCommitSql;
@@ -1355,9 +1374,28 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
+            {
+                var before = connection.Database;
                 await connection.ChangeDatabaseAsync(args.Database!, token);
+                // SqlClient learns the catalog only from SQL Server's change notice, and a session with NOEXEC, PARSEONLY,
+                // FMTONLY or SHOWPLAN_* on compiles the USE without running it and sends none, so the script would run in
+                // the old database. So an unchanged catalog is confirmed by the server (a case-only difference from the
+                // session's name leaves it unchanged too). The confirmation is a query of Varia's own, not part of the
+                // switch, so its messages (SET STATISTICS TIME's) stay out of Messages.
+                bool confirmed;
+                connection.InfoMessage -= onInfo;
+                try { confirmed = !string.Equals(connection.Database, before, StringComparison.Ordinal) || await InDatabaseAsync(connection, args.Database!, token); }
+                finally { connection.InfoMessage += onInfo; }
+                if (!confirmed)
+                {
+                    status = "failed";
+                    var text = DatabaseNotChanged(args.Database!, before);
+                    messages.Add(text, MessageKind.Error);
+                    failure = new("SQL_ERROR", text, 0, 0);
+                }
+            }
             database = connection.Database;
-            if ((args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
+            if (failure is null && (args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
             {
                 var profile = Profile(args.ConnectionId);
                 if (profile.Major is > 0 and < 14 && profile.EngineEdition is not (5 or 8))
