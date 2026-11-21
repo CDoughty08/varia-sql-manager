@@ -1431,6 +1431,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
           sorts.delete(entry.key)
           run.sorts = sorts
         }
+        // The stack sized it by the older revision's rows: it settles again from this one (a load, once it completes).
+        const settledKey = setKey(event.descriptor)
+        if (run.settled.has(settledKey)) {
+          if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+          run.settled.delete(settledKey)
+        }
+        this.settle(run, event.descriptor)
         const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
         this.announce(tabId, (event.descriptor.residence === 'remote'
           ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
@@ -1480,7 +1487,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const key = setKey(descriptor)
     if (descriptor.state !== 'complete' || !run.setKeys.has(key) || run.settled.has(key)) return
     if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
-    run.settled.set(key, { rows: descriptor.rowsStored, strip: descriptor.incomplete || descriptor.truncated !== undefined })
+    // A windowed result stores no rows here: the stack sizes it by the rows its grid can read.
+    const rows = descriptor.residence === 'remote' ? descriptor.rowsAvailable : descriptor.rowsStored
+    run.settled.set(key, { rows, strip: descriptor.incomplete || descriptor.truncated !== undefined })
   }
 
   /** An error, PRINT or RAISERROR output opens the strip, unless the user opened or closed it in this run. SQL Server's other

@@ -161,6 +161,12 @@ internal sealed class RemoteResult : IDisposable
         return (int)Math.Clamp(TargetBlockBytes / bytes, floor, MaxBlockRows);
     }
 
+    /// <summary>What a fetch of <paramref name="rows"/> rows is expected to cost in the cache.</summary>
+    private long EstimateOf(int rows) => (long)Math.Ceiling(rows * rowBytes * 1.25) + ResultStore.PageOverhead;
+
+    /// <summary>A whole block's expected cost, as its fetch reserves it.</summary>
+    private long BlockEstimate => Math.Max(1, Math.Min(EstimateOf(BlockRows), CacheLimit / 2));
+
     public long Rows { get; }
     /// <summary>BigQuery holds more rows than <see cref="Rows"/> (the 32-bit cap or a row limit).</summary>
     public bool Capped { get; }
@@ -174,6 +180,12 @@ internal sealed class RemoteResult : IDisposable
     public bool Expired { get { lock (gate) return expired; } }
 
     /// <summary>The blocks cached, in order (checks).</summary>
+    /// <summary>Checks only: the blocks with a fetch running or queued.</summary>
+    internal int FetchingBlocks()
+    {
+        lock (gate) return blocks.Values.Count(block => block.Fetching is not null);
+    }
+
     internal long[] CachedBlocks()
     {
         lock (gate) return [.. blocks.Values.Where(block => block.Filled > block.First).Select(block => block.Index).Order()];
@@ -275,7 +287,15 @@ internal sealed class RemoteResult : IDisposable
         }
         finally
         {
-            lock (gate) foreach (var block in targets) block.Waiters--;
+            lock (gate)
+                foreach (var block in targets)
+                {
+                    // A fetch this read asked for that no read now waits for: a cancelled read's stops, and one that answered
+                    // short becomes its viewer's read-ahead, so a jump cancels it and the next read of it takes it back.
+                    if (--block.Waiters > 0 || block.Fetching is null || block.AheadOf != 0) continue;
+                    if (token.IsCancellationRequested) block.Stop?.Cancel();
+                    else block.AheadOf = viewer == 0 ? uint.MaxValue : viewer;
+                }
         }
     }
 
@@ -364,7 +384,7 @@ internal sealed class RemoteResult : IDisposable
                 // The block's estimated cost is reserved before it is read, evicting this result's least recent blocks for
                 // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
-                var estimate = Math.Min((long)Math.Ceiling(rows * rowBytes * 1.25) + ResultStore.PageOverhead, CacheLimit / 2);
+                var estimate = Math.Min(EstimateOf(rows), CacheLimit / 2);
                 Reserve(estimate, block);
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
@@ -466,8 +486,10 @@ internal sealed class RemoteResult : IDisposable
             viewer.First = first;
             viewer.Last = last;
             var maxBlock = (Rows - 1) / BlockRows;
+            // Only as many blocks as the cache holds beside the read's own: more would evict the rows on screen.
+            var room = CacheLimit / BlockEstimate - (last - first + 1);
             foreach (var index in new[] { first - 1, last + 1, viewer.Direction > 0 ? last + 2 : first - 2 })
-                if (index >= 0 && index <= maxBlock) ahead.Add(BlockLocked(index));
+                if (index >= 0 && index <= maxBlock && ahead.Count < room) ahead.Add(BlockLocked(index));
         }
         foreach (var block in ahead)
         {

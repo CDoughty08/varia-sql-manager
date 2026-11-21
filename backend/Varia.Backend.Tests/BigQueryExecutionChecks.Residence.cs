@@ -180,7 +180,8 @@ internal static partial class BigQueryExecutionChecks
             check(next >= 2050 && Consecutive(rows, 2000, 50), "the next read finds the rows the held fetch brought");
         }
 
-        // A jump cancels the viewer's stale read-ahead; the read's own block still arrives.
+        // A jump cancels the viewer's stale read-ahead, and the block of a read that answered short (it became the viewer's);
+        // the new read's own block still arrives.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
             var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -190,11 +191,40 @@ internal static partial class BigQueryExecutionChecks
             await ReadRemote(remote, 100 * 256, 10, viewer: 7, waitMs: 50);
             var cancelledBefore = blocks.Cancelled;
             blocks.Gate.SetResult();
-            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 10, 99, 100, 101, 102 }.All(cached.Contains), 15_000);
+            var settled = SpinWait.SpinUntil(() => remote.CachedBlocks() is var cached && new long[] { 99, 100, 101, 102 }.All(cached.Contains), 15_000);
             var cachedAfter = remote.CachedBlocks();
-            check(settled && !cachedAfter.Contains(9) && !cachedAfter.Contains(11) && !cachedAfter.Contains(12),
-                $"a jump cancels the viewer's earlier read-ahead and keeps the read's own block: {string.Join(",", cachedAfter)} (cancelled in flight: {cancelledBefore})");
+            check(settled && new long[] { 9, 10, 11, 12 }.All(block => !cachedAfter.Contains(block)),
+                $"a jump cancels the viewer's earlier read-ahead and a short-answered read's block, and keeps the new read's own: {string.Join(",", cachedAfter)} (cancelled in flight: {cancelledBefore})");
             // Another viewer's read-ahead is its own: viewer 8 jumping does not cancel viewer 7's.
+        }
+
+        // A cancelled read stops the fetch it started that no other read waits for; its viewer's read-ahead runs on.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks);
+            using var stop = new CancellationTokenSource();
+            var reading = remote.ReadAsync(20 * 256, 10, 3, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stop.Token);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 4, 15_000);
+            stop.Cancel();
+            try { await reading; } catch (OperationCanceledException) { }
+            blocks.Gate.SetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var cached = remote.CachedBlocks();
+            check(!cached.Contains(20) && new long[] { 19, 21 }.All(cached.Contains),
+                $"a cancelled read stops its own fetch and leaves its viewer's read-ahead running: {string.Join(",", cached)}");
+        }
+
+        // A cache that holds two blocks reads ahead one beside the read's own, and never evicts the block on screen for it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            var (next, _) = await ReadRemote(remote, 5 * remote.BlockRows, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var cached = remote.CachedBlocks();
+            check(next > 5L * remote.BlockRows && cached.Contains(5) && blocks.Calls.Count == 2 && remote.Evictions == 0,
+                $"a two-block cache reads ahead one block and keeps the one read: {string.Join(",", cached)} {blocks.Calls.Count} fetches, {remote.Evictions} evictions");
         }
 
         // The cache evicts its least recent blocks within its limit, and gives every byte back when released.

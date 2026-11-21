@@ -274,6 +274,23 @@ describe('results service', () => {
     service.closeResults('t1')
     expect(tab().settled.size).toBe(0)
   })
+  it('sizes a windowed result in the stack by the rows its grid can read, and again when it switches residence', () => {
+    const { client, service, flush, tab } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { rowsStored: 3 }) })
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 1_000_000, residence: 'remote', revision: 0, rowsTotal: 1_000_000 }) })
+    flush()
+    expect(tab().settled.get('1:2')).toEqual({ rows: 1_000_000, strip: false })
+    // A set that switches to windowed after it settled is sized again from the new revision.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    flush()
+    expect(tab().settled.get('1:1')).toEqual({ rows: 5_000, strip: false })
+    // Loading it back starts it open: it is not sized until it completes.
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 0, residence: 'memory', revision: 2 }) })
+    flush()
+    expect(tab().settled.has('1:1')).toBe(false)
+    service.dispose()
+  })
   it('bounds a run\'s sets and messages', () => {
     const { client, service, flush, tab } = fixture()
     service.begin('t1', 'q1')

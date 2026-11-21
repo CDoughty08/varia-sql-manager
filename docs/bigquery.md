@@ -310,7 +310,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   most recently used blocks within the window cache, reserving each block from the global result budget before it fetches
   (and any overrun after, never past the window cache: rows too wide for it answer that they are too wide), and
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
-  way it is scrolling; a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, or stops
+  way it is scrolling (fewer when the cache holds few blocks); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, or stops
   where the cache is full, then the grid shows the rows it has and asks again.
 - **Load into memory.** `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
@@ -320,7 +320,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; later lanes run them in
   BigQuery; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
   filters are removed when its result switches (the screen reader hears so). A destination table lasts
-  about 24 hours: once it has expired, cached rows still read and rows not cached answer `REMOTE_EXPIRED`.
+  about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
 
 ### Cost
 

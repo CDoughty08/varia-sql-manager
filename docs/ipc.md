@@ -982,7 +982,8 @@ PageBody := array(7)
 
 ## Result store and memory budget
 
-Results stay in backend memory, never on disk (`ResultStore`).
+Results stay in backend memory, never on disk (`ResultStore`); a windowed BigQuery result keeps only a budgeted block cache
+and reads its rows from BigQuery ([Remote results](#remote-results)).
 
 - **Budget.** Global: a quarter of the process's available memory (container-aware), within 256 MiB – 16 GiB, or the
   Tools › Options limit (`queryResults.grid.memoryLimitGiB`, 0 = automatic) up to three quarters of it; one query may
@@ -1103,7 +1104,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   when half the cache holds fewer, one at least); at
   most 2 fetches per result and 4 per connection; a 429 backs off with jitter. It waits up to 20 s (inside its deadline)
   and then answers with the rows it has; the grid draws the rest as loading and reads again. Each `viewer` reads ahead
-  one block either side and one more in its direction of travel; a jump cancels that viewer's stale read-ahead.
+  one block either side and one more in its direction of travel (only as many as the cache holds beside the read's own
+  blocks); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more stops if
+  the read was cancelled, and otherwise becomes its viewer's read-ahead.
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
@@ -1115,7 +1118,7 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   after that check: the page snapshot, a new view, a lease and an operation's release token refuse a windowed set as they
   take hold, a search or operation whose set switched (even one loaded back since) answers `REMOTE_RESULT`, and a copy
   the switch overtakes is refused rather than cut short. Both codes are in the shared `errorCodes` list. A 404 from `tabledata.list` (BigQuery's
-  result table expired) answers `REMOTE_EXPIRED` when no row of the window is cached; a read that sent cached rows first
+  result table expired) answers `REMOTE_EXPIRED` when the read reaches an uncached block before it has sent any row; a read that sent cached rows first
   answers short with them.
 - **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result
   like `query.execute`: unary with EVENTs, the same summary, stopped by `query.cancel(queryId)`. Main sends it only for a

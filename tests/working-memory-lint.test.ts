@@ -120,6 +120,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
   expect(reserve).toMatch(/throw new RequestException\("TOO_LARGE"/)
   const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
+  expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeGreaterThan(0)
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeLessThan(seed.indexOf('block.Pages.Add(page);'))
   // Every charge of the cache goes through the store's cache accounting.
   expect(count(remote, /\bstore\.TryReserve(?:Work|Spare)?\(/g)).toBe(0)
