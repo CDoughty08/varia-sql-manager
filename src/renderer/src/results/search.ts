@@ -110,6 +110,9 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   private readonly timers: Timers
   private readonly maxMatches: number
   private readonly tabs = new Map<string, TabState>()
+  /** Each held run's matched cells, by its rows (a new run brings new rows): a step only moves the active marker, so it
+   *  rebuilds no grid's set. */
+  private readonly cellSets = new WeakMap<readonly number[], ReadonlySet<number>>()
   private readonly unsubscribe: () => void
   private disposed = false
 
@@ -399,8 +402,10 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     const at = this.locate(tab)
     if (!at) return
     const { grid, local } = at
-    if (local >= grid.first && local < grid.first + grid.rows.length) return
+    // A read for an earlier step is stale either way: left running, it would replace the run that holds the active match.
     tab.fetch?.abort()
+    tab.fetch = undefined
+    if (local >= grid.first && local < grid.first + grid.rows.length) return
     const abort = tab.fetch = new AbortController()
     const last = grid.rows.length > 0 ? grid.rows[grid.rows.length - 1] : -1
     const backward = local === grid.total - 1 ? true : local === 0 ? false : local < grid.first
@@ -439,6 +444,16 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     tab.revealKey = tab.mode === 'columns' ? this.locateColumn(tab)?.key : this.locate(tab)?.grid.key
   }
 
+  private cellsOf(grid: GridRun): ReadonlySet<number> {
+    let cells = this.cellSets.get(grid.rows)
+    if (!cells) {
+      const built = new Set<number>()
+      for (let k = 0; k < grid.rows.length; k++) built.add(cellKey(grid.rows[k], grid.columns[k]))
+      this.cellSets.set(grid.rows, cells = built)
+    }
+    return cells
+  }
+
   private publishTab(tabId: string, tab: TabState): void {
     if (this.disposed) return
     const marks = new Map<EntryKey, GridMarks>()
@@ -460,8 +475,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
         partial ||= !grid.complete
         approximate ||= grid.approximate
         if (grid.rows.length === 0 || !shown.has(grid.key)) continue
-        const cells = new Set<number>()
-        for (let k = 0; k < grid.rows.length; k++) cells.add(cellKey(grid.rows[k], grid.columns[k]))
+        const cells = this.cellsOf(grid)
         const at = active?.grid === grid ? active.local - grid.first : -1
         const current = at >= 0 && at < grid.rows.length ? { row: grid.rows[at], column: grid.columns[at] } : undefined
         marks.set(grid.key, current ? { handle: grid.handle, cells, current } : { handle: grid.handle, cells })
