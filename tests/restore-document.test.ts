@@ -4,10 +4,10 @@ import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServ
 import type { RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
-import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
+import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
-import { coverage, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
+import { coverage, followPoint, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
 import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -187,6 +187,33 @@ describe('Restore Database as a document', () => {
     restore.updateDraft(id, { manual: [uuid(1)], stopAt: '2026-10-29T21:05:40' })
     expect(draftPlan(state().draft!, state().facts)).toEqual({ ids: [uuid(1)], manual: true })
   })
+  it('gives the Backup Timeline the points the document will accept, and the last backup taken whatever point is set', async () => {
+    const { restore, id, state } = opened()
+    await settled()
+    const at = (second: number) => `2026-10-29T21:05:${String(second).padStart(2, '0')}`
+    // A point already set no longer makes Last backup taken that point's plan's last log: the planner's last is log3 at :46.
+    restore.updateDraft(id, { stopAt: at(43) })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(46))
+    restore.updateDraft(id, { manual: [uuid(1), uuid(2), uuid(3)] })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(44))
+    // Under Manual Selection the band is the stretch the checked sets' last log stops in, and only it (or a last base's finish) is allowed.
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([{ from: at(41), to: at(44) }])
+    expect([40, 41, 43, 44, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, true, true, false, false])
+    restore.updateDraft(id, { manual: [uuid(1), uuid(4)] })
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([])
+    expect([40, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, false])
+    // OK is allowed exactly where draftPlan then has no problem, for every valid selection and the planner alike.
+    for (const manual of [undefined, [], [1], [1, 2], [1, 2, 3], [1, 2, 3, 5], [1, 4], [1, 4, 5]]) {
+      restore.updateDraft(id, { manual: manual?.map(uuid), stopAt: undefined })
+      const draft = state().draft!, facts = state().facts, covered = timelineCoverage(draft, facts)
+      for (let second = 35; second <= 50; second++) {
+        const plan = draftPlan({ ...draft, stopAt: at(second) }, facts), label = `${manual?.join() ?? 'planner'} @${second}`
+        const accepted = plan.ids.length > 0 && !plan.problem
+        expect(timelinePointAllowed(draft, facts, at(second), covered), label).toBe(accepted)
+        if (covered.some(stretch => stretch.from <= at(second) && at(second) <= stretch.to)) expect(accepted, label).toBe(true)
+      }
+    }
+  })
   it('disables the checkboxes of sets the planner never uses, with the reason', () => {
     const draft = { manual: [] } as unknown as RestoreDraft
     expect(setReason(history[0])).toBeUndefined()
@@ -302,6 +329,15 @@ describe('the Backup Timeline', () => {
     expect(stepPoint('a', false, at, span)).toBeUndefined()
     // A point after the last backup moves the window's end with it.
     expect(timeText(timelineWindow(history, 'day', timeMs('2026-10-30T09:00:00')).to)).toBe('2026-10-30T09:00:00')
+    // A point before the interval (a Manual Selection's older sets) ends the window there, so it still shows; one inside keeps the last backup's end.
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T19:00:00')).to)).toBe('2026-10-29T19:00:00')
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T20:30:00')).to)).toBe('2026-10-29T21:05:46')
+    // Once open, the window stays while the point moves inside it, and slides only as far as the point leaves it, either way.
+    const open = { from: timeMs('2026-10-29T20:00:00')!, to: timeMs('2026-10-29T21:00:00')! }, text = (window: { from: number, to: number }) => [timeText(window.from), timeText(window.to)]
+    expect(followPoint(open, timeMs('2026-10-29T20:30:00')!)).toEqual(open)
+    expect(followPoint(open, open.from)).toEqual(open)
+    expect(text(followPoint(open, timeMs('2026-10-29T19:59:00')!))).toEqual(['2026-10-29T19:59:00', '2026-10-29T20:59:00'])
+    expect(text(followPoint(open, timeMs('2026-10-29T21:01:00')!))).toEqual(['2026-10-29T20:01:00', '2026-10-29T21:01:00'])
     // The logs cover from the full backup's finish to the last log's, as one stretch at the end of an hour's window.
     const stretches = coverage(history, span)
     expect(stretches).toHaveLength(1)
