@@ -37,7 +37,7 @@ function mountFailing(code: string, message: string) {
   const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
   const activeLabel = () => { const id = root.getAttribute('aria-activedescendant'); return id ? root.ownerDocument.getElementById(id)?.getAttribute('aria-label') : undefined }
   const activeClass = () => { const id = root.getAttribute('aria-activedescendant'); return id ? root.ownerDocument.getElementById(id)?.className : undefined }
-  return { view, frame, activeLabel, activeClass, status: () => status }
+  return { view, root, frame, activeLabel, activeClass, status: () => status }
 }
 
 describe('a failed tile under the active cell', () => {
@@ -50,6 +50,17 @@ describe('a failed tile under the active cell', () => {
     // ...and the active cell says it is not loaded, pointing at Retry, rather than that it is loading.
     expect(grid.activeLabel()).toBe('Not loaded, use Retry to read these rows again')
     expect(grid.activeClass()).toContain('is-err')
+    grid.view.dispose()
+  })
+  it('writes no NULL tooltip on a cell whose tile read failed', async () => {
+    const grid = mountFailing('REMOTE_EXPIRED', 'expired')
+    await grid.frame()
+    await grid.frame()
+    expect(grid.status().tileError).toBe('expired')
+    const cells = [...grid.root.querySelectorAll('.rg-c.is-load.is-err')] as HTMLElement[]
+    expect(cells.length).toBeGreaterThan(1)
+    cells[1].dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+    expect(cells[1].getAttribute('title')).toBeNull()
     grid.view.dispose()
   })
 })
