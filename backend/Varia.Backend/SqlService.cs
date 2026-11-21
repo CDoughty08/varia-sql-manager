@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile", "agent.historyMessage", "results.remoteQuery",
         "results.diffSeek"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -433,7 +433,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// copies and exports take one of 16 result slots.</summary>
     public RequestLane LaneOf(string method) => method switch
     {
-        "query.execute" or "plans.estimate" => RequestLane.Query,
+        "query.execute" or "plans.estimate" or "results.remoteQuery" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
@@ -541,6 +541,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
+        "results.remoteQuery" => await RemoteQueryAsync(Read<RemoteQueryArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
@@ -1222,6 +1223,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
+        if (args.Residence is not null || args.WindowCacheMiB is not null) throw new RequestException("INVALID_PARAMS", "Result residence and the window cache apply only to BigQuery connections.");
         Name(args.Database);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
@@ -1854,10 +1856,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// still being built are not served, so the worker reads again after the next progress event.</summary>
     private async Task<ResultsReadResult> ReadResultsAsync(ResultsReadArgs args, RequestContext? context)
     {
-        if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.MaxRows is < 1 or > 65_536)
+        if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.MaxRows is < 1 or > 65_536 || args.Viewer is 0 or > int.MaxValue)
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
         if (context is not { IsStream: true }) throw new RequestException("INVALID_REQUEST", "Result pages are read as a stream with credit.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        // A windowed result's rows come from its block cache, fetched from BigQuery; it has no views (sort and filter run in BigQuery).
+        if (set.Remote is { } remote) return args.ViewId is null ? await ReadRemoteAsync(args, set, remote, context) : throw RemoteRefused();
         if (args.ViewId is { } viewId) return await ReadViewAsync(args, FindView(args.ResultId, viewId), context);
         var next = args.FirstRow;
         int pages = 0, rows = 0;
@@ -1931,6 +1935,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         var estimated = new List<long>();
+        // A windowed result answers from its cache only: this runs on the control lane and never reaches BigQuery.
+        if (set.Remote is { } remote) return args.ViewId is null ? new ResultsRowBytesResult(args.FirstRow, remote.RowBytes(args.FirstRow, args.Count), remote.Rows, []) : throw RemoteRefused();
         if (args.ViewId is { } viewId)
         {
             var view = FindView(args.ResultId, viewId);
@@ -1977,7 +1983,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.Sort is not { Length: <= ViewSorter.MaxKeys } || args.Replaces == 0
             || args.Filters is { Length: > ViewSorter.MaxFilters } || args.Sort.Length + (args.Filters?.Length ?? 0) == 0)
             throw new RequestException("INVALID_PARAMS", "A view needs up to 16 sort keys and up to 16 filters, and at least one of either.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         var filters = ViewFilters(args, set);
         var keys = new ViewKey[args.Sort.Length];
         for (var i = 0; i < keys.Length; i++)
@@ -2144,9 +2150,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
             || args.MaxMatches is < 1 or > ResultSearcher.MaxMatches || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "A search needs 1 to 1,024 characters of text and 1 to 10,000 matches from a row of the result.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        var revision = set.Revision;
         using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         // A packed result is read fused, never unpacked whole: in page order through a view far from its pages' (a sort),
@@ -2154,7 +2161,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await LowMemoryAware(Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token), ResultSearcher.TooLarge);
         // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
-        if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        // Switched to windowed under the search (and perhaps back): its pages were the older revision's.
+        if (set.Revision != revision) throw RemoteRefused();
+        if (found is null && view is null) throw Unavailable(args.ResultId);
         if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
         return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
     }
@@ -2167,7 +2177,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.Columns is not { Length: <= ColumnProfiler.MaxColumns } || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Up to 32 columns are profiled at a time.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         for (var i = 0; i < args.Columns.Length; i++)
             if (!Shown(set, args.Columns[i]) || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
@@ -2230,7 +2240,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
@@ -2269,7 +2279,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private DistinctSnapshot FindSnapshot(uint resultId, uint snapshotId)
     {
-        if (store.Find(resultId) is null) throw Unavailable(resultId);
+        Stored(store.Find(resultId) ?? throw Unavailable(resultId));
         return store.FindSnapshot(resultId, snapshotId) ?? throw SnapshotClosed();
     }
 
@@ -2332,7 +2342,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var by = args.By switch { "auto" => IdentityBy.Auto, "column" => IdentityBy.Column, "row" => IdentityBy.Row, _ => (IdentityBy?)null };
         if (args.ResultId == 0 || by is null || (by == IdentityBy.Column) != args.Column.HasValue)
             throw new RequestException("INVALID_PARAMS", "Rows are told apart by auto, column (with a column) or row.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         if (args.Column is { } column && !Shown(set, column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         // A diff's rows are told apart only by their entries (RowIdentity.Entries): no column of it is a key.
@@ -2372,7 +2382,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.Count is < 1 or > MaxRowIds || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
-        if (store.Find(args.ResultId) is null) throw Unavailable(args.ResultId);
+        Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         var identity = IdentityOf(args.ResultId);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var rows = view?.Rows ?? identity.Rows;
@@ -2391,7 +2401,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (args.ResultId == 0 || args.Ids is not { Length: >= 1 and <= MaxFindIds } || args.ViewId == 0 || args.Ids.Any(id => id is < 0 or > RowIdentity.Mask))
             throw new RequestException("INVALID_PARAMS", "Between 1 and 10,000 row identities are required.");
-        if (store.Find(args.ResultId) is null) throw Unavailable(args.ResultId);
+        Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         var identity = IdentityOf(args.ResultId);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var (positions, marks, truncated) = await Task.Run(() => IdentityMatches.Find(identity, view, args.Ids, MaxFindMatches, token), token);
@@ -2465,8 +2475,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Two different results, a context of -1 to 100 rows and a layout of unified or entry are required.");
         var entry = args.Layout == "entry";
         var match = DiffMatchOf(args.Match);
-        var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
-        var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
+        var left = Stored(store.Find(args.Left) ?? throw Unavailable(args.Left));
+        var right = Stored(store.Find(args.Right) ?? throw Unavailable(args.Right));
         if (!ReferenceEquals(left.Budget, right.Budget))
             throw new RequestException("INVALID_PARAMS", "Only two result sets of the same query can be compared.");
         // Tables only (grouped results PR 16): a pivot's aggregate would be ranked ahead of its group column as the key, and
@@ -2612,14 +2622,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// positions with ViewId), wrapping round, or the position of a look-alike row's partner. Reads the change index's running
     /// totals and per-row counts (the view's own totals under a view), and a tone only for the one row it lands on; finding a
     /// partner under a view is one pass over its order. Answers None when nothing is found, Hidden when the partner exists
-    /// but the view does not show it. (A remote result's refusal, REMOTE_RESULT, belongs here once results can be remote.)</summary>
+    /// but the view does not show it. A windowed result is refused first (Stored, REMOTE_RESULT).</summary>
     private async Task<ResultsDiffSeekResult> DiffSeekAsync(ResultsDiffSeekArgs args, CancellationToken token)
     {
         var seeking = args.From is not null || args.Direction is not null;
         if (args.ResultId == 0 || args.ViewId == 0 || seeking == (args.PartnerOf is not null)
             || (seeking && (args.From is not (>= -1 and <= MaxSafeInteger) || args.Direction is not ("next" or "previous"))) || args.PartnerOf is < 0 or > MaxSafeInteger)
             throw new RequestException("INVALID_PARAMS", "A seek names a position and a direction (next or previous), or the position whose possible match it finds.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         if (set.Kind != "diff" || set.DiffIndex is not { } index) throw new RequestException("INVALID_PARAMS", "Only a comparison's changes can be sought.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var answer = await Task.Run(() =>
@@ -2678,7 +2688,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
             throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
-        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         // Only a query's own rows (a group's Table): a pivot's figures, a diff's or a live table's columns are not data to
         // summarise, and a pivot is never made of a pivot.
         if (set.Kind is not "rows") throw new RequestException("INVALID_PARAMS", "Only a query's results can be pivoted.");
@@ -2800,6 +2810,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// on the operation's flow, so the leases it takes count their items there).</summary>
     internal async Task<T> UntilReleased<T>(Func<CancellationToken, T> operation, CancellationToken token, OperationProgress? progress, params ResultSetBuffer[] sets)
     {
+        var revisions = sets.Select(set => set.Revision).ToArray();
         using var work = CancellationTokenSource.CreateLinkedTokenSource([token, .. sets.Select(set => set.Released)]);
         try
         {
@@ -2812,6 +2823,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.FirstOrDefault(set => set.IsReleased) is { } released)
         {
             throw Unavailable(released.ResultId);
+        }
+        // A set switched to windowed under the operation (a misestimate), perhaps loaded back already: its pages are gone.
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && sets.Select((set, i) => set.IsRemote || set.Revision != revisions[i]).Any(moved => moved))
+        {
+            throw RemoteRefused();
         }
     }
 

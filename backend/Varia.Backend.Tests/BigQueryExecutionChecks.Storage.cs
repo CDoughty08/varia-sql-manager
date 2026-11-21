@@ -552,7 +552,7 @@ internal static partial class BigQueryExecutionChecks
         using (var harness = StorageHarness(jobs, storage, new ResultStore(256 * 1024, 128 * 1024)))
         {
             await harness.ConnectAsync();
-            var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t", Memory);
             var set = result?.ResultSets.Single();
             check(code == "ok" && result?.Status == "completed" && set is { RowsRead: 20000, Truncated: "queryBudget" } && set.RowsStored is > 0 and < 20000
                 && Says(result, "Results were truncated because the result memory budget"),
@@ -869,7 +869,7 @@ internal static partial class BigQueryExecutionChecks
             using (var harness = StorageHarness(jobs, storage, tight))
             {
                 await harness.ConnectAsync();
-                var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+                var (code, result, _) = await harness.Execute("SELECT n, s FROM t", Memory);
                 check(code == "ok" && result?.ResultSets.Single() is { RowsStored: 100_000, Truncated: null },
                     $"batches waiting for the reader hold no budget: a budget of the result and five batches stores it whole: {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated}");
             }
@@ -888,7 +888,7 @@ internal static partial class BigQueryExecutionChecks
             using (var harness = StorageHarness(jobs, storage, tight))
             {
                 await harness.ConnectAsync();
-                var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
+                var (code, result, _) = await harness.Execute("SELECT n, s FROM t", Memory);
                 check(code == "ok" && result?.ResultSets.Single() is { RowsStored: 0, Truncated: "queryBudget" } && tight.UsedBytes < 2L * wire,
                     $"a compressed batch whose decoded buffers do not fit the budget stops the read at the budget and gives every charge back (the empty set's own bytes stay): {code} {result?.ResultSets.Single().RowsStored} {result?.ResultSets.Single().Truncated} {tight.UsedBytes}");
             }

@@ -49,6 +49,17 @@ function fixture(o: { parallel?: number } = {}) {
 }
 
 describe('the Compare popover', () => {
+  it('neither offers nor pivots a result windowed in BigQuery, so neither opens on it to fail when run', () => {
+    const { compare, pivot, run, handle } = fixture()
+    const keys = run(3)
+    // Result 2 switched to windowed after it opened (resultSet.residence): its snapshot says so, its descriptor does not.
+    const windowed = handle(keys[1])
+    windowed.snapshot = { ...windowed.snapshot, residence: 'remote' }
+    expect(compare.targetsOf('t1', keys[0]).map(target => target.entry.number)).toEqual([3])
+    expect(compare.canPick('t1', keys[1])).toBe(false)
+    expect(pivot.canPivot('t1', keys[1])).toBe(false)
+    expect(pivot.canPivot('t1', keys[0])).toBe(true)
+  })
   it('offers the run\'s other Tables that share a column and have every row: never a Pivot, a comparison, a plan set or itself', async () => {
     const { results, compare, pivot, run, tab } = fixture()
     const keys = run(6, { plan: 3, columns: { 5: [column('Other')] } })

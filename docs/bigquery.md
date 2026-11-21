@@ -138,7 +138,8 @@ Remember password and credential references, pins the verified principal to the 
 target is `identity-changed`, and an answer without a verifiable principal is refused), records the connect in BigQuery's
 history and registers the handle's provider so methods for the other engine are refused before they reach it.
 
-`connections.disconnect` releases the handle and its client. A SQL Server method for a BigQuery handle answers
+`connections.disconnect` releases the handle and its client. A windowed result stays open with the blocks it has cached
+(still charged until it is closed); reading a block it lacks answers `NOT_CONNECTED`. A SQL Server method for a BigQuery handle answers
 `UNSUPPORTED_PROVIDER` (docs/ipc.md#providers).
 
 ## Pre-connect methods
@@ -176,7 +177,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
 - **Rows in memory.** `BigQueryColumnPlan` decodes each REST row straight into the result store's pages, as SQL
   Server's reader does: the same row limit, result budget (each page is charged while its rows are decoded), cell caps
   (text 65,535 characters, documents 2 MiB, bytes 32,766) and truncation notes. Rows past a limit stay in BigQuery and
-  are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
+  are counted from its `totalRows`; a result too large for the budget may instead stay in BigQuery
+  ([Residence](#residence)). More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
   is NULL with the read-error flag and one message for its column. Discard results reads no rows.
 - **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
   (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
@@ -283,6 +285,53 @@ type.
   fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
+
+### Residence
+
+A BigQuery result can be far larger than the memory budget, and its rows already sit in the job's destination table,
+which is free to read. So a result is either **in memory**, as SQL Server's are, or **windowed in BigQuery**: the
+backend keeps only the blocks the grid is showing, reads the rest as you scroll, and the caption says "windowed in
+BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is docs/ipc.md's Remote results).
+
+- **Setting.** Tools › Options › Query Results › BigQuery › Results: **Keep results** (`queryResults.bigQuery.residence`):
+  Automatically, by size (the default), Always in memory (the budget truncates) or Always windowed in
+  BigQuery; and **Block cache per windowed result** (`queryResults.bigQuery.windowCacheMiB`, 16 – 4,096 MiB, default 64), the blocks each
+  windowed result keeps. Each query takes them as it starts; Preview Rows' 1,000 rows are always read into memory.
+- **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,
+  under Always in memory, when its destination table cannot be read, or when its rows (the first page's measured cost
+  per row, times the rows it will show within Maximum rows) fit half of what the query may still take from its budget and the global one. Otherwise it is windowed, and the
+  first page seeds its first blocks. A windowed result counts at most 2,147,483,647 rows (the grid's 32-bit indexes);
+  Messages says so when more than that would show.
+- **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of
+  truncating: its pages are freed, the grid keeps its place and drops its selection, and a screen reader hears that the
+  result is now windowed. Low system memory is no misestimate: the query's read stops storing, as any query does (a Load into memory switches back, windowed), and a windowed
+  result fetches no block while it lasts (its reads answer that the computer is low on memory, keeping the blocks cached).
+- **Blocks.** About 4 MiB of measured rows each (256 – 16,384 rows, fewer for rows so wide that half the window cache,
+  allowing the estimate's 25% margin, holds fewer), read with `tabledata.list` from the destination
+  table, at most two at a time per result and four per connection, backing off on rate limits. The cache keeps the
+  most recently used blocks within the window cache, reserving each block from the global result budget before it fetches
+  (and any overrun after: a block too wide for the window cache answers that its rows are too wide; an overrun
+  waits for the result's other fetches to settle; blocks a read waits for that do not fit together may pass the window
+  cache, up to twice it, until the read is done; past that, the refusal says to raise it), and
+  shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
+  way it is scrolling (fewer when the cache holds few blocks, the one ahead first); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks (less near its
+  deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
+  after a few tries show Retry (a screen reader hears their cells as not loaded); a block only read ahead stops where the cache is full, never evicting the rows on screen,
+  and read-ahead counts blocks at the widest their rows have come out.
+- **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
+  Storage Read when it qualifies; a script statement's rows always through REST, which keeps their order), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
+  result windowed, whole, with an empty cache that reads its rows from BigQuery again (Messages says whether it did not fit
+  or the computer was low on memory); a load after BigQuery's temporary
+  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while another result of the same query loads (they share its budget). Closing the result stops the load,
+  which then says the result was closed. Reads under way when it starts
+  answer with the rows they have, and the grid reads again from memory.
+- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
+  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
+  filters are removed when its result switches (the screen reader hears so). The grid does not offer them where it can tell
+  first: Save Results As refuses before its file dialog (even while the result still loads), Copy before it stops the copy
+  running, a transposed grid's strip does not suggest filtering, the Pivot builder says the result cannot be pivoted yet, the
+  Compare popover leaves it out, and Search skips it. A destination table lasts
+  about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
 
 ### Cost
 
@@ -411,6 +460,9 @@ expires, snapshot time), in UTC and binary units. Empty facts are left out and v
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
+| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
+| `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
+| `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
 | `ROW_ACCESS` | Preview Rows on a table with row access policies | Use Script As › SELECT to query it (billed) |
 
 ## Emulator mode
@@ -443,7 +495,10 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Read part runs `BigQueryStorageFake` (Arrow batches through an in-process `IBigQueryStorageRead`): a golden of every
   type read through REST and Arrow to identical cells, the scanner, the session's request and thresholds, each fallback,
   the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
-  CONNECT.
+  CONNECT. Its Residence part covers the decision and both settings, the block cache (sizes, LRU, budget, lanes,
+  read-ahead per viewer, a jump, waits, expiry, rate limits), every reader's `REMOTE_RESULT`, the switch to windowed on
+  a misestimate through REST and Arrow, and Load into memory with its refusal and Stop. `tests/bigquery-remote-results.test.ts`,
+  `tests/results-port.test.ts` and `tests/result-client.test.ts` cover main's and the renderer's side.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;

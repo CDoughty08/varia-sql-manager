@@ -65,7 +65,7 @@ export const pivotValueSchema = z.union([
 
 /** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
 export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max), viewId: u32.optional() }).strict(),
+  z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max), viewId: u32.optional(), viewer: u31.optional() }).strict(),
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
   z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
@@ -213,11 +213,13 @@ export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | Results
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
-/** EVENT bodies for a query.execute request. */
+/** EVENT bodies for a query.execute or results.remoteQuery request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.opened'), ...session }).strict(),
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
   z.object({ type: z.literal('resultSet.closed'), descriptor: backendDescriptorSchema }).strict(),
+  // A BigQuery result switched between memory and windowed (essential): its new descriptor and revision.
+  z.object({ type: z.literal('resultSet.residence'), descriptor: backendDescriptorSchema.required({ residence: true, revision: true }) }).strict(),
   z.object({
     type: z.literal('progress'), completedBatches: count, totalBatches: count, batchNumber: count, iteration: count,
     results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncated: truncationSchema.optional() }).strict()).max(64)
@@ -277,7 +279,7 @@ export const resultMemoryDetailSchema = z.object({
   largest: z.array(z.object({
     resultId: u32, logicalBytes: count, storedBytes: count, state: z.enum(['raw', 'partial', 'packed', 'unpacking']), progress: z.number().int().min(0).max(100).optional(), live: z.literal(true).optional()
   }).strict()).max(maxLargestResults),
-  codec: codecCounters, heap: z.object({ committedBytes: count, freeBytes: count }).strict()
+  codec: codecCounters, heap: z.object({ committedBytes: count, freeBytes: count }).strict(), windowCacheBytes: count.optional()
 }).strict() satisfies z.ZodType<ResultMemoryDetail>
 export const indexMemoryDetailSchema = z.object({
   connections: count, objects: count, texts: count, references: count, definitions: count, packedDefinitions: count, definitionTexts: count, packedTexts: count,
