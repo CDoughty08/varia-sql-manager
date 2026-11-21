@@ -182,6 +182,15 @@ internal static class ScriptingTemplateChecks
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         var options = ScriptingLiveChecks.Defaults(json);
         var catalog = ScriptingCatalog.Current;
+        foreach (var (subtype, type) in new[] { ("scalar", "FN"), ("clrScalar", "FS") })
+        {
+            var scalar = Target("function", subtype, type, parameters: [P(1, "@p", new TypeRow("Units", "types", true))]);
+            scalar = scalar with { Ref = scalar.Ref with { Schema = "sales]", Name = "Total]" } };
+            check(DmlTemplates.Batch(scalar, ScriptVerb.Select, false) == Lines("SELECT [sales]]].[Total]]] (", "   <@p, [Units],>)"),
+                "SELECT To qualifies the " + subtype + " function even when optional schema qualification is off");
+        }
+        check(DmlTemplates.Batch(Target("function", "inline", "IF"), ScriptVerb.Select, false) == "SELECT * FROM [o] ()",
+            "an inline table-valued function still follows optional schema qualification");
         check(DmlTemplates.Batch(Target("function", "inline", "IF", parameters: [P(1, "@x")]), ScriptVerb.Select, true) == Lines("SELECT * FROM [dbo].[o] (", "   <@x, int,>)")
             && DmlTemplates.Batch(Target("function", "clrTableValued", "FT"), ScriptVerb.Select, true) == "SELECT * FROM [dbo].[o] ()"
             && DmlTemplates.Batch(Target("function", "scalar", "FN", parameters: [P(0, "", T("int", 4), true)]), ScriptVerb.Select, true) == "SELECT [dbo].[o] ()"
