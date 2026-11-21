@@ -34,8 +34,8 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   collation, NULL first. Sorting is in memory; the query never runs again.
 - float and real values show SSMS's 15 and 7 significant digits, but sorts, filters, the funnel's distinct values,
   duplicates, the column profile, Pivot and comparisons use the exact value: 1E0 and 1.0000000000000002E0 both show as
-  1 yet sort apart, filter apart and compare as changed. Where two such values would read the same in the funnel's list,
-  the rounded one shows its exact digits (1.0000000000000002).
+  1 yet sort apart, filter apart and compare as changed. In the funnel's list, and its search, a value the grid rounds
+  shows its exact digits (1.0000000000000002, or 0.30000000000000004 for 0.1E0 + 0.2E0).
 - With filters, the result's caption counts the rows kept ("34 of 100 rows") and lists each filter with a Remove button;
   a column's funnel stays filled while that column has a filter.
 - **Highlight** (grid menu) colours rows yellow, green, blue, purple or red, while the tab is open; Ctrl+Shift+H applies the last colour picked. A highlight follows its row by a

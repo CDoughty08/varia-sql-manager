@@ -145,11 +145,10 @@ internal static class FloatExactChecks
             var between = ViewSorter.Build(three, three.SealedSnapshot(), [], [new ViewFilter(FilterOp.Between, column, [1, 0], false, null, [])], CancellationToken.None).Order;
             check(string.Join(",", between) == "0,1", "Between ends at the highest selected exact value: " + string.Join(",", between));
         }
-        // A sql_variant holding floats keeps their exact values too; its rows' identities tell them apart.
-        ResultColumn[] variant = [new("V", "sql_variant", "text")];
-        var variants = FillRows(store, store.BeginQuery("variant"), variant, row => row.AppendFloat(High), row => row.AppendFloat(Low));
-        check(RowIdentity.Build(variants, variants.SealedSnapshot(), IdentityBy.Column, 0, CancellationToken.None).Unique,
-            "a sql_variant column's floats of one display text have distinct row identities");
+        // The funnel lists a value whose display text reads back as another by its exact text, even with no other value
+        // of that text beside it.
+        var computed = Fill(store, store.BeginQuery("computed"), [(0, 0.1 + 0.2, RealLow), (1, 0.5, RealLow)]);
+        check(Distinct(computed, 1) == "0.30000000000000004×1,0.5×1", "the funnel lists a computed float by its exact text: " + Distinct(computed, 1));
     }
 
     /// <summary>Results made from others (a Pivot, a comparison) keep the exact values of their float and real columns, and

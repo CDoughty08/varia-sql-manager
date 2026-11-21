@@ -52,7 +52,7 @@
 
 ### Fixes
 
-- **float and real values that show the same stay apart:** Two float or real values that differ beyond the 15 or 7 digits the grid shows \(1E0 and 1.0000000000000002E0 both show as 1\) are no longer treated as one value: they sort in their true order, a filter keeps only the value you picked, the funnel and column profile count them apart \(the funnel shows the rounded one's exact digits\), and Compare marks them changed\. The grid, Copy and Save Results As still show the rounded text\.
+- **float and real values that show the same stay apart:** Two float or real values that differ beyond the 15 or 7 digits the grid shows \(1E0 and 1.0000000000000002E0 both show as 1\) are no longer treated as one value: they sort in their true order, a filter keeps only the value you picked, the funnel and column profile count them apart \(the funnel shows a rounded value's exact digits\), and Compare marks them changed\. The grid, Copy and Save Results As still show the rounded text\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.

@@ -668,25 +668,8 @@ internal sealed class ColumnPlan
                 return Decimal(builder, number.Precision <= 28 ? CellFormat.WriteDecimal(span, number.Value) : CellFormat.WriteSqlDecimal(span, number), ColumnLength.DecimalBytes(number));
             }
             case SqlMoney money: return Estimated(Formatted(builder, CellFormat.WriteMoney(builder.BeginFormatted(), money.Value), 8));
-            // A float or real whose display text reads back as another value keeps its exact value, as in a float column.
-            case SqlSingle number:
-            {
-                var span = builder.BeginFormatted();
-                var written = CellFormat.WriteReal(span, number.Value);
-                var exact = !PageBuilder.ReadsBack(span[..written], number.Value);
-                Formatted(builder, written, 4);
-                if (exact) builder.KeepExact(number.Value);
-                return false;
-            }
-            case SqlDouble number:
-            {
-                var span = builder.BeginFormatted();
-                var written = CellFormat.WriteFloat(span, number.Value);
-                var exact = !PageBuilder.ReadsBack(span[..written], number.Value);
-                Formatted(builder, written, 8);
-                if (exact) builder.KeepExact(number.Value);
-                return false;
-            }
+            case SqlSingle number: return Formatted(builder, CellFormat.WriteReal(builder.BeginFormatted(), number.Value), 4);
+            case SqlDouble number: return Formatted(builder, CellFormat.WriteFloat(builder.BeginFormatted(), number.Value), 8);
             case SqlDateTime date: return Estimated(Formatted(builder, CellFormat.WriteDateTime(builder.BeginFormatted(), date.Value), 8));
             // date, time, datetime2 and datetimeoffset have no Sql* type; their scale is not reported, so all 7 digits show.
             case DateTime date: return Estimated(Formatted(builder, CellFormat.WriteDateTime2(builder.BeginFormatted(), date, 7), 8));

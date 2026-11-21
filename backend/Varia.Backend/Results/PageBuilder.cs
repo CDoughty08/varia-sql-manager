@@ -226,11 +226,11 @@ internal sealed class PageBuilder
     }
 
     /// <summary>Whether a float's display text reads back as the value itself, so it needs no exact value beside it.</summary>
-    public static bool ReadsBack(ReadOnlySpan<byte> text, double value) =>
+    private static bool ReadsBack(ReadOnlySpan<byte> text, double value) =>
         double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
 
     /// <summary>Whether a real's display text reads back as the value itself.</summary>
-    public static bool ReadsBack(ReadOnlySpan<byte> text, float value) =>
+    private static bool ReadsBack(ReadOnlySpan<byte> text, float value) =>
         float.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var shown) && shown == value;
 
     /// <summary>A real as its display text (<see cref="CellFormat.WriteReal"/>), its exact value kept beside the page when

@@ -300,7 +300,7 @@ internal sealed class CellHasher
     private readonly Kind[] kinds;
     private readonly (CompareInfo Info, CompareOptions Options)?[] cultures;
     private readonly bool[] hidden;
-    // Columns whose cells may keep an exact value beside their text (float, real, sql_variant).
+    // Columns whose cells may keep an exact value beside their text (float and real).
     private readonly bool[] exacts;
     private char[] chars = new char[256];
     private byte[] sortKey = new byte[512];
