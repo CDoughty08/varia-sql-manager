@@ -1538,7 +1538,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   charged to the budget with its packed page ([Charges](#result-store-and-memory-budget)), dropped when the page is
   unpacked and freed with its result. It takes at most an eighth of the page's packed bytes, and never so much that the
   page with it saves under a tenth (a page of GUIDs or random text would otherwise cost more than it saved): over that,
-  the largest gram filters are left out, then the whole filter. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
+  the largest gram filters are left out, then the whole filter. A page whose cap is below what any filter of it takes
+  (its header and each built column's characters) gets none without reading its cells or waiting for a fold. Over SQL Server's messages in 22 languages (200 packed pages, 50 MB), filters take
   2.8 KiB a page (4.6 % of the packed bytes) and build at about 240 MB/s on the packer's thread; specific words pass over
   40 – 66 % of the pages (8152, xp_cmdshell, Datenbank, データベース: Find 1.3 – 1.9 times faster), common words
   (database, error) none, and pages holding cells the fold cannot vouch for (Thai, Indic, Chinese punctuation) are always
