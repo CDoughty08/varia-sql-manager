@@ -58,8 +58,8 @@ describe('BackendStateService', () => {
     expect(connections.get('server-a')?.lost).toBe(true)
   })
   it('words the banner for unexpected and manual restarts', () => {
-    expect(noticeText({ unexpected: true, connections: 2, queries: 1 })).toBe('The SQL backend stopped unexpectedly and was restarted. 2 connections were lost and 1 running script was stopped; nothing was re-run.')
-    expect(noticeText({ unexpected: true, connections: 1, queries: 0 })).toBe('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 0 running scripts were stopped; nothing was re-run.')
+    expect(noticeText({ unexpected: true, connections: 2, queries: 1 })).toBe('The SQL backend stopped unexpectedly and was restarted. 2 connections were lost and 1 running query was stopped; nothing was re-run.')
+    expect(noticeText({ unexpected: true, connections: 1, queries: 0 })).toBe('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 0 running queries were stopped; nothing was re-run.')
     expect(noticeText({ unexpected: false, connections: 3, queries: 0 })).toBe('The SQL backend was restarted. 3 connections were closed.')
   })
 })
