@@ -108,6 +108,12 @@ internal sealed class ResultSetBuffer
     private volatile bool incomplete;
     /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
     private SearchMemo? searchMemo;
+    /// <summary>Sealed pages waiting to be packed as they sealed (<see cref="ResultStore.PackAtSeal"/>), oldest first, each
+    /// counted in its query's <see cref="QueryBudget.SealPending"/>; <see cref="sealQueued"/> pages have been queued so far.</summary>
+    private readonly Queue<StoredPage> sealQueue = new();
+    private int sealQueued;
+    /// <summary>A worker is packing <see cref="sealQueue"/> (<see cref="PackSealed"/>): at most one a set.</summary>
+    private bool sealRunning;
     /// <summary>A diff's change index (<see cref="Results.DiffIndex"/>), its bytes counted in <see cref="charged"/>.</summary>
     private DiffIndex? diffIndex;
     /// <summary>The allowance the replace that wrote this set holds (<see cref="ResultStore.Allow"/>), let go when it is freed.</summary>
@@ -190,6 +196,9 @@ internal sealed class ResultSetBuffer
     /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
     /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }
+    /// <summary>Never packed at seal (<see cref="ResultStore.PackAtSeal"/>): set by the synthesize test hook, before its first
+    /// row, so a check or benchmark that asks for a raw result gets one.</summary>
+    internal bool SealRaw { get; set; }
 
     /// <summary>The builder for the next row, or null when this set stores nothing more: released, its query stopped, or,
     /// for a derived set, a row the budget refused or a page sealed under low system memory.</summary>
@@ -293,6 +302,7 @@ internal sealed class ResultSetBuffer
         Volatile.Write(ref sealedPages, pages.Count);
         rowsAvailable += rows;
         bytesStored += page.Length;
+        QueueSealedLocked();
         // Checked at every seal, the only low-memory check there is: the page just sealed is kept, and nothing more is
         // stored. A query's own set stops its query, at its last seal too, so later sets store nothing. A derived set stops
         // only itself, at its next row (its caller then refuses it whole), and the query can still store another. One whose
@@ -356,6 +366,7 @@ internal sealed class ResultSetBuffer
         {
             state = 2;
             builder = null;
+            DropSealQueueLocked();
             stop = released;
             if (leases > 0 || pins > 0)
             {
@@ -404,6 +415,7 @@ internal sealed class ResultSetBuffer
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
             touchedAt = store.Now;
             if (--leases > 0 || pins > 0) return;
+            StartSealedLocked();
             if (!freePending)
             {
                 repack = state == 1 && store.Packing == PagePacking.EveryComplete;
@@ -458,6 +470,7 @@ internal sealed class ResultSetBuffer
             if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
             touchedAt = store.Now;
             if (--pins > 0 || leases > 0) return;
+            StartSealedLocked();
             if (!freePending)
             {
                 repack = state == 1 && store.Packing == PagePacking.EveryComplete;
@@ -712,14 +725,7 @@ internal sealed class ResultSetBuffer
         bool PackOne(StoredPage page)
         {
             if (Volatile.Read(ref stopped) != 0 || proceed is not null && !proceed()) return false;
-            if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) return true;
-            var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
-            // Built outside the lock from the raw page, only for a page that stays packed, and capped: at most an eighth of
-            // the packed bytes, and the page with its filter still saves a tenth (a wide page of GUIDs would cost more).
-            var filter = keep && raw.Length >= store.FilterMinBytes
-                ? PageFilter.Build(raw, Columns, Wires, store.FilterCapped ? Math.Min(bytes.Length / 8, raw.Length - raw.Length / 10 - bytes.Length) : long.MaxValue)
-                : null;
-            var stored = bytes.Length + (filter?.Bytes ?? 0);
+            if (page.Stored is not byte[] raw || Compress(raw, mode, quiet) is not { } packed) return true;
             lock (gate)
             {
                 if (state != 1 || pins > 0 || leases > 0)
@@ -730,22 +736,7 @@ internal sealed class ResultSetBuffer
                 // An operation unpacked the result whole between two pages and has already ended (its end poked the
                 // policy): a use, so the rest waits the delay again.
                 if (unpacks is not null && this.unpacks != generation) return false;
-                if (!ReferenceEquals(page.Stored, raw)) return true;
-                if (!keep)
-                {
-                    page.KeptRaw = true;
-                    store.CountKeptRaw();
-                    return true;
-                }
-                page.Stored = new PackedPage(bytes, filter);
-                store.CountPacked();
-                var difference = raw.Length - stored;
-                if (difference >= 0) ReturnLocked(difference);
-                else Charge(-difference);
-                packedBytes += stored;
-                packedLogical += raw.Length;
-                store.Held(stored, raw.Length, 0);
-                saved += difference;
+                saved += ReplaceLocked(page, raw, packed);
                 return true;
             }
         }
@@ -778,6 +769,145 @@ internal sealed class ResultSetBuffer
             if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
         }
         return saved;
+    }
+
+    /// <summary>A raw page packed outside every lock, with its Find filter, or null when the codec failed. A page that
+    /// saves less than a tenth stays raw (<c>Keep</c> false) unless the checks' mode packs every page; its filter is built
+    /// only for a page that stays packed, and capped: at most an eighth of the packed bytes, and the page with its filter
+    /// still saves a tenth (a wide page of GUIDs would cost more).</summary>
+    private (byte[] Bytes, PageFilter? Filter, bool Keep)? Compress(byte[] raw, PagePacking mode, Action<bool>? quiet = null)
+    {
+        if (store.Pack(raw, quiet) is not { } bytes) return null;
+        var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
+        var filter = keep && raw.Length >= store.FilterMinBytes
+            ? PageFilter.Build(raw, Columns, Wires, store.FilterCapped ? Math.Min(bytes.Length / 8, raw.Length - raw.Length / 10 - bytes.Length) : long.MaxValue)
+            : null;
+        return (bytes, filter, keep);
+    }
+
+    /// <summary>Replaces a page still holding <paramref name="raw"/> with its packed form (or marks it kept raw), under the
+    /// lock, once the caller has checked that no pin or lease is held: the saving goes back to the budgets at once.
+    /// Returns the bytes saved.</summary>
+    private long ReplaceLocked(StoredPage page, byte[] raw, (byte[] Bytes, PageFilter? Filter, bool Keep) packed)
+    {
+        if (!ReferenceEquals(page.Stored, raw)) return 0;
+        if (!packed.Keep)
+        {
+            page.KeptRaw = true;
+            store.CountKeptRaw();
+            return 0;
+        }
+        var stored = packed.Bytes.Length + (packed.Filter?.Bytes ?? 0);
+        page.Stored = new PackedPage(packed.Bytes, packed.Filter);
+        store.CountPacked();
+        var difference = raw.Length - stored;
+        if (difference >= 0) ReturnLocked(difference);
+        else Charge(-difference);
+        packedBytes += stored;
+        packedLogical += raw.Length;
+        store.Held(stored, raw.Length, 0);
+        return difference;
+    }
+
+    /// <summary>Queues the pages sealed since the last call for packing at seal (<see cref="ResultStore.PackAtSeal"/>): a
+    /// query's own set only (not a live table's, nor a derived set an operation builds from stored rows, which the policy
+    /// packs once complete), and only once it holds <see cref="ResultPacker.FloorBytes"/>, so a small result is never
+    /// packed; the pages sealed before then are queued with the one that reaches it.</summary>
+    private void QueueSealedLocked()
+    {
+        if (!store.PackAtSeal || store.Packing == PagePacking.Off || Budget.Live is not null || Derived || SealRaw || bytesStored < ResultPacker.FloorBytes) return;
+        var queued = 0;
+        for (; sealQueued < pages.Count; sealQueued++)
+        {
+            sealQueue.Enqueue(pages[sealQueued]);
+            queued++;
+        }
+        if (queued == 0) return;
+        Budget.SealQueued(queued);
+        Budget.Sealing(this);
+        StartSealedLocked();
+    }
+
+    /// <summary>Starts a thread-pool worker packing the queued pages (<see cref="PackSealed"/>) unless one runs or a pin or
+    /// lease is held: the reading thread never packs, and the last pin or lease to end starts it again. One worker a set,
+    /// so queries storing at once pack on as many threads; a single thread for all of them fell behind four at once.</summary>
+    private void StartSealedLocked()
+    {
+        if (sealRunning || sealQueue.Count == 0 || pins > 0 || leases > 0) return;
+        sealRunning = true;
+        ThreadPool.UnsafeQueueUserWorkItem(static set => { while (set.PackSealed()) { } }, this, preferLocal: false);
+    }
+
+    private void DropSealQueueLocked()
+    {
+        if (sealQueue.Count == 0) return;
+        Budget.SealQueued(-sealQueue.Count);
+        sealQueue.Clear();
+    }
+
+    /// <summary>Whether pages are queued for packing at seal that will pack without a lease ending first: a pin (a read)
+    /// ends with its read, Find or profile and its end restarts the worker, so a refused row waits through it (within the
+    /// wait's bounds); a lease (a Copy or Save) may hold the
+    /// set for as long as its job runs, so a row is refused at once rather than waiting on it.</summary>
+    internal bool SealPackable
+    {
+        get { lock (gate) return sealQueue.Count > 0 && leases == 0 && SealMayPackLocked(); }
+    }
+
+    /// <summary>Whether the queued pages may still be packed: not on a set released, nor on a complete one an operation has
+    /// unpacked whole (a use, which the policy's delays then govern), nor once packing is off.</summary>
+    private bool SealMayPackLocked() => store.Packing != PagePacking.Off && (state == 0 || state == 1 && unpacks == 0);
+
+    /// <summary>Packs the oldest queued page outside the lock and replaces it as <see cref="Pack"/> does, never while a pin
+    /// or lease is held (the page stays queued, and the last hold to end hands the set over again). The page's saving goes
+    /// back to the budgets at once, which wakes a row waiting for room. Returns whether more remain to pack now. A failure, a defect never the user's, drops the queue:
+    /// the pages stay raw and readable, and the policy packs them once the result is complete.</summary>
+    internal bool PackSealed()
+    {
+        try
+        {
+            StoredPage page;
+            lock (gate)
+            {
+                if (!SealMayPackLocked()) DropSealQueueLocked();
+                if (sealQueue.Count == 0 || pins > 0 || leases > 0) return sealRunning = false;
+                page = sealQueue.Peek();
+            }
+            var raw = page.Stored as byte[];
+            var packed = raw is null ? null : Compress(raw, store.Packing);
+            store.SealCompressed?.Invoke(this);
+            long saved = 0;
+            lock (gate)
+            {
+                // A hold began while the page packed: it stays queued for the hold's end.
+                if (pins > 0 || leases > 0) return sealRunning = false;
+                if (SealMayPackLocked() && sealQueue.Count > 0 && ReferenceEquals(sealQueue.Peek(), page))
+                {
+                    sealQueue.Dequeue();
+                    Budget.SealQueued(-1);
+                    if (raw is not null && packed is { } done) saved = ReplaceLocked(page, raw, done);
+                }
+            }
+            if (saved > 0) store.Freed(saved, live: false, compacts: false);
+            // A page that saved nothing leaves a row waiting for room to look again, now that less is queued.
+            else store.RoomChanged();
+            lock (gate)
+            {
+                if (sealQueue.Count > 0 && pins == 0 && leases == 0 && SealMayPackLocked()) return true;
+                if (!SealMayPackLocked()) DropSealQueueLocked();
+                return sealRunning = false;
+            }
+        }
+        catch (Exception)
+        {
+            lock (gate)
+            {
+                DropSealQueueLocked();
+                sealRunning = false;
+            }
+            store.RoomChanged();
+            return false;
+        }
     }
 
     /// <summary>Unpacks every packed page in place before an operation that reads the whole result (a diff read far out

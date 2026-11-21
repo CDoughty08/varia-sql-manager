@@ -516,6 +516,9 @@ internal static class PackerChecks
         packer.Delay = 1L << 40;
         packer.VisibleDelay = 1L << 40;
         var store = service.Results;
+        // The policy's visibility rules alone: the service also packs a result as it stores (SealPackingChecks).
+        check(store.PackAtSeal, "the backend process's service packs pages as they seal");
+        store.PackAtSeal = false;
         var set = Filled(store, "service", BigRows);
         var source = Guid.NewGuid().ToString();
         object Visible(long seq, params uint[] ids) => service.DispatchAsync("results.visibility", JsonSerializer.SerializeToElement(new { source, seq, visible = ids }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
