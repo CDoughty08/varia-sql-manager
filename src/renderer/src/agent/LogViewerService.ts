@@ -271,6 +271,8 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
       this.patch(state.id, { connectionId, confirm, selectedStep: undefined, message: undefined, profile: { status: 'unknown' }, ...moved ? { jobs: [], caps: undefined, note: undefined, pendingJob: undefined } : {} })
       if (moved) this.setFilters(state.id, { checked: undefined, run: undefined })
       if (connectionId) void this.readProfile(state.id)
+      // A run kept through a lost connection reads its message again on the new one (nothing else would, as the run did not change).
+      void this.readMessage(state.id)
     }
   }
 
@@ -476,6 +478,8 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     const outcome = deleteOutcome(result, jobs.length, thrown, agentHistory.olderThan)
     if (!outcome.ok) { this.patch(id, { confirm: { ...confirm, running: false, error: { ...outcome.code ? { code: outcome.code } : {}, message: outcome.message } } }); return }
     this.patch(id, { confirm: undefined, deleted: outcome.line, message: undefined, selectedStep: undefined })
+    // The selected run may outlive an older-than delete: read its message again (gone, if the delete took it).
+    void this.readMessage(id)
     this.options.focus?.(id)
     this.refresh(id)
   }

@@ -240,8 +240,17 @@ describe('the Log File Viewer', () => {
     expect(logViewer.get(id)?.confirm).toMatchObject({ running: false, error: { code: 'PERMISSION_DENIED', message: 'Refused.' } })
     api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: ['3 history entries purged.'], elapsedMs: 1 } })
     logViewer.setConfirm(id, { scope: 'older', count: 2, unit: 2 })
+    // A selected run whose message shows: after the delete its message is read again, not left reading.
+    const grid = { snapshot: { activeKey: `${nightly}:15` } as Record<string, unknown>, subscribe() { return () => {} }, getSnapshot() { return this.snapshot } }
+    api.agentHistoryMessage.mockResolvedValue({ ok: true, value: { elapsedMs: 1, message: 'The job failed.' } })
+    logViewer.attachRuns(id, grid as never)
+    await settled()
+    const reads = api.agentHistoryMessage.mock.calls.length
     const refreshes = handle().refreshes
     await logViewer.confirmDelete(id)
+    await settled()
+    expect(api.agentHistoryMessage.mock.calls.length).toBe(reads + 1)
+    expect(logViewer.get(id)?.message).toEqual({ key: `${nightly}:15`, state: 'ready', text: 'The job failed.' })
     expect(api.executeObjectAction).toHaveBeenLastCalledWith(expect.objectContaining({ agentHistory: { jobs: [nightly], olderThan: { count: 2, unit: 2 } } }))
     expect(logViewer.get(id)).not.toHaveProperty('confirm')
     expect(logViewer.get(id)?.deleted).toBe(`${logViewerText.deletedOlder(1, 2, 2)} 3 history entries purged.`)
