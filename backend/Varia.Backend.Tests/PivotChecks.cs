@@ -211,6 +211,12 @@ internal static class PivotChecks
         var sql = Source(store, [["0", numericMax], ["0", numericMax], ["0", "-" + numericMax]], [plan.Columns[2], sqlNumeric]);
         var (_, sqlTotals) = Pivot(store, sql, new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Avg, 1)]));
         check(Text(sqlTotals).Single() == "0|ERR|ERR", "SQL Server NUMERIC retains its existing accumulator overflow rule");
+        using var declared = JsonDocument.Parse("""{"fields":[{"name":"g","type":"INT64"},{"name":"cents","type":"NUMERIC","precision":"31","scale":"2"}]}""");
+        var cents = Varia.Backend.BigQuery.BigQueryColumnPlan.From(declared.RootElement)!.Columns;
+        var centsMax = new string('9', 29) + ".99";
+        var (_, centsTotals) = Pivot(store, Source(store, [["0", centsMax], ["0", centsMax], ["1", centsMax], ["1", centsMax], ["1", "-" + centsMax]], [cents[0], cents[1]]), new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Avg, 1)]));
+        check(Text(centsTotals).SequenceEqual(["0|ERR|" + centsMax + "0000", "1|" + centsMax + "|" + new string('3', 29) + ".330000"]),
+            "BigQuery NUMERIC(P, 2) sums past NUMERIC's 29 whole digits are cell errors: " + string.Join(" / ", Text(centsTotals)));
         var max = (BigInteger.One << 255) - 1;
         static string AtScale38(BigInteger units)
         {

@@ -741,7 +741,8 @@ internal static class PivotOutput
                 var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(39, '0');
                 builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^38] + "." + digits[^38..]);
             }
-            else if (BigInteger.Abs(units) >= (BigInteger)ResultPivoter.Decimal38) builder.AppendNull(error: true);
+            // NUMERIC holds 29 whole digits whatever a column's declared scale, so test the result at NUMERIC's own scale of nine.
+            else if (BigInteger.Abs(units) * BigInteger.Pow(10, 9 - shown) >= (BigInteger)ResultPivoter.Decimal38) builder.AppendNull(error: true);
             else builder.EndFormatted(WriteScaled(builder.BeginFormatted(), (Int128)units, shown));
             return 0;
         }
