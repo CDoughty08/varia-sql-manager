@@ -137,8 +137,9 @@ describe('applyUpdate', () => {
     expect((await readdir(join(dir, 'a'))).sort()).toEqual(['Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage', 'varia.AppImage'])
   })
   // Confirmation arrives after the wait began, through the folder's watch: a broken watch would wait out the whole window
-  // (the default, far past the test's timeout) instead.
-  it('notices a confirmation that comes after the new AppImage started, and an exit after it is still a success', async () => {
+  // (the default, far past the test's timeout) instead. AppImages run only on Linux, whose watch (inotify) sees every change
+  // once watch() returns; macOS's (FSEvents) can miss one made just after it starts, so it is not tested there.
+  it.skipIf(process.platform === 'darwin')('notices a confirmation that comes after the new AppImage started, and an exit after it is still a success', async () => {
     const { current, staged, renamed } = await appImage()
     await applyUpdate('appimage', staged, '1.1.0', { env: { APPIMAGE: current }, currentVersion: '1.0.0', spawn: confirmingSpawn(true).spawn })
     expect(await readdir(join(dir, 'a'))).toEqual(['Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage'])
