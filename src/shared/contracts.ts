@@ -1021,6 +1021,8 @@ export interface VariaApi {
   checkSqlFiles(): Promise<ApiResult<FileChange[]>>
   /** Reads a registered file again, keeping its id. */
   reloadSqlFile(fileId: string): Promise<ApiResult<OpenSqlFile>>
+  /** Keeps the tab's text after a reload read its file (No when asked again): main registers the file as before that read. */
+  keepSqlFile(fileId: string): Promise<ApiResult<void>>
   /** Visual Studio's "modified outside of the source editor" question about one file, in main's message box. */
   confirmReload(prompt: ReloadPrompt): Promise<ApiResult<ReloadAnswer>>
   /** File › Recent Files, most recent first, as many as Options shows; names and paths are for display only. */

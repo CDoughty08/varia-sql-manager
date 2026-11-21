@@ -9,7 +9,7 @@ import { requireKeptPins, type KeptSession } from './session'
 import { quitStoppingNotes, sessionCloseNoteText, type SessionCloseNote } from '../../../shared/sessions'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
-  & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload' | 'keepSession'>>
+  & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'keepSqlFile' | 'confirmReload' | 'keepSession'>>
 export interface FileServiceOptions {
   /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
   readonly autoReload?: () => boolean
@@ -182,7 +182,9 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         // fill still appending is not an edit, and an edit undone back to the saved text loses nothing.
         const revision = this.documents.editRevision(id), read = await this.readAgain(id)
         if (!read || this.disposed || !this.documents.get(id)) continue
-        if (this.documents.editRevision(id) === revision || !this.documents.hasUnsavedEdits(id) || await ask(this.documents.hasUnsavedEdits(id))) this.applyReload(id, read)
+        if (this.documents.editRevision(id) === revision || !this.documents.hasUnsavedEdits(id) || await ask(true)) this.applyReload(id, read)
+        // Main took the read as the file's new baseline: No puts back the one before, so the next Save asks first.
+        else unwrap(await this.api.keepSqlFile?.(fileId) ?? { ok: true, value: undefined })
       } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
     if (failed.length) throw new Error([...failed, ...deleted].join(' '))

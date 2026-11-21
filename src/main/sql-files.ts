@@ -153,6 +153,9 @@ export class SqlFileStore {
   private stamps = new Map<string, Stamp>()
   /** Files a check reported changed that were not reloaded since: their next Save asks before replacing that change. */
   private conflicts = new Set<string>()
+  /** What each file's last reload replaced, kept while its registration is still the one that reload made, so `keep` can
+   *  put it back when the page does not put the text it read in its tab. */
+  private reloaded = new Map<string, { readonly before: RegisteredFile; readonly conflict: boolean; readonly after: RegisteredFile }>()
   /** Change-check comparisons not settled yet, including ones a check stopped waiting for. */
   private comparing = new Map<string, Promise<Comparison>>()
   /** The last registration a read started (`serially`). */
@@ -311,10 +314,26 @@ export class SqlFileStore {
 
   /** Reads a registered file again (Yes in File changed), keeping its id; what it sees becomes the file's stamp. */
   async reload(fileId: string): Promise<OpenSqlFile> {
-    const { file, kind } = this.registered(fileId)
+    const before = this.registered(fileId), conflict = this.conflicts.has(fileId), { file, kind } = before
+    this.reloaded.delete(fileId)
     const opened = await this.read(file.path, { kind, reload: true })
     if (opened.id !== fileId) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
+    const after = this.files.get(fileId)
+    if (after) this.reloaded.set(fileId, { before, conflict, after })
     return opened
+  }
+
+  /**
+   * No after a reload read the file (the user typed while it was read and then kept that text): the file is registered
+   * as it was before that read, so its next Save asks before replacing the change, as after any No. Nothing happens once
+   * a save, another reload or a release has replaced what that reload registered.
+   */
+  keep(fileId: string): void {
+    const reloaded = this.reloaded.get(fileId)
+    this.reloaded.delete(fileId)
+    if (!reloaded || this.files.get(fileId) !== reloaded.after) return
+    this.files.set(fileId, reloaded.before)
+    if (reloaded.conflict) this.conflicts.add(fileId)
   }
 
   /**
@@ -383,8 +402,8 @@ export class SqlFileStore {
 
   /** A cache for one burst of opens: pass it to each `read` or `register` of the burst, then drop it. */
   targets(): TargetCache { return new Map() }
-  release(fileId: string): void { this.files.delete(fileId); this.stamps.delete(fileId); this.conflicts.delete(fileId) }
-  clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear() }
+  release(fileId: string): void { this.files.delete(fileId); this.stamps.delete(fileId); this.conflicts.delete(fileId); this.reloaded.delete(fileId) }
+  clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear(); this.reloaded.clear() }
   private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
   /**
    * Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. On POSIX the

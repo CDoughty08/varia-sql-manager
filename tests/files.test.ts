@@ -25,6 +25,7 @@ function fixture() {
     openRecentFile: vi.fn<VariaApi['openRecentFile']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this test.' })),
+    keepSqlFile: vi.fn<VariaApi['keepSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' }))
   }
   // Reload modified files unless there are unsaved changes.
@@ -837,6 +838,9 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f1', dirty: true, more: false }])
     expect(model(query.id).getValue()).toBe('SELECT 1 -- typed during the read')
     expect(documents.get(query.id)?.dirty).toBe(true)
+    // Main took the read as the file's baseline: keeping the text puts back the one before, so the next Save asks first.
+    expect(api.keepSqlFile.mock.calls).toEqual([['f1']])
+    api.keepSqlFile.mockClear()
     // Yes after an edit during an answered reload's read replaces it with what was read, leaving the query clean.
     const again = deferred<Awaited<ReturnType<VariaApi['reloadSqlFile']>>>()
     api.reloadSqlFile.mockImplementationOnce(() => again.promise)
@@ -851,6 +855,7 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(api.reloadSqlFile).toHaveBeenCalledTimes(2)
     expect(model(query.id).getValue()).toBe('SELECT 9')
     expect(documents.get(query.id)?.dirty).toBe(false)
+    expect(api.keepSqlFile).not.toHaveBeenCalled()
   })
   it('reloads without asking again after an edit undone during the read, and asks again under Yes to All without its All buttons', async () => {
     const { documents, api, files, model, options } = fixture()
@@ -885,6 +890,7 @@ describe('files main opened, Recent Files and changes made outside', () => {
     await checking
     expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f1', dirty: false, more: true }, { fileId: 'f2', dirty: true, more: false }])
     expect([query, two, three].map(document => model(document.id).getValue())).toEqual(["SELECT 'f1 from disk'", 'SELECT 2 -- mine', "SELECT 'f3 from disk'"])
+    expect(api.keepSqlFile.mock.calls).toEqual([['f2']])
   })
   it('counts typing into a large file still filling as unsaved, and its fill\'s chunks as no edit, when reloading it', async () => {
     const { documents, api, files, model, options, frame } = fixture()
@@ -912,6 +918,20 @@ describe('files main opened, Recent Files and changes made outside', () => {
     await files.checkExternalChanges()
     expect(api.confirmReload.mock.calls.map(([prompt]) => prompt)).toEqual([{ fileId: 'f2', dirty: true, more: false }])
     expect(model(other.id).getValue().startsWith('-- mine\n')).toBe(true)
+    // Yes, then only the fill's chunks arrive while main reads the file: no edit, so it is not asked about again.
+    const again = deferred<Awaited<ReturnType<VariaApi['reloadSqlFile']>>>()
+    api.reloadSqlFile.mockImplementationOnce(() => again.promise)
+    api.confirmReload.mockClear()
+    api.confirmReload.mockResolvedValueOnce({ ok: true, value: 'yes' })
+    const reloading = files.checkExternalChanges()
+    await vi.waitFor(() => expect(api.reloadSqlFile).toHaveBeenCalledTimes(2))
+    expect(documents.isFilling(other.id)).toBe(true)
+    frame()
+    again.resolve({ ok: true, value: { ...openedFile('f2', 'C:/other.sql'), content: 'SELECT 8' } })
+    await reloading
+    expect(api.confirmReload).toHaveBeenCalledTimes(1)
+    expect(model(other.id).getValue()).toBe('SELECT 8')
+    expect(api.keepSqlFile).not.toHaveBeenCalled()
   })
   it('reloads as one undoable edit of what changed, with the file\'s line ending, leaving the query clean', async () => {
     const { documents, api, files, model } = fixture()
