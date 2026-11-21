@@ -240,11 +240,19 @@ export class ResultsPortHost {
 
   queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened') this.own([event.descriptor])
+    // A switch never opens a result: it refreshes one this renderer still owns, so a close that crossed it (or a set the
+    // backend released meanwhile) stays refused here.
+    else if (event.type === 'resultSet.residence' && this.owns(event.descriptor.generation, event.descriptor.resultId)) {
+      if (event.descriptor.state === 'released') this.owned.delete(event.descriptor.resultId)
+      else this.own([event.descriptor])
+    }
     this.post({ t: 'query', queryId, event })
   }
 
   querySummary(summary: QueryResult): void {
-    this.own(summary.resultSets)
+    // A set the summary names released is gone (a load that Close Results stopped answers its set so): owning it again
+    // would send its reads to the backend rather than refuse them here.
+    this.own(summary.resultSets.filter(set => set.state !== 'released'))
     if (summary.planSets) this.own(summary.planSets)
     this.rememberMemory('results', summary.budget)
   }
@@ -343,6 +351,7 @@ export class ResultsPortHost {
     }
     const params: ResultsReadParams = { resultId: request.resultId, firstRow: request.firstRow, maxRows: request.maxRows }
     if (request.viewId !== undefined) params.viewId = request.viewId
+    if (request.viewer !== undefined) params.viewer = request.viewer
     stream.handle = this.backend.read(request.generation, params, sink, credit)
     stream.handle.done.then(result => {
       if (this.streams.get(rid) !== stream || this.port !== port) return

@@ -76,6 +76,9 @@ interface Binding {
   /** The column highlights follow, when this result has none like it (or, `ambiguous`, several). */
   readonly lacks?: string
   readonly ambiguous?: boolean
+  /** Its identify failed: kept bound, so a publish does not ask again (a refusal would repeat every frame), but the next
+   *  highlight binds afresh and asks again. */
+  failed?: boolean
 }
 interface Marks {
   by?: TrackBy
@@ -282,7 +285,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
 
   /** Binds a set's highlights to a run's result, telling its rows apart the way they were first told apart. */
   private bind(tabId: string, index: Owner, marks: Marks, entry: ResultSetEntry): Binding {
-    if (marks.bound?.handle === entry.handle) return marks.bound
+    if (marks.bound?.handle === entry.handle && !marks.bound.failed) return marks.bound
     marks.bound?.abort.abort()
     marks.found.clear()
     marks.finding.clear()
@@ -303,8 +306,10 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         marks.by ??= result.column < 0 || !picked ? { row: true } : { column: picked.name, dataType: picked.dataType, ...picked.sortKind ? { sortKind: picked.sortKind } : {}, ordinal: result.column }
         return true
       }, error => {
-        if (marks.bound === binding && (error as Error).name !== 'AbortError')
+        if (marks.bound === binding && (error as Error).name !== 'AbortError') {
           this.results.notify(tabId, 'Could not find the highlighted rows: ' + (error instanceof Error ? error.message : 'The rows could not be told apart.'))
+          binding.failed = true
+        }
         return false
       })
     }

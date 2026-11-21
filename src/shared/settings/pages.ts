@@ -39,6 +39,8 @@ export const settingPages = [
   { id: 'queryResults', title: 'Query Results' },
   { id: 'queryResults.sqlServer', title: 'SQL Server', parent: 'queryResults' },
   { id: 'queryResults.sqlServer.grid', title: 'Results to Grid', parent: 'queryResults.sqlServer', layout: 'form', sections: [{ label: 'Grid display', description: 'How results look in the grid.' }, { label: 'Copy and save' }, { label: 'Limits and memory', description: 'Rows past a limit are still read and counted, but not kept.' }, { label: 'Execution plan', description: 'The panes beside a graphical execution plan.' }, { label: 'Comparisons', description: 'How Compare shows the differences between two results.' }] },
+  { id: 'queryResults.bigQuery', providers: bigQueryOnly, title: 'BigQuery', parent: 'queryResults' },
+  { id: 'queryResults.bigQuery.results', providers: bigQueryOnly, title: 'Results', parent: 'queryResults.bigQuery', layout: 'form', description: 'Where the rows of a BigQuery result live: in memory, as with SQL Server, or windowed in the result table BigQuery keeps and read as the grid scrolls, which costs nothing. Not in SSMS.' },
   { id: 'objectExplorer', title: 'SQL Server Object Explorer' },
   { id: 'objectExplorer.commands', title: 'Commands', parent: 'objectExplorer', layout: 'propertyGrid' },
   { id: 'objectExplorer.scripting', title: 'Scripting', parent: 'objectExplorer', layout: 'propertyGrid' },

@@ -22,6 +22,16 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
     private int stopped;
     private long refusedBytes, stoppedBytes;
     public string SessionId { get; } = sessionId;
+    private volatile bool executing;
+    /// <summary>The query that owns this budget is still executing (BigQuery): its sets may still change, so Load into
+    /// memory waits for it to end.</summary>
+    public bool Executing { get => executing; set => executing = value; }
+    private int loading;
+    /// <summary>A Load into memory of one of this query's sets is running. Sets of one query share its budget, so two loads
+    /// at once would each be refused part way where one alone fits: a second waits for the first (BUSY).</summary>
+    public bool Loading => Volatile.Read(ref loading) != 0;
+    public bool TryBeginLoad() => Interlocked.CompareExchange(ref loading, 1, 0) == 0;
+    public void EndLoad() => Volatile.Write(ref loading, 0);
     /// <summary>The live subscription this budget belongs to, or null for a query's.</summary>
     public LiveBudget? Live { get; } = live;
     public long MaxBytes { get; } = maxBytes;
@@ -178,6 +188,8 @@ internal sealed partial class ResultStore
     private uint nextId = 1;
     private long used;
     private long liveUsed;
+    /// <summary>Windowed results' block caches, all of them (<see cref="TryReserveCache"/>): part of <see cref="UsedBytes"/>.</summary>
+    private long windowCacheUsed;
     private long freedSinceCollect;
     private long freedSinceCompact;
     private int collecting;
@@ -277,6 +289,8 @@ internal sealed partial class ResultStore
     /// <summary>What all live tables may hold together (the live share of the budget), and hold now.</summary>
     public long LiveBytes => Volatile.Read(ref figures).Live;
     public long LiveUsedBytes => Interlocked.Read(ref liveUsed);
+    /// <summary>What windowed results' block caches hold (the Memory panel's "window cache").</summary>
+    public long WindowCacheBytes => Interlocked.Read(ref windowCacheUsed);
     /// <summary>Bytes released toward the next forced collection (the checks read it).</summary>
     internal long FreedSinceCollect => Interlocked.Read(ref freedSinceCollect);
     /// <summary>Bytes released toward the next compacting collection (the checks read it).</summary>
@@ -729,6 +743,12 @@ internal sealed partial class ResultStore
                 throw nextViewId == 0 ? new RequestException("BACKEND_ERROR", "View identifiers are exhausted. Restart the SQL backend.")
                     : new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.");
             }
+            // Switched to windowed while the view was built (Demote drops views under this lock): its pages are gone.
+            if (set.IsRemote)
+            {
+                Return(set.Budget, charged);
+                throw SqlService.RemoteRefused();
+            }
             if (replaces is { } old && views.TryGetValue(old, out var replaced) && replaced.Set == set && views.Remove(old)) dropped.Add(replaced);
             var own = views.Values.Where(item => item.Set == set).OrderBy(item => item.ViewId).ToList();
             for (var i = 0; i <= own.Count - MaxViewsPerResult; i++)
@@ -780,7 +800,7 @@ internal sealed partial class ResultStore
         var set = snapshot.Set;
         lock (gate)
         {
-            string? refusal = !sets.ContainsKey(set.ResultId) || set.IsReleased ? "RESULT_RELEASED" : nextSnapshotId == 0 ? "BACKEND_ERROR"
+            string? refusal = !sets.ContainsKey(set.ResultId) || set.IsReleased ? "RESULT_RELEASED" : set.IsRemote ? "REMOTE_RESULT" : nextSnapshotId == 0 ? "BACKEND_ERROR"
                 : snapshots.Values.Count(item => item.Set == set) >= ViewSorter.MaxDistinctSnapshots ? "TOO_LARGE" : null;
             if (refusal is null)
             {
@@ -792,6 +812,7 @@ internal sealed partial class ResultStore
             throw refusal switch
             {
                 "RESULT_RELEASED" => new RequestException(refusal, "These results were closed. Execute the query again to see them."),
+                "REMOTE_RESULT" => SqlService.RemoteRefused(),
                 "TOO_LARGE" => new RequestException(refusal, "These results keep as many value lists as they can. Remove some column filters and try again."),
                 _ => new RequestException(refusal, "Value list identifiers are exhausted. Restart the SQL backend.")
             };
@@ -845,6 +866,72 @@ internal sealed partial class ResultStore
     }
 
     public int IdentityCount { get { lock (gate) return identities.Count; } }
+
+    /// <summary>Switches a stored set to windowed (docs/bigquery.md, Residence: Misestimate): its views, snapshots and identities go
+    /// first, as on a release, then its pages (<see cref="ResultSetBuffer.Demote"/>). False once it was released, and the
+    /// remote result is then disposed.</summary>
+    public bool Demote(ResultSetBuffer set, RemoteResult remote, long totalRows, bool bump = true)
+    {
+        // Windowed first, then what was built over its pages goes: AddView and AddSnapshot refuse a windowed set under this
+        // lock, so one finished meanwhile is either refused or dropped here.
+        if (!set.Demote(remote, totalRows, bump))
+        {
+            remote.Dispose();
+            return false;
+        }
+        List<ResultView> dropped;
+        lock (gate)
+        {
+            if (!sets.ContainsKey(set.ResultId)) dropped = [];
+            else dropped = DropViewsLocked([set]);
+        }
+        Free([], dropped);
+        return true;
+    }
+
+    /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Residence) to the global budget, as a live table
+    /// is, not to a query's half: within the cache's own limit (<paramref name="limit"/>, what <paramref name="held"/> counts
+    /// for that cache) and the global budget. The cache evicts its own blocks and asks again when this refuses.</summary>
+    public bool TryReserveCache(ref long held, long limit, long bytes) => TryReserveCache(ref held, limit, bytes, out _);
+
+    /// <param name="overLimit">On a refusal, whether the cache's own limit refused (else the global budget did), as the
+    /// reservation saw it: a caller deciding by its held bytes afterwards would race other fetches giving theirs back.</param>
+    public bool TryReserveCache(ref long held, long limit, long bytes, out bool overLimit)
+    {
+        overLimit = false;
+        if (bytes <= 0) return true;
+        // Nothing more is held under high memory load, as for a query's pages (TryReserve's system check).
+        if (IsSystemMemoryLow()) return false;
+        if (Interlocked.Add(ref held, bytes) > limit)
+        {
+            Interlocked.Add(ref held, -bytes);
+            overLimit = true;
+            return false;
+        }
+        var global = Volatile.Read(ref figures).Global;
+        for (var current = Interlocked.Read(ref used); ; current = Interlocked.Read(ref used))
+        {
+            if (current + bytes > global)
+            {
+                Interlocked.Add(ref held, -bytes);
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) break;
+        }
+        Interlocked.Add(ref windowCacheUsed, bytes);
+        return true;
+    }
+
+    /// <summary>Gives back a block cache's bytes (<see cref="TryReserveCache"/>).</summary>
+    public void ReturnCache(ref long held, long bytes)
+    {
+        if (bytes <= 0) return;
+        Interlocked.Add(ref held, -bytes);
+        Interlocked.Add(ref windowCacheUsed, -bytes);
+        Interlocked.Add(ref used, -bytes);
+        RoomChanged();
+        Freed(bytes);
+    }
 
     /// <summary>Releases the given ids (unknown and repeated ids are skipped) and returns how many were released.</summary>
     public int Release(IEnumerable<uint> resultIds)

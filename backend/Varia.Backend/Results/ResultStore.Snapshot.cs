@@ -36,7 +36,7 @@ internal sealed partial class ResultStore
             if (largest.Count > MaxLargest) largest.RemoveAt(MaxLargest);
         }
         var heap = GC.GetGCMemoryInfo();
-        return new ResultMemoryDetail(logical, stored, packed, packedLogical, cache, largest, Codec(), new ManagedHeap(heap.TotalCommittedBytes, heap.FragmentedBytes));
+        return new ResultMemoryDetail(logical, stored, packed, packedLogical, cache, largest, Codec(), new ManagedHeap(heap.TotalCommittedBytes, heap.FragmentedBytes), WindowCacheBytes);
     }
 
     /// <summary>The codec's counters since the store began, times in microseconds.</summary>

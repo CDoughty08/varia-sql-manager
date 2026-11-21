@@ -221,7 +221,7 @@ try {
     await expect(outputStatus(page)).toHaveText('The SQL backend stopped while this query was running.')
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
-    await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
+    await expect(banner()).toContainText('1 connection was lost and 1 running query was stopped; nothing was re-run.')
     await expect(lostServerRows(page)).toContainText('(Disconnected · Backend restarted)')
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -329,7 +329,7 @@ try {
   await expect(executeReconnect).toHaveCount(0)
   await expect(queryStatus(page)).toContainText('Connection lost.')
   await expect(queryStatus(page)).toContainText('crash-server Disconnected')
-  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running script was stopped; nothing was re-run.')
+  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running query was stopped; nothing was re-run.')
   // Nothing written to generation 1 reached generation 2, and the password never reached the call log.
   let recorded = await calls()
   expect(recorded.filter(call => call.generation === 2).map(call => call.method)).not.toContain('query.execute')
@@ -414,7 +414,7 @@ try {
   await banner().getByRole('button', { name: 'Restart SQL Backend', exact: true }).click()
   await ready(6)
   // The losses stay reported until dismissed.
-  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 0 connections were lost and 0 running scripts were stopped; nothing was re-run.')
+  await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 0 connections were lost and 0 running queries were stopped; nothing was re-run.')
   await banner().getByRole('button', { name: 'Dismiss', exact: true }).click()
   await expect(banner()).toHaveCount(0)
   console.log('Crash loop passed: the breaker tripped on the third loss in 120 s, Copy details, and Restart SQL Backend.')

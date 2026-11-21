@@ -55,9 +55,12 @@ export const requestSchemas = {
     startLine: z.number().int().min(1).max(1_000_000).optional(), startColumn: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
-    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional()
+    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
+    residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
+  // Only the load kind so far; main checks the renderer owns the result in that generation before sending it.
+  'results.remoteQuery': z.object({ queryId: z.uuid(), resultId: z.number().int().min(1).max(0xffffffff), generation: z.number().int().min(1).max(2 ** 31 - 1), kind: z.enum(['load']) }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.

@@ -360,6 +360,46 @@ internal static class BigQuerySessionChecks
         await UnknownOutcomeAsync(check, key);
         await ExpiryAsync(check, key);
         await StopAsync(check, key);
+        await StopWhileDecidingAsync(check, key);
+    }
+
+    /// <summary>Stop while a script child's residence is being decided (its jobs.get hangs): the set the run's end closes was
+    /// announced first, never a resultSet.closed for a set the grid never heard open.</summary>
+    static async Task StopWhileDecidingAsync(Action<bool, string> check, JsonObject key)
+    {
+        var bq = new Bq();
+        bq.Scripts["SCRIPT two"] = [("SELECT", null), ("SELECT", null)];
+        using var harness = new Harness(bq);
+        await harness.ConnectAsync(key);
+        // A child's first page with more to come, so deciding its residence asks jobs.get for the destination table.
+        harness.Fake.On("GET", Base + "/queries/child_[^/]+", request =>
+        {
+            var id = request.Url[(request.Url.LastIndexOf('/') + 1)..];
+            var asked = HttpUtility.ParseQueryString(request.Uri.Query);
+            var offset = asked["pageToken"] is { } token ? int.Parse(token[5..], CultureInfo.InvariantCulture) : 0;
+            var count = Math.Min(100, 5000 - offset);
+            var rows = new JsonArray([.. Enumerable.Range(offset, count).Select(i => (JsonNode)new JsonObject { ["f"] = new JsonArray(new JsonObject { ["v"] = i.ToString(CultureInfo.InvariantCulture) }, new JsonObject { ["v"] = "x" }) })]);
+            var answer = new JsonObject { ["kind"] = "bigquery#getQueryResultsResponse", ["jobReference"] = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = id, ["location"] = "US" }, ["jobComplete"] = true,
+                ["schema"] = new JsonObject { ["fields"] = new JsonArray(new JsonObject { ["name"] = "n", ["type"] = "INTEGER", ["mode"] = "NULLABLE" }, new JsonObject { ["name"] = "s", ["type"] = "STRING", ["mode"] = "NULLABLE" }) },
+                ["totalRows"] = "5000", ["rows"] = rows, ["pageToken"] = "page-" + (offset + count) };
+            return new(200, answer.ToJsonString());
+        });
+        var hung = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Fake.Hang = request => { if (request.Method == "GET" && request.Url.Contains("/jobs/child_", StringComparison.Ordinal)) { hung.TrySetResult(); return true; } return false; };
+        var args = harness.Query(Tab(), "SCRIPT two", query => query["residence"] = "windowed");
+        using var context = new RequestContext(1, "query.execute", RequestLane.Query, 0, sendEvent: (_, body, droppable) =>
+        {
+            var element = JsonSerializer.SerializeToElement(body, body.GetType(), Wire);
+            harness.Events.Enqueue((element.GetProperty("type").GetString() ?? "", droppable, element));
+        });
+        var running = harness.Call("query.execute", args, context);
+        var deciding = await Task.WhenAny(hung.Task, Task.Delay(15_000)) == hung.Task;
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = args["queryId"]!.GetValue<string>() });
+        var (code, result, _) = await running;
+        harness.Fake.Hang = null;
+        var order = harness.Events.Where(item => item.Type.StartsWith("resultSet.", StringComparison.Ordinal)).Select(item => item.Type).ToArray();
+        check(deciding && code == "ok" && (result as QueryResult)?.Status == "cancelled" && order.Length > 0 && order[0] == "resultSet.opened" && order.Count(type => type == "resultSet.closed") == 1,
+            $"Stop while a script child's residence is decided announces its set before closing it: {deciding} {code} {(result as QueryResult)?.Status} {string.Join(", ", order)}");
     }
 
     /// <summary>The SQL the backend runs against BigQuery (docs/architecture.md, SQL the backend runs): constant text, values

@@ -35,7 +35,7 @@ function duration(microseconds: number): string {
 }
 
 export interface Tile { readonly label: string; readonly value: string; readonly unit?: string; readonly note: string; readonly tone?: 'saved' }
-export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'returned' | 'records' | 'names' | 'definitions' | 'reading'; readonly label: string; readonly bytes: number; readonly share: number }
+export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'window' | 'returned' | 'records' | 'names' | 'definitions' | 'reading'; readonly label: string; readonly bytes: number; readonly share: number }
 export interface Bar { readonly label: string; readonly total: number; readonly segments: readonly Segment[] }
 /** A result's name in Biggest results in its two parts: its query tab's, which gives way first, and the Results part. */
 export interface ResultLabel { readonly tab?: string; readonly result: string }
@@ -51,6 +51,8 @@ export interface NerdMetricsModel {
   readonly bars: readonly Bar[]
   readonly legend: readonly Segment[]
   readonly biggest: readonly BiggestRow[]
+  /** What the Biggest results list says when it lists none: windowed results hold blocks, not rows in pages. */
+  readonly biggestEmpty: string
   readonly counters: readonly Counter[]
   readonly heap: string
   /** The unit the section's byte figures share. */
@@ -60,7 +62,7 @@ export interface NerdMetricsModel {
 }
 
 const stateLabels: Readonly<Record<ResultMemoryEntry['state'], string>> = { raw: 'Raw', partial: 'Partly packed', packed: 'Packed', unpacking: 'Unpacking' }
-const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', returned: 'Given back', records: 'Records', names: 'Names', definitions: 'Definitions', reading: 'Being read' }
+const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', window: 'Window cache', returned: 'Given back', records: 'Records', names: 'Names', definitions: 'Definitions', reading: 'Being read' }
 
 /** Whether any page is compressed: what the ring's second tone, the packed chip, the ratio and the trend wait for. */
 export const anyCompressed = (detail: ResultMemoryDetail | undefined): boolean => !!detail && detail.compressedBytes > 0 && detail.packedLogicalBytes > 0
@@ -71,8 +73,10 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const { logicalBytes: logical, storedBytes: stored, compressedBytes: compressed, packedLogicalBytes: packedLogical, cacheBytes: cache, codec, heap } = detail
   const isCompressed = anyCompressed(detail)
   const codecOn = codec.name !== undefined
-  const memory = stored + cache
-  const givenBack = Math.max(0, logical - memory)
+  // Windowed BigQuery results' block caches hold rows read from BigQuery, apart from the rows as read.
+  const window = detail.windowCacheBytes ?? 0
+  const memory = stored + cache + window
+  const givenBack = Math.max(0, logical - stored - cache)
   const rawBytes = Math.max(0, stored - compressed)
   const ratio = isCompressed ? packedLogical / compressed : 0
   const codecNote = codecOn ? `${codec.name}${codec.level === undefined ? '' : ` · level ${codec.level}`}` : 'Compression off'
@@ -82,14 +86,15 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const tiles: Tile[] = [
     { label: 'Compressed', ...logical > 0 ? { value: percent(packedLogical, logical), unit: '%' } : { value: dash }, note: 'of rows, by size' },
     { label: 'Ratio', ...isCompressed ? { value: ratio.toFixed(2), unit: '×' } : { value: dash }, note: codecNote },
-    { label: 'Saved', value: saved.value, unit: saved.unit, note: logical > 0 ? `${percent(givenBack, logical)}% of ${bytes(logical)}` : 'No rows held', ...givenBack > 0 ? { tone: 'saved' as const } : {} }
+    { label: 'Saved', value: saved.value, unit: saved.unit, note: logical > 0 ? `${percent(givenBack, logical)}% of ${bytes(logical)}` : window > 0 ? 'Only windowed results\' blocks held' : 'No rows held', ...givenBack > 0 ? { tone: 'saved' as const } : {} }
   ]
-  // Both bars share one scale, so the lower one's shortfall is what compression gave back.
-  const scale = Math.max(logical, memory, 1)
+  // Both bars share one scale, so the lower one's shortfall is what compression gave back; the window cache adds to the
+  // rows as read, so the lower bar (its parts plus what was given back) never overflows it.
+  const scale = Math.max(logical + window, memory, 1)
   const segment = (part: Segment['part'], bytes: number): Segment => ({ part, label: partLabels[part], bytes, share: bytes / scale })
   const asRead = [segment('raw', Math.max(0, logical - packedLogical)), segment('packed', packedLogical)].filter(part => part.bytes > 0)
-  const now = [segment('raw', rawBytes), segment('packed', compressed), segment('cache', cache), segment('returned', givenBack)].filter(part => part.bytes > 0)
-  const legend = [segment('raw', rawBytes), ...[segment('packed', compressed), segment('cache', cache), segment('returned', givenBack)].filter(part => part.bytes > 0)]
+  const now = [segment('raw', rawBytes), segment('packed', compressed), segment('cache', cache), segment('window', window), segment('returned', givenBack)].filter(part => part.bytes > 0)
+  const legend = [segment('raw', rawBytes), ...[segment('packed', compressed), segment('cache', cache), segment('window', window), segment('returned', givenBack)].filter(part => part.bytes > 0)]
   const widest = Math.max(1, ...detail.largest.map(entry => entry.logicalBytes))
   const biggest = detail.largest.map(entry => ({
     resultId: entry.resultId, label: name(entry), name: labelText(name(entry)), logical: bytes(entry.logicalBytes), stored: bytes(entry.storedBytes), state: entry.state,
@@ -111,6 +116,7 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
     compressed: isCompressed, codecOn, logicalBytes: logical, memoryBytes: memory, givenBack, tiles,
     bars: [{ label: 'Rows as read', total: logical, segments: asRead }, { label: 'In memory now', total: memory, segments: now }],
     legend, biggest, counters, bytes, cozy,
+    biggestEmpty: window > 0 ? 'Only windowed results are open: their rows stay in BigQuery, and their blocks are the Window cache above.' : 'No results held.',
     // The runtime reports nothing before its first collection: a new backend's heap is unmeasured, not empty.
     heap: heap.committedBytes > 0 ? `Heap ${bytes(heap.committedBytes)} · ${bytes(heap.freeBytes)} free for reuse` : 'Heap not measured yet'
   }
