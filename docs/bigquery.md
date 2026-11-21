@@ -374,7 +374,7 @@ does not offer it (Script As › SELECT queries them, billed). A table with row 
 Script As serves BigQuery's tables, snapshots, views, materialized views, external tables and routines.
 
 - SELECT, INSERT, UPDATE, DELETE and DROP are local templates from `tables.get` (a routine's DROP from `routines.get`, which
-  picks PROCEDURE, TABLE FUNCTION, AGGREGATE FUNCTION or FUNCTION), free. SELECT lists the top-level columns, ends with
+  uses DROP PROCEDURE for procedures, DROP TABLE FUNCTION for table functions and DROP FUNCTION for scalar and aggregate functions), free. SELECT lists the top-level columns, ends with
   `LIMIT 1000` and says that LIMIT does not lower the bytes billed. INSERT, UPDATE and DELETE are offered for tables only (a
   snapshot's rows cannot change) and use SSMS's `<name, type,>` placeholders.
 - CREATE reads the object's own DDL from `INFORMATION_SCHEMA.TABLES` or `ROUTINES` (the `ddl` column), a query BigQuery
