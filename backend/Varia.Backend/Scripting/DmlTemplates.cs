@@ -110,22 +110,48 @@ internal static class DmlTemplates
 
     private static string ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
     {
-        var taken = inputs.Select(parameter => Skeleton(parameter.Name)).ToHashSet(StringComparer.Ordinal);
+        var ascii = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var other = new List<string>();
+        foreach (var parameter in inputs)
+            if (parameter.Name.All(char.IsAscii)) ascii.Add(parameter.Name);
+            else if (parameter.Name.All(c => !char.IsAscii(c) || c is '@' or 'R' or 'r' or 'C' or 'c' or (>= '0' and <= '9'))) other.Add(parameter.Name);
         var name = "@RC";
-        for (var suffix = 1; taken.Contains(name); suffix++) name = "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
+        for (var suffix = 1; ascii.Contains(name) || other.Any(parameter => CouldBe(parameter, name)); suffix++)
+            name = "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
         return name;
     }
 
-    // What a parameter name could equal under the loosest collation, judged conservatively: case, width and accents
-    // folded, and every other non-ASCII character dropped, since a collation may weigh it zero (the default
-    // SQL_Latin1_General_CP1_CI_AS ignores thousands, so @RC followed by U+0219 is @RC). A needless @RC1 is harmless.
-    private static string Skeleton(string name)
+    // Whether some collation could compare a parameter name with non-ASCII characters equal to `candidate`, judged
+    // conservatively: each non-ASCII character may count as its folded ASCII form (case, width, accents: a fullwidth R is
+    // R, Ç is C) or as nothing, since a collation may weigh it zero (the default SQL_Latin1_General_CP1_CI_AS ignores
+    // thousands, so @RC followed by U+0219 is @RC). A needless @RC1 is harmless.
+    private static bool CouldBe(string name, string candidate)
     {
-        string folded;
-        try { folded = name.Normalize(NormalizationForm.FormKD); }
-        catch (ArgumentException) { folded = name; }
-        var ascii = new StringBuilder(folded.Length);
-        foreach (var c in folded) if (c < 128) ascii.Append(char.ToUpperInvariant(c));
+        var reach = new bool[candidate.Length + 1];
+        reach[0] = true;
+        foreach (var c in name)
+        {
+            var next = new bool[reach.Length];
+            var folded = char.IsAscii(c) ? null : Fold(c);
+            for (var at = 0; at < reach.Length; at++)
+            {
+                if (!reach[at]) continue;
+                if (folded is null) { if (at < candidate.Length && char.ToUpperInvariant(c) == candidate[at]) next[at + 1] = true; continue; }
+                next[at] = true;
+                if (folded.Length > 0 && candidate.AsSpan(at).StartsWith(folded, StringComparison.Ordinal)) next[at + folded.Length] = true;
+            }
+            reach = next;
+        }
+        return reach[candidate.Length];
+    }
+
+    private static string Fold(char c)
+    {
+        string decomposed;
+        try { decomposed = c.ToString().Normalize(NormalizationForm.FormKD); }
+        catch (ArgumentException) { return ""; }
+        var ascii = new StringBuilder(decomposed.Length);
+        foreach (var part in decomposed) if (char.IsAscii(part)) ascii.Append(char.ToUpperInvariant(part));
         return ascii.ToString();
     }
 
