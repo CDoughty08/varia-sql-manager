@@ -800,6 +800,19 @@ internal static class StoreChecks
                 "a database held without changing the budget stops showing as reading at the first check after the interval, and a refused walk is sent at the next check: " + refused);
         service.Search.Forget(lateConnection);
         service.ReportIndexMemory();
+        // A walk over a table of many texts grows the set; with no build running, it gives the arrays (no budget charges them) back.
+        var wide = new ObjectTable.Builder();
+        var wideNames = Enumerable.Range(0, 64).Select(at => pool.TryAcquire("dbo.Wide" + at)!).ToArray();
+        foreach (var wideName in wideNames) wide.Text(wideName);
+        foreach (var wideName in wideNames) wide.Add("table", "tables", null, null, wideName, null, false);
+        var wideConnection = Guid.NewGuid().ToString();
+        var wideBytes = 64 * (IndexMemory.RecordBytes + IndexMemory.SlotBytes);
+        service.Search.Budget.Force(wideBytes);
+        service.Search.Held(wideConnection).Put(new DatabaseIndex("Wide", wide.Build(), wideBytes, 0, 0, pooled: true));
+        check(service.Search.MemoryDetail().Objects == 64 && service.Search.WalkSetCapacity < 16,
+            "with no build running, a walk gives back its set's arrays, which no budget charges: " + service.Search.WalkSetCapacity);
+        service.Search.Forget(wideConnection);
+        service.ReportIndexMemory();
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>
