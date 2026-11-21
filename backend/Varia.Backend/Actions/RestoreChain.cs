@@ -34,7 +34,8 @@ internal static class RestoreChain
         return (new(headers[0].Database, headers[0].FamilyGuid, headers), null);
     }
 
-    /// <summary>Why the headers the media hold do not restore as planned, or null: a set of another kind than planned, a damaged set,
+    /// <summary>Why the headers the media hold do not restore as planned, or null: another backup set than the one reviewed (the file
+    /// was overwritten after it was read), a set of another kind than planned, a damaged set,
     /// a copy-only log, sets of more than one database, a differential not based on the full, or a log that does not continue the
     /// set before it.</summary>
     internal static (string Code, string Message)? Problem(RestoreCatalogJson restore, IReadOnlyList<RestorePlanSetDto> planned, IReadOnlyList<BackupSetDto> headers, bool files = false)
@@ -43,6 +44,7 @@ internal static class RestoreChain
         for (var index = 0; index < planned.Count; index++)
         {
             var (set, header) = (planned[index], headers[index]);
+            if (!SameSet(set, header)) return ("MEDIA", restore.Message("changedSet") + " (" + Where(set) + ")");
             if (header.Type != set.Type)
                 return ("RESTORE_SEQUENCE", "The backup at position " + set.File.ToString(CultureInfo.InvariantCulture) + " of " + Where(set) + " is not the " + set.Type + " backup the plan names. Read the backups again.");
             if (header.Damaged) return ("MEDIA", restore.Message("damaged") + " (" + Where(set) + ")");
@@ -55,6 +57,10 @@ internal static class RestoreChain
         }
         return null;
     }
+
+    /// <summary>Whether the header is the set the plan was reviewed against: the same BackupSetGUID, or none on both (a header without
+    /// one cannot be told apart, so a GUID on one side only is a change too).</summary>
+    internal static bool SameSet(RestorePlanSetDto set, BackupSetDto header) => string.Equals(set.Guid, header.BackupSetGuid, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>A set's first file by name, and how many more it is striped across.</summary>
     internal static string Where(RestorePlanSetDto set)

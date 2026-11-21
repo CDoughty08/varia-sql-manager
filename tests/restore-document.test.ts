@@ -18,7 +18,7 @@ const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
 const conn = '00000000-0000-4000-8000-0000000000c1'
 const row = (id: string, name: string, type: BackupSetRow['type'], position: number, first: string, last: string, checkpoint: string, base: string, finish: string, devices: string[]): BackupSetRow => ({
   id, name, type, server: 'SQLHOST', database: 'Sales', position, firstLsn: first, lastLsn: last, checkpointLsn: checkpoint, databaseBackupLsn: base,
-  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices
+  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices, backupSetGuid: id
 })
 const history = [
   row(uuid(5), 'log3', 'log', 3, '56800001', '68800001', '68800001', '43200001', '21:05:46', ['B:\\Backup\\Sales_log.trn']),
@@ -101,7 +101,7 @@ describe('Restore Database as a document', () => {
     const [request] = scripts()
     expect(validateRequest('actions.script', request)).toEqual(request)
     expect(request).toMatchObject({ action: 'restore', target: { kind: 'database', name: 'Sales' }, identity: { id: 7, created: '2026-01-01T00:00:00.000' },
-      restore: { sets: [{ id: uuid(1), devices: ['B:\\Backup\\Sales_full1.bak', 'B:\\Backup\\Sales_full2.bak'], file: 1, type: 'full' }, { id: uuid(4), type: 'differential' }, { id: uuid(5), file: 3, type: 'log' }],
+      restore: { sets: [{ id: uuid(1), devices: ['B:\\Backup\\Sales_full1.bak', 'B:\\Backup\\Sales_full2.bak'], file: 1, type: 'full', guid: uuid(1) }, { id: uuid(4), type: 'differential', guid: uuid(4) }, { id: uuid(5), file: 3, type: 'log', guid: uuid(5) }],
         relocate: [], replace: false, recovery: 'recovery', tailLog: { file: 'B:\\Backup\\Sales_LogBackup_2026-10-30_12-00-00.bak', noRecovery: true }, closeConnections: false } })
     expect(state().script).toEqual({ state: 'ready', text: 'USE [master]\nRESTORE DATABASE [Sales]\n\nGO\n' })
     // A copy: no tail-log backup (the destination is not the source), and the files go to the default folders under its name.

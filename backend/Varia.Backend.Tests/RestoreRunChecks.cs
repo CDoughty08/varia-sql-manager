@@ -203,5 +203,26 @@ internal static partial class RestoreRunChecks
         check(wrong.Count == 0 && RestoreChain.Where(planned[0]) == "f.bak" && RestoreChain.Where(Set("1:1", "full", 1, "/var/b/x.bak", "/var/b/y.bak")) == "x.bak (+1 files)",
             "RestoreChain refuses what SQL Server would (another kind at the position, damaged sets, copy-only logs, a differential of another full, gaps, other databases and forks) and passes the planner's chains: "
             + string.Join(", ", wrong));
+
+        // The BackupSetGUID pin: a backup file overwritten after review can hold a set of the same kind, database and chain at the same
+        // position (a newer full), which only its GUID tells apart.
+        const string reviewed = "c0000000-0000-4000-8000-000000000001", newer = "c0000000-0000-4000-8000-000000000002";
+        var pinned = new List<RestorePlanSetDto> { planned[0] with { Guid = reviewed } };
+        var one = (string? guid) => new List<BackupSetDto> { full with { BackupSetGuid = guid } };
+        var guidCases = new (string Name, string? Expected, List<RestorePlanSetDto> Sets, List<BackupSetDto> Headers)[]
+        {
+            ("the reviewed GUID", null, pinned, one(reviewed)),
+            ("the reviewed GUID in upper case", null, pinned, one(reviewed.ToUpperInvariant())),
+            ("a newer full at the position", "MEDIA", pinned, one(newer)),
+            ("a header without a GUID where the plan has one", "MEDIA", pinned, one(null)),
+            ("a header with a GUID where the reviewed one had none", "MEDIA", [planned[0]], one(newer)),
+            ("no GUID on either side", null, [planned[0]], one(null)),
+            ("a later set changed", "MEDIA", [.. planned.Select((set, index) => set with { Guid = "c0000000-0000-4000-8000-00000000001" + index })],
+                [.. good.Select((set, index) => set with { BackupSetGuid = "c0000000-0000-4000-8000-00000000001" + (index == 3 ? 9 : index) })])
+        };
+        var guidWrong = guidCases.Where(item => Code(item.Headers, item.Sets) != item.Expected).Select(item => item.Name + " gave " + (Code(item.Headers, item.Sets) ?? "none")).ToList();
+        check(guidWrong.Count == 0 && RestoreChain.Problem(Restore, pinned, one(newer)) is { Message: var message } && message.StartsWith(Restore.Message("changedSet"), StringComparison.Ordinal),
+            "RestoreChain passes only the set whose BackupSetGUID is the reviewed one (case aside), treats a GUID on one side only as a change, and asks for the backups to be read again: "
+            + string.Join(", ", guidWrong));
     }
 }

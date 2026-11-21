@@ -55,7 +55,7 @@ internal static class RestoreFilesLiveChecks
         await Step("INSERT dbo.t DEFAULT VALUES;", db);
         var history = await Describe(new("history", db));
         RestorePlanSetDto Planned(string name) => history.Restore?.Sets?.FirstOrDefault(set => set.Name == name) is { } set
-            ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name);
+            ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name);
         var (full, log1) = (Planned("full"), Planned("log1"));
         var listed = (await Describe(new("historyFiles", SetId: full.Id))).Restore?.Files ?? [];
         check(listed.Any(item => item.Logical == file && item.Filegroup == group && item.Type == "data" && item.Absent is null) && listed.Any(item => item.Logical == "f3" && item.Filegroup == "FG3"),

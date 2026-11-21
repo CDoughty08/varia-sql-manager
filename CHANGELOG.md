@@ -52,6 +52,7 @@
 
 ### Fixes
 
+- **Restore never restores a backup it was not shown:** Restore Database and Restore Files and Filegroups now check, right before they run, that each backup set is the one the plan was made from \(its backup set GUID\), not just a backup of the same kind at the same position\. If a job overwrote the backup file after it was read, the restore stops before any statement and asks you to read the backups again\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.

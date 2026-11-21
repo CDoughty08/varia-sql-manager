@@ -76,7 +76,7 @@ internal static class RestoreRunLiveChecks
         var target = scratch.RestoreTarget;
         static string Q(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
         RestorePlanSetDto Planned(string name, string? type = null) => sets.FirstOrDefault(set => set.Name == name) is { } set
-            ? new(set.Id, [.. set.Devices], set.Position, type ?? set.Type, set.Name) : throw new InvalidOperationException("No set " + name);
+            ? new(set.Id, [.. set.Devices], set.Position, type ?? set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name);
         var last = new List<RestorePlanSetDto> { Planned("full"), Planned("diff"), Planned("log3") };
         RestoreOptionsDto Options(List<RestorePlanSetDto> chain, IReadOnlyList<RestoreMoveDto>? moves = null, bool replace = false, bool close = false, RestoreTailLogDto? tail = null, string recovery = "recovery") =>
             new(chain, [.. moves ?? []], replace, false, false, recovery, close, TailLog: tail);
@@ -123,10 +123,14 @@ internal static class RestoreRunLiveChecks
         var stale = await Wire(target, Options(last, relocated, replace: true), targetIdentity! with { Id = targetIdentity.Id + 100_000 });
         var notKind = await Wire(target, Options([Planned("full"), Planned("log1", "differential")], relocated, replace: true), targetIdentity);
         var gap = await Wire(target, Options([Planned("full"), Planned("log3")], relocated, replace: true), targetIdentity);
+        // A backup file overwritten after the plan was reviewed: the set at the position has another BackupSetGUID than the plan's.
+        var overwritten = await Wire(target, Options([Planned("full") with { Guid = "00000000-0000-0000-0000-000000000001" }, Planned("diff"), Planned("log3")], relocated, replace: true), targetIdentity);
         check(sinceRead is { Error.Code: "NAME_IN_USE", Steps: [] } && mismatch is { Error.Code: "BACKUP_MISMATCH", Steps: [] } && stale is { Error.Code: "NOT_FOUND", Steps: [] }
-            && notKind is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && gap is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && await State(target) == "0/0" && await Rows(target) == "5",
+            && notKind is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && gap is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && overwritten is { Error.Code: "MEDIA", Steps: [] }
+            && overwritten.Error.Message.StartsWith(restore.Message("changedSet"), StringComparison.Ordinal) && await State(target) == "0/0" && await Rows(target) == "5",
             "the run refuses before any statement a database created since the read, another database's backup without WITH REPLACE, a database that is not the one read, "
-            + "and sets the media say are of another kind or do not chain: " + string.Join(" | ", new[] { sinceRead, mismatch, stale, notKind, gap }.Select(Show)));
+            + "sets the media say are of another kind or do not chain, and a set whose BackupSetGUID is not the reviewed one: "
+            + string.Join(" | ", new[] { sinceRead, mismatch, stale, notKind, gap, overwritten }.Select(Show)));
 
         // The cleanup's DROP checks the database itself: an online database (here one this check just restored) is never dropped.
         var id = (await sql("SELECT CONVERT(nvarchar(20), DB_ID(" + Q(target) + "));", "master")).Scalar;

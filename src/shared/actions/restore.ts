@@ -78,6 +78,8 @@ export const restoreMessages = {
   /** Why Manual Selection cannot check a set the planner never uses (the row's title and its checkbox's description). */
   damaged: 'This backup set is marked damaged.',
   copyOnlyLog: 'A copy-only log backup is not part of the log chain.',
+  /** The run's preflight: the set at a planned position has another BackupSetGUID than the one reviewed (the file was overwritten). */
+  changedSet: 'This backup set is not the one the plan was made from: the backup file changed after it was read. Read the backups again and review the plan.',
   /** Stop reached SQL Server only as it finished the last RESTORE WITH RECOVERY: the run's reply says so ({database} shown through displayText). */
   finishedAtStop: 'Stop came as SQL Server finished the restore: {database} is restored and online.',
   notPlanned: 'File and partial backups restore with T-SQL.',
@@ -203,6 +205,8 @@ export interface BackupSetRow {
   readonly forkPointLsn?: string
   /** The database's family: the same across its restores, different for another database of the same name. */
   readonly familyGuid?: string
+  /** The set's own BackupSetGUID (msdb's backup_set_uuid, HEADERONLY's BackupSetGUID), lower-case; absent when the header has none. */
+  readonly backupSetGuid?: string
   /** The media set's disk files, in family order. */
   readonly devices: readonly string[]
   /** Why the set cannot be restored as it is: a striped set with families missing, or one that is not on disk. */
@@ -263,13 +267,15 @@ export interface RestoreModel {
 
 // --- Request ------------------------------------------------------------------------------------------------------------
 
-/** One set of the plan: its media set's disk files and its position there. `name` titles its step. */
+/** One set of the plan: its media set's disk files and its position there. `name` titles its step. `guid` is the BackupSetGUID
+ *  the plan was reviewed against (absent: the header had none); the run refuses another set at that position. */
 export interface RestorePlanSet {
   readonly id: string
   readonly devices: readonly string[]
   readonly file: number
   readonly type: PlannedSetType
   readonly name?: string
+  readonly guid?: string
 }
 export interface RestoreMove { readonly logical: string; readonly physical: string }
 /** What a restore does: the sets in order, where the files go, and the options SSMS's pages set. */
@@ -297,6 +303,7 @@ export interface RestoreFilesSet {
   readonly file: number
   readonly type: typeof restoreFilesSetTypes[number]
   readonly name?: string
+  readonly guid?: string
 }
 /**
  * What a file restore does (D1g): the files (FILE) and filegroups (FILEGROUP) of an existing database to restore from the first
@@ -394,7 +401,7 @@ export function restoreCatalog() {
     sourceKinds: restoreSourceKinds, recoveryStates: restoreRecoveryStates, filesSetTypes: restoreFilesSetTypes,
     messages: {
       systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets, invalidPlan: restoreMessages.invalidPlan,
-      damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, finishedAtStop: restoreMessages.finishedAtStop,
+      damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, changedSet: restoreMessages.changedSet, finishedAtStop: restoreMessages.finishedAtStop,
       simpleReadOnly: restoreMessages.simpleReadOnly, otherDatabase: restoreMessages.otherDatabase, filesStayRestoring: restoreMessages.filesStayRestoring,
       standbyOnline: restoreMessages.standbyOnline, primaryOnline: restoreMessages.primaryOnline, logChainAhead: restoreMessages.logChainAhead, logBackedUpDuring: restoreMessages.logBackedUpDuring
     },
