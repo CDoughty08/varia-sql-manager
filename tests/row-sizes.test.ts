@@ -6,7 +6,7 @@ import type { ResultHandle } from '../src/renderer/src/results/ResultClient'
 interface Pending<T> { resolve(value: T): void; reject(error: unknown): void; signal?: AbortSignal }
 
 /** A handle whose rowBytes and profile requests the test answers. */
-function fixture(rowsAvailable = 1000, state = 'complete') {
+function fixture(rowsAvailable = 1000, state = 'complete', timers?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void }) {
   const snapshot: { state: string; rowsAvailable: number; residence?: string; revision?: number } = { state, rowsAvailable }
   const reads: (Pending<ResultsRowBytesResult> & { first: number; count: number })[] = []
   const profiles: Pending<ResultsProfileResult>[] = []
@@ -16,7 +16,7 @@ function fixture(rowsAvailable = 1000, state = 'complete') {
     profile: (_columns: number[], signal?: AbortSignal) => new Promise<ResultsProfileResult>((resolve, reject) => { profiles.push({ resolve, reject, signal }) })
   } as unknown as ResultHandle
   const changed = vi.fn()
-  const sizes = new RowSizes(handle, changed)
+  const sizes = new RowSizes(handle, changed, timers)
   const answer = (index: number, bytes: (row: number) => number, estimated: number[] = []) => {
     const read = reads[index], count = Math.min(read.count, snapshot.rowsAvailable - read.first)
     read.resolve({ firstRow: read.first, bytes: Array.from({ length: count }, (_, k) => bytes(read.first + k)), rowsAvailable: snapshot.rowsAvailable, estimated })
@@ -28,6 +28,27 @@ function fixture(rowsAvailable = 1000, state = 'complete') {
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
+  it('wakes the grid once a windowed short block has waited, so its bars fill without a scroll', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const scheduled: { callback: () => void; ms: number }[] = []
+    const timers = { setTimeout: (callback: () => void, ms: number) => scheduled.push({ callback, ms }), clearTimeout: vi.fn() }
+    const { sizes, reads, settle, snapshot, changed } = fixture(100_000, 'complete', timers)
+    snapshot.residence = 'remote'
+    sizes.ensure(0, 40)
+    reads[0].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    expect(changed).not.toHaveBeenCalled()
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0].ms).toBeGreaterThanOrEqual(rowSizeLimits.retryMs)
+    vi.advanceTimersByTime(scheduled[0].ms)
+    scheduled[0].callback()
+    expect(changed).toHaveBeenCalledTimes(1)
+    // The paint it wakes asks again.
+    sizes.ensure(0, 40)
+    expect(reads).toHaveLength(2)
+    sizes.dispose()
+  })
+
   it('asks a windowed result for a block its cache does not hold yet once per wait, not on every paint', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     const { sizes, reads, settle, snapshot, changed } = fixture(100_000)

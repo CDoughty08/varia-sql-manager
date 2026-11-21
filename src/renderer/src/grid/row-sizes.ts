@@ -1,4 +1,5 @@
 import type { ResultHandle } from '../results/ResultClient'
+import { browserTimers, type Timers } from '../core/timers'
 
 /** Rows one results.rowBytes asks for, blocks kept at most, blocks asked at once, and how long a failed block waits. */
 export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000 } as const
@@ -30,8 +31,10 @@ export class RowSizes {
   private disposed = false
   /** The result's revision the blocks were read under: a residence switch reads them again. */
   private revision: number | undefined
+  /** One repaint once a windowed short block has waited: nothing else paints a grid whose cells have all arrived. */
+  private wakeTimer: unknown
 
-  constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void) {}
+  constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void, private readonly timers: Timers = browserTimers) {}
 
   /** The bytes scaling the bars: the largest row known. */
   get max(): number { return Math.max(this.profileMax, this.readMax) }
@@ -78,6 +81,8 @@ export class RowSizes {
 
   dispose(): void {
     this.disposed = true
+    if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+    this.wakeTimer = undefined
     this.abort.abort()
     this.pending.clear()
     this.blocks.clear()
@@ -99,8 +104,14 @@ export class RowSizes {
       // A windowed result answers only the rows its block cache holds: a short block is asked again once it has waited, as a
       // failed one is, not on every paint (its rows may be fetching, or never fit the cache).
       const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
-      if (short && this.handle.getSnapshot().residence === 'remote') this.failed.set(block, performance.now())
-      else this.failed.delete(block)
+      if (short && this.handle.getSnapshot().residence === 'remote') {
+        this.failed.set(block, performance.now())
+        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again.
+        this.wakeTimer ??= this.timers.setTimeout(() => {
+          this.wakeTimer = undefined
+          if (!this.disposed) this.changed()
+        }, rowSizeLimits.retryMs + 1)
+      } else this.failed.delete(block)
       if (result.bytes.length > 0) this.changed()
     }, () => {
       // A failed read leaves the block's bars empty; the grid asks again as it scrolls, once the block has waited.
