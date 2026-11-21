@@ -174,10 +174,14 @@ internal sealed partial class ActionService
                 // The connect probe can fall back to "not Linux", so the settings write asks the server itself before msdb's registry writes.
                 if (write == AgentSql.SetProperties)
                 {
-                    await using var platform = connection.CreateCommand();
-                    platform.CommandText = AgentSql.Platform;
-                    if (Convert.ToInt32(await platform.ExecuteScalarAsync(context.Token), CultureInfo.InvariantCulture) == 1 && !WritesProperties(host.Profile(args.ConnectionId).EngineEdition, true))
-                        throw new StepRefusedException(Error("NOT_SUPPORTED", AgentPropertiesLinux));
+                    bool linux;
+                    await using (var platform = connection.CreateCommand())
+                    {
+                        platform.CommandText = AgentSql.Platform;
+                        await using var read = await platform.ExecuteReaderAsync(context.Token);
+                        linux = await read.ReadAsync(context.Token) && read.GetInt32(0) == 1;
+                    }
+                    if (linux && !WritesProperties(host.Profile(args.ConnectionId).EngineEdition, true)) throw new StepRefusedException(Error("NOT_SUPPORTED", AgentPropertiesLinux));
                 }
                 await using var command = connection.CreateCommand();
                 command.CommandText = write.Text;
