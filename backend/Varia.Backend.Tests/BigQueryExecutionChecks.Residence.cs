@@ -1985,9 +1985,10 @@ internal static partial class BigQueryExecutionChecks
                 var size = remote.BlockRows;
                 blocks.PadOf = row => row < size ? 2_000 : (int)(2_000 * wide);
                 await ReadRemote(remote, 0, 10, viewer: 1);
-                // A fetch leaves the count before its finally gives the estimate back: wait for both (a leak never settles).
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), 15_000);
-                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+                // Yield the read continuation so read-ahead can finish and return its estimate before comparing page costs.
+                var settled = await BigQuerySessionChecks.Poll(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), seconds: 15);
+                if (!settled || store.WindowCacheBytes != remote.CachedPageCost())
+                    failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}, fetching {remote.FetchingBlocks()}, settled {settled}");
             }
             check(failures.Count == 0, "a refused read-ahead overrun gives back its estimate: " + string.Join(", ", failures));
         }
