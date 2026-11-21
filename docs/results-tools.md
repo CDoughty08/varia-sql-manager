@@ -220,7 +220,7 @@ the picked result old (−); **Swap old and new** turns them. Names read old →
   changed; **Exact text** compares every character. When long values were compared by the part Varia keeps, the strip
   says so.
 - A column whose kind changed compares by the old result's kind. Numbers compare by value (2.0 is 2.00); text that is
-  not a number, such as empty text, never equals one, and text that is a number but for trailing spaces compares as text.
+  not a number, such as empty text, never equals one; trailing spaces are underlined, as in text.
 - Stored results are compared, ignoring the inputs' sorts and filters; the popover warns and the strip says so.
 
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed

@@ -345,10 +345,11 @@ internal sealed class CellHasher
     /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
     public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;
 
-    /// <summary>Whether two non-NULL cells of an exact numeric column compare as text, as <see cref="Same"/> does when either
-    /// is not a number (a second result's text column compares by the first's kind), so that a diff treats them as text.</summary>
-    public bool AsText(int column, ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
-        kinds[column] == Kind.Exact && (!NumericParts(a, out _, out _, out _) || !NumericParts(b, out _, out _, out _));
+    /// <summary>Whether a non-NULL cell's characters count beyond its value, as <see cref="Same"/>'s <c>text</c> says: a
+    /// character column's, or in an exact numeric column (a second result's text column compares by the first's kind) a
+    /// cell with trailing spaces or that is not a number. Exact text compares such cells character for character.</summary>
+    public bool Literal(int column, ReadOnlySpan<byte> cell) =>
+        IsText(column) || kinds[column] == Kind.Exact && (ViewSorter.TrimEnd(cell).Length != cell.Length || !NumericParts(cell, out _, out _, out _));
 
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
@@ -361,10 +362,17 @@ internal sealed class CellHasher
     /// <summary>Whether two non-NULL cells hold the same value by this column's rules (<paramref name="other"/> hashes its
     /// column the same way, and is another hasher, whose buffers it decodes into): what a diff checks rather than trusting
     /// two hashes, which can collide.</summary>
-    public bool Same(PageView view, int column, int row, CellHasher other, PageView otherView, int otherColumn, int otherRow)
+    public bool Same(PageView view, int column, int row, CellHasher other, PageView otherView, int otherColumn, int otherRow) =>
+        Same(view, column, row, other, otherView, otherColumn, otherRow, out _);
+
+    /// <summary>As above, and whether the two compared as text, whose equal values may still differ in characters (a diff's
+    /// soft difference, or a change under Exact): a character column's, or exact numerics either of which has trailing
+    /// spaces or is not a number (<see cref="Literal"/>).</summary>
+    public bool Same(PageView view, int column, int row, CellHasher other, PageView otherView, int otherColumn, int otherRow, out bool text)
     {
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
+        text = IsText(column);
         switch (kinds[column])
         {
             case Kind.Collated:
@@ -375,9 +383,16 @@ internal sealed class CellHasher
             case Kind.Trimmed: return ViewSorter.TrimEnd(a).SequenceEqual(ViewSorter.TrimEnd(b));
             case Kind.Exact:
             {
-                // Text that is not a number (a second result's empty or padded text) compares as text, as it would were it first.
-                if (!NumericParts(a, out var negativeA, out var wholeA, out var fractionA) | !NumericParts(b, out var negativeB, out var wholeB, out var fractionB))
-                    return ViewSorter.TrimEnd(a).SequenceEqual(ViewSorter.TrimEnd(b));
+                // A second result's text compares by the first's kind: trailing spaces never count (as in text) but are a
+                // difference of characters, numbers compare by value, and text that is not a number only to the same text.
+                var trimmedA = ViewSorter.TrimEnd(a);
+                var trimmedB = ViewSorter.TrimEnd(b);
+                text = trimmedA.Length != a.Length || trimmedB.Length != b.Length;
+                if (!NumericParts(trimmedA, out var negativeA, out var wholeA, out var fractionA) | !NumericParts(trimmedB, out var negativeB, out var wholeB, out var fractionB))
+                {
+                    text = true;
+                    return trimmedA.SequenceEqual(trimmedB);
+                }
                 return negativeA == negativeB && wholeA.SequenceEqual(wholeB) && fractionA.SequenceEqual(fractionB);
             }
             case Kind.Guid:
@@ -454,7 +469,7 @@ internal sealed class CellHasher
 
     /// <summary>An exact numeric's digits without a sign on zero, leading zeros or trailing fractional zeros, so 1.50, 01.5
     /// and 1.5 hash alike. Trailing spaces never count, as in text; other text that is not a number hashes by its bytes
-    /// behind a mark, apart from every number, so cells <see cref="Same"/> calls equal hash alike.</summary>
+    /// behind a mark, apart from every number, so cells hash alike exactly when <see cref="Same"/> calls them equal.</summary>
     private static ulong Numeric(ulong hash, ReadOnlySpan<byte> text)
     {
         text = ViewSorter.TrimEnd(text);

@@ -560,8 +560,9 @@ internal static class ResultDiffer
                     var column = isLeft ? pairs[compared[c]].Left : pairs[compared[c]].Right;
                     nulls[k * columns + c] = view.IsNull(column, at);
                     var hash = hasher.CellValue(view, column, at);
-                    // Exact text compares character for character (CompareCells), so its hash takes the bytes in too.
-                    if (exact && hasher.IsText(column) && !nulls[k * columns + c]) hash ^= Bytes(view.Span(column, at));
+                    // Exact compares text, and a number padded or not a number (Literal), character for character (CompareCells), so its
+                    // hash takes the bytes in too.
+                    if (exact && !nulls[k * columns + c] && hasher.Literal(column, view.Span(column, at))) hash ^= Bytes(view.Span(column, at));
                     hashes[k * columns + c] = hash;
                 }
             }
@@ -888,10 +889,9 @@ internal static class ResultDiffer
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
             if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r))) continue;
-            var text = leftHasher.IsText(lc) || leftHasher.AsText(lc, leftView.Span(lc, l), rightView.Span(rc, r));
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
             // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
-            var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r);
+            var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r, out var text);
             if (equal && !text) continue;
             if (!equal || exact) { cells.Add(p); hard = true; }
             else cells.Add(~p);

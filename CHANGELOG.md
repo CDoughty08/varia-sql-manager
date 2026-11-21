@@ -52,7 +52,7 @@
 
 ### Fixes
 
-- **Empty text is not zero in a comparison:** Comparing a number column with a text column of the same name no longer treats empty text, a lone `-` or `.`, or other text that is not a number as 0 when the number is in the old result; the result is the same whichever way round you compare\. Text that differs from the number only by trailing spaces is underlined, or changed with Exact text, as text is\.
+- **Empty text is not zero in a comparison:** Comparing a number column with a text column of the same name no longer treats empty text, a lone `-` or `.`, or other text that is not a number as 0 when the number is in the old result; the result is the same whichever way round you compare\. Trailing spaces after a number are underlined, or changed with Exact text, as in text\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.
 - **Connect asks before dropping a new connection:** Closing Connect after filling in a connection that is not saved yet, or changing its name, color, environment or settings, now asks whether to save it to History \(Save, Don't Save, Cancel\), as it already did for saved connections\. A typed password alone does not ask\.

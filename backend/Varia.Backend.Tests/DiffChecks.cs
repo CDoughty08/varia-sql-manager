@@ -180,9 +180,9 @@ internal static partial class DiffChecks
         foreach (var exact in new[] { false, true })
         {
             foreach (var text in new[] { "", " ", "  ", "-", ".", "-.", " 0 ", " 0", "+0", "0x0", "O", "abc", "1.2.3", "--1", "0-" })
-                check(Both(text, exact) == "~0:01 / ~0:01", "integer 0 and the text '" + text + "' differ in both directions" + (exact ? " (Exact)" : "") + ": " + Both(text, exact));
+                check(Both(text, exact) is var both && both == "~0:01 / ~0:01", "integer 0 and the text '" + text + "' differ in both directions" + (exact ? " (Exact)" : "") + ": " + both);
             // Trailing spaces are text's soft difference whichever result holds the text, and a change under Exact.
-            check(Both("0 ", exact) == (exact ? "~0:01 / ~0:01" : "=0:0-2 / =0:0-2"), "integer 0 and the text '0 ' compare alike in both directions" + (exact ? " (Exact)" : "") + ": " + Both("0 ", exact));
+            check(Both("0 ", exact) is var padded && padded == (exact ? "~0:01 / ~0:01" : "=0:0-2 / =0:0-2"), "integer 0 and the text '0 ' compare alike in both directions" + (exact ? " (Exact)" : "") + ": " + padded);
         }
         var (zeroLeft, zerosRight) = Pair(store, [["1", "0"], ["2", "-1.50"]], [["1", "-0.00"], ["2", "-01.5"]], keyedTexts, keyedInts);
         var numbers = ResultDiffer.Compare(zeroLeft, zeroLeft.SealedSnapshot(), zerosRight, zerosRight.SealedSnapshot(), true, CancellationToken.None);
@@ -191,6 +191,36 @@ internal static partial class DiffChecks
         var (wholeLeft, wholeRight) = Pair(store, [["0"]], [[""]], [new("Qty", "nvarchar", "text")], [new("Qty", "int", "text")]);
         var whole = ResultDiffer.Compare(wholeLeft, wholeLeft.SealedSnapshot(), wholeRight, wholeRight.SealedSnapshot(), false, CancellationToken.None);
         check(!whole.Entries.Any(entry => entry.Kind == DiffKind.Same), "an empty text row does not match an integer 0 row by whole rows: " + Entries(whole));
+        // A padded char key matches the first's decimals by value (its padding a soft difference): the key's hash and the
+        // cell comparison agree, so matching by it does not depend on which values were padded.
+        var (decimalKeys, charKeys) = Pair(store, [["1.50"], ["2.00"], ["3.10"]], [["2.00   "], ["1.5    "], ["3.1"]], [new("Qty", "nchar", "text", Collation: CaseInsensitive)], [new("Qty", "decimal", "text", Precision: 9, Scale: 2)]);
+        var padKeys = ResultDiffer.Compare(decimalKeys, decimalKeys.SealedSnapshot(), charKeys, charKeys.SealedSnapshot(), false, CancellationToken.None);
+        check(padKeys.KeyPair == 0 && Entries(padKeys) == "=1:0 =0:1 =2:2" && padKeys.Counts().Soft == 2, "padded char keys match decimals by value, the padding soft: " + Entries(padKeys));
+        // Cells hash alike exactly when they compare equal, so a key or whole row matches as its cells compare.
+        string[] values = ["0", "0 ", "0.0", "0.0 ", "-0", "00", "", " ", "-", ".", "abc", "abc ", "1.50", "1.5  ", "01.5", "-1.5", "1.5x"];
+        var hashed = Fill(store, store.BeginQuery("hashes"), 0, values.Select(value => new string?[] { value }).ToArray(), [new("Qty", "decimal", "text")]);
+        var hashes = new CellHasher(hashed.Columns, hashed.Wires);
+        var forked = hashes.Fork();
+        var page = PageView.Parse(PinnedPage.Body(hashed.SealedSnapshot()[0]), 1);
+        var disagree = new List<string>();
+        for (var i = 0; i < values.Length; i++)
+            for (var j = 0; j < values.Length; j++)
+            {
+                var same = hashes.Same(page, 0, i, forked, page, 0, j, out var asText);
+                if (same != (hashes.CellValue(page, 0, i) == forked.CellValue(page, 0, j))) disagree.Add("'" + values[i] + "'~'" + values[j] + "'");
+                var literal = hashes.Literal(0, System.Text.Encoding.UTF8.GetBytes(values[i])) || hashes.Literal(0, System.Text.Encoding.UTF8.GetBytes(values[j]));
+                if (asText != literal) disagree.Add("text '" + values[i] + "'~'" + values[j] + "'");
+            }
+        check(disagree.Count == 0, "exact cells hash alike exactly when they compare equal, and compare as text exactly when one is literal: " + string.Join(" ", disagree.Take(5)));
+        // Exact's look-alikes take a padded number's characters in, as its comparison does: the padded row is no look-alike.
+        ResultColumn[] wide = [new("Id", "int", "text"), new("A", "int", "text"), new("B", "int", "text"), new("D", "int", "text")];
+        ResultColumn[] wideText = [wide[0], wide[1], wide[2], new("D", "nvarchar", "text", Collation: CaseInsensitive)];
+        string Possible(DiffModel model) => string.Join(",", model.Possible.OrderBy(item => item.Key).Select(item => item.Key + ">" + item.Value));
+        var (lookLeft, lookRight) = Pair(store, [["1", "5", "6", "0"]], [["2", "5", "6", "0 "]], wideText, wide);
+        var looks = ResultDiffer.Compare(lookLeft, lookLeft.SealedSnapshot(), lookRight, lookRight.SealedSnapshot(), true, CancellationToken.None);
+        var (lookTextLeft, lookIntRight) = Pair(store, [["1", "5", "6", "0 "]], [["2", "5", "6", "0"]], wide, wideText);
+        var looksBack = ResultDiffer.Compare(lookTextLeft, lookTextLeft.SealedSnapshot(), lookIntRight, lookIntRight.SealedSnapshot(), true, CancellationToken.None);
+        check(Possible(looks) == "" && Possible(looksBack) == "", "Exact pairs look-alikes alike whichever result holds the padded text: " + Possible(looks) + " / " + Possible(looksBack));
         foreach (var (text, valid) in new[] { ("0", true), ("-0", true), ("5.", true), (".5", true), ("-.5", true), ("007", true), ("", false), ("-", false), (".", false), (" 1", false), ("1e3", false) })
             check(CellHasher.NumericParts(System.Text.Encoding.UTF8.GetBytes(text), out _, out _, out _) == valid, "'" + text + "' is " + (valid ? "" : "not ") + "an exact numeric");
     }
