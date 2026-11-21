@@ -28,6 +28,9 @@ internal static class AgentJobDocumentLiveChecks
         check(first is { Job: { } read, Steps: [{ Id: 1, Name: "Step 1" }] } && read.Name == job && read.JobId.Equals(id.ToString("D"), StringComparison.OrdinalIgnoreCase) && read.Description == ScratchDatabase.JobMarker,
             "the job document describes the scratch job: its id, description, version, modified date and its one step: " + JsonSerializer.Serialize(first?.Job));
         if (first?.Job is not { } before) return;
+        // sp_help_job names the missing operator of a level-0 notification "(unknown)" (message 14205); the document reads it as no operator.
+        check(before is { EmailLevel: 0, EmailOperator: "", PageLevel: 0, PageOperator: "", NetSendLevel: 0, NetSendOperator: "" },
+            "the job document reads a notification that is never sent with no operator, not sp_help_job's (unknown): " + JsonSerializer.Serialize(before));
 
         // sp_add_job's default event log level is 2, so the save sets 3 and the refused save 0: either landing shows.
         // A save carrying the version it read lands, and moves the version on; the same save again is refused STALE and changes nothing.

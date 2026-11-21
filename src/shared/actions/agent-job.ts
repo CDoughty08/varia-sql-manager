@@ -257,6 +257,7 @@ export interface AgentJobProblem { readonly field: AgentJobField; readonly sever
 
 export const agentJobText = {
   nameRequired: 'The job needs a name.',
+  ownerRequired: 'The job needs an owner.',
   operatorRequired: 'Choose the operator to notify.',
   descriptionTooLong: `A description holds at most ${agentLimits.descriptionChars} characters.`,
   readOnly: (owner: string) => `Read-only. Owned by ${owner}: only its owner and sysadmin can change it.`,
@@ -330,11 +331,12 @@ export function mailProblem(mail: AgentJobMail, platform: AgentPlatform): string
   return undefined
 }
 
-/** The draft's problems: errors on a missing name, a missing operator or a too long description (Save cannot send those), and warnings on
+/** The draft's problems: errors on a missing name, owner or operator or a too long description (Save cannot send those), and warnings on
  *  notifications that would not reach anyone. Nothing else blocks Save. */
 export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDraft): AgentJobProblem[] {
   const problems: AgentJobProblem[] = []
   if (!draft.name.trim()) problems.push({ field: 'name', severity: 'error', message: agentJobText.nameRequired })
+  if (!draft.owner.trim()) problems.push({ field: 'owner', severity: 'error', message: agentJobText.ownerRequired })
   if (draft.description.length > agentLimits.descriptionChars) problems.push({ field: 'description', severity: 'error', message: agentJobText.descriptionTooLong })
   const operators = model.operators
   const check = (field: 'email' | 'page' | 'netSend', levelValue: AgentNotifyLevel, name: string) => {

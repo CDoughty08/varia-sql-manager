@@ -84,12 +84,12 @@ later lanes, behind the same gate until 0.11.0.
   as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
   Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New Alert comes with the Alerts lane).
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
-  changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name or operator).
+  changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
   the job is resolved by name and creation time, the STALE guard compares `version_number` and `date_modified` under `UPDLOCK, HOLDLOCK` (so no other save lands
   before this one's) and THROWs 50011 when either moved, each removed alert is checked to still run this job before `sp_update_alert @job_id` detaches it
   (the zero GUID), and every call checks its return code (50012 with the call's index), so nothing commits unless all of it
-  does. A refusal lands on the field the failing call changed, the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id), opens a field-by-field
+  does. A refusal lands on the field the failing call changed, the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id; a job deleted and created again under the name is not compared, and Reload opens it), opens a field-by-field
   compare of what the server and you changed, a field changed by both first with a choice each, offering Reload and keep my
   changes or Discard mine and reload. The Script drawer shows SSMS's shape (`BEGIN TRANSACTION`, each call followed by
   `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a

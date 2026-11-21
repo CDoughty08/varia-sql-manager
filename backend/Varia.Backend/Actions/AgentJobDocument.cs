@@ -142,9 +142,11 @@ internal sealed partial class ActionService
             object? Value(string column) => jobRows.Value(jobRows.Rows[0], column);
             var modified = Value("date_modified") is DateTime changed ? changed.ToString("yyyy-MM-dd'T'HH:mm:ss.fff", CultureInfo.InvariantCulture) : "";
             int? outcome = Value("last_run_outcome") is { } last and not DBNull ? IntOf(last) : null;
+            // sp_help_job names a missing operator with message 14205 ("(unknown)" in English); a level of 0 sends to nobody, so its operator is ''.
+            string Operator(string level, string name) => IntOf(Value(level)) == 0 ? "" : TextOf(Value(name));
             job = new(row.Id.ToString("D"), row.Name, IntOf(Value("enabled")) == 1, TextOf(Value("description")), TextOf(Value("category")), TextOf(Value("owner")),
-                IntOf(Value("notify_level_email")), TextOf(Value("notify_email_operator")), IntOf(Value("notify_level_page")), TextOf(Value("notify_page_operator")),
-                IntOf(Value("notify_level_netsend")), TextOf(Value("notify_netsend_operator")), IntOf(Value("notify_level_eventlog")), IntOf(Value("delete_level")),
+                IntOf(Value("notify_level_email")), Operator("notify_level_email", "notify_email_operator"), IntOf(Value("notify_level_page")), Operator("notify_level_page", "notify_page_operator"),
+                IntOf(Value("notify_level_netsend")), Operator("notify_level_netsend", "notify_netsend_operator"), IntOf(Value("notify_level_eventlog")), IntOf(Value("delete_level")),
                 row.Created, modified, IntOf(Value("version_number")), IntOf(Value("start_step_id"), 1), RunStamp(IntOf(Value("last_run_date")), IntOf(Value("last_run_time"))), outcome);
             var stepRows = results[AgentSql.JobDocumentSteps.Id];
             steps = [.. stepRows.Rows.Select(item => new AgentJobStepRowDto(IntOf(stepRows.Value(item, "step_id")), TextOf(stepRows.Value(item, "step_name")), TextOf(stepRows.Value(item, "subsystem"))))];

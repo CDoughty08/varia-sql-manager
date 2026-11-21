@@ -88,7 +88,8 @@ export const jobDocumentText = {
   saving: 'The job is being saved. Wait for it to finish.',
   lost: 'The connection closed while the job was being saved, so whether it was saved is unknown. Reload the job to check.',
   backendLost: 'The SQL backend stopped while the job was being saved, so whether it was saved is unknown. Reload the job to check.',
-  copyFailed: 'The job to copy could not be read:'
+  copyFailed: 'The job to copy could not be read:',
+  replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.'
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
   { id: 'general', title: 'General' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
@@ -187,6 +188,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const result = await this.call(() => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentJob', target: { kind: 'agentJob', name } }))
     if (!this.end(id, requestId)) return
     const current = this.get(id)!
+    // Blank was chosen while the copy was read: the user's blank draft stands.
+    if (current.phase !== 'choosing') { this.patch(id, { copying: undefined }); return }
     const source = result.ok ? result.value.agentJobDocument : undefined
     const failure = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error
     if (failure || !source || !current.model) {
@@ -371,9 +374,11 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const current = result.ok && !result.value.error ? result.value.agentJobDocument : undefined
     const latest = this.get(id)
     if (!latest) return
-    if (!current?.job || !latest.model || !latest.draft) {
+    // Deleted and created again under the same name: not the job the draft edits, so no compare; Reload reads the new one.
+    const replaced = !!current?.job && !!latest.model?.job && current.job.jobId.toLowerCase() !== latest.model.job.jobId.toLowerCase()
+    if (!current?.job || !latest.model || !latest.draft || replaced) {
       // The job is gone (or unreadable) since: the refusal says so; the draft stays for a Reload.
-      this.patch(id, { phase: 'ready', error: result.ok && result.value.error ? result.value.error : refusal })
+      this.patch(id, { phase: 'ready', error: replaced ? fallback('NOT_FOUND', jobDocumentText.replaced) : result.ok && result.value.error ? result.value.error : refusal })
       return
     }
     this.patch(id, { phase: 'ready', error: refusal, stale: { current, rows: agentJobCompare(latest.model, current, latest.draft), keepServer: [] } })

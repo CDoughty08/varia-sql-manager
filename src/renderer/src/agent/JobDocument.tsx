@@ -158,7 +158,7 @@ function AlertsSection(props: SectionProps) {
           <td>{alert.messageId ? `Error ${alert.messageId}` : `Severity ${alert.severity}`}</td>
           <td>{alert.enabled ? 'Yes' : 'No'}</td>
           {model.alertsEditable && <td>{removed
-            ? <button type="button" disabled={!service.canEdit(state.id)} onClick={() => service.toggleAlert(state.id, alert.id)}>Keep</button>
+            ? <button type="button" disabled={!service.canEdit(state.id)} aria-label={`Keep ${alert.name}`} onClick={() => service.toggleAlert(state.id, alert.id)}>Keep</button>
             : <button type="button" disabled={!service.canEdit(state.id)} aria-label={`Remove ${alert.name}`} onClick={() => service.toggleAlert(state.id, alert.id)}><Icon name="trash" />Remove</button>}</td>}
         </tr>
       })}</tbody>
@@ -179,7 +179,7 @@ function StartPanel({ state, service }: { readonly state: JobDocumentState; read
     ...copy.current ? { anchor: copy.current } : {}, onDidAccept: item => void service.startCopy(state.id, item.id)
   })
   return <div className="agent-job-start" role="group" aria-label="New Job">
-    <button type="button" className="agent-job-start-choice" data-agent-job-focus onClick={() => service.startBlank(state.id)}>
+    <button type="button" className="agent-job-start-choice" data-agent-job-focus disabled={!!state.copying} onClick={() => service.startBlank(state.id)}>
       <Icon name="add" /><span><strong>{agentJobText.newBlank}</strong><span className="field-note">{agentJobText.newBlankHint}</span></span>
     </button>
     <button type="button" ref={copy} className="agent-job-start-choice" disabled={!jobs.length || !!state.copying} onClick={pick}>

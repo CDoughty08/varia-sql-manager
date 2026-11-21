@@ -77,6 +77,8 @@ describe("the job document's shared rules", () => {
     expect(agentJobSavable(warned)).toBe(true)
     expect(agentJobSavable(agentJobProblems(opened, { ...draft, name: ' ' }))).toBe(false)
     expect(agentJobSavable(agentJobProblems(opened, { ...draft, pageLevel: 2, pageOperator: '' }))).toBe(false)
+    // An empty owner is refused by the save's own schema, so it is an error on the Owner field, not a failed request.
+    expect(agentJobProblems(opened, { ...draft, owner: ' ' })).toContainEqual({ field: 'owner', severity: 'error', message: 'The job needs an owner.' })
     expect(pagerDuty(operator('x'))).toBeUndefined()
     expect(agentJobProblems(model({ mail: { checked: true, xps: false, sysadmin: true } }), draft).map(problem => problem.message)).toContain('Database Mail is off on this server (Database Mail XPs), so e-mail notifications are not sent.')
     expect(agentJobProblems(model({ mail: { checked: false, sysadmin: false } }), draft)).toEqual([])
@@ -190,6 +192,40 @@ describe('the job document', () => {
     jobDocuments.reload(id)
     await settled()
     expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', target: { name: 'Nightly again' }, error: { code: 'NOT_FOUND' } })
+  })
+  it('does not compare a job deleted and created again under its name, and Reload opens the new one', async () => {
+    const { jobDocuments, answers, setModel, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateDraft(id, { description: 'Mine' })
+    setModel(model({ job: record({ jobId: '44444444-4444-4444-4444-444444444444', version: 1 }) }))
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'gone', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', error: { code: 'NOT_FOUND', message: jobDocumentText.replaced }, draft: { description: 'Mine' } })
+    expect(jobDocuments.get(id)?.stale).toBeUndefined()
+    expect(jobDocuments.get(id)?.model?.job?.jobId).toBe('11111111-1111-1111-1111-111111111111')
+    // Reload opens the job now under the name, and the header follows it.
+    jobDocuments.reload(id)
+    await settled()
+    const watched = (live.handles as FakeLiveHandle[]).filter(item => item.owner.key === 'agent-job:' + id && !item.disposed)
+    expect(watched.map(item => item.spec.args)).toEqual([{ watch: ['44444444-4444-4444-4444-444444444444'] }])
+  })
+  it('keeps a blank job chosen while a copy is read', async () => {
+    const { jobDocuments, api } = opened()
+    const id = jobDocuments.newJob('c1')
+    await settled()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const describe = api.describeObject.getMockImplementation()!
+    api.describeObject.mockImplementationOnce(async params => { await gate; return describe(params) })
+    const copying = jobDocuments.startCopy(id, 'Nightly load')
+    expect(jobDocuments.get(id)?.copying).toBe('Nightly load')
+    jobDocuments.startBlank(id)
+    jobDocuments.updateDraft(id, { name: 'Mine' })
+    release()
+    await copying
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', draft: { name: 'Mine', emailLevel: 0 } })
+    expect(jobDocuments.get(id)?.copying).toBeUndefined()
   })
   it('sends a name as msdb keeps it, trimmed, and opens the job under that name', async () => {
     const { jobDocuments, executes, setModel } = opened(model({ job: undefined }))
