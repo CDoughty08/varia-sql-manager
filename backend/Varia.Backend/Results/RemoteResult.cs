@@ -285,14 +285,19 @@ internal sealed class RemoteResult : IDisposable
         try
         {
             // The read's own blocks are asked for first, in order, then its viewer's read-ahead.
-            foreach (var block in targets) _ = Ensure(block, 0, Math.Min(end, block.End));
+            // Each fetch started here is the one the read waits for first, even if it has already ended (a failure clears
+            // block.Fetching): asking again would repeat a failed call for the same read.
+            var started = new Task?[targets.Count];
+            for (var i = 0; i < targets.Count; i++) started[i] = Ensure(targets[i], 0, Math.Min(end, targets[i].End));
             ReadAhead(viewer, first, last);
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
             limit.CancelAfter(wait);
             var next = firstRow;
-            foreach (var block in targets)
+            for (var i = 0; i < targets.Count; i++)
             {
+                var block = targets[i];
                 var need = Math.Min(end, block.End);
+                var own = started[i];
                 while (true)
                 {
                     Task? fetching = null;
@@ -304,7 +309,8 @@ internal sealed class RemoteResult : IDisposable
                         // Released, or replaced by Load into memory: the rows sent so far are the answer (the caller tells a
                         // release apart), and the grid reads again under the new revision.
                         if (!gone && disposed.IsCancellationRequested) return next;
-                        if (!gone) fetching = block.Fetching;
+                        if (!gone) fetching = block.Fetching ?? own;
+                        own = null;
                     }
                     // The table is gone: the cached rows are the answer, a part-filled block's included (the seeded first
                     // page); none at all is REMOTE_EXPIRED.

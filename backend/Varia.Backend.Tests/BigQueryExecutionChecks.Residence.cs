@@ -1207,6 +1207,27 @@ internal static partial class BigQueryExecutionChecks
             check(code == "ok" && stopped && covering == 1, $"a block's call does not retry a rate limit itself, so its backoff stops by the read wait: {code} {stopped} {covering}");
         }
 
+        // A read whose thread is held up (as a loaded machine may) until its own fetch has failed waits on that fetch, never asking again.
+        using (var harness = new Harness(Lines(40000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromSeconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 400; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            while (harness.Jobs.TableReads.TryDequeue(out _)) { }
+            var remote = harness.Service.Results.Find(id)!.Remote!;
+            var stalled = 0;
+            remote.AheadChosen = _ => { if (Interlocked.Exchange(ref stalled, 1) == 0) SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 5_000); };
+            var (code, _, _, _) = await ReadRows(harness, id, 20000, 1);
+            var stopped = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var covering = harness.Jobs.TableReads.Count(read => read.StartIndex is { } start && start <= 20000 && 20000 < start + read.MaxResults);
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(code == "ok" && stopped && covering == 1, $"a read held up past its own fetch's failure does not fetch its block twice: {code} {stopped} covering={covering} reads={string.Join(";", harness.Jobs.TableReads.Select(r => r.StartIndex + "+" + r.MaxResults))}");
+        }
         // Reads that join a rate-limited fetch (the grid reading again) answer short, never with an error, when it stops; the
         // limit counts the clock, each call's own retries of a 429 included.
         using (var harness = new Harness(Lines(3000)))
@@ -1438,6 +1459,26 @@ internal static partial class BigQueryExecutionChecks
             check(executedSet is { Residence: "remote" } && code == "ok" && set is { Residence: "memory", RowsStored: 5000 } && streams.All(count => count == 1)
                 && rows.Select(row => row[0].Text).SequenceEqual(Enumerable.Range(0, 5000).Select(i => i.ToString(Inv))),
                 $"a script child's load reads its rows in order, never split into streams: {executedSet?.Residence} {code} {message} res={set?.Residence} stored={set?.RowsStored} streams={string.Join(",", streams)}");
+        }
+        // So does a script child kept in memory by Automatic that switched to windowed part way (its window is the one kept then).
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var childJobs = Lines(3000, Wide);
+            childJobs.StatementType = "SCRIPT";
+            childJobs.ScriptChild = true;
+            var childSchema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var childBatches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(childSchema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var childStorage = new BigQueryStorageFake(childSchema, childBatches) { IgnoreCompression = true };
+            using var harness = StorageHarness(childJobs, childStorage, new ResultStore(8L << 20, 400 * 1024));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("DECLARE q STRING DEFAULT 'SELECT n, s FROM t ORDER BY n'; EXECUTE IMMEDIATE q");
+            var executedSet = executed?.ResultSets.SingleOrDefault();
+            var before = childStorage.Sessions.Count;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(executedSet?.ResultId ?? 0));
+            var streams = childStorage.Sessions.Skip(before).Select(session => session.MaxStreamCount).ToList();
+            check(executedSet is { Residence: "remote", Revision: 1 } && code == "ok" && streams.Count == 0,
+                $"a script child switched to windowed part way loads through REST: {executedSet?.Residence} rev={executedSet?.Revision} {code} {message} streams={string.Join(",", streams)} msgs={Texts(result?.Messages ?? [])}");
         }
         // A Storage Read load refused for low memory switches back to windowed, whole, as REST's does.
         {
