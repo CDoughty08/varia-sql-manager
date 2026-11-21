@@ -178,6 +178,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
   /** Agent's state for a document, by its service probe's last sample. */
   availability(id: string): AgentAvailability { return agentAvailability(this.get(id)?.service) }
+  /** What the document shows: a lost connection's last service reading is no news, so it waits (pending) for a live one. */
+  shownAvailability(id: string): AgentAvailability { return this.live(id) ? this.availability(id) : 'pending' }
 
   // --- Opening ---------------------------------------------------------------------------------------------------------
 
@@ -209,7 +211,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       let patch: Partial<JobActivityState> = {}
       for (const sample of tick.samples) {
         if (sample.probe === agentJobsProbe) {
-          if (this.get(state.id)?.lastRunPending) patch = { ...patch, lastRunPending: false }
+          // A real read only: a resorted sample re-sends the rows held from before the expand change.
+          if (!sample.resorted && this.get(state.id)?.lastRunPending) patch = { ...patch, lastRunPending: false }
           if (sample.metrics) patch = { ...patch, counts: [...sample.metrics] }
           const facets = sample.tables?.find(table => table.table === 0)?.facets
           if (facets?.length) patch = { ...patch, facets: { ...this.get(state.id)?.facets, ...patch.facets, ...Object.fromEntries(facets.map(facet => [facet.column, facet])) } }
@@ -225,6 +228,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
           if (agentAvailability(service) === 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()
         }
       }
+      // The list failing whole (Agent XPs off, say) reads no last run either: the panel stops saying it is reading.
+      if (tick.errors?.some(error => error.probe === agentJobsProbe && !error.tables?.length) && this.get(state.id)?.lastRunPending) patch = { ...patch, lastRunPending: false }
       if (Object.keys(patch).length) this.patch(state.id, patch)
     })
     this.watches.set(state.id, () => ticks.dispose())

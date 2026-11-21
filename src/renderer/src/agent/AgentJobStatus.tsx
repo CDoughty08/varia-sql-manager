@@ -21,7 +21,7 @@ export default function AgentJobStatus() {
   for (const [connectionId, availability] of Object.entries(agent)) if (availability === 'stopped' || availability === 'xpsOff') down.set(connectionId, availability)
   for (const state of Object.values(documents)) {
     // A monitor whose connection is gone holds its last reading, which is no news.
-    const availability = state.connectionId && jobActivity.isLive(state.id) ? jobActivity.availability(state.id) : 'pending'
+    const availability = state.connectionId ? jobActivity.shownAvailability(state.id) : 'pending'
     if (state.connectionId && (availability === 'stopped' || availability === 'xpsOff')) down.set(state.connectionId, availability)
   }
   const servers = [...down.keys()].map(id => Object.values(documents).find(state => state.connectionId === id)?.label ?? jobs.find(entry => entry.connectionId === id)?.server ?? '')

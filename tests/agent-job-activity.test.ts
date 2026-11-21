@@ -223,8 +223,17 @@ describe('Job Activity Monitor', () => {
     expect(handle().refreshes).toBe(1)
     // Until a list sample comes, the last run table is another job's (or none): the panel says it is reading.
     expect(jobActivity.get(id)?.lastRunPending).toBe(true)
-    handle().deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 0, 0, 0, 0] }] })
+    // A resorted sample re-sends rows held from before: still reading.
+    handle().deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.list', costMs: 0, effectiveIntervalMs: 5000, resorted: true, tables: [] }] })
+    expect(jobActivity.get(id)?.lastRunPending).toBe(true)
+    handle().deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 0, 0, 0, 0] }] })
     expect(jobActivity.get(id)?.lastRunPending).toBe(false)
+    // The list failing whole (Agent XPs off) reads no last run: no longer reading.
+    jobActivity.toggleExpanded(id, { id: backup, name: 'Backup' })
+    expect(jobActivity.get(id)?.lastRunPending).toBe(true)
+    handle().deliver({ type: 'live.tick', seq: 3, sampledAt: 3, samples: [], errors: [{ probe: 'agent.jobs.list', code: 'AGENT_DISABLED', message: 'Agent XPs are off.', retryInMs: 0, terminal: true }] })
+    expect(jobActivity.get(id)?.lastRunPending).toBe(false)
+    jobActivity.toggleExpanded(id, { id: nightly, name: 'Nightly' })
     // Between retries is a Status filter; pressed again it comes off. Running is the view chip.
     jobActivity.applyTile(id, agentJobTiles[2].applies)
     expect(jobActivity.tilePressed(id, agentJobTiles[2].applies)).toBe(true)
@@ -239,7 +248,12 @@ describe('Job Activity Monitor', () => {
   it('sends args changed while the connection is lost, for the subscription after a reconnect, without a refresh', () => {
     const { jobActivity, handle, connections } = monitor()
     const id = jobActivity.open('c1')
+    handle().deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }] }] })
+    expect(jobActivity.shownAvailability(id)).toBe('stopped')
     connections.markLostBefore(2)
+    // Lost, the last reading is no news: the banner, note, tiles and pill wait for a live one.
+    expect(jobActivity.availability(id)).toBe('stopped')
+    expect(jobActivity.shownAvailability(id)).toBe('pending')
     jobActivity.toggleExpanded(id, { id: backup, name: 'Backup' })
     jobActivity.setColumnFilter(id, 'category', { values: ['ETL'] })
     expect(handle().args).toEqual([{ expand: backup }, { expand: backup, filters: [{ column: 'category', values: ['ETL'] }] }])
