@@ -71,6 +71,7 @@ const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENO
  *  `missing` keeps the last content's hash: a file deleted and then written back unchanged is no change. */
 interface Stamp { readonly size: number; readonly mtimeMs: number; readonly sha256: string; readonly missing?: true }
 interface FileBaseline { readonly baseSha256?: string }
+interface SaveConflict { readonly sha256?: string }
 interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind }
 interface FileReadOptions {
   readonly reload?: boolean
@@ -374,12 +375,17 @@ export class SqlFileStore {
    *  reported and the user did not reload counts): Save asks before replacing that. A deleted file is no change here,
    *  since Save writes it again. */
   async changedOnDisk(fileId: string): Promise<boolean> {
+    return (await this.saveConflict(fileId)) !== undefined
+  }
+
+  /** The disk version that Save would replace, or a conflict without a hash when it cannot be verified. */
+  async saveConflict(fileId: string): Promise<SaveConflict | undefined> {
     const { baseSha256 } = this.registered(fileId)
     // A sync or copy can preserve the size and timestamp. Verify the bytes immediately before offering to replace them.
     const comparison = await this.compare(fileId, true).catch(() => undefined)
-    if (!comparison) return true
+    if (!comparison) return {}
     const { stamp } = comparison
-    return !stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)
+    if (!stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)) return { sha256: stamp.sha256 }
   }
 
   /** How the file differs from its stamp, and the stamp that records what was seen; undefined when it cannot tell. */
@@ -552,7 +558,8 @@ export interface SavePrompts {
 
 /**
  * varia:files-save once validated: Save of Read-Only File, File changed (while `detectChanges`, Tools › Options' Detect
- * when file is changed outside the environment), Save as Unicode and the Save dialog, in that order, then the write. A Cancel at any of them writes and changes nothing, so Overwrite's write permission waits for the save itself.
+ * when file is changed outside the environment), Save as Unicode and the Save dialog. Changes during confirmation are
+ * checked again before writing. A Cancel writes and changes nothing, so Overwrite's write permission waits for the save itself.
  * `specificEncoding` is Save files with a specific encoding's Save encoding while that is on: every file is converted
  * without asking, a legacy one too.
  */
@@ -564,11 +571,25 @@ export async function saveDocument(files: SqlFileStore, request: SaveSqlFile, sp
     if (answer === 'saveAs') saveAs = true
     else overwriteReadOnly = true
   }
-  if (!saveAs && detectChanges && request.fileId && await files.changedOnDisk(request.fileId) && !await prompts.changed(files.get(request.fileId).path)) return null
+  const checkedFile = !saveAs && detectChanges ? request.fileId : undefined
+  let accepted: SaveConflict | undefined
+  // A confirmation covers the version the user was asked about. An external write while a dialog is open needs its own.
+  const confirmChanges = async (): Promise<boolean> => {
+    if (!checkedFile) return true
+    let conflict = await files.saveConflict(checkedFile)
+    while (conflict && (!accepted || conflict.sha256 !== accepted.sha256)) {
+      if (!await prompts.changed(files.get(checkedFile).path)) return false
+      accepted = conflict
+      if (!conflict.sha256) return true
+      conflict = await files.saveConflict(checkedFile)
+    }
+    return true
+  }
+  if (!await confirmChanges()) return null
   const registered = request.fileId ? files.get(request.fileId) : undefined
   let encoding = specificEncoding
   if (!encoding && registered?.encoding === 'legacy') {
-    if (!await prompts.unicode(registered.name, registered.codePage ?? 'ANSI')) return null
+    if (!await prompts.unicode(registered.name, registered.codePage ?? 'ANSI') || !await confirmChanges()) return null
     encoding = 'utf8bom'
   }
   let selectedPath: string | undefined

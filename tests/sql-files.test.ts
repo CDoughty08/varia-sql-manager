@@ -1047,6 +1047,36 @@ describe('changes made outside', () => {
     expect(declined.asked).toEqual(['changed ordinary.sql'])
     expect(await readFile(path, 'utf8')).toBe('SELECT 2')
   })
+  it('checks for external edits made while an ordinary Save waits for encoding confirmation', async () => {
+    const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })
+    const path = join(directory, 'ansi.sql'), time = new Date('2026-01-01T00:00:00Z')
+    await writeFile(path, Buffer.from([0x53, 0xe9]))
+    await utimes(path, time, time)
+    const opened = await store.read(path), external = Buffer.from([0x54, 0xe9]), declined = prompts()
+    const confirming = { ...declined.value, unicode: async () => {
+      await writeFile(path, external)
+      await utimes(path, time, time)
+      return true
+    } }
+    expect(await saveDocument(store, request('local edits', opened.id), undefined, confirming, true)).toBeNull()
+    expect(declined.asked).toEqual(['changed ansi.sql'])
+    expect(await readFile(path)).toEqual(external)
+  })
+  it('asks again if the disk version changes while the first overwrite confirmation is open', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'changing.sql')
+    await writeFile(path, 'original')
+    const opened = await store.read(path)
+    await writeFile(path, 'first external edit')
+    let asked = 0
+    const confirming = { ...prompts().value, changed: async () => {
+      if (++asked > 1) return false
+      await writeFile(path, 'later external edit')
+      return true
+    } }
+    expect(await saveDocument(store, request('local edit', opened.id), undefined, confirming, true)).toBeNull()
+    expect(asked).toBe(2)
+    expect(await readFile(path, 'utf8')).toBe('later external edit')
+  })
   it('verifies restored file bytes on save when a later external edit preserves the size and timestamp', async () => {
     const store = new SqlFileStore(), path = join(directory, 'pinned.sql'), time = new Date('2026-01-01T00:00:00Z')
     await writeFile(path, 'SELECT 1')
