@@ -587,6 +587,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  result), so its strip moves to the new run. */
   begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean } = {}): void {
     if (this.disposed) return
+    // A switch of the run this replaces is not said with the new one's end.
+    this.unheardSwitches.delete(tabId)
     // The focus follows a group by its ordinal into the next run, as names and highlights do; nothing derived is rebuilt,
     // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
     // A run that ended before it returned that group passes the wish on.
@@ -718,6 +720,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const timer = this.announcements.get(tabId)
     if (timer !== undefined) this.timers.clearTimeout(timer)
     this.announcements.delete(tabId)
+    this.unheardSwitches.delete(tabId)
     if (!Object.hasOwn(this.getSnapshot(), tabId)) return
     const next = { ...this.getSnapshot() }
     delete next[tabId]
@@ -1665,8 +1668,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       ? `${subject} is now windowed in BigQuery: rows are read as you scroll.`
       : `${subject} is loading into memory.`) + removed
     if (announce) {
-      this.unheardSwitches.set(tabId, [...this.unheardSwitches.get(tabId) ?? [], text])
-      this.announce(tabId, text)
+      // Said with any switch not yet read out (several results of a script switching at once): one replaces another.
+      const unheard = [...this.unheardSwitches.get(tabId) ?? [], text]
+      this.unheardSwitches.set(tabId, unheard)
+      this.announce(tabId, unheard.join(' '))
     }
     return text
   }

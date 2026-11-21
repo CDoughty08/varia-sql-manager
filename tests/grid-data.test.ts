@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GridData } from '../src/renderer/src/grid/data'
+import { GridData, stalledText } from '../src/renderer/src/grid/data'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { planTiles, tileColumnOf, tileKey, tileRowOf, type TileShape } from '../src/renderer/src/grid/tiles'
 import type { RowWindow, WindowOptions, WindowShape } from '../src/renderer/src/results/ResultClient'
@@ -343,7 +343,7 @@ describe('grid data', () => {
     data.ensure(range(1030, 1145, 0, 7), 10_000, 0, 30)
     expect(handle.prefetch).toHaveBeenCalledOnce()
   })
-  it('reads a tile that keeps answering no rows again after doubling waits, then not until the view leaves it or Retry', async () => {
+  it('reads a tile that keeps answering no rows again after doubling waits, then marks it failed so the grid offers Retry', async () => {
     const { data, reads, settle, advance } = fixture(8)
     // A windowed result's tile answers empty every time (rate limited, or its table shorter than BigQuery said), cached as such.
     const frame = () => data.ensure(range(0, 40, 0, 7), 10_000, 0, 30)
@@ -356,10 +356,44 @@ describe('grid data', () => {
     }
     const own = () => reads.filter(read => read.first < 128).length
     expect(own()).toBe(gridLimits.stallRetries + 1)
+    expect(data.error).toBe(stalledText)
     // Retry reads it again at once.
     data.retry()
     frame()
     expect(own()).toBe(gridLimits.stallRetries + 2)
+  })
+
+  it('reads a stalled tile again at once when more rows arrive, and never lets its long wait hold back another tile', async () => {
+    const { data, reads, settle, advance, changed } = fixture(8)
+    data.ensure(range(0, 40, 0, 7), 50, 0, 30)
+    reads[0].resolve(50)
+    await settle()
+    // Rows arrive past it, and its read on brings none: stalled, waiting 250 ms.
+    data.ensure(range(0, 40, 0, 7), 60, 0, 30)
+    reads[1].resolve(0)
+    await settle()
+    data.ensure(range(0, 40, 0, 7), 60, 0, 30)
+    expect(reads).toHaveLength(2)
+    // More rows: read on at once.
+    data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    expect(reads).toHaveLength(3)
+    // Stalled for long (a wait of seconds), then a fast drag elsewhere: the reads there start 50 ms after it settles.
+    for (let tries = 0; tries < 4; tries++) {
+      reads.at(-1)!.resolve(0)
+      await settle()
+      advance(10_000)
+      data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    }
+    reads.at(-1)!.resolve(0)
+    await settle()
+    data.ensure(range(0, 40, 0, 7), 70, 0, 30)
+    const before = reads.length
+    for (const first of [20_000, 40_000, 60_000]) data.ensure(range(first, first + 40, 0, 7), 1_000_000, 20_000, 30)
+    changed.mockClear()
+    advance(100)
+    expect(changed).toHaveBeenCalled()
+    data.ensure(range(60_000, 60_040, 0, 7), 1_000_000, 0, 30)
+    expect(reads.length).toBeGreaterThan(before)
   })
 
   it('aborts its reads and timers when disposed', () => {
