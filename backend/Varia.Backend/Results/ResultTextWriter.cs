@@ -492,11 +492,7 @@ internal sealed class ResultTextWriter
                 bytes = bytes[1..];
                 continue;
             }
-            for (var i = 0; i < count; i++)
-            {
-                span[2 * i] = Hex[bytes[i] >> 4];
-                span[2 * i + 1] = Hex[bytes[i] & 15];
-            }
+            Convert.TryToHexString(bytes[..count], span, out _);
             output.Advance(2 * count);
             Bytes += 2 * count;
             bytes = bytes[count..];
