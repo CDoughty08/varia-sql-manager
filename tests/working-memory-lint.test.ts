@@ -179,10 +179,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // only Jobs.cs's GetRequest and Sessions.cs's ListRequest name them.
   expect(bigQueryUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
   expect(bigQueryUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
-  // A Jobs member is reached for those calls alone anywhere in the backend, however the resource is held (a local, a field,
-  // a connection's client in another file): SQL Server Agent's AgentSql.Jobs and SMO's JobServer.Jobs are statements and
-  // collections, a job list's own Jobs (Sessions.cs) and SSIS's created.Jobs a list and a flag.
-  expect(codeUses(/(?<!\b(?:AgentSql|JobServer)\s*)\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs', 'Ssis/SsisActionService.cs', 'Ssis/SsisCreate.cs'])
+  // In BigQuery code a Jobs member is reached for those calls alone (a job list's own Jobs in Sessions.cs aside). These
+  // text bans are the readable first line; BigQueryExecutionChecks.References holds the rule on the compiled backend, where
+  // no spelling (a property pattern, a held resource, a target-typed request) hides a jobs.query.
+  expect(bigQueryUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()|\bJobs\s*:(?!:)/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs'])
   // ...and Google's client service is reached only in BigQuery's own code.
   expect(codeUses(/\b\w*[Cc]lient\s*\.\s*Service\b/g).filter(file => !file.startsWith('BigQuery/') && !file.startsWith('SqlService.BigQuery'))).toEqual([])
   expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])

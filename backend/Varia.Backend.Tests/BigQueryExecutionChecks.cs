@@ -302,6 +302,8 @@ internal static partial class BigQueryExecutionChecks
 
     public static async Task RunAsync(Action<bool, string> check)
     {
+        Trace("References");
+        References(check);
         Trace("CostText");
         CostText(check);
         Trace("Converter");
