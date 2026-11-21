@@ -16,13 +16,16 @@ export const longRunKinds = [
   'newLogin',
   'loginProperties',
   'backup',
-  'shrink'
+  'shrink',
+  'startAgent',
+  'stopAgent',
+  'restartAgent'
 ] as const
 export type LongRunKind = typeof longRunKinds[number]
 /** How a message names the run, at the start of a sentence. */
 export const longRunSubjects: { readonly [K in LongRunKind]: string } = {
   createCatalog: 'Create Catalog', newDatabase: 'New Database', attach: 'An attach', restore: 'A restore', verify: 'A backup verification', newLogin: 'New Login', loginProperties: 'Login Properties',
-  backup: 'A backup', shrink: 'A shrink'
+  backup: 'A backup', shrink: 'A shrink', startAgent: 'A start of SQL Server Agent', stopAgent: 'A stop of SQL Server Agent', restartAgent: 'A restart of SQL Server Agent'
 }
 /** The renderer tells main about at most this many runs (more are counted, not named), with server names this long. */
 export const longRunLimits = { runs: 16, server: 256 } as const

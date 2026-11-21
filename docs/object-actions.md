@@ -24,6 +24,11 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionDisable` |
 | `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionEnable` |
 | `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | SQL Server, Managed Instance | `explorerActionUnlock` |
+| `startJob` | Start Job at Step… | `explorer.startJob` | dialog (`startJobAtStep`) | `explorer.context` | `2_job` 1 | t | — | — | SQL Server, Managed Instance | `explorerActionStartJob` |
+| `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
+| `startAgent` | Start | `explorer.startAgent` | dialog (`startAgent`) | `explorer.context` | `2_service` 1 | s | — | — | SQL Server, Managed Instance | `explorerActionStartAgent` |
+| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
+| `restartAgent` | Restart | `explorer.restartAgent` | dialog (`restartAgent`) | `explorer.context` | `2_service` 3 | e | — | — | SQL Server, Managed Instance | `explorerActionRestartAgent` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -47,28 +52,30 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `login` | none | – | – | – | – | – | – | – | – | – | – |
-| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ |
-| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ |
-| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ |
-| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – |
-| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – |
-| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – |
-| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – |
-| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | ✓ | – | – | – | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | ✓ | – | – | – | – | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – | – | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… | Start Job at Step… | Stop Job | Start SQL Server Agent | Stop SQL Server Agent | Restart SQL Server Agent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – | – | – | – | – | – | – | – | – | – |
+| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ | – | – | – | – | – |
+| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ | – | – | – | – | – |
+| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ | – | – | – | – | – |
+| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – | – | – | – | – | – |
+| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – | – | – | – | – | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – | – | – | – | – | – |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – | – | – | – | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `agent` | none | – | – | – | – | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
+| `agentJob` | none | – | ✓ | ✓ | – | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
 
 ## Folder actions
 
@@ -92,6 +99,7 @@ A node's status badge (`explorerNodeStatus`) can overlay its row: a disabled log
 | `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | `disabled` | Disable Login: –, Enable Login: ✓ |
 | `login` | `system` | `disabled` | Disable Login: –, Enable Login: ○ |
 | `login` | `windowsGroup` | `disabled` | Disable Login: –, Enable Login: – |
+| `agentJob` | any | `disabled` | Disable Login: –, Enable Login: ✓ |
 
 Only `disabled` changes a login's actions: a login denied permission to connect can still be disabled, as in SSMS.
 
@@ -127,6 +135,10 @@ the Servers column above says which, and on another server the menu hides the it
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
 | `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 | `tableProperties` | Table Properties - <name> | Document tab | `tableProperties` | General (`settings-gear`), Permissions (`settings-gear`), Change Tracking (`settings-gear`), Storage (`settings-gear`), Security Predicates (`settings-gear`), Extended Properties (`settings-gear`) | No |
+| `startJobAtStep` | Start Job at Step - <name> | Modal dialog | `startJob` | General (`settings-gear`) | No |
+| `startAgent` | Start SQL Server Agent | Modal dialog | `startAgent` | General (`settings-gear`) | Yes |
+| `stopAgent` | Stop SQL Server Agent | Modal dialog | `stopAgent` | General (`settings-gear`) | Yes |
+| `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -368,6 +380,9 @@ last resort.
 | `loginProperties` | Login Properties |
 | `backup` | A backup |
 | `shrink` | A shrink |
+| `startAgent` | A start of SQL Server Agent |
+| `stopAgent` | A stop of SQL Server Agent |
+| `restartAgent` | A restart of SQL Server Agent |
 
 Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.
 
@@ -377,10 +392,10 @@ Sales to Sales2: Closing connections…").
 
 ### Long actions and progress
 
-An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:
+An action marked long in the catalogue (a restore, a verify, a backup, or the SQL Server Agent service's Start, Stop or Restart) takes the long gate instead of the execute gate:
 1 per Varia connection and 2 in all. Another waits up to `gateWaitMs`, then answers `BUSY`
-("Another restore or backup is running on this connection.", or "Restores or backups are already running on other
-connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
+("Another restore, backup or SQL Server Agent start or stop is running on this connection.", or "Restores, backups or
+SQL Server Agent starts and stops are already running on other connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
 Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they
 arrive only for a reader: SQL Server's message 3211 ("n percent processed.", from `STATS`) becomes a droppable
 `action.progress` EVENT `{step, percent}` at most every 250 ms, and is never one of the 32 messages the reply keeps.
@@ -396,7 +411,7 @@ When the backend's generation is closed (a quit, a reload, Restart SQL Backend),
 runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
 before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
 
-Long actions: Restore Database…, Restore Files and Filegroups….
+Long actions: Restore Database…, Restore Files and Filegroups…, Start SQL Server Agent, Stop SQL Server Agent, Restart SQL Server Agent.
 
 ## Database Properties
 
@@ -1430,6 +1445,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AUTH_ENTRA` | Yes |
 | `AUTH_IDENTITY` | No |
 | `PASSWORD_POLICY` | Yes |
+| `AGENT_STOPPED` | No |
+| `JOB_STATE` | No |
+| `SERVICE_UNREACHABLE` | No |
 
 ## Limits
 

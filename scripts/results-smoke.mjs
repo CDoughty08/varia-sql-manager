@@ -1337,7 +1337,7 @@ try {
     // overflow, without it they would fit. The columns can still settle narrower after the first measure (a slow runner), so
     // each poll sizes the frame again from the head's current width until the scroller overflows only beside the bar.
     const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
-    await expect.poll(async () => {
+    const fit = async () => {
       const measured = await tallFrame.evaluate((element, [half, parts]) => {
         const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
         element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
@@ -1345,9 +1345,17 @@ try {
       }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
       const [scroll, client, offset] = measured.split(/ in | of /).map(Number)
       return scroll > client && offset > scroll || measured
+    }
+    await expect.poll(fit, { timeout: 15_000 }).toBe(true)
+    // Generous: a slow runner's resize frame can lag, and columns that settle narrower still drop the bar, so a poll that
+    // finds no overflow sizes the frame again; on failure the message carries the scroller's sizes.
+    await expect.poll(async () => {
+      const height = await headerHeight()
+      if (Math.abs(height - (tallHeight + scrollbar)) < 0.5) return true
+      const sized = await sizes(), [scroll, client] = sized.split(/ in | of /).map(Number)
+      if (scroll <= client) await fit()
+      return `${height} (scroller ${sized})`
     }, { timeout: 15_000 }).toBe(true)
-    // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
-    await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
     await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
     await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)
   } else console.log('Results checks: local card scroll bar room skipped (overlay scroll bars take none).')

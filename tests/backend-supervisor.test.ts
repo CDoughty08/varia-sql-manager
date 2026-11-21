@@ -647,6 +647,19 @@ describe('BackendSupervisor results', () => {
     last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: descriptor })
     expect(await synthetic).toEqual({ ...descriptor, generation: 1 })
   })
+  it("checks a session close's answer, passing a BigQuery note on and failing an invalid one", async () => {
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const closing = value.request('query.session.close', { sessionId: 'tab-1', transaction: 'commit' })
+    await settle(8)
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: { closed: true, note: { code: 'outcomeUnknown', jobId: 'job_1' } } })
+    expect(await closing).toEqual({ closed: true, note: { code: 'outcomeUnknown', jobId: 'job_1' } })
+    const invalid = failure(value.request('query.session.close', { sessionId: 'tab-2' }))
+    await settle(8)
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: { closed: true, note: { code: 'committed' } } })
+    expect(await invalid).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
+  })
 })
 
 describe('BackendSupervisor operation progress', () => {

@@ -47,6 +47,8 @@ internal sealed class ResultTextWriter
     private readonly TextOptions options;
     private readonly IReadOnlyList<ResultColumn> columns;
     private readonly ValueKind[] kinds;
+    /// <summary>Each column's pair when it is a previous-value column (role old), else -1.</summary>
+    private readonly int[] olds;
     private readonly byte[][]? keys;
     /// <summary>Transposed JSON: the fields' keys (the name field's, then one per source row written).</summary>
     private byte[][]? fieldKeys;
@@ -61,6 +63,7 @@ internal sealed class ResultTextWriter
         this.options = options;
         this.columns = columns;
         kinds = [.. columns.Select(Kind)];
+        olds = [.. columns.Select(column => column is { Role: "old", Of: { } of } ? of : -1)];
         if (options.Format == TextFormat.Json) keys = JsonKeys(columns);
     }
 
@@ -177,14 +180,23 @@ internal sealed class ResultTextWriter
         EndLine();
     }
 
-    public void Row(in PageView page, int row, ReadOnlySpan<int> selected)
+    public void Row(in PageView page, int row, ReadOnlySpan<int> selected) => Row(page, row, selected, []);
+
+    /// <summary>A row of a one-row comparison's Save: a previous-value column (role old) is let through, written only where
+    /// its pair is <paramref name="changed"/>: elsewhere its field is empty (a JSON object leaves its key out), and a changed
+    /// cell whose old value is NULL is written as NULL whatever the NULL text, so "changed from NULL" never reads as
+    /// "unchanged".</summary>
+    public void Row(in PageView page, int row, ReadOnlySpan<int> selected, ReadOnlySpan<bool> changed)
     {
         if (options.Format == TextFormat.Json)
         {
             Write(records == 0 ? "\n{"u8 : ",\n{"u8);
+            var written = 0;
             for (var i = 0; i < selected.Length; i++)
             {
-                if (i > 0) Write(","u8);
+                var old = Previous(selected[i], changed);
+                if (old == false) continue;
+                if (written++ > 0) Write(","u8);
                 Write(keys![selected[i]]);
                 Write(":"u8);
                 Cell(page, row, selected[i]);
@@ -198,12 +210,18 @@ internal sealed class ResultTextWriter
             for (var i = 0; i < selected.Length; i++)
             {
                 if (i > 0) Write(options.Format == TextFormat.Csv ? ","u8 : "\t"u8);
-                Cell(page, row, selected[i]);
+                var old = Previous(selected[i], changed);
+                if (old == false) continue;
+                if (old == true && page.IsNull(selected[i], row)) Write("NULL"u8);
+                else Cell(page, row, selected[i]);
             }
             EndLine();
         }
         Rows++;
     }
+
+    /// <summary>For a previous-value column (role old), whether its pair changed in this row; null for any other column.</summary>
+    private bool? Previous(int column, ReadOnlySpan<bool> changed) => olds[column] is >= 0 and var of ? of < changed.Length && changed[of] : null;
 
     /// <summary>Transposed text (a grid drawn transposed, copied or saved as drawn): each line is a source column and each
     /// field a source row. This names the fields, <paramref name="names"/> being the rows' (<see cref="UniqueFields"/>):

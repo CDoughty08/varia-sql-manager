@@ -98,6 +98,9 @@ export class ResultsPortHost {
   /** Result ids the current generation holds for this renderer, oldest first, with their column count when a descriptor
    *  named it (search answers are bounded by it). */
   private readonly owned = new Map<number, number | undefined>()
+  /** The two inputs of each comparison this port was answered (results.diff), by its result id, in the current generation:
+   *  a replace names one of the same two inputs, in either order. */
+  private readonly diffInputs = new Map<number, readonly [number, number]>()
   private readonly latestMemory = new Map<MemoryFeature, Extract<PortMessage, { t: 'memory' }>>()
   private port: PortMainLike | undefined
   private generation = 0
@@ -186,6 +189,7 @@ export class ResultsPortHost {
     if (generation !== this.generation) {
       this.generation = generation
       this.owned.clear()
+      this.diffInputs.clear()
       this.latestMemory.clear()
     }
     if (state.status === 'restarting') this.latestMemory.clear()
@@ -756,16 +760,26 @@ export class ResultsPortHost {
   }
 
   /** A unified diff of two results this renderer owns (results.diff); cancelled like a sort, and counted with sorts. The
-   *  diff is a new result: the port owns it once answered, and main closes one answered after its port went (a reload). */
+   *  diff is a new result: the port owns it once answered, and main closes one answered after its port went (a reload).
+   *  `replaces` must name a comparison this port owns of the same two inputs (in either order, so a swap can replace). */
   private diff(request: Extract<PortRequest, { t: 'diff' }>): void {
     const { rid, generation } = request
     if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (!this.current(generation, request.resultId) || !this.current(generation, request.right)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    if (request.replaces !== undefined) {
+      const inputs = this.diffInputs.get(request.replaces)
+      if (!this.current(generation, request.replaces) || !inputs) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+      const same = (inputs[0] === request.resultId && inputs[1] === request.right) || (inputs[0] === request.right && inputs[1] === request.resultId)
+      if (!same) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    }
     const port = this.port
-    // Member by member: the match the port schema checked, never anything else the request carried.
+    // Member by member: the match, layout and replaced comparison the port schema checked, never anything else the request carried.
     const match = request.match === undefined ? undefined : request.match.mode === 'columns' ? { mode: 'columns' as const, columns: [...request.match.columns] } : { mode: request.match.mode }
-    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context, ...match ? { match } : {} }, this.relay(rid))
+    const params: ResultsDiffParams = { left: request.resultId, right: request.right, exact: request.exact, context: request.context, ...match ? { match } : {} }
+    if (request.layout !== undefined) params.layout = request.layout
+    if (request.replaces !== undefined) params.replaces = request.replaces
+    const diff = this.backend.diff(generation, params, this.relay(rid))
     this.sorting.set(rid, diff)
     diff.done.then(result => {
       const parsed = diffResultSchema.safeParse(result)
@@ -780,13 +794,24 @@ export class ResultsPortHost {
         return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
       }
       const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
-      if (generation === this.generation) this.own([descriptor])
+      if (generation === this.generation) {
+        this.own([descriptor])
+        this.recordInputs(descriptor.resultId, request.resultId, request.right)
+      }
       this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
     }, error => {
       if (this.port !== port || this.sorting.get(rid) !== diff) return
       this.sorting.delete(rid)
       this.fail(rid, error)
     })
+  }
+
+  /** Records a comparison's inputs, forgetting those of comparisons this port no longer owns once there are more than it
+   *  can own, so the record stays bounded. */
+  private recordInputs(diff: number, left: number, right: number): void {
+    this.diffInputs.set(diff, [left, right])
+    if (this.diffInputs.size <= this.limits.ownedResults) return
+    for (const id of this.diffInputs.keys()) if (!this.owned.has(id)) this.diffInputs.delete(id)
   }
 
   /** A pivot of a result this renderer owns (results.pivot; a view id is checked against its result by the backend);

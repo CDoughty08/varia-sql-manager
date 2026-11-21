@@ -28,7 +28,7 @@ const states = ['disconnected', 'connected', 'running', 'busy'] as const
 
 /** Every title-bar menu, resolved as the custom menus show it, in each workbench state: one snapshot per state. */
 async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuItem[])[][]> {
-  const fixture = workbenchFixture({ platform })
+  const fixture = workbenchFixture({ platform, agentPreview: true })
   cleanups.push(fixture.dispose)
   const theme = fixture.theme as { state: ThemeState }
   theme.state = { ...theme.state, themes }
@@ -59,7 +59,7 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
  * with and without selected cells, and Messages with and without selected text.
  */
 async function resolveContexts(platform: Platform): Promise<{ labels: string[]; snapshots: (readonly ResolvedMenuItem[])[][] }> {
-  const fixture = workbenchFixture({ platform })
+  const fixture = workbenchFixture({ platform, agentPreview: true })
   cleanups.push(fixture.dispose)
   fixture.api.push(readyBackend())
   const ran = fixture.documents.create('ran.sql', 'SELECT 3', 'master', 'server-r')
@@ -103,7 +103,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
     ['a column', object({ kind: 'column', database: 'AppData', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, 'Id')],
     ['a return value', object({ kind: 'returnValue', database: 'AppData', parent: { kind: 'function', schema: 'dbo', name: 'Total' } }, 'Returns int')],
     ['a login', object({ kind: 'login', name: 'sa' }, 'sa')],
-    ['a SQL Server Agent job', object({ kind: 'agentJob', name: 'Nightly' }, 'Nightly')], ['a SQL Server Agent error log', object({ kind: 'agentErrorLog', name: '0' }, 'Current')],
+    ['the SQL Server Agent node', object({ kind: 'agent' }, 'SQL Server Agent')], ['a SQL Server Agent job', object({ kind: 'agentJob', name: 'Nightly' }, 'Nightly')], ['a SQL Server Agent error log', object({ kind: 'agentErrorLog', name: '0' }, 'Current')],
     ['an SSIS Catalog folder', object({ kind: 'ssisFolder', name: 'Finance' }, 'Finance')],
     ['a results grid with selected cells', output('grid', 1)], ['a results grid without', output('grid', 0)],
     ['Messages with selected text', output('messages', 0, 'Completed.')], ['Messages without', output('messages', 0)]

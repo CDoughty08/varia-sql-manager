@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -107,8 +107,10 @@ export interface ResultHandle extends Disposable {
   /** Compares this result (the earlier) with `right` (the later), both complete results of the same query, in the backend
    *  (results.diff), and stores their unified diff as a new result, whose descriptor the answer carries: open it with
    *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
-   *  all); `exact`: text compared character for character instead of by collation. */
-  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; match?: DiffMatch; signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<ResultsDiffResult>
+   *  all); `exact`: text compared character for character instead of by collation; `layout`: two rows a change (`unified`,
+   *  the default) or one row an entry (`entry`); `replaces`: a comparison of the same two results (either order) this one
+   *  replaces, whose memory raises the query's limit while both are held (released by the caller once the new one is shown). */
+  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; match?: DiffMatch; layout?: DiffLayout; replaces?: ResultHandle; signal?: AbortSignal; onProgress?: OperationProgressListener }): Promise<ResultsDiffResult>
   /** Pivots the rows (a view's rows, in its order and with its filters, through a view) in the backend (results.pivot): grouped
    *  by up to `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column by their collation, with
    *  1 to `limits.pivot.maxValues` values each, stored as a new result whose descriptor the answer carries: open it with
@@ -455,6 +457,9 @@ export class ResultClient implements Disposable {
         const match = o.match
         if (match?.mode === 'columns' && (match.columns.length < 1 || match.columns.length > wire.diff.maxKeyColumns || new Set(match.columns).size !== match.columns.length || match.columns.some(column => !Number.isInteger(column) || column < 0 || column >= wire.page.maxColumns)))
           throw new ResultError('INVALID_PARAMS', 'Choose 1 to 16 different paired columns to match rows by.')
+        const { layout, replaces } = o
+        if ((layout !== undefined && layout !== 'unified' && layout !== 'entry') || (replaces && (replaces.key.generation !== state.key.generation || replaces.key.resultId === state.key.resultId || replaces.key.resultId === right.key.resultId)))
+          throw new ResultError('INVALID_PARAMS', 'A comparison is written in one or two rows a change, and replaces another comparison of the same query.')
         const key = { generation: state.key.generation, resultId: state.key.resultId }
         // A diff answered just before the abort reached the worker is a stored result nobody holds: it is released.
         const late = (message: WorkerResponse) => {
@@ -462,7 +467,7 @@ export class ResultClient implements Disposable {
           const { descriptor } = message.result as ResultsDiffResult
           void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
         }
-        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context, ...match ? { match: match.mode === 'columns' ? { mode: 'columns', columns: [...match.columns] } : { mode: match.mode } } : {} } }), o.signal, late, o.onProgress)
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context, ...match ? { match: match.mode === 'columns' ? { mode: 'columns', columns: [...match.columns] } : { mode: match.mode } } : {}, ...layout ? { layout } : {}, ...replaces ? { replaces: replaces.key.resultId } : {} } }), o.signal, late, o.onProgress)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsDiffResult
       },

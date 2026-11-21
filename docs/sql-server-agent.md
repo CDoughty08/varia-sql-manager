@@ -1,9 +1,10 @@
 # SQL Server Agent
 
 SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.md), UI in
-[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, Search Objects
-finds jobs, alerts and operators, and Script As scripts jobs, alerts, operators and proxies; Job Activity Monitor and the job
-documents arrive in later lanes, behind the same gate until 0.11.0.
+[docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's Start Job at Step…, Stop
+Job, Enable, Disable, Rename and Delete, and the Agent node's Start, Stop and Restart; Search Objects finds jobs, alerts
+and operators, and Script As scripts jobs, alerts, operators and proxies. Job Activity Monitor and the job documents arrive
+in later lanes, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -30,6 +31,32 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   is a profile with no role and no msdb permission, whose server facts a second read at server scope still fills in. The renderer derives the login's Agent role from it (`agentRoleOf`: sysadmin, operator,
   reader, user, none; unknown before the read, profileFailed after a failed one), which the context keys `agentRole`
   (Object Explorer's menu) and `explorerSelectionAgentRole` carry for Agent nodes.
+- **Job verbs** (object actions, docs/object-actions.md). A job's context menu offers Start Job at Step… and Stop Job, then
+  Disable (Enable on a disabled job), Rename and Delete. Start Job at Step… reads the job and its steps (`sp_help_jobstep`):
+  a job with one step starts as the dialog opens, as SSMS's does, and one with more lists its steps, the first chosen.
+  Stop Job, Disable, Enable and Rename run as status-bar jobs with Stop; Delete is Delete Object, which also deletes the
+  job's history and the schedules no other job uses. Each verb sends the job's creation time from the tree
+  (`agentIdentity`, sysjobs `date_created` to the second), and its one batch resolves the job by name and that time first,
+  so a job created since under the name is refused `NOT_FOUND` before msdb runs anything. The batches call only the msdb
+  procedures listed below, with named arguments, and are checked by `AgentSql.LintExecutable`, an exact-shape allow list.
+  msdb's procedures report failures by return code, so each batch raises its own error on a nonzero code. SQL Server
+  Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),
+  a job that is not running when stopped, or already running when started, is `JOB_STATE`; msdb's 14261, 14262 and 14372
+  are `NAME_IN_USE`, `NOT_FOUND` and `IN_USE`.
+- **Service control** (`AgentServiceControl`). The Agent node's Start, Stop and Restart ask before they run ("Are you sure
+  you want to stop the SQLAgent$SALES service on DB01?", with the state the Service Control Manager reports) and then show
+  their steps in place: Restart stops the service, waits for Stopped, starts it and waits for Running. They go through
+  Windows' Service Control Manager as the Windows user Varia runs as, so Windows decides, as in SSMS; the SQL login needs
+  no role. The machine is `SERVERPROPERTY('ComputerNamePhysicalNetBIOS')` and the service `SQLSERVERAGENT` or
+  `SQLAgent$<instance>`, both read from the server and checked against strict patterns; nothing typed names a machine.
+  Each call is bounded (`serviceStatementMs`, `serviceReadMs`) and a wait polls every `servicePollMs` up to
+  `serviceWaitMs`. Access denied is `PERMISSION_DENIED` ("Starting and stopping SQL Server Agent needs Windows
+  administrator rights on <machine>"), an unreachable machine or Service Control Manager `SERVICE_UNREACHABLE`, no
+  such service `NOT_FOUND`, and a Start while the service is still stopping `BLOCKED`. The verbs are offered with Varia on Windows for a Windows server that is not Managed Instance
+  and not a failover cluster instance; elsewhere they stay in the menu, greyed with the reason (Varia not on Windows, a
+  Linux server, Managed Instance, the service changing state), and the backend refuses them
+  `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
+  stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in
   [docs/scripting.md](scripting.md)). SMO writes the script through `ScriptPipeline` as for every other kind (headers
@@ -112,10 +139,18 @@ instance or under a domain account (AG-2's Windows workflow), and how history re
 
 `VARIA_TEST_SQL_AGENT=1` turns on the Agent live suite (docs/testing.md): it waits for Agent to come up, then fails if it
 never does. Scratch Agent objects use the run prefix with a kind tag (`_job`, `_sch`, `_op`, `_al`, `_px`, `_cr`) and are
-swept by `ScratchDatabase.SweepAsync` once their prefix is more than 6 hours old. Its Script As checks
+swept by `ScratchDatabase.SweepAsync` once their prefix is more than 6 hours old. With `VARIA_TEST_SQL_SCRATCH=1` the
+suite also runs the job verbs on its scratch job through `actions.describe` and `actions.execute`. Its Script As checks
 (`AgentScriptingLiveChecks`) script this run's job, operator, alert (Windows) and proxy, compare the job's script with
 SMO's own `Job.Script`, run the job's DROP And CREATE script, and script a `SQLAgentUserRole` login's own job (on Windows,
 its step that runs as a proxy comes without the proxy and with the warning).
+
+The service verbs have offline checks through the `IServiceControl` fake (every refusal, the waits, a partial restart and
+the platform gates) and a live suite of their own, `AgentService` (`VARIA_TEST_SQL_AGENT_SERVICE=1`), which really stops,
+starts and restarts Agent and leaves it running. No grouped or full live run reaches it: it runs only through
+`npm run backend:test:agent-service`, under the exclusive machine lock so no other session's Agent checks run while Agent
+is stopped, and in `.github/workflows/agent-service.yml` (docs/ci.md) against a named instance on Windows. A remote
+server's service control is checked by hand.
 
 <!-- Generated below from src/shared/agent/catalog.ts. Regenerate with: npx vitest run tests/agent-catalog.test.ts -u -->
 
@@ -329,43 +364,42 @@ And these master procedures, each in exactly this shape (`@p` is a parameter):
 
 Writes (from AG-2) call only these, each followed by a return-code check:
 
-| Procedure | Lane |
-| --- | --- |
-| `msdb.dbo.sp_start_job` | AG-2 |
-| `msdb.dbo.sp_stop_job` | AG-2 |
-| `msdb.dbo.sp_update_job` | AG-2 |
-| `msdb.dbo.sp_delete_job` | AG-2 |
-| `master.dbo.xp_servicecontrol` | AG-2 |
-| `msdb.dbo.sp_purge_jobhistory` | AG-6a |
-| `msdb.dbo.sp_add_job` | AG-6a |
-| `msdb.dbo.sp_add_jobserver` | AG-6a |
-| `msdb.dbo.sp_update_alert` | AG-6a |
-| `msdb.dbo.sp_add_jobstep` | AG-6b |
-| `msdb.dbo.sp_update_jobstep` | AG-6b |
-| `msdb.dbo.sp_delete_jobstep` | AG-6b |
-| `msdb.dbo.sp_add_jobschedule` | AG-6c |
-| `msdb.dbo.sp_attach_schedule` | AG-6c |
-| `msdb.dbo.sp_detach_schedule` | AG-6c |
-| `msdb.dbo.sp_add_schedule` | AG-6c |
-| `msdb.dbo.sp_update_schedule` | AG-6c |
-| `msdb.dbo.sp_delete_schedule` | AG-6c |
-| `msdb.dbo.sp_add_operator` | AG-7 |
-| `msdb.dbo.sp_update_operator` | AG-7 |
-| `msdb.dbo.sp_delete_operator` | AG-7 |
-| `msdb.dbo.sp_add_alert` | AG-7 |
-| `msdb.dbo.sp_delete_alert` | AG-7 |
-| `msdb.dbo.sp_add_notification` | AG-7 |
-| `msdb.dbo.sp_update_notification` | AG-7 |
-| `msdb.dbo.sp_delete_notification` | AG-7 |
-| `msdb.dbo.sp_set_sqlagent_properties` | AG-8a |
-| `msdb.dbo.sp_add_proxy` | AG-8b |
-| `msdb.dbo.sp_update_proxy` | AG-8b |
-| `msdb.dbo.sp_delete_proxy` | AG-8b |
-| `msdb.dbo.sp_grant_proxy_to_subsystem` | AG-8b |
-| `msdb.dbo.sp_revoke_proxy_from_subsystem` | AG-8b |
-| `msdb.dbo.sp_grant_login_to_proxy` | AG-8b |
-| `msdb.dbo.sp_revoke_login_from_proxy` | AG-8b |
-| `msdb.dbo.sp_cycle_agent_errorlog` | AG-5b |
+| Procedure | Arguments | Lane |
+| --- | --- | --- |
+| `msdb.dbo.sp_start_job` | `@job_id`, `@step_name` | AG-2 |
+| `msdb.dbo.sp_stop_job` | `@job_id` | AG-2 |
+| `msdb.dbo.sp_update_job` | `@job_id`, `@enabled`, `@new_name` | AG-2 |
+| `msdb.dbo.sp_delete_job` | `@job_id`, `@delete_history`, `@delete_unused_schedule` | AG-2 |
+| `msdb.dbo.sp_purge_jobhistory` | later lanes | AG-6a |
+| `msdb.dbo.sp_add_job` | later lanes | AG-6a |
+| `msdb.dbo.sp_add_jobserver` | later lanes | AG-6a |
+| `msdb.dbo.sp_update_alert` | later lanes | AG-6a |
+| `msdb.dbo.sp_add_jobstep` | later lanes | AG-6b |
+| `msdb.dbo.sp_update_jobstep` | later lanes | AG-6b |
+| `msdb.dbo.sp_delete_jobstep` | later lanes | AG-6b |
+| `msdb.dbo.sp_add_jobschedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_attach_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_detach_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_add_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_update_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_delete_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_add_operator` | later lanes | AG-7 |
+| `msdb.dbo.sp_update_operator` | later lanes | AG-7 |
+| `msdb.dbo.sp_delete_operator` | later lanes | AG-7 |
+| `msdb.dbo.sp_add_alert` | later lanes | AG-7 |
+| `msdb.dbo.sp_delete_alert` | later lanes | AG-7 |
+| `msdb.dbo.sp_add_notification` | later lanes | AG-7 |
+| `msdb.dbo.sp_update_notification` | later lanes | AG-7 |
+| `msdb.dbo.sp_delete_notification` | later lanes | AG-7 |
+| `msdb.dbo.sp_set_sqlagent_properties` | later lanes | AG-8a |
+| `msdb.dbo.sp_add_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_update_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_delete_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_grant_proxy_to_subsystem` | later lanes | AG-8b |
+| `msdb.dbo.sp_revoke_proxy_from_subsystem` | later lanes | AG-8b |
+| `msdb.dbo.sp_grant_login_to_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_revoke_login_from_proxy` | later lanes | AG-8b |
+| `msdb.dbo.sp_cycle_agent_errorlog` | later lanes | AG-5b |
 
 msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):
 
@@ -378,7 +412,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `14372` | `IN_USE` | A schedule is still used by a job. |
 | `15281` | `AGENT_STOPPED` | Agent XPs is off (SQL Server Agent is stopped or disabled). |
 | `22022` | `JOB_STATE` | SQL Server Agent refused a start or stop; decided by a re-read, never by number. |
-| `22003` | `SQL_ERROR` | Every `xp_servicecontrol` failure; the Windows code is in its text ("returned error 5" is access denied). |
+| `22003` | `SQL_ERROR` | Every `xp_servicecontrol` failure (only its `QueryState` read is used); the Windows code is in its text. |
 
 ### Limits
 
@@ -400,6 +434,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `serviceStatementMs` | 30,000 | One service Start or Stop statement, in ms |
 | `serviceWaitMs` | 60,000 | How long a Start or Stop waits for the service's new state, in ms |
 | `serviceReadMs` | 10,000 | One service state read, in ms |
+| `servicePollMs` | 500 | How often a Start or Stop's wait polls the service's state, in ms |
 | `agentUpWaitMs` | 120,000 | How long the live checks wait for Agent after the server is up, in ms |
 | `profileMs` | 10,000 | The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role) |
 

@@ -141,7 +141,7 @@ describe('result diffs', () => {
     const comparing = compare.compare('t1', keyAt(results, 't1', 1))
     run(2, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
-    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0 })
+    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' })
     await comparing
     expect(client.released()).toContain(950)
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
@@ -287,5 +287,12 @@ describe('change index limits', () => {
     const source = readFileSync('backend/Varia.Backend/Results/DiffIndex.cs', 'utf8')
     const constant = (name: string) => Number(new RegExp(`\\b${name} = (\\d+);`).exec(source)?.[1])
     expect([constant('OverviewBuckets'), constant('BlockRows'), constant('MaxKinds')]).toEqual([limits.diff.overviewBuckets, limits.diff.indexBlockRows, limits.diff.maxKinds])
+  })
+
+  it('give the one-row layout the pairs that fit a page with their previous values and the suffix (UnifiedDiff)', () => {
+    const source = readFileSync('backend/Varia.Backend/Results/ResultDiff.cs', 'utf8')
+    expect(source).toContain('public const int MaxEntryPairs = (PageBuilder.MaxColumns - SuffixColumns) / 2;')
+    expect(source).toContain('public const int SuffixColumns = 4;')
+    expect(limits.diff.maxEntryPairs).toBe((limits.page.maxColumns - 4) / 2)
   })
 })

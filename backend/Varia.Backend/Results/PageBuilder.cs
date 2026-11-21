@@ -158,6 +158,9 @@ internal sealed class PageBuilder
         if (bitmap is not null) bitmap[row >> 3] &= (byte)~(1 << (row & 7));
     }
 
+    /// <summary>Whether the cell just appended was stored truncated (by its reader's cap or the row limit).</summary>
+    public bool LastTruncated => lastTruncated;
+
     /// <summary>Bytes the current row may still add before its cells become truncated prefixes.</summary>
     private int RowBudget => (int)Math.Max(0, MaxRowBytes - rowBytes - reserved);
 

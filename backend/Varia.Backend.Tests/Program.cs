@@ -37,6 +37,11 @@ if (args is [FindBench.Argument])
     FindBench.Run();
     return;
 }
+if (args is [RoomPoolBench.Argument])
+{
+    RoomPoolBench.Run();
+    return;
+}
 // The pivot benchmark, run by hand (docs/pivot-performance-findings.md): measures only, no checks.
 if (args is [PivotBench.Argument, ..])
 {
@@ -61,6 +66,13 @@ if (args is [SealBench.Argument, var sealServer, ..])
 if (args is [TypedFormBench.Argument, var typedServer])
 {
     TypedFormBench.Run(typedServer);
+    return;
+}
+
+// Offline BigQuery read throughput, REST against Storage Read, run by hand (docs/bigquery.md): measures only, no checks.
+if (args is [BigQueryExecutionChecks.ReadBenchArgument, ..])
+{
+    await BigQueryExecutionChecks.ReadBenchAsync(args);
     return;
 }
 
@@ -106,6 +118,7 @@ if (args is ["--bigquery-checks"])
     BigQueryCredentialChecks.Run(Collect);
     await BigQueryChecks.RunAsync(Collect);
     await BigQueryExecutionChecks.RunAsync(Collect);
+    await BigQuerySessionChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -467,6 +480,7 @@ if (liveGroup is null)
         ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
         ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
+        ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
@@ -475,6 +489,7 @@ if (liveGroup is null)
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("TypedForm", Sync(() => TypedFormChecks.Run(Check))),
+        ("RoomPool", Sync(() => RoomPoolChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("SealPacking", Sync(() => SealPackingChecks.Run(Check))),
@@ -512,6 +527,7 @@ if (liveGroup is null)
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
         ("Agent", () => AgentChecks.RunAsync(Check)),
+        ("AgentActions", () => AgentActionChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
@@ -668,8 +684,11 @@ if (liveGroup is null)
         && new[] { "0/2", "3/2", "1/0", "x/2", "1/2/3" }.All(value => { try { LiveGroups.Parse(["--live-group", value]); return false; } catch (ArgumentException) { return true; } })
         && LiveGroups.Runs(null, "Query") && LiveGroups.Split([("a", 5), ("b", 5), ("c", 9)], 2) is [["c"], ["a", "b"]]
         && LiveGroups.Parse(["--live-suite", "Scripting"]) is { Suite: "Scripting" } single && LiveGroups.Runs(single, "Scripting") && !LiveGroups.Runs(single, "Query")
-        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))(),
-        "--live-group k/n names one group of n, --live-suite one known suite, and a run without either runs every suite");
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "Agent,NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && LiveGroups.Parse(["--live-suite", "Agent,AgentService"]) is { } pair && LiveGroups.Runs(pair, "Agent") && LiveGroups.Runs(pair, "AgentService") && !LiveGroups.Runs(pair, "Query")
+        && !LiveGroups.Runs(null, "AgentService") && !LiveGroups.Runs(new LiveGroups.Group(1, 1), "AgentService") && LiveGroups.Covers([.. LiveGroups.Suites.Select(suite => suite.Name), "AgentService"]),
+        "--live-group k/n names one group of n, --live-suite one or more known suites, and a run without either runs every suite but the excluded ones (AgentService), which only --live-suite runs");
     Console.WriteLine("Passed " + passed + " offline .NET checks.");
 }
 
@@ -1050,6 +1069,7 @@ try
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
     await Suite("Agent", () => AgentLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("AgentService", () => AgentActionLiveChecks.ServiceAsync(Check, service, info, json));
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."

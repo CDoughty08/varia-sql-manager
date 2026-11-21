@@ -387,15 +387,36 @@ internal sealed class ResultJobs(ResultStore store)
         && !path.StartsWith("//./", StringComparison.Ordinal) && !path.StartsWith("//?/", StringComparison.Ordinal);
 
     /// <summary>The columns Save writes: the visible ones, and for a diff its marker and row numbers first ("Change", "Old row",
-    /// "New row"), decided here from the result's kind so that no renderer flag or dialog choice is needed. Copy never writes
-    /// them (<see cref="Resolve"/>).</summary>
+    /// "New row"), and in the one-row layout each data column followed by its previous-value column ("&lt;name&gt; (old)"),
+    /// decided here from the result's kind so that no renderer flag or dialog choice is needed. Copy never writes them
+    /// (<see cref="Resolve"/>).</summary>
     internal static int[] SavedColumns(ResultSetBuffer set)
     {
         var columns = set.Columns;
         IEnumerable<int> visible = Enumerable.Range(0, columns.Count).Where(column => !ResultTextWriter.Hidden(columns[column]));
         if (set.Kind != "diff") return [.. visible];
         int Role(string role) => Enumerable.Range(0, columns.Count).First(column => columns[column].Role == role);
-        return [Role("mark"), Role("leftRow"), Role("rightRow"), .. visible];
+        // A data column's pair is its index (the data columns come first, in pair order).
+        var old = new Dictionary<int, int>();
+        for (var c = 0; c < columns.Count; c++) if (columns[c] is { Role: "old", Of: { } of }) old[of] = c;
+        return [Role("mark"), Role("leftRow"), Role("rightRow"), .. visible.SelectMany(column => old.TryGetValue(column, out var previous) ? new[] { column, previous } : [column])];
+    }
+
+    /// <summary>The changed pairs of a one-row comparison's stored row, for Save's previous values: none unless the row is
+    /// changed; a cut row's from its full list in the change index, another's from the cells its tone lists (soft ones are
+    /// not changed). <paramref name="changed"/> has one entry a pair and is filled here.</summary>
+    internal static void ChangedPairs(DiffIndex index, in PageView page, int at, int storedRow, int toneColumn, Span<bool> changed)
+    {
+        changed.Clear();
+        if (storedRow >= index.Rows || index.KindOf(storedRow) != DiffRowKind.Changed) return;
+        if (index.IsCut(storedRow) && index.ChangedPairs(storedRow) is { IsEmpty: false } bits)
+        {
+            for (var p = 0; p < changed.Length; p++) changed[p] = (bits[p / 64] & (1UL << (p % 64))) != 0;
+            return;
+        }
+        if (page.IsNull(toneColumn, at)) return;
+        foreach (var (first, last) in DiffIndex.ListedCells(System.Text.Encoding.UTF8.GetString(page.Span(toneColumn, at))))
+            for (var p = first; p <= last && p < changed.Length; p++) changed[p] = true;
     }
 
     /// <summary>A header column names a transposed job's fields, so only such a job has one.</summary>
@@ -507,12 +528,22 @@ internal sealed class ResultJobs(ResultStore store)
         var set = source.Set;
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];
         using var room = new ReadRoom(set);
+        // A one-row comparison's Save writes each changed cell's previous value, and only those: its changed pairs come from
+        // the tone and, for a cut row, the change index. Copy never selects previous-value columns.
+        var index = set.Kind == "diff" && columns.Any(column => set.Columns[column].Role == "old") ? set.DiffIndex : null;
+        var changed = index is null ? null : new bool[set.Columns.Count(column => column.Role == "old")];
         foreach (var page in Pages(source, first, last))
         {
             token.ThrowIfCancellationRequested();
             var (from, to) = Within(page, first, last);
             var view = PageView.Parse(room.Body(page), set.Columns.Count, scratch);
-            for (var row = from; row <= to; row++) writer.Row(view, row, columns);
+            for (var row = from; row <= to; row++)
+            {
+                if (index is null) { writer.Row(view, row, columns); continue; }
+                var position = page.FirstRow + row;
+                ChangedPairs(index, view, row, (int)(source.View is { } sorted ? sorted.Order[position] : position), set.Columns.Count - 1, changed);
+                writer.Row(view, row, columns, changed);
+            }
             AfterPage?.Invoke();
             await drain();
         }

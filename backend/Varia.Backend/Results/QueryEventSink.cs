@@ -38,6 +38,17 @@ internal sealed class QueryEventSink : IDisposable
         lock (gate) Emit(new { Type = "session.opened", Spid = spid, Login = login }, false);
     }
 
+    /// <summary>query.job: a BigQuery request's top-level job as it starts and finishes (essential, never dropped).</summary>
+    public void Job(object body)
+    {
+        lock (gate)
+        {
+            if (stopped) return;
+            FlushMessages();
+            Emit(body, false);
+        }
+    }
+
     public void Opened(ResultSetBuffer set)
     {
         lock (gate)

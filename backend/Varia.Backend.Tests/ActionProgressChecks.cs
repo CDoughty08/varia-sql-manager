@@ -156,9 +156,9 @@ internal static class ActionProgressChecks
             && catalog.Limit("progressEventMs") == (long)options.ProgressInterval.TotalMilliseconds && options.LongPerConnection == 1 && options.LongTotal == 2,
             "the long gate and the progress interval come from the catalogue's limits");
         var marked = WithLong("delete", 30_000);
-        check(catalog.Actions.Where(catalog.IsLong).SequenceEqual(["restore", "restoreFiles"]) && marked.IsLong("delete") && !marked.IsLong("rename") && !marked.IsLong("createTable")
+        check(catalog.Actions.Where(catalog.IsLong).SequenceEqual(["restore", "restoreFiles", "startAgent", "stopAgent", "restartAgent"]) && marked.IsLong("delete") && !marked.IsLong("rename") && !marked.IsLong("createTable")
             && marked.CleanupBudget("delete") == TimeSpan.FromSeconds(30),
-            "an action is long only when the catalogue marks it (Restore Database, D1f; Restore Files and Filegroups, D1g; later the backup)");
+            "an action is long only when the catalogue marks it (Restore Database, D1f; Restore Files and Filegroups, D1g; SQL Server Agent's Start, Stop and Restart, AG-2)");
     }
 
     private static async Task RunnerAsync(Action<bool, string> check)
@@ -224,8 +224,8 @@ internal static class ActionProgressChecks
         var ended = await Task.WhenAll(first, second, rename);
         // A and B start together, so either may open first; the rename on A always opens third.
         var opened = host.Opened.ToArray();
-        const string LongBusy = "BUSY: Another restore or backup is running on this connection. Retry after it finishes.";
-        const string LongElsewhere = "BUSY: Restores or backups are already running on other connections. Retry after one finishes.";
+        const string LongBusy = "BUSY: Another restore, backup or SQL Server Agent start or stop is running on this connection. Retry after it finishes.";
+        const string LongElsewhere = "BUSY: Restores, backups or SQL Server Agent starts and stops are already running on other connections. Retry after one finishes.";
         check(sameConnection == LongBusy && third == LongElsewhere && renameOpened && opened.Length == 3 && opened.Take(2).Order(StringComparer.Ordinal).SequenceEqual(["A", "B"]) && opened[2] == "A" && ended.All(code => code.StartsWith("CANCELLED", StringComparison.Ordinal)),
             $"the long gate allows one long action per Varia connection and two in all, says which (this connection, or the others when all long slots are taken), and leaves the execute gate free: {sameConnection} / {third} / {string.Join(", ", ended)} / {string.Join(",", opened)}");
 

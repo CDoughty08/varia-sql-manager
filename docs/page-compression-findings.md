@@ -260,7 +260,38 @@ working memory, so the operation holds about a page a worker and the result stay
   growth (1 and 4.2 GiB).
 - **Copy and Save** stay on one thread and unpack each page just before writing it (0.5 to 0.9 s per GiB, 1.4 to 2.5
   times the raw Save). They are never refused for want of room. Decompressing ahead on a second thread was not built.
-- Fused rooms are plain arrays freed with the operation.
+- Fused rooms come from the store's room pool ([Room pool](#room-pool)) and go back when the operation ends.
+
+### Room pool
+
+View reads and fused operations rent their rooms from one pool a store keeps (`RoomPool`) and give them back once
+nothing reads them, so a result read again allocates no new rooms. Before the pool each tile of a sorted view made a
+256 KiB room for each page it unpacked: about 33 MB of large-object-heap arrays a 128-row tile, freed only by a full
+collection, so scrolling a sorted view of a packed result collected every other tile.
+
+- **Renting:** a room is the shortest idle one at least the page's length, or a new one rounded up to 16 KiB, so pages
+  of nearly one length (most end within a row of the seal) share rooms. A reader reads its first page-length bytes.
+- **Giving back:** a view read gives its group's rooms back before it hands over a page (it may wait for credit with
+  it); Copy and Save keep them across pages. `PageRooms` gives back, when disposed, the rooms their readers gave back; a
+  room still out is dropped.
+- **Kept:** idle rooms up to `RoomPool.IdleBytes` (a tile's 64 rooms and one a worker: about 21 MiB on 16 workers),
+  none longer than four sealed pages, none twice. They are not charged to the budget, as a sort's or a filter's pooled
+  scratch is not, and are let go after 30 s without a rental.
+
+Measured on 1,000,000 W1 rows packed (830 pages) through a scattered view, without the pool → with it. Times are the
+best of three interleaved runs on a busy 16-worker machine; allocations, collections and pauses held across all three.
+
+| | 128-row tile | 256-row screen | Find, every page | Find through the view |
+| --- | ---: | ---: | ---: | ---: |
+| Allocated a read | 33 MB → 0.2 MB | 66 MB → 0.4 MB | 2.3–4.3 MB → 0.15 MB | 9–12 MB → 4 MB |
+| Full collections, 300 tiles or screens, 30 Finds | 194–230 → 0 | 374–385 → 0 | 4–8 → 0 | 14–17 → 2 |
+| GC pause, all reads | 150–360 ms → 1 ms | 210–370 ms → 12 ms | 5–15 ms → 0 | 7–43 ms → 1–3 ms |
+| p50 (p99) | 4.2 (23.6) → 1.9 (13.4) ms | 6.7 (30.4) → 4.2 (9.2) ms | 15.4 → 15.3 ms | 17.2 → 24.5 ms |
+
+What a Find through a view still allocates is its own row-position array (4 bytes a row), not rooms.
+
+`RoomPoolBench` (`--room-pool-bench`, run by `tests/bench/search.bench.ts`) holds the memory a tile allocates to a floor
+(`node.roomPool.tileAllocatedMb`) and reports the full collections the tiles cause.
 
 ### Operations that unpack first
 
@@ -279,7 +310,8 @@ If the reservation is refused, the operation answers `TOO_LARGE`, as a sort that
 
 - **A packed page is charged its packed length plus `PageOverhead` plus its sidecar.** Packing returns the difference
   to the query and global budgets at once.
-- **The unpacked-page cache, rooms, extracts and rehydration are working memory.**
+- **The unpacked-page cache, rooms, extracts and rehydration are working memory.** Rooms idle in the room pool are
+  not charged; the pool's cap bounds them.
 - **Returning memory to the operating system follows `ResultStore.CollectNow`.** Bytes packing frees count as freed, so
   packing triggers the same collections as a release, but it never forces a compaction on its own. A non-compacting
   collection gives back almost nothing (0.1 to 0.3 GiB), yet the freed space is reused: 4.2 to 5.3 GiB of new pages
