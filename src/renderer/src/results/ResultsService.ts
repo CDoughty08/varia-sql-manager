@@ -1046,7 +1046,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
     if (snapshot.state !== 'complete') return stillLoading
-    if (set.descriptor.residence === 'remote') return windowedSave
+    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence).
+    if (snapshot.residence === 'remote') return windowedSave
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
     if (this.heldOff(tabId, set.key)) return stillSorting

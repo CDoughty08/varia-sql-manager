@@ -1423,7 +1423,7 @@ export class GridView {
     this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
-      if (measured <= 0) { this.measureShortly(); return }
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
         this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), withPrevious(widths[column] ?? 0, widths[this.previousOf(column)] ?? 0), this.charWidth))
@@ -1441,6 +1441,8 @@ export class GridView {
     })
   }
 
+  /** First measures that read no rows so far (bounded by g.measureRetries). */
+  private measureShort = 0
   /** Measures again shortly: the results port was full, or a windowed result's rows were not read yet (the measure
    *  answered none), and sizing from headers alone would stay for good. */
   private measureShortly(): void {
@@ -1468,7 +1470,7 @@ export class GridView {
     this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || kept.sized) return
-      if (measured <= 0) { this.measureShortly(); return }
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       let chars = 0
       for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
       this.uniform!.setShared(this.sharedWidth(chars))

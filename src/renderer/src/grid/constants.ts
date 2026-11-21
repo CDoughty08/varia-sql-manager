@@ -31,6 +31,9 @@ export const gridLimits = {
   fastScrollViewports: 3, settleMs: 50, prefetchIdleFrames: 2, prefetchViewports: 2,
   /** A read refused because main's results port is full (many grids reading at once) is tried again after this. */
   busyRetryMs: 250,
+  /** A first measure that read no rows (a windowed result's first block not read yet) is tried again this many times, each
+   *  waiting on the backend's read, before the columns are sized from their headers. */
+  measureRetries: 8,
   scrollCap: 15_000_000, scrollCapPhysical: 30_000_000, rebaseRows: 4096,
   splitter: 5, stackMinRows: 4, stackBorder: 2, mountedGrids: 12, mountsPerFrame: 2,
   /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing

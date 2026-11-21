@@ -323,7 +323,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   answer with the rows they have, and the grid reads again from memory.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
   of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
-  filters are removed when its result switches (the screen reader hears so). A destination table lasts
+  filters are removed when its result switches (the screen reader hears so). The grid does not offer them where it can tell
+  first: Save Results As refuses before its file dialog, the Pivot builder says the result cannot be pivoted yet, the
+  Compare popover leaves it out, and Search skips it. A destination table lasts
   about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
 
 ### Cost

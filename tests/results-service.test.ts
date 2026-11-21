@@ -488,6 +488,17 @@ describe('results service', () => {
     expect(api.saveResults).not.toHaveBeenCalled()
     service.dispose()
   })
+  it('refuses to save a result that switched to windowed after it opened in memory, before the dialog', async () => {
+    const { api, client, service, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', residence: 'memory', revision: 0 }) })
+    client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })]) })
+    flush()
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
+    expect(api.saveResults).not.toHaveBeenCalled()
+    service.dispose()
+  })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
     const { api, service, tab, timers, flush, progress, events } = fixture()
     const saved: unknown[] = []
