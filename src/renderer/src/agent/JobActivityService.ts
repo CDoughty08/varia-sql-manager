@@ -27,14 +27,12 @@ import type { PaneService } from '../services/panes'
 
 /** The list's stored columns the service reads back from a selected row (catalogue order, src/shared/live/catalog.ts). */
 const columnIndex = Object.fromEntries(liveProbes[agentJobsProbe].tables![0].columns.map((column, index) => [column.id, index])) as Record<string, number>
-const readColumns = columnIndex.created + 1
+const readColumns = columnIndex.jobId + 1
 
 /** A job selected in the grid, as its cells read: what a bulk verb sends (its name and the identity msdb listed) and shows. */
 export interface SelectedJob {
   readonly id: string
   readonly name: string
-  /** date_created as yyyy-MM-ddTHH:mm:ss: the AG-2 verbs refuse a job replaced since under the same name. */
-  readonly created: string
   readonly status: string
   /** Its last run's start as the grid shows it (yyyy-MM-dd HH:mm:ss, server time), or '' when it never ran. */
   readonly lastRun: string
@@ -363,7 +361,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
         const window = await table.handle.getWindow(rows[at], end - at + 1, { colStart: 0, colEnd: readColumns, display: false })
         for (let row = 0; row < window.count; row++) {
           const cell = (column: string) => window.text[row * readColumns + columnIndex[column]] ?? ''
-          if (cell('jobId')) selected.push({ id: cell('jobId').toLowerCase(), name: cell('name'), created: cell('created'), status: cell('status'), lastRun: cell('lastRun') })
+          if (cell('jobId')) selected.push({ id: cell('jobId').toLowerCase(), name: cell('name'), status: cell('status'), lastRun: cell('lastRun') })
         }
         at = end + 1
       }
@@ -409,7 +407,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       publish(true)
       const requestId = this.newId()
       const target = { kind: 'agentJob' as const, name: job.name }
-      const agentIdentity = { created: job.created }
+      const agentIdentity = { jobId: job.id }
       let result: ApiResult<ActionExecuteResult> | undefined, thrown: unknown
       // When the request left (monotonic): the status bar dates the Start in server time from it.
       const sentAt = performance.now()

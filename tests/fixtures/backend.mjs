@@ -1834,7 +1834,7 @@ function agentJobVerb(params) {
   const job = agentJobs.find(item => item.name === params.target.name)
   const refused = (code, message) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false } })
   if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
-  if (params.agentIdentity?.created !== job.created) return refused('CHANGED', `The job ${job.name} was replaced since it was listed.`)
+  if (params.agentIdentity?.jobId !== job.id) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
   if (params.action === 'startJob') {
     if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })

@@ -183,7 +183,7 @@ internal static class AgentLiveChecks
             var folder = await Children(service, info, json, new NodeRefDto("folder", Owner: new ObjectRefDto("agent"), Folder: "agentJobs"),
                 new ExplorerFilterDto(Name: new TextFilterDto("equals", job)));
             check(folder is { Error: null, Nodes: [{ Label: var label, Icon: "agent-job", HasChildren: false, Ref.Object: { Kind: "agentJob", Name: var name, Database: null } } row0] } && label == job && name == job
-                && row0.Detail?.StartsWith("Owner ", StringComparison.Ordinal) == true,
+                && row0.JobId == id.ToString("D") && row0.Detail?.StartsWith("Owner ", StringComparison.Ordinal) == true,
                 "Object Explorer's Jobs folder lists the scratch job by name (filtered to it) with its owner, as an agentJob ref named alone: " + JsonSerializer.Serialize(folder));
             // Search Objects indexes it only behind the release gate: shut, the build reads nothing from msdb and skips nothing.
             async Task<(ObjectIndexStatus Index, List<ObjectSearchHit> Hits)> Indexed(bool gate)

@@ -1,7 +1,6 @@
 using System.Data;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Agent;
 using Varia.Backend.Explorer;
@@ -10,7 +9,7 @@ using Varia.Backend.Scripting;
 namespace Varia.Backend.Actions;
 
 /// <summary>SQL Server Agent's verbs from Object Explorer (AG-2). A job's Start Job at Step, Stop Job, Disable, Enable, Rename and Delete each
-/// run one msdb write (AgentSql.Writes) that resolves the job by its name and the date_created the tree listed, so a job that took the name
+/// run one msdb write (AgentSql.Writes) that resolves the job by its name and the job_id the tree listed, so a job that took the name
 /// since is refused (50010, NOT_FOUND). msdb's 22022 (SQL Server Agent refused a start or stop) is decided by reading Agent's state and the
 /// job's again: AGENT_STOPPED, JOB_STATE or SQL_ERROR. The Agent node's Start, Stop and Restart drive its service through the Service Control
 /// Manager (<see cref="AgentServiceControl"/>), offered only with Varia on Windows and a Windows server that is not Managed Instance or a
@@ -28,11 +27,6 @@ internal sealed partial class ActionService
     internal const string JobRunningMessage = "The job is already running.";
     internal const string JobIdleMessage = "The job is not running.";
     internal const string HostUnreadableMessage = "SQL Server did not say which machine and instance it runs as, so Varia cannot find its SQL Server Agent service.";
-
-    [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\z", RegexOptions.CultureInvariant)]
-    private static partial Regex AgentCreatedPattern();
-    internal static bool AgentCreated(string? text) => text is not null && AgentCreatedPattern().IsMatch(text)
-        && DateTime.TryParseExact(text, "yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
 
     /// <summary>Re-validates a job's verbs and the Agent service's (zod: startJobSchema, stopJobSchema, the job branches of rename, delete
     /// and loginState, agentServiceRequestSchema). Null when the request is neither, after refusing an Agent member on it.</summary>
@@ -55,7 +49,7 @@ internal sealed partial class ActionService
         }
         if (args.Target?.Kind != "agentJob" || !JobVerbs.Contains(args.Action)) throw Invalid("target.");
         var target = Target(args.Target, args.Action);
-        if (args.AgentIdentity is { } identity ? !AgentCreated(identity.Created) : !script) throw Invalid("agentIdentity.");
+        if (args.AgentIdentity is { } identity ? !(identity.JobId is { Length: 36 } && Guid.TryParseExact(identity.JobId, "D", out _)) : !script) throw Invalid("agentIdentity.");
         if (args.StepName is not null && (args.Action != "startJob" || !ExplorerRefs.Ident(args.StepName))) throw Invalid("stepName.");
         if (args.DeleteUnusedSchedule is not null && args.Action != "delete") throw Invalid("deleteUnusedSchedule.");
         // Each verb's own members; nothing else.
@@ -82,7 +76,7 @@ internal sealed partial class ActionService
 
     // --- Describe ---------------------------------------------------------------------------------------------------------
 
-    private sealed record JobRow(Guid Id, string Name, string Created, bool Enabled, string? Owner);
+    private sealed record JobRow(Guid Id, string Name, bool Enabled, string? Owner);
 
     private static async Task<JobRow?> ReadJobAsync(SqlConnection connection, string name, CancellationToken token)
     {
@@ -92,17 +86,17 @@ internal sealed partial class ActionService
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         await using var reader = await command.ExecuteReaderAsync(token);
         if (!await reader.ReadAsync(token)) return null;
-        return new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2).Trim(), Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture) != 0, reader.IsDBNull(4) ? null : reader.GetString(4));
+        return new(reader.GetGuid(0), reader.GetString(1), Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) != 0, reader.IsDBNull(3) ? null : reader.GetString(3));
     }
 
     private ActionError JobGone(ObjectRefDto target) => Error("NOT_FOUND", "The job " + Display(target) + " no longer exists. Refresh Object Explorer.");
 
-    /// <summary>Delete Object's row for a job: its name, owner and the date_created the Delete request names.</summary>
+    /// <summary>Delete Object's row for a job: its name, owner and the job_id the Delete request names.</summary>
     private async Task<ActionDescribeResult> DescribeAgentJobDeleteAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
     {
         var job = await ReadJobAsync(connection, target.Name!, token);
         if (job is null) return new(null, 0, JobGone(target));
-        return new(new DeleteTargetDto(job.Name, "Job", job.Owner, [], false, AgentIdentity: new(job.Created)), 0);
+        return new(new DeleteTargetDto(job.Name, "Job", job.Owner, [], false, AgentIdentity: new(job.Id.ToString("D"))), 0);
     }
 
     /// <summary>Start Job at Step's facts: the job, whether it runs now (sp_help_job's current_execution_status, 4 idle), and its steps.</summary>
@@ -117,7 +111,7 @@ internal sealed partial class ActionService
         var running = status is not null && Convert.ToInt32(status, CultureInfo.InvariantCulture) != 4;
         var steps = results["jobSteps"];
         var list = steps.Rows.Select(row => new AgentJobStepDto(Convert.ToInt32(steps.Value(row, "step_id"), CultureInfo.InvariantCulture), Convert.ToString(steps.Value(row, "step_name"), CultureInfo.InvariantCulture) ?? "")).ToList();
-        return new(null, 0, AgentJob: new(job.Name, new(job.Created), job.Enabled, running, list, steps.Truncated));
+        return new(null, 0, AgentJob: new(job.Name, new(job.Id.ToString("D")), job.Enabled, running, list, steps.Truncated));
     }
 
     // --- Script ------------------------------------------------------------------------------------------------------------
@@ -173,7 +167,7 @@ internal sealed partial class ActionService
                 command.CommandText = write.Text;
                 command.CommandTimeout = 0;
                 Add(command, "@name", SqlDbType.NVarChar, 128, target.Name!);
-                Add(command, "@created", SqlDbType.Char, 19, args.AgentIdentity!.Created);
+                Add(command, "@expected_job_id", SqlDbType.UniqueIdentifier, 0, Guid.ParseExact(args.AgentIdentity!.JobId, "D"));
                 for (var i = 0; i < write.Parameters.Count; i++) Add(command, write.Parameters[i].Name, write.Parameters[i].Type, write.Parameters[i].Size, values[i]);
                 await ReadAllAsync(command, context.Token);
             }

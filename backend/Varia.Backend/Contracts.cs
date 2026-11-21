@@ -367,7 +367,7 @@ internal sealed record DateFilterDto(string Op, string Value, string? Value2 = n
 /// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss. Database: a database node's runtime state.
 /// ConnectDenied: a login denied CONNECT SQL, sent only when true (Status says disabled when it is disabled too).</summary>
 internal sealed record ExplorerNode(NodeRefDto Ref, string Label, string Icon, bool HasChildren, string? Sublabel = null, string? Detail = null, string? Subtype = null,
-    string? Status = null, string? Created = null, ExplorerDatabase? Database = null, bool? ConnectDenied = null);
+    string? Status = null, string? Created = null, ExplorerDatabase? Database = null, bool? ConnectDenied = null, string? JobId = null);
 /// <summary>A database's runtime state as the listing read it (sys.databases' state, user_access, is_read_only and
 /// is_in_standby), in the shape of the live status rows, so the renderer's action rules can take the newer of the two.</summary>
 internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly, bool Standby);
@@ -593,10 +593,10 @@ internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, 
 /// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
 internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
-/// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
+/// its sysjobs job_id, as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
 /// Agent node as their target, on actions.execute only.</summary>
-internal sealed record AgentIdentityDto(string Created);
+internal sealed record AgentIdentityDto(string JobId);
 /// <summary>Table Properties' changes (src/shared/actions/tables.ts TableChanges): LockEscalation TABLE, AUTO or DISABLE; ChangeTracking
 /// on or off with Track columns updated (only with it on); extended properties to add, update (each with a text Value of at most the
 /// catalogue's extendedPropertyValue UTF-16 units) or drop (no Value), each name once. The tableProperties action takes them with Identity
