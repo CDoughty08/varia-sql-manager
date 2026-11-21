@@ -229,8 +229,16 @@ internal sealed class BigQueryColumnPlan
         return new BigQueryColumnPlan(truncated ? fields[..PageBuilder.MaxColumns] : fields, truncated) { SchemaColumns = fields.Length };
     }
 
-    static ResultColumn Describe(BigQueryField field) => new(CellFormat.Prefix(field.Name, 512, out _).ToString(), field.TypeText(), WireOf(field) == WireKind.Binary ? "binary" : "text",
-        IsDocument(field) ? "json" : null, Nullable: !field.Required && !field.Repeated) { SortKind = field.SortKind };
+    static ResultColumn Describe(BigQueryField field)
+    {
+        var numeric = !field.Repeated && field.Kind is BigQueryKind.Numeric or BigQueryKind.BigNumeric;
+        var wide = field.Kind == BigQueryKind.BigNumeric;
+        // NUMERIC(P) and BIGNUMERIC(P) default to scale zero. Unparameterized types have their full native scale.
+        int? precision = numeric ? (int)Math.Clamp(field.Precision ?? (wide ? 77 : 38), 1, wide ? 77 : 38) : null;
+        int? scale = numeric ? (int)Math.Clamp(field.Scale ?? (field.Precision.HasValue ? 0 : wide ? 38 : 9), 0, wide ? 38 : 9) : null;
+        return new ResultColumn(CellFormat.Prefix(field.Name, 512, out _).ToString(), field.TypeText(), WireOf(field) == WireKind.Binary ? "binary" : "text",
+            IsDocument(field) ? "json" : null, Precision: precision, Scale: scale, Nullable: !field.Required && !field.Repeated) { SortKind = field.SortKind };
+    }
 
     internal static bool IsDocument(BigQueryField field) => field.Repeated || field.Kind is BigQueryKind.Json or BigQueryKind.Struct;
     static WireKind WireOf(BigQueryField field) => field.Kind == BigQueryKind.Bytes && !field.Repeated ? WireKind.Binary : WireKind.Text;

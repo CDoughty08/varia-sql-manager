@@ -46,21 +46,23 @@ internal sealed class PivotModel
 /// <summary>One value's figures, a slot per cell: counts, sums (exact as whole numbers of the column's smallest unit, so
 /// decimal(38, s) sums keep all 38 digits, flagged as an overflow past them; approximate as doubles) or the row holding a
 /// lowest or highest value. <paramref name="scale"/> is an exact column's scale.</summary>
-internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int scale = 0)
+internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int scale = 0, bool wide = false)
 {
     public PivotValue Value { get; } = value;
     public bool Exact { get; } = exact;
     public int Scale { get; } = scale;
     public readonly long[] Counts = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? [] : new long[cells];
-    public readonly Int128[] Sums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new Int128[cells] : [];
+    public readonly Int128[] Sums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact && !wide ? new Int128[cells] : [];
+    public readonly BigInteger[]? WideSums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && wide ? new BigInteger[cells] : null;
     public readonly double[] Doubles = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && !exact ? new double[cells] : [];
     public readonly bool[] Overflow = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new bool[cells] : [];
     public readonly int[] Best = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? Filled(cells) : [];
 
     /// <summary>Bytes a cell's slot holds for an aggregate.</summary>
-    public static long CellBytes(PivotAggregate aggregate) => aggregate switch
+    public static long CellBytes(PivotAggregate aggregate, bool wide = false) => aggregate switch
     {
-        PivotAggregate.Sum or PivotAggregate.Avg => 8 + 16 + 1,
+        // A wide sum needs at most 256 value bits plus 31 row-count bits, its limbs and array overhead.
+        PivotAggregate.Sum or PivotAggregate.Avg => wide ? 104 : 8 + 16 + 1,
         PivotAggregate.Min or PivotAggregate.Max => 4,
         _ => 8
     };
@@ -183,11 +185,12 @@ internal static class ResultPivoter
         var stride = columnGroups + 1;
         var cells = rowReps.Count * stride;
         long bytes = 0;
-        foreach (var value in spec.Values) bytes += PivotFigures.CellBytes(value.Aggregate) * cells;
+        bool Wide(PivotValue value) => value.Column >= 0 && ColumnTypes.IsBigNumeric(set.Columns[value.Column]);
+        foreach (var value in spec.Values) bytes += PivotFigures.CellBytes(value.Aggregate, Wide(value)) * cells;
         if (!reserve(bytes)) throw new PivotTooLargeException();
 
         var figures = spec.Values.Select(value => value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact
-            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column])) : new PivotFigures(value, cells, false)).ToArray();
+            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column]), Wide(value)) : new PivotFigures(value, cells, false)).ToArray();
         // A row outside the view (no row group) counts nowhere; every other row counts in its cell and its row group's total.
         int CellOf(int row, out int total)
         {
@@ -226,7 +229,15 @@ internal static class ResultPivoter
                         continue;
                     }
                     var span = view.Span(value.Column, r);
-                    if (item.Exact)
+                    if (item.WideSums is { } wideSums)
+                    {
+                        var parsed = TryBigNumeric(span, out var number);
+                        if (cell >= 0) { wideSums[cell] += number; item.Counts[cell]++; item.Overflow[cell] |= !parsed; }
+                        wideSums[totalCell] += number;
+                        item.Counts[totalCell]++;
+                        item.Overflow[totalCell] |= !parsed;
+                    }
+                    else if (item.Exact)
                     {
                         var parsed = TryScaled(span, item.Scale, out var number);
                         Add(item, cell, parsed, number);
@@ -310,6 +321,25 @@ internal static class ResultPivoter
 
     /// <summary>10^38: a decimal(38, s) holds whole numbers of its smallest unit below it.</summary>
     internal static readonly Int128 Decimal38 = Int128.Parse("100000000000000000000000000000000000000", CultureInfo.InvariantCulture);
+
+    // BIGNUMERIC cells are canonical decimal text in REST and Arrow. Parse into 10^-38 units.
+    private static bool TryBigNumeric(ReadOnlySpan<byte> text, out BigInteger number)
+    {
+        number = 0;
+        var negative = text.StartsWith("-"u8);
+        if (negative) text = text[1..];
+        var point = text.IndexOf((byte)'.');
+        var whole = point < 0 ? text : text[..point];
+        var fraction = point < 0 ? default : text[(point + 1)..];
+        if (whole.IsEmpty || whole.Length > 39 || fraction.Length > 38 || whole.ContainsAnyExceptInRange((byte)'0', (byte)'9') || fraction.ContainsAnyExceptInRange((byte)'0', (byte)'9')) return false;
+        Span<byte> digits = stackalloc byte[77];
+        whole.CopyTo(digits);
+        fraction.CopyTo(digits[whole.Length..]);
+        digits.Slice(whole.Length + fraction.Length, 38 - fraction.Length).Fill((byte)'0');
+        if (!BigInteger.TryParse(digits[..(whole.Length + 38)], NumberStyles.None, CultureInfo.InvariantCulture, out number)) return false;
+        if (negative) number = -number;
+        return true;
+    }
 
     private static void Add(PivotFigures figures, int cell, bool parsed, Int128 number)
     {
@@ -566,6 +596,7 @@ internal static class PivotOutput
         var column = source.Columns[value.Column];
         if (value.Aggregate is PivotAggregate.Min or PivotAggregate.Max) return column with { Name = name, Nullable = true };
         if (ViewSorter.KindOf(column, source.Wires[value.Column]) != ViewSorter.Kind.Exact) return new ResultColumn(name, "float", "text", Precision: 53);
+        if (ColumnTypes.IsBigNumeric(column)) return new ResultColumn(name, "BIGNUMERIC", "text", Precision: 77, Scale: 38) { SortKind = ColumnTypes.Decimal };
         var scale = ResultPivoter.Scale(column);
         if (value.Aggregate == PivotAggregate.Avg) scale = Math.Max(scale, 6);
         else if (ResultPivoter.IsInteger(column)) return new ResultColumn(name, "bigint", "text");
@@ -695,6 +726,19 @@ internal static class PivotOutput
         }
         // An overflow (past decimal(38)'s digits) shows as a cell that could not be read, where SQL Server's SUM would fail.
         if (figures.Overflow[cell]) { builder.AppendNull(error: true); return 0; }
+        if (figures.WideSums is { } wide)
+        {
+            var units = wide[cell];
+            if (value.Aggregate == PivotAggregate.Avg)
+            {
+                var rounded = BigInteger.DivRem(units, count, out var remainder);
+                units = BigInteger.Abs(remainder) * 2 >= count ? rounded + units.Sign : rounded;
+            }
+            if (units.GetBitLength() > 255) { builder.AppendNull(error: true); return 0; }
+            var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(39, '0');
+            builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^38] + "." + digits[^38..]);
+            return 0;
+        }
         var sum = figures.Sums[cell];
         var scale = figures.Scale;
         if (value.Aggregate == PivotAggregate.Avg)
