@@ -40,18 +40,19 @@ internal static partial class PageCodec
     /// <param name="typed">False keeps every column's lengths and text (the checks and benchmarks compare both).</param>
     public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null, bool typed = true)
     {
-        var bound = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
         // A page's worst case is above the large object heap's threshold, so the rooms are pooled (bounded per core by the
-        // shared pool) rather than allocated per page or kept on every thread that ever packs. The room holds the values'
-        // frame and the form's frame (each at most the page's bound) after a prefix written last.
-        var room = ArrayPool<byte>.Shared.Rent(MaxPrefix + 2 * bound);
-        var form = ArrayPool<byte>.Shared.Rent(Math.Max(1, page.Length));
-        var values = typed ? ArrayPool<byte>.Shared.Rent(Math.Max(1, page.Length)) : null;
+        // shared pool) rather than allocated per page or kept on every thread that ever packs. The typed values' room is
+        // rented only once a column has a shape, and the frames' room once the form is written, the length of the frames'
+        // bounds after a prefix written last, so a page with no typed column rents what it did before the typed form.
+        byte[]? room = null, values = null;
+        var form = Rent(Math.Max(1, page.Length));
         try
         {
-            var formLength = ToLengths(page, form, values, out var valuesLength);
+            var formLength = ToLengths(page, form, typed, ref values, out var valuesLength);
             var source = formLength < 0 ? page : form.AsSpan(0, formLength);
             var marker = formLength < 0 ? AsSealed : valuesLength > 0 ? AsTyped : AsLengths;
+            var valuesBound = marker == AsTyped ? ZstandardEncoder.GetMaxCompressedLength(valuesLength) : 0;
+            room = Rent((int)(MaxPrefix + valuesBound + ZstandardEncoder.GetMaxCompressedLength(source.Length)));
             // Made (and warmed in the room) before anything is written there.
             var encoder = quiet is null ? null : QuietEncoder(room);
             var frames = room.AsSpan(MaxPrefix);
@@ -95,8 +96,18 @@ internal static partial class PageCodec
         {
             if (values is not null) ArrayPool<byte>.Shared.Return(values);
             ArrayPool<byte>.Shared.Return(form);
-            ArrayPool<byte>.Shared.Return(room);
+            if (room is not null) ArrayPool<byte>.Shared.Return(room);
         }
+    }
+
+    /// <summary>Bytes the calling thread asked the shared pool for while packing (<see cref="Rent"/>), for the checks.</summary>
+    [ThreadStatic] internal static long Rented;
+
+    /// <summary>A packing room from the shared pool, counted in <see cref="Rented"/>.</summary>
+    private static byte[] Rent(int length)
+    {
+        Rented += length;
+        return ArrayPool<byte>.Shared.Rent(length);
     }
 
     /// <summary>Compresses a page as a stream of unknown length, then ends the frame: given the whole input at once with

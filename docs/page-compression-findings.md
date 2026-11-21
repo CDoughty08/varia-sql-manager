@@ -175,6 +175,8 @@ value shape is kept as values instead of lengths and text (`PageCodec.Typed.cs`)
 - **Two frames:** the typed values go in a Zstandard frame of their own, ahead of the form's frame. In one frame their
   bytes spoil Zstandard's literal tables for the text digits beside them: `numeric` packed 2 % larger typed in one frame,
   and 7 % smaller in two. Unpacking reads the values' frame into a pooled room, then expands the form in place as before.
+  Packing rents the values' room only once a column's every cell parsed, and the frames' room at the bounds of what it
+  compresses, so a page with no typed column takes from the shared pool what it took before the typed form.
 
 Measured with `--typed` (both forms timed page by page in turn), counting the lengths sidecar:
 

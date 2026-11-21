@@ -28,8 +28,9 @@ internal static partial class PageCodec
 
     /// <summary>Writes the lengths form of <paramref name="page"/> into <paramref name="form"/> (at least the page's
     /// length) and returns its length, or -1 when the bytes are not a page this reads exactly back (anything PageBuilder
-    /// did not seal: those are packed as they are).</summary>
-    private static int ToLengths(ReadOnlySpan<byte> page, Span<byte> form, Span<byte> values, out int valuesLength)
+    /// did not seal: those are packed as they are). With <paramref name="typed"/>, typed columns' values go to
+    /// <paramref name="values"/>, rented (the page's length) once a column has a shape.</summary>
+    private static int ToLengths(ReadOnlySpan<byte> page, Span<byte> form, bool typed, ref byte[]? values, out int valuesLength)
     {
         valuesLength = 0;
         if (!ReadLayout(page, out var layout, out var blobStart, out var rows, out var columns)) return -1;
@@ -49,8 +50,8 @@ internal static partial class PageCodec
                     {
                         var validity = layout[c * Stride + 2] == 0 ? default : blob.Slice(layout[c * Stride + 1], layout[c * Stride + 2]);
                         var columnValues = 0;
-                        var written = !values.IsEmpty && layout[c * Stride] == (int)WireKind.Text
-                            ? WriteTyped(blob.Slice(offset, length), blob.Slice(layout[c * Stride + 5], layout[c * Stride + 6]), validity, rows, form[at..], values[valuesLength..], out columnValues)
+                        var written = typed && layout[c * Stride] == (int)WireKind.Text
+                            ? WriteTyped(blob.Slice(offset, length), blob.Slice(layout[c * Stride + 5], layout[c * Stride + 6]), validity, rows, form[at..], ref values, valuesLength, page.Length, out columnValues)
                             : -1;
                         typedColumn = written >= 0;
                         if (typedColumn) valuesLength += columnValues;
