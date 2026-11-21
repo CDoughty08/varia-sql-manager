@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
-import { methodAllows, methodPolicies, optionsAllow } from '../src/shared/ipc/methods'
+import { deadlineFor, methodAllows, methodPolicies, optionsAllow } from '../src/shared/ipc/methods'
 import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { queryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
 import { resultRows, rowsFact } from '../src/renderer/src/results/status'
@@ -30,6 +30,8 @@ describe('BigQuery remote results', () => {
     expect(methodPolicies['results.remoteQuery']).toMatchObject({ kind: 'unary', lane: 'query', deadlineMs: 0, providers: ['bigquery'] })
     expect(methodAllows('results.remoteQuery', 'bigquery')).toBe(true)
     expect(methodAllows('results.remoteQuery', 'sqlserver')).toBe(false)
+    // Neither a deadline nor main's backstop ends a load, however long it reads.
+    expect(deadlineFor('results.remoteQuery', { queryId: crypto.randomUUID(), resultId: 1, generation: 1, kind: 'load' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
   })
 
   it('checks the result is owned in its generation before sending a remote query (index.ts)', () => {
