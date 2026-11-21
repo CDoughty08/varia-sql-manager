@@ -101,7 +101,7 @@ internal sealed partial class SqlService
                 {
                     if (chunk.Refusal != TruncationReason.None)
                     {
-                        if (window is not null && set.SwitchesOnRefusal && chunk.Refusal != TruncationReason.SystemMemory) { switched = true; break; }
+                        if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; break; }
                         set.Skip(chunk.Refusal);
                         budget.Stop(chunk.Refusal);
                         storing = false;
@@ -115,7 +115,7 @@ internal sealed partial class SqlService
                     {
                         if (!store.TryReserve(budget, decoded, true, out var refusal))
                         {
-                            if (window is not null && set.SwitchesOnRefusal && refusal != TruncationReason.SystemMemory) { switched = true; break; }
+                            if (window is not null && SwitchesOn(set, refusal)) { switched = true; break; }
                             set.Skip(refusal);
                             budget.Stop(refusal);
                             storing = false;

@@ -1343,6 +1343,34 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task LoadIntoMemoryAsync(Action<bool, string> check)
     {
+        // A load refused for low memory switches back to windowed, whole, as any refusal does, and a later load still works.
+        {
+            var low = 0;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref low) == 1 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref low, 1);
+            var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            Volatile.Write(ref low, 0);
+            var (again, _, _, againMessage) = await Run(harness, "results.remoteQuery", Load(id));
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory") && Says(result, "low on memory, so the result stays windowed") && again == "ok",
+                $"a load refused for low memory leaves the result windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} rev={set?.Revision} avail={set?.RowsAvailable} stored={set?.RowsStored} trunc={set?.Truncated} msgs={Texts(result?.Messages ?? [])} | next load once memory recovers: {again} {againMessage}");
+        }
+        // So does a load during which memory runs low at a seal.
+        {
+            var asked = -1;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Volatile.Read(ref asked) >= 0 && Interlocked.Increment(ref asked) >= 2 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            Volatile.Write(ref asked, 0);
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", RowsAvailable: 3000 } && set.Truncated is null && !Says(result, "was loaded into memory"),
+                $"a load during which memory runs low switches back to windowed, whole: {code} {message} status={result?.Status} res={set?.Residence} avail={set?.RowsAvailable} trunc={set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
         using (var harness = new Harness(Lines(3000)))
         {
             await harness.ConnectAsync();

@@ -303,7 +303,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   Messages says so when more than that would show.
 - **Misestimate.** When the budget refuses an automatic in-memory result part way, it switches to windowed instead of
   truncating: its pages are freed, the grid keeps its place and drops its selection, and a screen reader hears that the
-  result is now windowed. Low system memory is no misestimate: the read stops storing, as any query does, and a windowed
+  result is now windowed. Low system memory is no misestimate: the query's read stops storing, as any query does (a Load into memory switches back, windowed), and a windowed
   result fetches no block while it lasts (its reads answer that the computer is low on memory, keeping the blocks cached).
 - **Blocks.** About 4 MiB of measured rows each (256 – 16,384 rows, fewer for rows so wide that half the window cache,
   allowing the estimate's 25% margin, holds fewer), read with `tabledata.list` from the destination

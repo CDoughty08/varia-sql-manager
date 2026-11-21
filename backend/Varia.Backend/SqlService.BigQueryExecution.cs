@@ -557,7 +557,7 @@ internal sealed partial class SqlService
                     // The page does not fit beside the rows already stored, so neither would its rows.
                     charge = 0;
                     // An Automatic read switches to windowed instead (docs/bigquery.md, Residence: Misestimate).
-                    if (window is not null && set.SwitchesOnRefusal && refusal != TruncationReason.SystemMemory && SwitchToWindowed(set, window, events, messages!)) return;
+                    if (window is not null && SwitchesOn(set, refusal) && SwitchToWindowed(set, window, events, messages!)) return;
                     set.Skip(refusal);
                     budget.Stop(refusal);
                     storing = false;

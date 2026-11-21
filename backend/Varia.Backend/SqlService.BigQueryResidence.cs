@@ -141,6 +141,11 @@ internal sealed partial class SqlService
         return true;
     }
 
+    /// <summary>Whether a refusal of a page or batch should switch the set to windowed rather than stop it: low system memory
+    /// stops a query's own read (it is no misestimate), while a load into memory still switches back, its rows windowed.</summary>
+    private static bool SwitchesOn(ResultSetBuffer set, TruncationReason refusal) =>
+        set.SwitchesOnRefusal && (refusal != TruncationReason.SystemMemory || set.Budget.Loading);
+
     /// <summary>Whether a refusal the set saw should switch it to windowed rather than stop it.</summary>
     private static bool Switches(ResultSetBuffer set, BigQueryWindow? context) =>
         context is not null && set.SwitchesOnRefusal && set.Refusal != TruncationReason.None && set.IsOpen;
@@ -359,7 +364,9 @@ internal sealed partial class SqlService
             // Only the revision this load opened: one a later load promoted is that load's to finish.
             if (set.IsOpen && set.Revision == loaded) set.Complete();
             if (set.IsReleased) throw Unavailable(args.ResultId);
-            messages.Add(set.IsRemote ? "The result did not fit in memory, so it stays windowed in BigQuery." : "The result was loaded into memory.");
+            messages.Add(!set.IsRemote ? "The result was loaded into memory."
+                : store.IsSystemMemoryLow() ? "The computer is low on memory, so the result stays windowed in BigQuery."
+                : "The result did not fit in memory, so it stays windowed in BigQuery.");
         }
         catch (Exception error)
         {

@@ -431,9 +431,9 @@ internal sealed class ResultSetBuffer
         // last seal sees pressure (the seal inside Complete, or its last row filling a page) asks for no row after it, so
         // it is whole and not truncated.
         if (!store.IsSystemMemoryLow()) return;
-        // An Automatic read stops here too rather than switch to windowed: low memory is no misestimate, and its block cache
-        // could not fill either (ResultStore.TryReserveCache).
-        if (Derived) refused = TruncationReason.SystemMemory;
+        // An Automatic query's read stops here too rather than switch to windowed: low memory is no misestimate, and its block
+        // cache could not fill either (ResultStore.TryReserveCache). A load into memory switches back, its rows still windowed.
+        if (Derived || (SwitchesOnRefusal && Budget.Loading)) refused = TruncationReason.SystemMemory;
         else Budget.Stop(TruncationReason.SystemMemory);
     }
 
