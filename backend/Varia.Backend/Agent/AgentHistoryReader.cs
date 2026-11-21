@@ -45,8 +45,9 @@ internal sealed record AgentHistoryJobState(bool Running, DateTime? Start);
 /// <summary>How step rows with no job outcome row read when their job is not seen running.</summary>
 internal enum AgentOrphanLabel { Unknown, XpsOff }
 
-/// <summary>One run: its job outcome row (null for step rows with none), its step rows in instance order, and its outcome.</summary>
-internal sealed record AgentHistoryRun(Guid Job, AgentHistoryRow? Outcome, List<AgentHistoryRow> Steps, string OutcomeId)
+/// <summary>One run: its job outcome row (null for step rows with none), its step rows in instance order, and its outcome. BeforeRead marks step
+/// rows with no outcome row older than any of their job's outcome rows in a date-window read: their outcome row may predate the read.</summary>
+internal sealed record AgentHistoryRun(Guid Job, AgentHistoryRow? Outcome, List<AgentHistoryRow> Steps, string OutcomeId, bool BeforeRead = false)
 {
     /// <summary>Its outcome row's instance_id (Agent writes it last), else its first step row's, which stays the same while a running job writes
     /// more steps, so a selected In progress run stays selected until its outcome row lands.</summary>
@@ -73,6 +74,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
     public const string XpsOffLabel = "In progress or unknown (Agent XPs off)";
     public const string InProgressMessage = "The run has no job outcome row yet: the job is running.";
     public const string UnknownMessage = "No job outcome row was written: SQL Server Agent stopped or restarted during the run.";
+    public const string UnknownBeforeReadMessage = "No job outcome row was read: the run started before the history read (a day before the window), so its outcome row may be older, or SQL Server Agent stopped during it. A wider window reads it.";
     public const string XpsOffMessage = "No job outcome row yet. The Agent XPs option is 0, so whether the job is still running cannot be read.";
     public const string OutcomeStepName = "(Job outcome)";
 
@@ -282,7 +284,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             if (read.HistoryError is { } failed) errors.Add(Error(failed) with { Tables = [0, 1] });
             return new(null, [new(0, []), new(1, []), jobsTable], errors, Status: Status(read));
         }
-        var runs = Group(rows, read.States, read.Label);
+        var runs = Group(rows, read.States, read.Label, windowed: now.Days is not null);
         var since = now.Days is { } days && read.ServerNow is { } clock ? clock.AddDays(-days) : (DateTime?)null;
         var kept = runs.Where(run => Passes(run, now, since)).OrderByDescending(run => run.Started ?? DateTime.MinValue).ThenByDescending(run => run.Key).ToList();
         var maxChars = (int)catalog.Limit("gridMessageChars");
@@ -321,7 +323,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         var (label, message, tone) = run.OutcomeId switch
         {
             "inProgress" => (InProgressLabel, InProgressMessage, "running"),
-            "unknown" when run.Outcome is null => (UnknownLabel, UnknownMessage, "warning"),
+            "unknown" when run.Outcome is null => (UnknownLabel, run.BeforeRead ? UnknownBeforeReadMessage : UnknownMessage, "warning"),
             "xpsOff" => (XpsOffLabel, XpsOffMessage, "warning"),
             _ => (Label(catalog.RunStatuses, run.Outcome!.Status) ?? run.Outcome.Status.ToString(CultureInfo.InvariantCulture), run.Outcome.Message,
                 catalog.RunStatusTones.TryGetValue(run.Outcome.Status, out var outcomeTone) ? outcomeTone : null)
@@ -356,16 +358,19 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
     /// Step rows that match none group by the outcome rows around them: those after the job's last outcome row are In progress while the job runs
     /// (only those that started at or after its current start, where that is readable), the rest Unknown (Agent stopped or crashed mid-run) or, with
     /// <see cref="AgentOrphanLabel.XpsOff"/>, In progress or unknown. A date-window read starts a day before the window, and the window
-    /// (<see cref="Passes"/>) keeps runs by their start, so a crashed run inside the window stays Unknown. One pass over each job's rows, so a full
-    /// read (historyRows) groups in linear time.
+    /// (<see cref="Passes"/>) keeps runs by their start, so a crashed run inside the window stays Unknown. With <paramref name="windowed"/>, such
+    /// step rows older than every outcome row of their job read are <see cref="AgentHistoryRun.BeforeRead"/>: a run that started before the read
+    /// (a long one) has its outcome row outside it, which the rows cannot tell from a crash. One pass over each job's rows, so a full read
+    /// (historyRows) groups in linear time.
     /// </summary>
-    internal static List<AgentHistoryRun> Group(IEnumerable<AgentHistoryRow> rows, IReadOnlyDictionary<Guid, AgentHistoryJobState> states, AgentOrphanLabel label)
+    internal static List<AgentHistoryRun> Group(IEnumerable<AgentHistoryRow> rows, IReadOnlyDictionary<Guid, AgentHistoryJobState> states, AgentOrphanLabel label, bool windowed = false)
     {
         var runs = new List<AgentHistoryRun>();
         foreach (var job in rows.GroupBy(row => row.Job))
         {
             // One pass in instance order: the step rows since the job's previous outcome row wait in `pending` until the next one.
             var pending = new List<AgentHistoryRow>();
+            var leading = windowed;
             foreach (var row in job.OrderBy(row => row.Instance))
             {
                 if (row.Step > 0) { pending.Add(row); continue; }
@@ -373,8 +378,9 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
                 runs.Add(new(job.Key, row, steps, OutcomeOf(row.Status)));
                 // Step rows between two outcome rows that the later one does not claim: one Unknown run per gap (a run Agent never finished).
                 var gap = steps.Count == pending.Count ? [] : pending.Except(steps).ToList();
-                if (gap.Count > 0) runs.Add(new(job.Key, null, gap, "unknown"));
+                if (gap.Count > 0) runs.Add(new(job.Key, null, gap, "unknown", leading));
                 pending.Clear();
+                leading = false;
             }
             if (pending.Count == 0) continue;
             var state = states.TryGetValue(job.Key, out var known) ? known : new AgentHistoryJobState(false, null);
@@ -383,7 +389,7 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
             var tail = pending;
             var current = state.Running ? tail.Where(row => state.Start is not { } start || row.Started is null || row.Started >= start).ToList() : [];
             var before = tail.Except(current).ToList();
-            if (before.Count > 0) runs.Add(new(job.Key, null, before, state.Running ? "unknown" : unknown));
+            if (before.Count > 0) runs.Add(new(job.Key, null, before, state.Running ? "unknown" : unknown, leading));
             if (current.Count > 0) runs.Add(new(job.Key, null, current, "inProgress"));
         }
         return runs;

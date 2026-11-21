@@ -208,6 +208,25 @@ describe('the Log File Viewer', () => {
     logViewer.clearFilters(id)
     expect(handle().args.at(-1)).toEqual({ jobs: [rows[1][0]], days: 7 })
   })
+  it("reads a kept run's message again when the viewer gets a connection back", async () => {
+    const { logViewer, api, documents, connect } = viewer()
+    connect(connectionInfo('c2'))
+    const id = logViewer.open('c1')
+    const grid = { snapshot: { activeKey: `${nightly}:15` } as Record<string, unknown>, subscribe() { return () => {} }, getSnapshot() { return this.snapshot } }
+    api.agentHistoryMessage.mockResolvedValue({ ok: true, value: { elapsedMs: 1, message: 'The job failed.' } })
+    logViewer.attachRuns(id, grid as never)
+    await settled()
+    documents.update(id, { connectionId: undefined })
+    await settled()
+    const reads = api.agentHistoryMessage.mock.calls.length
+    // Lost then given a new connection: the run stays, so its message is read again on the new one rather than left reading.
+    documents.update(id, { connectionId: 'c2' })
+    await settled()
+    expect(logViewer.get(id)?.run).toEqual({ job: nightly, instance: 15 })
+    expect(api.agentHistoryMessage.mock.calls.length).toBe(reads + 1)
+    expect(api.agentHistoryMessage).toHaveBeenLastCalledWith(expect.objectContaining({ connectionId: 'c2', jobId: nightly, instanceId: 15 }))
+    expect(logViewer.get(id)?.message).toEqual({ key: `${nightly}:15`, state: 'ready', text: 'The job failed.' })
+  })
   it('reads the selected row\'s whole message, and retries a failed read', async () => {
     const { logViewer, handle, api } = viewer()
     const id = logViewer.open('c1')

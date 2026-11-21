@@ -84,7 +84,9 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
   or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read
   as stopped (the Unknown and In progress filters keep those). The read starts a day before the window, which keeps runs by
-  their start, so a run Agent never finished stays Unknown in any window; steps of a run that spans a daylight-saving fall-back
+  their start, so a run Agent never finished stays Unknown in any window; a run that started before the read (one longer than
+  about a day) has its outcome row outside it, so its later steps read Unknown too, with a message that says so and that a wider
+  window reads it; steps of a run that spans a daylight-saving fall-back
   can read as an Unknown run, as msdb stores local times. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
   sources and the window read msdb again. Selecting a run shows its steps (outcome row first) and the selected row's message in
   **Message details** with Copy; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message

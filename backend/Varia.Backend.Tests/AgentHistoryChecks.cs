@@ -73,6 +73,11 @@ internal static class AgentHistoryChecks
         var windowRunning = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 41, 3, 1, 2)], new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day) }, AgentOrphanLabel.Unknown);
         check(windowIdle is [{ OutcomeId: "unknown", Key: 40 }] && windowRunning is [{ OutcomeId: "inProgress" }],
             "an idle job's steps with no outcome row are a run Agent never finished (Unknown), in a date window too; a running job's are In progress");
+        // A long run that started before a date-window read: its outcome row and first steps are older than the read, its later steps are in it.
+        var longRun = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1), Row(Backup, 50, 0, 1, 6), Row(Backup, 51, 1, 1, 2), Row(Backup, 60, 0, 1, 3)], states, AgentOrphanLabel.Unknown, windowed: true);
+        var fullLong = AgentHistoryReader.Group([Row(Backup, 40, 2, 1, 1)], states, AgentOrphanLabel.Unknown);
+        check(longRun.Single(run => run.Key == 40).BeforeRead && longRun.Single(run => run.Key == 51).BeforeRead == false && fullLong is [{ BeforeRead: false }],
+            "in a date-window read, step rows with no outcome row older than all their job's outcome rows say their outcome row may predate the read; later gaps and full reads do not");
         check(bounded.Select(run => run.OutcomeId + run.Key).SequenceEqual(["succeeded21", "unknown20", "succeeded23"]),
             "a step row before an outcome row that started earlier than its run is a crashed run of its own (Unknown), whichever window was read; the window filter keeps or drops it by its start");
         var running = AgentHistoryReader.Group([Row(Backup, 30, 0, 1, 1), Row(Backup, 31, 1, 1, 2), Row(Backup, 32, 2, 1, 3)],
