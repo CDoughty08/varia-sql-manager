@@ -31,6 +31,7 @@ internal static class SearchChecks
         Packing(check);
         SearchPackedChecks.Run(check);
         SearchDetailChecks.Run(check);
+        SearchLookupChecks.Run(check);
         Reader(check).GetAwaiter().GetResult();
         AgentRows(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
@@ -497,7 +498,8 @@ internal static class SearchChecks
         check(new[] { "CR", "CP", "AU", "SA", "BD", "LS" }.All(code => DatabaseReader.ServerNamed(code) is { } named && ObjectSearchService.Kinds.Contains(named.Kind) && ObjectSearchSql.Server(true, false).Contains("'" + code + "'", StringComparison.Ordinal)),
             "every named server object code the batch writes maps to a kind the index holds");
         var catalog = ExplorerCatalog.Current;
-        var served = catalog.Kinds.Where(kind => kind.Scope is not ("server" or "childUnnamed") && !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && !ObjectSearchService.Unindexed.Contains(kind.Kind))
+        // BigQuery's kinds join the index with Search Objects for BigQuery (BQ-6a).
+        var served = catalog.Kinds.Where(kind => kind.Scope is not ("server" or "childUnnamed") && !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && !kind.BigQuery && !ObjectSearchService.Unindexed.Contains(kind.Kind))
             .Select(kind => kind.Kind).ToHashSet();
         check(served.SetEquals(ObjectSearchService.Kinds), "the index holds every kind Object Explorer lists but the server, return values and the SSIS Catalog's: "
             + string.Join(", ", served.Except(ObjectSearchService.Kinds).Concat(ObjectSearchService.Kinds.Except(served))));
@@ -546,7 +548,7 @@ internal static class SearchChecks
     /// type or a parameter's direction): the rest is filled in (a nullable int column, index_id and parameter_id counting up, an int
     /// parameter). The key metadata sets are empty unless given.</summary>
     internal static DataTableReader Batch(bool children, object?[][] objects, object?[][] types, object?[][] named, object?[][] columns, object?[][] indexes, object?[][] stats, object?[][] parameters,
-        object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null)
+        object?[][]? allTypes = null, object?[][]? indexColumns = null, object?[][]? keys = null, object?[][]? foreignKeys = null, bool? caseSensitive = null, bool dottedI = false)
     {
         var counted = 0;
         object?[] Column(object?[] row) => row.Length > 11 ? row : row.Length > 2 ? [.. row, null] : [row[0], row[1], ++counted, 56, (short)4, (byte)10, (byte)0, true, false, false, false, null];
@@ -576,6 +578,8 @@ internal static class SearchChecks
             sets.Add(Rows([("id", typeof(int)), ("parent", typeof(int)), ("index", typeof(int))], keys ?? []));
             sets.Add(Rows([("id", typeof(int)), ("column", typeof(int)), ("referenced", typeof(int)), ("other", typeof(int))], foreignKeys ?? []));
         }
+        // A read without definitions: the collation's case set follows directly (ObjectSearchSql.CaseSensitive).
+        if (caseSensitive is { } cased) sets.Add(Rows([("cased", typeof(bool)), ("dotted", typeof(bool))], [cased, dottedI]));
         return new DataTableReader([.. sets]);
     }
 

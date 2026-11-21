@@ -38,7 +38,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup",
-        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "agent.profile",
+        "bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "agent.profile",
         "results.diffSeek"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
@@ -521,6 +521,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "bigquery.account" => await bigQuery.AccountAsync(Read<BigQueryCredentialArgs>(parameters, json), Token(context)),
         "bigquery.projects" => await bigQuery.ProjectsAsync(Read<BigQueryProjectsArgs>(parameters, json), Token(context)),
         "bigquery.dryRun" => await bigQuery.DryRunQueryAsync(Read<BigQueryDryRunArgs>(parameters, json), Token(context)),
+        "bigquery.properties" => await bigQuery.PropertiesAsync(Read<BigQueryPropertiesArgs>(parameters, json), Token(context)),
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
@@ -560,7 +561,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.distinctClose" => CloseSnapshots(Read<ResultsDistinctCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
-        "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
+        "explorer.children" => Read<ExplorerChildrenArgs>(parameters, json) is var childrenArgs && bigQuery.Owns(childrenArgs.ConnectionId)
+            ? await bigQuery.ChildrenAsync(childrenArgs, Varia.Backend.Explorer.ExplorerCatalog.Current, Token(context)) : await explorer.ChildrenAsync(childrenArgs, Token(context)),
         "explorer.peek" => await explorer.PeekAsync(Read<PeekArgs>(parameters, json), Token(context)),
         "explorer.peekDependencies" => await explorer.PeekDependenciesAsync(Read<PeekArgs>(parameters, json), Token(context)),
         "explorer.dependencies" => await explorer.DependenciesAsync(Read<DependenciesArgs>(parameters, json), Token(context)),
@@ -568,7 +570,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
         "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
-        "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
+        "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
+            ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs, Providers.BigQuery).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
@@ -1213,7 +1216,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > 1_000_000 || args.MaxRows < 0 || args.MaxResultSets is < 1 or > 1000
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
-        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection) return await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection)
+            return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
+        if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         Name(args.Database);

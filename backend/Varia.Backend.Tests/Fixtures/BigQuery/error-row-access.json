@@ -1,0 +1,1 @@
+{"error":{"code":400,"message":"Cannot list rows of table varia-alpha:sales.orders because it has row access policies.","errors":[{"message":"Cannot list rows of table varia-alpha:sales.orders because it has row access policies.","domain":"global","reason":"invalid"}],"status":"INVALID_ARGUMENT"}}

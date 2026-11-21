@@ -17,7 +17,7 @@ const code = (value: string) => '`' + value + '`'
 const codes = (values: readonly string[]) => values.map(code).join(', ')
 const versions: Readonly<Record<number, string>> = { 13: '2016', 14: '2017', 15: '2019', 16: '2022', 17: '2025' }
 const since = (major?: number) => major === undefined ? '—' : `${versions[major] ?? major} (${major})`
-const inserts: Readonly<Record<InsertStyle, string>> = { none: '—', onePart: '`[name]`', twoPart: '`[schema].[name]`', raw: 'the name as is (`@name`)' }
+const inserts: Readonly<Record<InsertStyle, string>> = { none: '—', onePart: '`[name]`', twoPart: '`[schema].[name]`', raw: 'the name as is (`@name`)', bqPath: "BigQuery's backtick-quoted path (`` `project.dataset.table` ``)" }
 const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   pageSize: 'Rows per page, and the largest page a request may ask for',
   folderCap: 'Children a folder loads before it stops and suggests a filter',
@@ -203,6 +203,8 @@ export function renderExplorerDocs(): string {
     `used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to ${explorerLimits.maxName}, if it`,
     'owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).',
     'SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.',
+    'BigQuery objects carry their `project`, `dataset` and (for a column) `table`, and keep to BigQuery\'s own name rules and',
+    'lengths (`src/shared/bigquery/names.ts`) instead, a column\'s name being its dot-joined field path; no sysname names them.',
     '',
     table(['Scope', 'Requires', 'Forbids', 'Kinds'], kindScopes.map(scope => [code(scope), fields(scopeFields[scope].required), fields(scopeFields[scope].forbidden), fields(kindsOfScope(scope))])),
     '',
