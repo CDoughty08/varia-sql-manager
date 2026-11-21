@@ -275,8 +275,14 @@ collection, so scrolling a sorted view of a packed result collected every other 
   it); Copy and Save keep them across pages. `PageRooms` gives back, when disposed, the rooms their readers gave back; a
   room still out is dropped.
 - **Kept:** idle rooms up to `RoomPool.IdleBytes` (a tile's 64 rooms and one a worker: about 21 MiB on 16 workers),
-  none longer than four sealed pages, none twice. They are not charged to the budget, as a sort's or a filter's pooled
-  scratch is not, and are let go after 30 s without a rental.
+  none longer than four sealed pages, none twice. When they are full, the rooms given back longest ago make way for one given
+  back now, whatever their lengths, so once a read makes rooms of its own they replace those an earlier, narrower or
+  wider, result left. A room lent to a shorter page than its own goes first; each room made while
+  rooms are lent drops one of them, the longest lent to a page no shorter than the one the room was made for, so lent
+  rooms do not keep out the rooms a read lacks. A read that leaves a wider one makes its own rooms over a few tiles, and
+  results whose pages spread over many room lengths (wide rows) can make somewhat more rooms than keeping the first
+  rooms given back did. They are not charged to the budget, as a sort's or a filter's pooled scratch is not, and
+  are let go after 30 s without a rental.
 
 Measured on 1,000,000 W1 rows packed (830 pages) through a scattered view, without the pool → with it. Times are the
 best of three interleaved runs on a busy 16-worker machine; allocations, collections and pauses held across all three.
