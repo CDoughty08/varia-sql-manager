@@ -166,7 +166,7 @@ are not rebuilt.
   group and values: Count, Distinct Count, Sum, Average, Min or Max (Sum and Average for numeric columns only). Text
   groups by the column's collation, NULL is a group of its own, and decimal sums keep all 38 digits. A pivot of more than
   256 column groups (fewer with many values), 100,000 row groups or 4,000,000 figures is refused with a message saying which.
-- BigQuery NUMERIC uses its declared scale, or nine fractional places for an unparameterized column. BIGNUMERIC sums and averages keep all 38 fractional places. A sum outside its signed 256-bit range shows a cell error.
+- BigQuery NUMERIC sums use the column's declared scale, or nine fractional places for an unparameterized column. Averages keep at least six fractional places. BIGNUMERIC sums and averages keep all 38 fractional places. An aggregate outside its output range shows a cell error.
 - The builder belongs to the grid you last used (for a comparison or plan set, the first pivotable result) and names it.
   Each result keeps its draft, inherited by a re-run's result of the same number. **Pivot Results…** on a Pivot opens
   the builder with what that Pivot was built with.

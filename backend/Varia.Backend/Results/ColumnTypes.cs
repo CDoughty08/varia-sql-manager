@@ -38,9 +38,6 @@ internal static class ColumnTypes
         _ => Other
     };
 
-    /// <summary>BigQuery's decimal type with a signed 256-bit range at scale 38.</summary>
-    public static bool IsBigNumeric(ResultColumn column) => column.SortKind == Decimal && BaseName(column.DataType) == "bignumeric";
-
     /// <summary>Exact numerics: integers, decimals and bit, which sort and hash by numeric value.</summary>
     public static bool IsExact(ResultColumn column) => column.SortKind is Integer or Decimal or Boolean;
 

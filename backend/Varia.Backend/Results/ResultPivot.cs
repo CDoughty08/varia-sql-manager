@@ -46,14 +46,15 @@ internal sealed class PivotModel
 /// <summary>One value's figures, a slot per cell: counts, sums (exact as whole numbers of the column's smallest unit, so
 /// decimal(38, s) sums keep all 38 digits, flagged as an overflow past them; approximate as doubles) or the row holding a
 /// lowest or highest value. <paramref name="scale"/> is an exact column's scale.</summary>
-internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int scale = 0, bool wide = false)
+internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int scale = 0, BigQueryDecimalKind decimalKind = BigQueryDecimalKind.None)
 {
     public PivotValue Value { get; } = value;
     public bool Exact { get; } = exact;
-    public int Scale { get; } = scale;
+    public int Scale { get; } = decimalKind == BigQueryDecimalKind.BigNumeric ? 38 : scale;
+    public BigQueryDecimalKind DecimalKind { get; } = decimalKind;
     public readonly long[] Counts = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? [] : new long[cells];
-    public readonly Int128[] Sums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact && !wide ? new Int128[cells] : [];
-    public readonly BigInteger[]? WideSums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && wide ? new BigInteger[cells] : null;
+    public readonly Int128[] Sums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact && decimalKind == BigQueryDecimalKind.None ? new Int128[cells] : [];
+    public readonly BigInteger[]? WideSums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && decimalKind != BigQueryDecimalKind.None ? new BigInteger[cells] : null;
     public readonly double[] Doubles = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && !exact ? new double[cells] : [];
     public readonly bool[] Overflow = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new bool[cells] : [];
     public readonly int[] Best = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? Filled(cells) : [];
@@ -185,12 +186,15 @@ internal static class ResultPivoter
         var stride = columnGroups + 1;
         var cells = rowReps.Count * stride;
         long bytes = 0;
-        bool Wide(PivotValue value) => value.Column >= 0 && ColumnTypes.IsBigNumeric(set.Columns[value.Column]);
-        foreach (var value in spec.Values) bytes += PivotFigures.CellBytes(value.Aggregate, Wide(value)) * cells;
+        foreach (var value in spec.Values)
+        {
+            var wide = value.Column >= 0 && set.Columns[value.Column].BigQueryDecimal != BigQueryDecimalKind.None;
+            bytes += PivotFigures.CellBytes(value.Aggregate, wide) * cells;
+        }
         if (!reserve(bytes)) throw new PivotTooLargeException();
 
         var figures = spec.Values.Select(value => value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact
-            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column]), Wide(value)) : new PivotFigures(value, cells, false)).ToArray();
+            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column]), set.Columns[value.Column].BigQueryDecimal) : new PivotFigures(value, cells, false)).ToArray();
         // A row outside the view (no row group) counts nowhere; every other row counts in its cell and its row group's total.
         int CellOf(int row, out int total)
         {
@@ -231,7 +235,7 @@ internal static class ResultPivoter
                     var span = view.Span(value.Column, r);
                     if (item.WideSums is { } wideSums)
                     {
-                        var parsed = TryBigNumeric(span, out var number);
+                        var parsed = TryWideDecimal(span, item.Scale, out var number);
                         if (cell >= 0) { wideSums[cell] += number; item.Counts[cell]++; item.Overflow[cell] |= !parsed; }
                         wideSums[totalCell] += number;
                         item.Counts[totalCell]++;
@@ -322,8 +326,8 @@ internal static class ResultPivoter
     /// <summary>10^38: a decimal(38, s) holds whole numbers of its smallest unit below it.</summary>
     internal static readonly Int128 Decimal38 = Int128.Parse("100000000000000000000000000000000000000", CultureInfo.InvariantCulture);
 
-    // BIGNUMERIC cells are canonical decimal text in REST and Arrow. Parse into 10^-38 units.
-    private static bool TryBigNumeric(ReadOnlySpan<byte> text, out BigInteger number)
+    // Both BigQuery readers store canonical decimal text. The running total may exceed the output range before values cancel or are averaged.
+    private static bool TryWideDecimal(ReadOnlySpan<byte> text, int scale, out BigInteger number)
     {
         number = 0;
         var negative = text.StartsWith("-"u8);
@@ -331,12 +335,12 @@ internal static class ResultPivoter
         var point = text.IndexOf((byte)'.');
         var whole = point < 0 ? text : text[..point];
         var fraction = point < 0 ? default : text[(point + 1)..];
-        if (whole.IsEmpty || whole.Length > 39 || fraction.Length > 38 || whole.ContainsAnyExceptInRange((byte)'0', (byte)'9') || fraction.ContainsAnyExceptInRange((byte)'0', (byte)'9')) return false;
+        if (whole.IsEmpty || whole.Length > 39 || fraction.Length > scale || whole.ContainsAnyExceptInRange((byte)'0', (byte)'9') || fraction.ContainsAnyExceptInRange((byte)'0', (byte)'9')) return false;
         Span<byte> digits = stackalloc byte[77];
         whole.CopyTo(digits);
         fraction.CopyTo(digits[whole.Length..]);
-        digits.Slice(whole.Length + fraction.Length, 38 - fraction.Length).Fill((byte)'0');
-        if (!BigInteger.TryParse(digits[..(whole.Length + 38)], NumberStyles.None, CultureInfo.InvariantCulture, out number)) return false;
+        digits.Slice(whole.Length + fraction.Length, scale - fraction.Length).Fill((byte)'0');
+        if (!BigInteger.TryParse(digits[..(whole.Length + scale)], NumberStyles.None, CultureInfo.InvariantCulture, out number)) return false;
         if (negative) number = -number;
         return true;
     }
@@ -596,11 +600,11 @@ internal static class PivotOutput
         var column = source.Columns[value.Column];
         if (value.Aggregate is PivotAggregate.Min or PivotAggregate.Max) return column with { Name = name, Nullable = true };
         if (ViewSorter.KindOf(column, source.Wires[value.Column]) != ViewSorter.Kind.Exact) return new ResultColumn(name, "float", "text", Precision: 53);
-        if (ColumnTypes.IsBigNumeric(column)) return new ResultColumn(name, "BIGNUMERIC", "text", Precision: 77, Scale: 38) { SortKind = ColumnTypes.Decimal };
+        if (column.BigQueryDecimal == BigQueryDecimalKind.BigNumeric) return new ResultColumn(name, "BIGNUMERIC", "text", Precision: 77, Scale: 38) { SortKind = ColumnTypes.Decimal, BigQueryDecimal = column.BigQueryDecimal };
         var scale = ResultPivoter.Scale(column);
         if (value.Aggregate == PivotAggregate.Avg) scale = Math.Max(scale, 6);
         else if (ResultPivoter.IsInteger(column)) return new ResultColumn(name, "bigint", "text");
-        return new ResultColumn(name, "decimal(38," + scale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: 38, Scale: scale);
+        return new ResultColumn(name, "decimal(38," + scale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: 38, Scale: scale) { BigQueryDecimal = column.BigQueryDecimal };
     }
 
     public static (IReadOnlyList<ResultColumn> Columns, IReadOnlyList<WireKind> Wires, IReadOnlyList<ColumnLength> Lengths) Shape(ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model, CancellationToken token = default)
@@ -728,15 +732,17 @@ internal static class PivotOutput
         if (figures.Overflow[cell]) { builder.AppendNull(error: true); return 0; }
         if (figures.WideSums is { } wide)
         {
-            var units = wide[cell];
-            if (value.Aggregate == PivotAggregate.Avg)
+            var average = value.Aggregate == PivotAggregate.Avg;
+            var shown = average ? Math.Max(figures.Scale, 6) : figures.Scale;
+            var units = average ? RoundedAverage(wide[cell], count, figures.Scale, shown) : wide[cell];
+            if (figures.DecimalKind == BigQueryDecimalKind.BigNumeric)
             {
-                var rounded = BigInteger.DivRem(units, count, out var remainder);
-                units = BigInteger.Abs(remainder) * 2 >= count ? rounded + units.Sign : rounded;
+                if (units.GetBitLength() > 255) { builder.AppendNull(error: true); return 0; }
+                var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(39, '0');
+                builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^38] + "." + digits[^38..]);
             }
-            if (units.GetBitLength() > 255) { builder.AppendNull(error: true); return 0; }
-            var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(39, '0');
-            builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^38] + "." + digits[^38..]);
+            else if (BigInteger.Abs(units) >= (BigInteger)ResultPivoter.Decimal38) builder.AppendNull(error: true);
+            else builder.EndFormatted(WriteScaled(builder.BeginFormatted(), (Int128)units, shown));
             return 0;
         }
         var sum = figures.Sums[cell];
@@ -758,12 +764,15 @@ internal static class PivotOutput
     /// <paramref name="shown"/> decimals, rounded half away from zero; null past decimal(38)'s digits.</summary>
     internal static Int128? Average(Int128 sum, long count, int scale, int shown)
     {
-        var scaled = (BigInteger)sum * BigInteger.Pow(10, shown - scale);
-        var quotient = BigInteger.DivRem(BigInteger.Abs(scaled), count, out var remainder);
-        if (remainder * 2 >= count) quotient++;
-        if (scaled.Sign < 0) quotient = -quotient;
-        if (BigInteger.Abs(quotient) >= (BigInteger)ResultPivoter.Decimal38) return null;
-        return (Int128)quotient;
+        var quotient = RoundedAverage(sum, count, scale, shown);
+        return BigInteger.Abs(quotient) >= (BigInteger)ResultPivoter.Decimal38 ? null : (Int128)quotient;
+    }
+
+    private static BigInteger RoundedAverage(BigInteger sum, long count, int scale, int shown)
+    {
+        var scaled = shown == scale ? sum : sum * BigInteger.Pow(10, shown - scale);
+        var quotient = BigInteger.DivRem(scaled, count, out var remainder);
+        return BigInteger.Abs(remainder) * 2 >= count ? quotient + scaled.Sign : quotient;
     }
 
     /// <summary>A whole number of 10^-<paramref name="scale"/> as decimal text with exactly that many decimals (250 at scale 2

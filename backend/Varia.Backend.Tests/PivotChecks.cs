@@ -202,6 +202,15 @@ internal static class PivotChecks
         var source = Source(store, [["1.25", "0.000000001", "0", big], ["2.5", "0.000000002", "0", tiny]], [.. plan.Columns]);
         var (_, pivot) = Pivot(store, source, new PivotSpec([2], -1, [new(PivotAggregate.Sum, 0), new(PivotAggregate.Avg, 0), new(PivotAggregate.Sum, 1), new(PivotAggregate.Sum, 3)]));
         check(Text(pivot).Single() == "0|3.75|1.875000|0.000000003|" + big + "." + new string('0', 37) + "1", "BigQuery decimal pivots preserve fractional and wide values: " + Text(pivot).Single());
+        var numericMax = new string('9', 29) + "." + new string('9', 9);
+        var nearLimit = Source(store, [["0", numericMax], ["0", numericMax], ["1", numericMax], ["1", numericMax], ["1", "-" + numericMax]], [plan.Columns[2], plan.Columns[1]]);
+        var (_, numericTotals) = Pivot(store, nearLimit, new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Avg, 1)]));
+        check(Text(numericTotals).SequenceEqual(["0|ERR|" + numericMax, "1|" + numericMax + "|" + new string('3', 29) + "." + new string('3', 9)]),
+            "BigQuery NUMERIC finishes its average and cancellation before testing the result range: " + string.Join(" / ", Text(numericTotals)));
+        var sqlNumeric = new ResultColumn("amount", "NUMERIC", "text", Precision: 38, Scale: 9);
+        var sql = Source(store, [["0", numericMax], ["0", numericMax], ["0", "-" + numericMax]], [plan.Columns[2], sqlNumeric]);
+        var (_, sqlTotals) = Pivot(store, sql, new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Avg, 1)]));
+        check(Text(sqlTotals).Single() == "0|ERR|ERR", "SQL Server NUMERIC retains its existing accumulator overflow rule");
         var max = (BigInteger.One << 255) - 1;
         static string AtScale38(BigInteger units)
         {
