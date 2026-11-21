@@ -17,11 +17,17 @@ internal sealed class QuerySession(string connectionId, SqlConnection connection
     /// have committed or rolled back, so a loss found later must not say that nothing was committed.</summary>
     public bool CommitInDoubt { get; set; }
 
+    /// <summary>Test seam: runs once the gate is taken, before the closed flag is read, so a check can close the session there.</summary>
+    internal Action? GateTaken { get; set; }
+
     public bool TryEnter()
     {
         if (!gate.Wait(0)) return false;
+        GateTaken?.Invoke();
         if (Volatile.Read(ref closed) == 0) return true;
-        gate.Release();
+        // A Close() that ran while this entrant held the gate left the connection to whoever holds it, which is this entrant.
+        try { Connection.Dispose(); }
+        finally { gate.Release(); }
         throw new RequestException("SESSION_CLOSED", "This query session was closed. Execute again to open a new session.");
     }
 

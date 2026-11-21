@@ -66,6 +66,9 @@ internal static class ResultSearcher
     /// <summary>How many packed pages the calling thread's last search passed over by their filters, for the checks.</summary>
     [ThreadStatic] internal static int LastFiltered;
 
+    /// <summary>Whether the calling thread's last search gave its memo's room back to its own working memory, for the checks.</summary>
+    [ThreadStatic] internal static bool LastYielded;
+
     /// <summary>The positions are read in runs on several threads (one per <see cref="MinSlice"/> positions, up to the
     /// sort's threads, or <paramref name="workers"/>), each keeping what the outcome may take of it, joined in order: the
     /// outcome is the one a single pass gives.</summary>
@@ -97,6 +100,7 @@ internal static class ResultSearcher
         finally
         {
             LastSkipped = plan?.Skipped ?? 0;
+            LastYielded = plan?.Yielded ?? false;
             plan?.Dispose(set);
         }
     }
@@ -119,7 +123,8 @@ internal static class ResultSearcher
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
-        using var rooms = PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge));
+        // The search's own working memory comes before its memo's spare room (Narrowing.YieldMemo).
+        using var rooms = PageRooms.Over(pages, columns, () => new RequestException("TOO_LARGE", TooLarge), plan is null ? null : () => plan.YieldMemo(set));
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
         if (rooms is not null) slots = Math.Min(slots, PackedSlots);
         void Read(int run)
@@ -261,7 +266,8 @@ internal static class ResultSearcher
     {
         var order = view.Order;
         var bytes = 4L * baseRows;
-        if (baseRows > Array.MaxLength || !set.TryReserveWork(bytes)) throw new RequestException("TOO_LARGE", TooLarge);
+        // The memo's spare room goes back before the inverse is refused (Narrowing.YieldMemo).
+        if (baseRows > Array.MaxLength || !(set.TryReserveWork(bytes) || plan?.YieldMemo(set) == true && set.TryReserveWork(bytes))) throw new RequestException("TOO_LARGE", TooLarge);
         try
         {
             var at = GC.AllocateUninitializedArray<int>((int)baseRows);
@@ -276,7 +282,7 @@ internal static class ResultSearcher
             var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(baseRows, int.MaxValue)));
             var parts = new Kept[runs];
             long From(int run) => baseRows * run / runs;
-            using var rooms = PageRooms.Over(pages, matchers.Length, () => new RequestException("TOO_LARGE", TooLarge));
+            using var rooms = PageRooms.Over(pages, matchers.Length, () => new RequestException("TOO_LARGE", TooLarge), plan is null ? null : () => plan.YieldMemo(set));
             void Read(int run)
             {
                 var part = parts[run] = new Kept(backward, maxMatches);

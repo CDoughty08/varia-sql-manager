@@ -225,6 +225,14 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   Save, highlights and length sorts read `sortKind`, never type-name lists. SQL Server-only refinements the kinds lack
   (uniqueidentifier order, money scale, text and ntext as keys) live beside the factory; `SortKindChecks` and
   `tests/sort-kind.test.ts` pin each consumer's kinds for every SQL Server type.
+- **float and real cells keep their exact value apart from their text.** A page holds SSMS's display text (15 and 7
+  significant digits), so Copy, Save and the grid are unchanged; a cell whose text reads back as another value
+  (`PageBuilder.AppendFloat`/`AppendReal`) keeps its exact value in the page's lengths sidecar (`PageLengths.Exacts`,
+  charged with it, never sent to main). Stored pages' readers attach the sidecar (`PageView.With`), and every value
+  operation (sort keys, filters, distinct values, duplicates, profiles, Pivot, row identity and comparisons) reads
+  `PageView.TryExact` before parsing the text, only for columns that may hold one (`ColumnTypes.HoldsExact`: float
+  and real; a sql_variant sorts and groups by its text). A new reader of stored pages attaches it too, and a result built from another (Pivot, comparison)
+  carries a copied cell's exact value with `KeepExact` when its own column holds exact values.
 - **Named result sets** (`backend/Varia.Backend/ResultNames.cs`, docs/named-result-sets-scope.md): a `#Name="…"` comment
   names the next top-level statement's first result set in its batch. The SQL is sent unchanged; markers are found by
   `SqlScript.Parse`'s masking (not in strings, quoted names or nested comments). Only a batch with a well-formed marker
@@ -256,7 +264,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   memory-load check are never raised. Every whole-result operation reserves
   its working memory before it builds (search reserves only its rooms for a packed result, and through a sorted view
   of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
-  memory, one a result, freed with it: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
+  memory, one a result, freed with it and given back to the search's own reservations when they would be refused: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
