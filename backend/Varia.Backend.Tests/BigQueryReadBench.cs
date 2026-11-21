@@ -14,8 +14,9 @@ namespace Varia.Backend.Tests;
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --bigquery-read-bench [--rows N] [--runs N]</c>.
 /// Every reader runs through query.execute against the in-process fakes (REST pages of 10,000 rows of JSON; Arrow batches of
 /// 10,000 rows on four streams, or one for ORDER BY, uncompressed or with LZ4 frame or Zstandard buffers), so it measures
-/// Varia's decoding and storing, not the network. Two tables: "numbers" (an INT64 counter and short strings, very
-/// repetitive) and "mixed" (random ids and amounts, a small set of countries, emails and free text with nulls, flags).
+/// Varia's decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the collection
+/// one case's release schedules runs before the next case's clock starts). Two tables: "numbers" (an INT64 counter and
+/// short strings, very repetitive) and "mixed" (random ids and amounts, a small set of countries, emails and free text with nulls, flags).
 /// Prints one JSON line per case with the median time, rows per second and the Arrow bytes sent; measures only, no checks,
 /// no floors, and never touches a real project.
 /// </summary>
@@ -28,7 +29,8 @@ internal static partial class BigQueryExecutionChecks
         long Option(string name, long fallback) => System.Array.IndexOf(args, name) is var at and >= 0 && at + 1 < args.Length ? long.Parse(args[at + 1], CultureInfo.InvariantCulture) : fallback;
         var count = (int)Option("--rows", 500_000);
         var runs = (int)Option("--runs", 5);
-        foreach (var (data, (jobs, storage)) in new[] { ("numbers", Numbers(count, 10_000, jobs => jobs.PageCap = 10_000)), ("mixed", Mixed(count, 10_000)) })
+        var previous = new ResultStore(1, 1);
+        foreach (var (data, (jobs, storage)) in new[] { ("numbers", Numbers(count, 10_000, jobs => (jobs.PageCap, jobs.CacheRows) = (10_000, true))), ("mixed", Mixed(count, 10_000)) })
         {
             (string Name, bool Arrow, CompressionCodecType? Compression, string Sql)[] cases =
             [
@@ -45,7 +47,13 @@ internal static partial class BigQueryExecutionChecks
                 // Uncompressed batches for "arrow"; LZ4 forced; Zstandard as Varia asks for it.
                 storage.Compression = read.Compression == CompressionCodecType.Lz4Frame ? read.Compression : null;
                 storage.IgnoreCompression = read.Compression is null;
-                using var harness = new Harness(jobs, new ResultStore(8L << 30, 4L << 30), read.Arrow ? storage : null);
+                // The collection the previous case's release scheduled (64 MiB released, or a store emptied) runs before the clock
+                // starts: in the timing it would be a blocking gen2 collection over this process's fixtures (gigabytes of
+                // JSON rows), a pause the backend's own heap does not have and that only the larger result reached.
+                await previous.Collection;
+                var store = new ResultStore(8L << 30, 4L << 30);
+                previous = store;
+                using var harness = new Harness(jobs, store, read.Arrow ? storage : null);
                 harness.Service.BigQuery.StorageReadMinBytes = 0;
                 await harness.ConnectAsync();
                 var before = Interlocked.Read(ref storage.SentBytes);
@@ -100,7 +108,8 @@ internal static partial class BigQueryExecutionChecks
             Schema = Schema(Field("id", "INTEGER"), Field("amount", "FLOAT"), Field("country", "STRING"), Field("email", "STRING"), Field("note", "STRING"), Field("active", "BOOLEAN")),
             Rows = [.. Enumerable.Range(0, count).Select(i => Row(ids[i].ToString(Inv), amounts[i].ToString("R", Inv), country[i], email[i], note[i] is { } text ? JsonValue.Create(text) : null, active[i] ? "true" : "false"))],
             Destination = Destination,
-            PageCap = 10_000
+            PageCap = 10_000,
+            CacheRows = true
         };
         var schema = new Schema([new("id", Int64Type.Default, true), new("amount", DoubleType.Default, true), new("country", StringType.Default, true),
             new("email", StringType.Default, true), new("note", StringType.Default, true), new("active", BooleanType.Default, true)], null);

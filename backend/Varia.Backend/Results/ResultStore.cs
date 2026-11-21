@@ -157,6 +157,7 @@ internal sealed partial class ResultStore
     private long freedSinceCollect;
     private long freedSinceCompact;
     private int collecting;
+    private Task collection = Task.CompletedTask;
 
     /// <param name="memory">The memory load and its high-load threshold, in bytes (<see cref="OperatingSystemMemory"/> in the
     /// process). Null stores up to the budgets whatever the machine's load: the checks build their stores so, because their
@@ -256,6 +257,9 @@ internal sealed partial class ResultStore
     internal long FreedSinceCollect => Interlocked.Read(ref freedSinceCollect);
     /// <summary>Bytes released toward the next compacting collection (the checks read it).</summary>
     internal long FreedSinceCompact => Interlocked.Read(ref freedSinceCompact);
+    /// <summary>The forced collection a release scheduled last, or a completed task (the read bench waits for it, so the
+    /// collection one case's release scheduled does not land in the next case's timing).</summary>
+    internal Task Collection => Volatile.Read(ref collection);
     /// <summary>Sets the live share: <paramref name="share"/> of the global budget (limits.live.budgetShare).</summary>
     public void ShareWithLive(double share)
     {
@@ -895,11 +899,11 @@ internal sealed partial class ResultStore
     private void Collect()
     {
         if (Interlocked.Exchange(ref collecting, 1) == 1) return;
-        _ = Task.Delay(100).ContinueWith(_ =>
+        Volatile.Write(ref collection, Task.Delay(100).ContinueWith(_ =>
         {
             Volatile.Write(ref collecting, 0);
             CollectNow();
-        }, TaskScheduler.Default);
+        }, TaskScheduler.Default));
     }
 
     /// <summary>The most a compacting collection copies while the machine has memory to spare. Every thread of the backend
