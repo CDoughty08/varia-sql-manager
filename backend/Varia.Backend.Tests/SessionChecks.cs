@@ -39,11 +39,11 @@ internal static class SessionChecks
         // entrant; the entrant then refuses, and must dispose the connection itself rather than strand it.
         using var raced = new SqlConnection("Data Source=offline");
         var racing = new QuerySession(Guid.NewGuid().ToString(), raced);
-        racing.GateTakenForTest = racing.Close;
+        racing.GateTaken = racing.Close;
         string? refused = null;
         try { racing.TryEnter(); }
         catch (RequestException error) { refused = error.Code; }
-        racing.GateTakenForTest = null;
+        racing.GateTaken = null;
         // With the gate freed a later entrant is refused as closed too, never told the session is busy.
         string? again = null;
         try { racing.TryEnter(); }
