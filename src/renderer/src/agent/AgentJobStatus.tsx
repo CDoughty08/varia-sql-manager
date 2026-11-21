@@ -2,6 +2,7 @@ import { watchedText } from '../../../shared/agent/jobs'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import type { WatchedEntry } from './AgentJobStatusService'
+import { serverItems } from '../contributions/query'
 
 const running = (entry: WatchedEntry) => entry.phase.phase === 'starting' || entry.phase.phase === 'running'
 
@@ -11,13 +12,16 @@ const running = (entry: WatchedEntry) => entry.phase.phase === 'starting' || ent
  * followed job reads. Hidden while there is nothing to say. The connection item is left alone.
  */
 export default function AgentJobStatus() {
-  const { agentJobs, jobActivity, commands } = useWorkbench()
+  const { agentJobs, jobActivity, commands, connections, quickInput } = useWorkbench()
   const { jobs, agent } = useServiceSnapshot(agentJobs)
   const { documents } = useServiceSnapshot(jobActivity)
+  // Read again when a connection goes: its monitor's last reading then says nothing.
+  useServiceSnapshot(connections)
   const down = new Map<string, string>()
   for (const [connectionId, availability] of Object.entries(agent)) if (availability === 'stopped' || availability === 'xpsOff') down.set(connectionId, availability)
   for (const state of Object.values(documents)) {
-    const availability = state.connectionId ? jobActivity.availability(state.id) : 'pending'
+    // A monitor whose connection is gone holds its last reading, which is no news.
+    const availability = state.connectionId && jobActivity.isLive(state.id) ? jobActivity.availability(state.id) : 'pending'
     if (state.connectionId && (availability === 'stopped' || availability === 'xpsOff')) down.set(state.connectionId, availability)
   }
   const servers = [...down.keys()].map(id => Object.values(documents).find(state => state.connectionId === id)?.label ?? jobs.find(entry => entry.connectionId === id)?.server ?? '')
@@ -25,10 +29,14 @@ export default function AgentJobStatus() {
   const more = jobs.length - 1
   if (!newest && !down.size) return null
   const xpsOnly = [...down.values()].every(value => value === 'xpsOff')
-  // One server down: its monitor; several: the command's server picker.
+  // One server down: its monitor; several: a picker of those servers.
+  const open = (connectionId: string) => {
+    try { jobActivity.open(connectionId) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job Activity Monitor could not open.') }
+  }
   const openDown = () => {
-    if (down.size !== 1) { void commands.execute('agent.jobActivity', undefined, 'toolbar'); return }
-    try { jobActivity.open([...down.keys()][0]) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Job Activity Monitor could not open.') }
+    const choices = connections.liveSqlServer().filter(connection => down.has(connection.id))
+    if (down.size === 1 || choices.length <= 1) { open(choices[0]?.id ?? [...down.keys()][0]); return }
+    quickInput.show({ ariaLabel: 'Job Activity Monitor', placeholder: 'Select a server whose Agent is stopped', noun: 'servers', items: serverItems(choices), onDidAccept: item => open(item.id) })
   }
   return <>
     {newest && <span className="agent-job-status" role="status" data-phase={newest.phase.phase}>

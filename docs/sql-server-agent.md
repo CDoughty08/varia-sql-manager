@@ -80,7 +80,7 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   before the Start itself, dated in server time by the watched probe's clock (unless the job was seen running since, as
   Start is refused while a job runs). Agent
   stopped (or its XPs off) on a server a monitor or a followed job reads shows as its own item, which opens that server's
-  Job Activity Monitor; after a followed job ends that way, the service probe alone keeps reading Agent's state until it
+  Job Activity Monitor (with several such servers, a pick of them; a monitor whose connection is gone does not count); after a followed job ends that way, the service probe alone keeps reading Agent's state until it
   runs again. The connection item is unchanged.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in

@@ -44,4 +44,33 @@ describe("The status bar's Agent stopped item", () => {
     await act(async () => { view.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [4, null, 3, null, 1, stamp, ...Array.from({ length: 12 }, () => null)] }] }) })
     expect(host.querySelector('.agent-job-status')?.textContent).toContain(`Nightly: Succeeded (started ${String(stamp).slice(0, 4)}-${String(stamp).slice(4, 6)}-${String(stamp).slice(6, 8)} 14:00:00, server time)`)
   })
+  it('offers only the stopped servers when several are down, and forgets a server whose connection is gone', async () => {
+    const fixture = workbenchFixture({ agentPreview: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    fixture.connect(connectionInfo('c2'))
+    fixture.connect(connectionInfo('c3', 2))
+    for (const id of ['c1', 'c2']) {
+      fixture.jobActivity.open(id)
+      const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.connectionId === id)!
+      handle.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }] }] })
+    }
+    fixture.documents.newQuery('', undefined, 'c3')
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const workbench = { ...fixture, platform: 'win32' } as unknown as Workbench
+    await act(async () => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(AgentJobStatus) })) })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+    const button = host.querySelector<HTMLButtonElement>('.agent-stopped-status button')!
+    expect(button.textContent).toContain('on 2 servers')
+    await act(async () => { button.click() })
+    // Not the active query's server: a pick of the two whose Agent is stopped.
+    expect(fixture.quickInput.getSnapshot().rows.map(row => row.item.id)).toEqual(['c1', 'c2'])
+    fixture.quickInput.hide('cancel')
+    // Both connections lost: their monitors' last readings are no news, so the item goes.
+    await act(async () => { fixture.connections.markLostBefore(2) })
+    expect(host.querySelector('.agent-stopped-status')).toBeNull()
+  })
 })

@@ -55,6 +55,8 @@ export interface JobActivityState {
   readonly columnFilters: readonly AgentJobColumnFilter[]
   /** The job whose last run shows below the grid (the rethink's chevron), by id, with its name for the panel's title. */
   readonly expanded?: { readonly id: string; readonly name: string }
+  /** The expanded job changed and no list sample has come since: the last run table is still another job's (or none). */
+  readonly lastRunPending?: boolean
   readonly selected: readonly SelectedJob[]
   /** The selection holds more rows than a bulk verb may take (agentLimits.startJobs): only that many were read. */
   readonly overCap: boolean
@@ -207,6 +209,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
       let patch: Partial<JobActivityState> = {}
       for (const sample of tick.samples) {
         if (sample.probe === agentJobsProbe) {
+          if (this.get(state.id)?.lastRunPending) patch = { ...patch, lastRunPending: false }
           if (sample.metrics) patch = { ...patch, counts: [...sample.metrics] }
           const facets = sample.tables?.find(table => table.table === 0)?.facets
           if (facets?.length) patch = { ...patch, facets: { ...this.get(state.id)?.facets, ...patch.facets, ...Object.fromEntries(facets.map(facet => [facet.column, facet])) } }
@@ -301,7 +304,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const before = this.get(id)
     if (!before) return
     const next = { ...before, ...patch }
-    this.patch(id, 'expanded' in patch && !patch.expanded ? { ...patch, expanded: undefined } : patch)
+    const changed = before.expanded?.id !== next.expanded?.id
+    this.patch(id, { ...'expanded' in patch && !patch.expanded ? { ...patch, expanded: undefined } : patch, ...changed ? { lastRunPending: !!next.expanded } : {} })
     if (JSON.stringify(jobActivityArgs(next)) === JSON.stringify(jobActivityArgs(before))) return
     const handle = this.handles.get(id)
     if (!handle) return
@@ -310,7 +314,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     if (!this.live(id)) return
     // The backend applies new args at the next sample: read now so the last run shown is the job just picked, and a view that
     // failed subscribes again with them.
-    if (before.expanded?.id !== next.expanded?.id || handle.getSnapshot().status === 'ended') handle.refresh()
+    if (changed || handle.getSnapshot().status === 'ended') handle.refresh()
   }
 
   // --- The grid and its selection ----------------------------------------------------------------------------------------
@@ -331,6 +335,8 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     const snapshot = entry.grid.getSnapshot()
     const table = snapshot.table, selection = snapshot.selection
     if (!table || !selection || snapshot.activeKey === undefined) {
+      // A read still in flight is for a selection that is gone: it must not bring it back.
+      entry.read++
       if (this.get(id)?.selected.length) this.patch(id, { selected: [], overCap: false })
       return
     }

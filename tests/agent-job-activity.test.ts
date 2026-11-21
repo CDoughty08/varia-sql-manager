@@ -28,6 +28,7 @@ const row = (id: string, name: string, status = 'Idle', lastRun = '2026-11-15 02
 
 /** A LiveGrid stand-in whose selection is rows of jobs. */
 class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
+  clear() { this.publish({ newRows: 0, following: true, lost: false } as LiveGridSnapshot) }
   select(rows: string[][], blocks: { top: number; bottom: number }[] = [{ top: 0, bottom: rows.length - 1 }]) {
     const columns = 14
     const handle = {
@@ -220,6 +221,10 @@ describe('Job Activity Monitor', () => {
     expect(handle().args).toEqual([{ filters: [{ column: 'category', values: ['ETL'] }] }, { expand: nightly, filters: [{ column: 'category', values: ['ETL'] }] }])
     // A new expanded job reads at once, so the panel never shows another job's run; a filter waits for the next sample.
     expect(handle().refreshes).toBe(1)
+    // Until a list sample comes, the last run table is another job's (or none): the panel says it is reading.
+    expect(jobActivity.get(id)?.lastRunPending).toBe(true)
+    handle().deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 0, 0, 0, 0] }] })
+    expect(jobActivity.get(id)?.lastRunPending).toBe(false)
     // Between retries is a Status filter; pressed again it comes off. Running is the view chip.
     jobActivity.applyTile(id, agentJobTiles[2].applies)
     expect(jobActivity.tilePressed(id, agentJobTiles[2].applies)).toBe(true)
@@ -274,6 +279,14 @@ describe('Job Activity Monitor', () => {
     const id = jobActivity.open('c1')
     const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
     jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup', 'Executing')])
+    await settled()
+    expect(jobActivity.get(id)?.selected.map(job => job.name)).toEqual(['Nightly', 'Backup'])
+    // A selection cleared while its read is in flight stays cleared when the read answers.
+    grid.select([row(backup, 'Backup')])
+    grid.clear()
+    await settled()
+    expect(jobActivity.get(id)?.selected).toEqual([])
     grid.select([row(nightly, 'Nightly'), row(backup, 'Backup', 'Executing')])
     await settled()
     expect(jobActivity.get(id)?.selected.map(job => job.name)).toEqual(['Nightly', 'Backup'])
