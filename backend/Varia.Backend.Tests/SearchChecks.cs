@@ -356,6 +356,9 @@ internal static class SearchChecks
         check(result.Hits is [{ Label: "dbo.usp_GetOrders", Definition: { Line: 3, Matches: 1 } }], "a definition search finds the module and the match's line");
         result = Search(index, "orders", names: false);
         check(result.Hits is [{ Definition.Matches: 3 }], "a definition hit counts every match in the module");
+        result = Search(index, "Order*s", names: false, wholeWord: true);
+        check(result.Hits is [{ Definition: { Line: 3, Matches: 2 } match }] && match.Preview.Substring(match.Range[0], match.Range[1]) == "Orders",
+            "a whole-word wildcard definition hit counts each whole match at its own offset: " + JsonSerializer.Serialize(result.Hits.Select(hit => hit.Definition)));
         result = Search(index, "orders", kinds: ["view"]);
         check(result.Hits is [{ Object.Database: "Archive" }], "Kinds narrow a search");
         result = Search(index, "orders", database: "Sales", definitions: false);
