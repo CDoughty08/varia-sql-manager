@@ -177,6 +177,33 @@ internal static class ExecutionLiveChecks
                 && afterNoExec.PlanSets is null && afterNoExec.ResultSets is [{ Kind: "rows" }],
                 "a captured run that leaves NOEXEC on does not leak plan result sets into later grids");
 
+            // With NOEXEC, PARSEONLY or FMTONLY on, SQL Server compiles the picker's USE without running it, so the script
+            // would run in the previous database; Varia refuses it and the session stays where it was.
+            foreach (var option in new[] { "NOEXEC", "PARSEONLY", "FMTONLY" })
+            {
+                var switchTab = Guid.NewGuid().ToString();
+                await Run("SET " + option + " ON;", switchTab);
+                var refused = await Run("SET " + option + " OFF;\nGO\nPRINT 'RAN IN ' + DB_NAME();", switchTab, database: "tempdb");
+                var stayed = await Run("SET " + option + " OFF;\nGO\nPRINT 'NOW IN ' + DB_NAME();", switchTab);
+                var moved = await Run("PRINT 'NOW IN ' + DB_NAME();", switchTab, database: "tempdb");
+                check(refused.Status == "failed" && refused.Database == "master" && refused.Error is { Code: "SQL_ERROR", BatchNumber: 0 }
+                    && refused.Error.Message == SqlService.DatabaseNotChanged("tempdb", "master") && !Texts(refused).Any(text => text.StartsWith("RAN IN "))
+                    && Texts(stayed).Contains("NOW IN master") && moved.Status == "completed" && moved.Database == "tempdb" && Texts(moved).Contains("NOW IN tempdb"),
+                    "a database change that " + option + " kept from running refuses the script, and the next execution switches: "
+                    + refused.Status + " in " + refused.Database + " | " + string.Join(" | ", Texts(refused).Concat(Texts(stayed)).Concat(Texts(moved))));
+                await Call("query.session.close", new SessionArgs(switchTab));
+            }
+            // A name that differs only in case leaves SqlClient's catalog unchanged; the server confirms the session is there.
+            var caseInsensitive = await Run("SELECT CONVERT(int, CASE WHEN DB_ID(N'MASTER') IS NULL THEN 0 ELSE 1 END);");
+            if (caseInsensitive.Status == "completed" && LiveResultChecks.RowsOf(store, caseInsensitive.ResultSets[0])[0][0] == "1")
+            {
+                var caseTab = Guid.NewGuid().ToString();
+                var caseOnly = await Run("PRINT 'IN ' + DB_NAME();", caseTab, database: "MASTER");
+                check(caseOnly.Status == "completed" && Texts(caseOnly).Contains("IN master"),
+                    "a picker name differing only in case from the session's database still executes: " + caseOnly.Status + " " + string.Join(" | ", Texts(caseOnly)));
+                await Call("query.session.close", new SessionArgs(caseTab));
+            }
+
             if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") == "1") await PreservesSingleGuidCollectors(check, Run, store, QueryWithPlan, tab => Call("query.session.close", new SessionArgs(tab)));
 
             // A session that never opened did not close: no "session closed" note, and the tab's next execution opens one.

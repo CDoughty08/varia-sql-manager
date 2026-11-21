@@ -782,6 +782,10 @@ server changes, or it is lost.
   SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
   SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;`. A script's own SET statements then persist in the session. A
   session whose prologue fails is closed, and the next execution opens a new one.
+- **Database.** When `database` differs from the session's, the backend changes it before the first batch. A session
+  with `SET NOEXEC`, `PARSEONLY`, `FMTONLY` or `SHOWPLAN_*` on compiles that `USE` without running it, so when SqlClient's
+  catalog is unchanged the server confirms it (`DB_ID() = DB_ID(@database)`); otherwise nothing runs and the result is
+  `failed` (batch 0) with `database` still the session's and a message saying which option to turn off.
 - **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
   `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
