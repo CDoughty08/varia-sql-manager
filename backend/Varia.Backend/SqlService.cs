@@ -235,7 +235,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); }, null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); this.store.Rooms.Trim(Environment.TickCount64); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
@@ -1737,7 +1737,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
             // The figure the query stopped at, not today's: the limit may have changed since (results.setMemoryLimit).
-            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes)) / (1024 * 1024)
+            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         foreach (var note in tally.Notes(args.MaxResultSets)) Note(note);
@@ -2396,12 +2396,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
     /// memory to their query budget, and stores the unified diff as a new derived result of the query, whole or not at all,
-    /// released with its others, or at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    /// released with its others, or at once when its answer is not sent (a CANCEL or the deadline came first). With
+    /// Replaces it runs under an allowance of the replaced comparison's charge (ResultStore.Allow), kept by the new set until
+    /// it is freed, or let go at once when the diff fails.</summary>
     private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, RequestContext? context)
     {
         var token = Token(context);
-        if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
-            throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
+        if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext || args.Layout is not (null or "unified" or "entry") || args.Replaces == 0)
+            throw new RequestException("INVALID_PARAMS", "Two different results, a context of -1 to 100 rows and a layout of unified or entry are required.");
+        var entry = args.Layout == "entry";
         var match = DiffMatchOf(args.Match);
         var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
         var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
@@ -2412,7 +2415,47 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (left.Kind != "rows" || right.Kind != "rows")
             throw new RequestException("INVALID_PARAMS", NotTablesSentence);
         if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
+        // The one-row layout's data and previous-value columns and suffix fit a page's columns (D12): the renderer asks for
+        // two rows itself past that, so there is no silent fallback here.
+        if (entry && ResultDiffer.Pairs(left.Columns, right.Columns, left.Wires, right.Wires).Length > UnifiedDiff.MaxEntryPairs)
+            throw new RequestException("INVALID_PARAMS", "These results share more than " + UnifiedDiff.MaxEntryPairs.ToString("N0", CultureInfo.InvariantCulture) + " columns, too many to show one row per entry.");
         ThrowIfStopped(left.Budget);
+        // A replace (D14): the old comparison of the same two results, either way round, lends its whole charge as an
+        // allowance on the query's limit, so old and new fit together until the renderer releases the old.
+        var hold = args.Replaces is { } replacedId ? Allowance(replacedId, left, args) : null;
+        try { return await DiffWritten(args, context, token, entry, match, left, right, hold); }
+        catch
+        {
+            hold?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>The allowance a replace runs under: <paramref name="replacedId"/> must be a comparison of the same query and
+    /// the same two inputs (in either order, so a swap can replace).</summary>
+    private AllowanceHold Allowance(uint replacedId, ResultSetBuffer left, ResultsDiffArgs args)
+    {
+        var replaced = store.Find(replacedId) ?? throw Unavailable(replacedId);
+        if (replaced.Kind != "diff" || !ReferenceEquals(replaced.Budget, left.Budget) || replaced.DiffInputs is not { } inputs
+            || !(inputs == (args.Left, args.Right) || inputs == (args.Right, args.Left)))
+            throw new RequestException("INVALID_PARAMS", "Only a comparison of the same two results can be replaced.");
+        return store.Allow(left.Budget, replaced) ?? throw Unavailable(replacedId);
+    }
+
+    internal const string DiffRowsTooLarge = "There is not enough result memory for all rows of the differences. Show changes only, or close other results and try again.";
+
+    /// <summary>What a refused diff answers once its sources are known to be there and its query storing (NotStored decides
+    /// those first): DIFF_ROWS_TOO_LARGE only when a reservation that grows with the rows stored (the rows, their previous
+    /// values, the change index and its cut rows' lists) was refused for an All rows diff (context -1), which Changes only
+    /// may fit; low system memory says so; anything else is TOO_LARGE with <paramref name="tooLarge"/>.</summary>
+    internal static RequestException DiffRefusal(int diffContext, bool storedRows, bool systemMemory, string tooLarge) =>
+        systemMemory ? new RequestException("TOO_LARGE", LowMemory)
+        : storedRows && diffContext == -1 ? new RequestException("DIFF_ROWS_TOO_LARGE", DiffRowsTooLarge)
+        : new RequestException("TOO_LARGE", tooLarge);
+
+    private async Task<ResultsDiffResult> DiffWritten(ResultsDiffArgs args, RequestContext? context, CancellationToken token, bool entry, DiffMatch match, ResultSetBuffer left, ResultSetBuffer right,
+        AllowanceHold? hold)
+    {
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
         // Packed results are read fused (ResultDiffer.Compare, UnifiedDiff.Write); only a first result read far from its
@@ -2428,7 +2471,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw TooLarge(ResultDiffer.TooLarge);
         // The differing cells are charged a chunk at a time, asking the system's memory load once for every 64 MiB of them.
         var cells = new WorkSteps(store, left.Budget);
-        // The change index's reservation until the diff's set takes it over.
+        // The change index's reservation until the diff's set takes it over: before writing, then the builder's.
+        DiffIndex.Builder? builder = null;
         long indexHeld = 0;
         try
         {
@@ -2443,15 +2487,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
+            // A refusal of what grows with the rows stored: DIFF_ROWS_TOO_LARGE for All rows, whose Changes only may fit.
+            RequestException RowsRefused(bool systemMemory = false) =>
+                NotStored(left.Budget, DiffRefusal(args.Context, true, systemMemory || store.IsSystemMemoryLow(), tooLarge), (left, args.Left), (right, args.Right));
             // The change index is reserved before any row is written, so the rows never take its room; refused, the diff is
-            // refused whole, as its rows are. (Comparison plan PR 6 answers DIFF_ROWS_TOO_LARGE here for context -1.)
-            var storedRows = UnifiedDiff.StoredRows(model, args.Context);
+            // refused whole, as its rows are.
+            var storedRows = UnifiedDiff.StoredRows(model, args.Context, entry);
             if (storedRows > Array.MaxLength) throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
             var indexBytes = DiffIndex.BytesFor(storedRows, model.Possible.Count);
-            if (!store.TryReserveWork(left.Budget, indexBytes)) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+            if (!store.TryReserveWork(left.Budget, indexBytes)) throw RowsRefused();
             indexHeld = indexBytes;
-            var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
-                lengths: UnifiedDiff.Lengths(right, model), derived: true)
+            var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(left, right, model, entry), UnifiedDiff.Wires(left, right, model, entry),
+                lengths: UnifiedDiff.Lengths(left, right, model, entry), derived: true)
                 ?? throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
             set.DiffInputs = (args.Left, args.Right);
             void Release()
@@ -2462,16 +2509,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 progress?.Phase("write", 0.98);
                 long trailing;
-                var builder = new DiffIndex.Builder((int)storedRows, model.Possible.Count, indexBytes);
-                try { trailing = await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge, index: builder), token, progress, left, right); }
-                catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right)); }
+                // A cut row's list of changed pairs (the one-row layout) is charged as it is written, with the index.
+                builder = new DiffIndex.Builder((int)storedRows, model.Possible.Count, indexBytes, model.Pairs.Length, bytes => store.TryReserveWork(left.Budget, bytes));
+                indexHeld = 0;
+                try { trailing = await UntilReleased(work => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, work, tooLarge, index: builder, oneRow: entry), token, progress, left, right); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, TooLarge(tooLarge), (left, args.Left), (right, args.Right)); }
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
-                // before trying to store it and stops at the first one refused.
+                // before trying to store it and stops at the first one refused: by the budget, by low system memory at a
+                // seal, or for a cut row's list.
                 var written = set.Describe();
-                if (written.RowsStored < written.RowsRead || builder.Build() is not { } index) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
+                if (written.RowsStored < written.RowsRead || builder.Refused || builder.Build() is not { } index)
+                    throw RowsRefused(systemMemory: set.Truncated == TruncationReason.SystemMemory);
                 // The set takes over the index's reservation: returned when it is freed.
                 set.KeepDiffIndex(index);
-                indexHeld = 0;
+                builder = null;
                 var (same, changed, added, removed, soft) = model.Counts();
                 var paired = model.Pairs;
                 string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
@@ -2482,7 +2533,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 var answer = new ResultsDiffResult(set.Describe(), used, same, changed, added, removed, soft,
                     model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right), model.Repeated(), model.Possible.Count / 2,
                     model.PossibleSkipped, same + changed == 0 && leftRows > 0 && rightRows > 0, [.. model.ColumnChanges().Select(change => new DiffColumnChange(change.Changed, change.Soft))], trailing,
-                    index.Overview(), index.Units);
+                    index.Overview(), index.Units, entry ? "entry" : "unified");
+                // The allowance lasts while the new set is kept: until the old one is freed (which ends it), or this one is.
+                if (hold is not null) set.KeepAllowance(hold);
                 // Main owns the diff only once it has the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
                 return answer;
@@ -2493,7 +2546,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(left.Budget, working + cells.Held + indexHeld); }
+        finally { store.Return(left.Budget, working + cells.Held + indexHeld + (builder?.Bytes ?? 0)); }
     }
 
     /// <summary>results.diffSeek: the next or previous change unit from a position of a comparison (stored rows, or a view's

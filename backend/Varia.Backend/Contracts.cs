@@ -190,8 +190,11 @@ internal sealed record ResultsFindRowsArgs(uint ResultId, long[] Ids, uint? View
 internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool Truncated, long Rows);
 /// <summary>results.diff: compares two complete results of the same query (Left the earlier, Right the later) and stores
 /// the unified diff as a new result of that query (UnifiedDiff). Context is how many unchanged rows show around each change
-/// (-1: all); Exact compares text character for character instead of by collation.</summary>
-internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1, DiffMatchArgs? Match = null);
+/// (-1: all); Exact compares text character for character instead of by collation. Layout is "unified" (absent: two rows a
+/// change) or "entry" (one row an entry, its old values in previous-value columns; at most UnifiedDiff.MaxEntryPairs pairs).
+/// Replaces names a comparison of the same two results (either order) that this one replaces: while it is written the
+/// query's limit is raised by that comparison's whole charge (ResultStore.Allow).</summary>
+internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1, DiffMatchArgs? Match = null, string? Layout = null, uint? Replaces = null);
 /// <summary>How results.diff matches rows: Mode "auto" (absent: auto), "position", "rows", or "columns" with 1 to 16
 /// distinct pair indexes (ResultDiffer.MaxKeyColumns).</summary>
 internal sealed record DiffMatchArgs(string Mode, int[]? Columns = null);
@@ -204,10 +207,11 @@ internal sealed record DiffColumnChange(long Changed, long Soft);
 /// the other result, which are not compared; Soft counts values equal only by collation (case or trailing spaces, say).
 /// Repeated counts entries whose key repeats (flagged dup), Possible the pairs of removed and added rows that look alike
 /// (flagged poss), PossibleSkipped that too many unmatched rows were left to look; NothingPaired that both results have
-/// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row.</summary>
+/// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row;
+/// Layout the layout written ("unified" or "entry").</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, DiffMatchResult Match, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
     string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden,
-    int[] Overview, long Units);
+    int[] Overview, long Units, string Layout = "unified");
 /// <summary>results.diffSeek: either From (a position, -1 before the first) and Direction "next" or "previous", or PartnerOf
 /// (a look-alike row's position); positions are a view's with ViewId, else stored rows of the comparison.</summary>
 internal sealed record ResultsDiffSeekArgs(uint ResultId, uint? ViewId = null, long? From = null, string? Direction = null, long? PartnerOf = null);

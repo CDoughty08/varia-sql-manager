@@ -85,8 +85,9 @@ internal static partial class FusedReadChecks
         Refused(check);
     }
 
-    /// <summary>Run from Store's isolated lane: returning a room keeps it reusable and charged until disposal, which must
-    /// drop its unpooled buffer even while the disposed owner stays reachable (PageSource.Rehydrate keeps that owner).</summary>
+    /// <summary>Run from Store's isolated lane: returning a room keeps it reusable and charged until disposal, which gives
+    /// its buffer to the store's room pool and keeps no hold on it even while the disposed owner stays reachable
+    /// (PageSource.Rehydrate keeps that owner): once the pool lets its idle rooms go, the buffer is collected.</summary>
     public static void ReturnedRooms(Action<bool, string> check)
     {
         var store = Raw();
@@ -100,9 +101,11 @@ internal static partial class FusedReadChecks
             "a returned fused-read room stays reusable and charged while its owner is open");
         rooms.Dispose();
         rooms.Dispose();
+        var pooled = store.Rooms.IdleRooms;
+        store.Rooms.Trim();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-        check(!buffer.IsAlive && rooms.Made == 0 && rooms.Reserved == 0 && store.UsedBytes == before,
-            "a still-reachable disposed fused-read rooms owner drops its returned buffer and returns its reservation exactly once");
+        check(pooled == 1 && !buffer.IsAlive && rooms.Made == 0 && rooms.Reserved == 0 && store.UsedBytes == before,
+            "a still-reachable disposed fused-read rooms owner gives its returned buffer to the pool, holds it no longer, and returns its reservation exactly once");
         var refused = false;
         try { rooms.Rent(); }
         catch (ObjectDisposedException) { refused = true; }

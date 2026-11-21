@@ -454,7 +454,7 @@ internal sealed partial class SqlService
         if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
-            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes)) / (1024 * 1024)
+            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (discarded > 0 && args.DiscardResults) Note("Results were discarded after execution, as Query Options ask.");

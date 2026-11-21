@@ -30,8 +30,9 @@ export const limits = {
   /** results.diff: unchanged rows shown around a change (-1 for all), names listed of the columns only one result has, and
    *  the pairs a match by columns takes (SqlService.MaxDiffContext, MaxDiffColumnNames and ResultDiffer.MaxKeyColumns in C#);
    *  the answer's overview buckets, the rows one running total of the change index covers, and the kinds a `kind` filter
-   *  names (DiffIndex.OverviewBuckets, BlockRows and MaxKinds in C#). */
-  diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16, overviewBuckets: 512, indexBlockRows: 4096, maxKinds: 4 },
+   *  names (DiffIndex.OverviewBuckets, BlockRows and MaxKinds in C#); the most pairs the one-row layout takes
+   *  (UnifiedDiff.MaxEntryPairs: 2p + 4 columns within a page's 4,096). */
+  diff: { maxContext: 100, maxColumnNames: 64, maxKeyColumns: 16, overviewBuckets: 512, indexBlockRows: 4096, maxKinds: 4, maxEntryPairs: 2046 },
   /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
    *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */
   search: { maxText: 1024, maxMatches: 10_000 },
@@ -141,6 +142,9 @@ export const errorCodes = [
   'UNSUPPORTED_PROVIDER',
   // Backend: a results.diff key column holds a truncated value, which could pair different rows; choose another.
   'DIFF_KEY_TRUNCATED',
+  // Backend: a results.diff of all rows (context -1) refused memory for what grows with its rows stored (the rows, their
+  // previous values, the change index); showing changes only (context 0) may fit. Other refusals stay TOO_LARGE.
+  'DIFF_ROWS_TOO_LARGE',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

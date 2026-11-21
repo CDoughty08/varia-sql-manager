@@ -37,6 +37,11 @@ if (args is [FindBench.Argument])
     FindBench.Run();
     return;
 }
+if (args is [RoomPoolBench.Argument])
+{
+    RoomPoolBench.Run();
+    return;
+}
 // The pivot benchmark, run by hand (docs/pivot-performance-findings.md): measures only, no checks.
 if (args is [PivotBench.Argument, ..])
 {
@@ -471,6 +476,7 @@ if (liveGroup is null)
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("TypedForm", Sync(() => TypedFormChecks.Run(Check))),
+        ("RoomPool", Sync(() => RoomPoolChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),

@@ -39,6 +39,81 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
         if (Interlocked.CompareExchange(ref stopped, (int)reason, 0) == 0 && reason is TruncationReason.QueryBudget or TruncationReason.GlobalBudget)
             Volatile.Write(ref stoppedBytes, Interlocked.Read(ref refusedBytes));
     }
+
+    private readonly object allowGate = new();
+    private readonly Dictionary<uint, Allowance> allowances = [];
+    private long allowed;
+
+    /// <summary>The bytes the query's limit is raised by now: the allowances in force, summed (<see cref="ResultStore.Allow"/>).</summary>
+    public long AllowedBytes => Interlocked.Read(ref allowed);
+
+    /// <summary>Allowances in force, for the checks.</summary>
+    internal int AllowanceCount { get { lock (allowGate) return allowances.Count; } }
+
+    /// <summary>One replaced result's allowance: granted once with its charge, held by each replace that names it.</summary>
+    internal sealed class Allowance(uint replaced, long bytes)
+    {
+        public uint Replaced { get; } = replaced;
+        public long Bytes { get; } = bytes;
+        public int Holders;
+        public bool Ended;
+    }
+
+    /// <summary>Joins the allowance for <paramref name="replaced"/>, granting it with <paramref name="bytes"/> when there is
+    /// none: a newer replace of the same result adds a holder, not a second grant. Called under the replaced set's lock
+    /// (<see cref="ResultSetBuffer.Grant"/>), so it never meets the end of that set's allowance halfway.</summary>
+    internal Allowance Join(uint replaced, long bytes)
+    {
+        lock (allowGate)
+        {
+            if (!allowances.TryGetValue(replaced, out var allowance))
+            {
+                allowances[replaced] = allowance = new Allowance(replaced, Math.Max(0, bytes));
+                Interlocked.Add(ref allowed, allowance.Bytes);
+            }
+            allowance.Holders++;
+            return allowance;
+        }
+    }
+
+    /// <summary>Drops one hold; the last holder's drop ends the allowance.</summary>
+    internal void Drop(Allowance allowance)
+    {
+        lock (allowGate)
+        {
+            if (allowance.Ended || --allowance.Holders > 0) return;
+            EndLocked(allowance);
+        }
+    }
+
+    /// <summary>Ends the allowance for <paramref name="replaced"/>, whatever holds it: the replaced set's bytes went back
+    /// (<see cref="ResultSetBuffer"/>'s free), so the limit no longer needs to cover them.</summary>
+    internal void End(uint replaced)
+    {
+        lock (allowGate)
+            if (allowances.TryGetValue(replaced, out var allowance)) EndLocked(allowance);
+    }
+
+    private void EndLocked(Allowance allowance)
+    {
+        allowance.Ended = true;
+        allowances.Remove(allowance.Replaced);
+        Interlocked.Add(ref allowed, -allowance.Bytes);
+    }
+}
+
+/// <summary>A replace's hold on an allowance (<see cref="ResultStore.Allow"/>): disposed when the replace fails or is
+/// cancelled, or kept by the set it wrote until that set is freed (<see cref="ResultSetBuffer.KeepAllowance"/>).
+/// Disposing twice drops it once.</summary>
+internal sealed class AllowanceHold(QueryBudget budget, QueryBudget.Allowance allowance) : IDisposable
+{
+    private int dropped;
+    public long Bytes => allowance.Bytes;
+    public uint Replaced => allowance.Replaced;
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref dropped, 1) == 0) budget.Drop(allowance);
+    }
 }
 
 /// <summary>Query results kept in backend memory (never on disk) under a byte budget: a global one, at most half of it per
@@ -218,6 +293,8 @@ internal sealed partial class ResultStore
     internal static bool DefaultFilterCapped { get; set; } = true;
     /// <summary>Whether packing types columns (PageCodec.Typed.cs): always in the product; the benchmarks compare both.</summary>
     internal bool TypedPacking { get; init; } = true;
+    /// <summary>The rooms view reads unpack packed pages into, kept between reads (<see cref="RoomPool"/>).</summary>
+    internal RoomPool Rooms { get; } = new();
 
     private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, cacheLookups, packedIn, packedOut, unpackedOut, packTicks, unpackTicks, lastUnpackTicks;
 
@@ -305,7 +382,44 @@ internal sealed partial class ResultStore
 
     private bool FitsGlobal(long bytes) => UsedBytes + bytes <= GlobalBytes;
 
-    private bool FitsQuery(QueryBudget query, long bytes) => query.UsedBytes + bytes <= Math.Min(QueryBytes, query.MaxBytes);
+    private bool FitsQuery(QueryBudget query, long bytes) => query.UsedBytes + bytes <= QueryLimit(query, Volatile.Read(ref figures));
+
+    /// <summary>The query's limit: its half of the budget (or its own smaller ceiling), raised by the allowances in force
+    /// (<see cref="Allow"/>). The only limit reader: every reservation of the query, on any thread and through any room,
+    /// checks against it (<see cref="TryReserve(QueryBudget, long, bool, out TruncationReason)"/>, <see cref="FitsQuery"/>,
+    /// <see cref="HasSpare"/>, <see cref="TryReserveSpare"/>), and a refusal records it.</summary>
+    private static long QueryLimit(QueryBudget query, Figures budget) => Math.Min(budget.Query, query.MaxBytes) + query.AllowedBytes;
+
+    /// <summary>The query's limit now (<see cref="QueryLimit(QueryBudget, Figures)"/>): the truncation note's figure when no
+    /// stopped figure is recorded.</summary>
+    public long QueryLimit(QueryBudget query) => QueryLimit(query, Volatile.Read(ref figures));
+
+    /// <summary>Raises <paramref name="query"/>'s limit by <paramref name="replaced"/>'s whole charge now (its rows, metadata,
+    /// change index, views, identity and value lists; <see cref="ChargeOf"/>) while a result that replaces it is written
+    /// (results.diff's replaces): a bounded overrun of the query's half, so old and new can be held together until the
+    /// old is released. One allowance per replaced result, granted once and held by each replace naming it; allowances of
+    /// different results add up. It ends when the replaced set's bytes go back (its free, after the last lease or pin), or
+    /// when its last holder lets go (a failed or cancelled replace, or a written one's set freed). The global budget and
+    /// the system's memory load are not raised. Null when the replaced set is already freed.</summary>
+    public AllowanceHold? Allow(QueryBudget query, ResultSetBuffer replaced)
+    {
+        var allowance = replaced.Grant(() => query.Join(replaced.ResultId, ChargeOf(replaced)));
+        return allowance is null ? null : new AllowanceHold(query, allowance);
+    }
+
+    /// <summary>What a result holds of its query's budget now: its own charge (rows, metadata, change index, search memo)
+    /// and its views', identity's and value lists' charges.</summary>
+    public long ChargeOf(ResultSetBuffer set)
+    {
+        var bytes = set.ChargedBytes;
+        lock (gate)
+        {
+            foreach (var view in views.Values) if (view.Set == set) bytes += view.Charged;
+            foreach (var snapshot in snapshots.Values) if (snapshot.Set == set) bytes += snapshot.Charged;
+            if (identities.TryGetValue(set.ResultId, out var identity)) bytes += identity.Charged;
+        }
+        return bytes;
+    }
 
     /// <summary>Wakes the waits for room (<see cref="WaitForRoomAsync"/>): bytes went back to the budget, or a packing pass
     /// for room ended (the policy's), which may mean there is nothing more to wait for.</summary>
@@ -424,7 +538,7 @@ internal sealed partial class ResultStore
     private bool TryReserve(QueryBudget query, long bytes, bool checkSystem, Figures budget, out TruncationReason reason)
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
-        var queryLimit = Math.Min(budget.Query, query.MaxBytes);
+        var queryLimit = QueryLimit(query, budget);
         // Each share is claimed before the next is checked and given back on a later refusal, so concurrent reservations (a
         // query's Storage Read streams) never pass a limit together. The query's share is claimed only when it fits.
         for (var current = Interlocked.Read(ref query.used); ; current = Interlocked.Read(ref query.used))
@@ -483,7 +597,7 @@ internal sealed partial class ResultStore
     public bool HasSpare(QueryBudget query)
     {
         var budget = Volatile.Read(ref figures);
-        var limit = Math.Min(budget.Query, query.MaxBytes);
+        var limit = QueryLimit(query, budget);
         return query.UsedBytes <= limit - limit / 8 && UsedBytes <= budget.Global - budget.Global / 8;
     }
 
@@ -496,7 +610,7 @@ internal sealed partial class ResultStore
     public bool TryReserveSpare(QueryBudget query, long bytes, bool? checkSystem = null)
     {
         var budget = Volatile.Read(ref figures);
-        var limit = Math.Min(budget.Query, query.MaxBytes);
+        var limit = QueryLimit(query, budget);
         if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > budget.Global - budget.Global / 8) return false;
         // The same reading as the eighth left free: a lowering in between cannot let spare memory take that eighth.
         return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, budget, out _);
