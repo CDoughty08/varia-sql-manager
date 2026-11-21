@@ -56,7 +56,9 @@ const lostText = 'These results are no longer available because the SQL backend 
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
-export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
+export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
+  // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped at 32-bit row indexes.
+  if (o.residence === 'remote') return o.truncated ? `Only the first ${formatCount(o.rowsAvailable ?? 0)} of ${formatCount(o.rowsRead)} rows can be shown: a grid reads at most ${formatCount(2_147_483_647)} rows of a result windowed in BigQuery.` : undefined
   const shown = `Only the first ${formatCount(o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
   if (o.truncated === 'systemMemory') return `${shown} because the computer is low on memory. Execution continued.`
   if (o.truncated === 'queryBudget' || o.truncated === 'globalBudget') {
@@ -223,7 +225,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
-  const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
+  const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget, residence: snapshot.residence, rowsAvailable: snapshot.rowsAvailable })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   const compareNote = compared ? compareText(compared, sources) : undefined
   const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked), outOfDate) : highlightText(marked)) : undefined

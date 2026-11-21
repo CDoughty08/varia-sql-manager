@@ -1105,8 +1105,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   most 2 fetches per result and 4 per connection; a 429 backs off with jitter. It waits up to 20 s (inside its deadline)
   and then answers with the rows it has; the grid draws the rest as loading and reads again. Each `viewer` reads ahead
   one block either side and one more in its direction of travel (only as many as the cache holds beside the read's own
-  blocks); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more stops if
-  the read was cancelled, and otherwise becomes its viewer's read-ahead.
+  blocks); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more (the read
+  was cancelled or answered short) becomes its viewer's read-ahead: the viewer's next read joins it, and a jump stops it.
+  A block nothing was fetched into leaves the cache's lists once no read waits for it.
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 
@@ -102,12 +102,17 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
   // The block is read in one place, however it is spelled, so nothing reads one before its reservation.
+  expect(count(remote, /\bfetch(?:\.Invoke)?\s*\(/g)).toBe(1)
   expect(count(fetch, /\bfetch(?:\.Invoke)?\s*\(/g)).toBe(1)
+  // The delegate is kept only in its field, never copied where a read could call it unreserved.
+  expect(count(remote, /=\s*fetch\s*;/g)).toBe(1)
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ Reserve\(cost - estimate, block\); \}/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
+  // The cache's charge changes only through the store's accounting (ref held), never by hand.
+  expect(remote).not.toMatch(/\bheld\s*(?:[+\-]?=|\+\+|--)/)
   // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
   expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
   expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
@@ -121,7 +126,13 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(reserve).toMatch(/throw new RequestException\("TOO_LARGE"/)
   const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeGreaterThan(0)
+  // A refused reservation keeps no page.
+  expect(seed).toMatch(/if \(!store\.TryReserveCache\(ref held, CacheLimit, page\.Cost\)\) (?:return|continue|break);/)
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeLessThan(seed.indexOf('block.Pages.Add(page);'))
-  // Every charge of the cache goes through the store's cache accounting.
+  // Every charge of the cache goes through the store's cache accounting, which only the cache calls.
   expect(count(remote, /\bstore\.TryReserve(?:Work|Spare)?\(/g)).toBe(0)
+  const backend = join(__dirname, '..', 'backend', 'Varia.Backend')
+  const callers = (readdirSync(backend, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
+    .filter(name => /\bTryReserveCache\(/.test(strip(readFileSync(join(backend, name), 'utf8')))).map(name => name.replaceAll('\\', '/')).sort()
+  expect(callers).toEqual(['Results/RemoteResult.cs', 'Results/ResultStore.cs'])
 })

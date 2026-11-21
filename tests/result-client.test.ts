@@ -263,6 +263,32 @@ describe('ResultClient', () => {
     expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 0 })
   })
 
+  it('revises a result whose summary arrives before its residence event', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10 })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    const first = handle.getWindow(0, 4)
+    await settle()
+    serve()
+    expect((await first).count).toBe(4)
+    worker().fromWorker.splice(0)
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    client.applySummary({ resultSets: [windowed] } as QueryResult)
+    await settle()
+    expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
+    expect(handle.peekWindow(0, 4)).toBeUndefined()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, state: 'complete' })
+    // The event that follows changes nothing more.
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: windowed } })
+    await settle()
+    expect(worker().received.filter(message => message.type === 'revise')).toHaveLength(1)
+  })
+
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

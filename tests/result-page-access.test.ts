@@ -44,7 +44,7 @@ describe('result page access', () => {
   it('refuses a windowed BigQuery result in every reader of stored pages before it does any work (REMOTE_RESULT)', () => {
     // A windowed result has no stored pages: its rows stay in BigQuery (docs/architecture.md, Results). Each reader finds its
     // set through Stored(...), which answers REMOTE_RESULT; only these find a set another way, each for its own reason.
-    const service = sources.filter(file => /^backend\/Varia\.Backend\/SqlService[^/]*\.cs$/.test(file))
+    const service = sources.filter(file => file.startsWith('backend/Varia.Backend/') && file !== 'backend/Varia.Backend/Results/ResultStore.cs')
     const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
       .filter(([, , line]) => /\b_?[sS]tore\.Find\(/.test(line) && !/\bStored\(store\.Find\(/.test(line))
       .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
@@ -56,6 +56,8 @@ describe('result page access', () => {
       'SqlService.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
       // A comparison being replaced is a diff the backend built in memory, never windowed.
       'SqlService.cs: var replaced = store.Find(replacedId) ?? throw Unavailable(replacedId);',
+      // Copy and Save find their set through ResultJobs.Lease, which refuses a windowed one (pinned below).
+      'Results/ResultJobs.cs: var set = store.Find(resultId);',
       // Load into memory is the one request that wants the windowed result.
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);'
     ].sort())

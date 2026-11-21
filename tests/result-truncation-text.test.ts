@@ -15,6 +15,12 @@ describe('the truncation strip\'s budget figure', () => {
     expect(truncationText({ truncated: 'queryBudget', rowsStored: 10, rowsRead: 20, budget: { ...now, stoppedBytes: 4 * GiB } })).toContain('(4,096 MB)')
   })
 
+  it('says a windowed BigQuery result is capped at the rows a grid reads, never that 0 rows are shown or a SQL Server limit', () => {
+    const text = truncationText({ truncated: 'rowLimit', rowsStored: 0, rowsRead: 3_000_000_000, residence: 'remote', rowsAvailable: 2_147_483_647 })
+    expect(text).toBe('Only the first 2,147,483,647 of 3,000,000,000 rows can be shown: a grid reads at most 2,147,483,647 rows of a result windowed in BigQuery.')
+    expect(truncationText({ rowsStored: 0, rowsRead: 500, residence: 'remote', rowsAvailable: 500 })).toBeUndefined()
+  })
+
   it('falls back to the current half or whole budget without one', () => {
     expect(truncationText({ truncated: 'globalBudget', rowsStored: 10, rowsRead: 20, budget: now })).toContain('(1,024 MB)')
     expect(truncationText({ truncated: 'queryBudget', rowsStored: 10, rowsRead: 20, budget: now })).toContain('(512 MB)')

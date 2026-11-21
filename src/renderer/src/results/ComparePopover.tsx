@@ -8,7 +8,7 @@ import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
 import { comparedNames, comparisonName, distinctName, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
-import { formatCount } from './status'
+import { formatCount, resultRows } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
 const width = 300
@@ -232,7 +232,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const reordered = (entry: ResultSetEntry) => { const sort = results.sortOf(tabId, entry.key); return !!sort && (sort.keys.length > 0 || sort.filters.length > 0) }
   const filtered = sides ? [sides.old, sides.neu].filter(reordered) : []
   const left = sides ? [...sides.pairing.oldOnly.map(column => [column, sides.old, sides.neu] as const), ...sides.pairing.newOnly.map(column => [column, sides.neu, sides.old] as const)] : []
-  const rows = (entry: ResultSetEntry) => { const stored = entry.handle.getSnapshot().rowsStored; return `${formatCount(stored)} ${stored === 1 ? 'row' : 'rows'}` }
+  const rows = (entry: ResultSetEntry) => { const stored = resultRows(entry.handle.getSnapshot()); return `${formatCount(stored)} ${stored === 1 ? 'row' : 'rows'}` }
   const side = (entry: ResultSetEntry, old: boolean) => <div className="compare-side" role="group" aria-label={old ? 'Old side' : 'New side'}
     title={old ? 'Old side: its rows that differ show as removed (−)' : 'New side: its rows that differ show as added (+)'}>
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>

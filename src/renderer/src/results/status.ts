@@ -118,3 +118,7 @@ export function messagesSummary(messages: readonly MessageEntry[]): { readonly c
     ...firstError ? { firstError } : {}, readable
   }
 }
+
+/** A result's rows as panels count them: a windowed BigQuery result stores none here, so it counts the rows its grid can read. */
+export const resultRows = (snapshot: { residence?: string; rowsStored: number; rowsAvailable: number }): number =>
+  snapshot.residence === 'remote' ? snapshot.rowsAvailable : snapshot.rowsStored

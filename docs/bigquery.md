@@ -293,7 +293,7 @@ backend keeps only the blocks the grid is showing, reads the rest as you scroll,
 BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is docs/ipc.md's Remote results).
 
 - **Setting.** Options › Query Results › BigQuery › Results: **Keep results** (`queryResults.bigQuery.residence`):
-  Automatically, by size (the default), Always in memory (the old behaviour: the budget truncates) or Always windowed in
+  Automatically, by size (the default), Always in memory (the budget truncates) or Always windowed in
   BigQuery; and **Block cache per windowed result** (`queryResults.bigQuery.windowCacheMiB`, 16 – 4,096 MiB, default 64), the blocks each
   windowed result keeps. Each query takes them as it starts.
 - **Deciding.** After the first page and before the grid opens: a result stays in memory when the rows arrived whole,

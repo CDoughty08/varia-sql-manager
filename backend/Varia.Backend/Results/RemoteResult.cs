@@ -180,6 +180,12 @@ internal sealed class RemoteResult : IDisposable
     public bool Expired { get { lock (gate) return expired; } }
 
     /// <summary>The blocks cached, in order (checks).</summary>
+    /// <summary>Checks only: the blocks the cache lists, fetched or not.</summary>
+    internal int ListedBlocks()
+    {
+        lock (gate) return blocks.Count;
+    }
+
     /// <summary>Checks only: the blocks with a fetch running or queued.</summary>
     internal int FetchingBlocks()
     {
@@ -290,11 +296,10 @@ internal sealed class RemoteResult : IDisposable
             lock (gate)
                 foreach (var block in targets)
                 {
-                    // A fetch this read asked for that no read now waits for: a cancelled read's stops, and one that answered
-                    // short becomes its viewer's read-ahead, so a jump cancels it and the next read of it takes it back.
-                    if (--block.Waiters > 0 || block.Fetching is null || block.AheadOf != 0) continue;
-                    if (token.IsCancellationRequested) block.Stop?.Cancel();
-                    else block.AheadOf = viewer == 0 ? uint.MaxValue : viewer;
+                    // A fetch this read asked for that no read now waits for (the read was cancelled or answered short)
+                    // becomes its viewer's read-ahead: the viewer's next read nearby joins it, and a jump cancels it.
+                    if (--block.Waiters == 0 && block.Fetching is not null && block.AheadOf == 0) block.AheadOf = viewer == 0 ? uint.MaxValue : viewer;
+                    DropIfIdleLocked(block);
                 }
         }
     }
@@ -325,6 +330,16 @@ internal sealed class RemoteResult : IDisposable
         blocks[index] = block;
         block.Node = lru.AddLast(block);
         return block;
+    }
+
+    /// <summary>A block nothing fetched (cancelled, refused or failed) that no read waits for leaves the cache's lists, so
+    /// the blocks a scroll passed over are not kept.</summary>
+    private void DropIfIdleLocked(Block block)
+    {
+        if (block.Node is null || block.Waiters > 0 || block.Fetching is not null || block.Bytes > 0 || block.Filled > block.First) return;
+        blocks.Remove(block.Index);
+        lru.Remove(block.Node);
+        block.Node = null;
     }
 
     private void Touch(Block block)
@@ -358,6 +373,7 @@ internal sealed class RemoteResult : IDisposable
                 lock (gate)
                 {
                     if (block.Fetching == done) { block.Fetching = null; block.Stop = null; block.AheadOf = 0; }
+                    DropIfIdleLocked(block);
                 }
                 stop.Dispose();
                 // Observed here: a failure reaches the reads awaiting it, and a read-ahead's has no one to tell.

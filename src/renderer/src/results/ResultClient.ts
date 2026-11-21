@@ -641,7 +641,12 @@ export class ResultClient implements Disposable {
 
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
   applySummary(summary: QueryResult): void {
-    for (const descriptor of summary.resultSets) this.update(this.state(descriptor), descriptor, true)
+    // A summary may overtake its residence event (the event comes through the worker): a newer revision is revised here.
+    for (const descriptor of summary.resultSets) {
+      const state = this.state(descriptor)
+      if ((descriptor.revision ?? 0) > (state.snapshot.revision ?? 0)) this.revise(state, descriptor, true)
+      else this.update(state, descriptor, true)
+    }
     for (const descriptor of summary.planSets ?? []) this.update(this.state(descriptor), descriptor, true)
   }
 
@@ -1018,13 +1023,13 @@ export class ResultClient implements Disposable {
   /** A BigQuery result switched residence under a new revision: the rows read under the old one are stale, so the worker
    *  drops its pages and the window cache its windows, and its counters start again from the new descriptor. The grid
    *  keeps its scroll and reads the rows again. */
-  private revise(state: ResultState, descriptor: ResultDescriptor): void {
-    if ((descriptor.revision ?? 0) <= (state.snapshot.revision ?? 0) || !this.tracked(state)) return this.update(state, descriptor, false)
+  private revise(state: ResultState, descriptor: ResultDescriptor, final = false): void {
+    if ((descriptor.revision ?? 0) <= (state.snapshot.revision ?? 0) || !this.tracked(state)) return this.update(state, descriptor, final)
     this.windows.dropResult(state.id)
     // The backend dropped the result's views with its old pages: theirs go too, and each reports itself released.
     for (const view of [...this.views.values()]) if (view.key.generation === state.key.generation && view.key.resultId === state.key.resultId) this.endView(view, 'released')
     if (!this.failure && !this.disposed) void this.attached.then(() => this.worker.postMessage({ type: 'revise', key: state.key }), () => {})
-    this.update(state, descriptor, false)
+    this.update(state, descriptor, final)
   }
 
   /** Counters only grow, and a final (summary) descriptor settles the state; released and lost stay. A newer revision

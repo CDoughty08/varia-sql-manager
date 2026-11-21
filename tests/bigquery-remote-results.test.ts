@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
 import { methodAllows, methodPolicies, optionsAllow } from '../src/shared/ipc/methods'
 import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { queryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
-import { rowsFact } from '../src/renderer/src/results/status'
+import { resultRows, rowsFact } from '../src/renderer/src/results/status'
 import { nerdMetrics } from '../src/renderer/src/results/memory-details'
 import type { ResultMemoryDetail } from '../src/shared/contracts'
 
@@ -93,5 +94,18 @@ describe('BigQuery remote results', () => {
     // A backend without windowed results reports none, and nothing changes.
     const { windowCacheBytes: _, ...plain } = detail
     expect(nerdMetrics(plain, () => ({ result: 'Result 1' })).bars[1].segments.map(segment => segment.part)).toEqual(['raw'])
+  })
+})
+
+describe('row counts of a windowed result', () => {
+  it('counts the rows its grid can read, in Compare and Pivot too', () => {
+    expect(resultRows({ residence: 'remote', rowsStored: 0, rowsAvailable: 1_000_000 })).toBe(1_000_000)
+    expect(resultRows({ residence: 'memory', rowsStored: 40, rowsAvailable: 30 })).toBe(40)
+    expect(resultRows({ rowsStored: 40, rowsAvailable: 30 })).toBe(40)
+    for (const panel of ['ComparePopover.tsx', 'PivotPanel.tsx']) {
+      const source = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'results', panel), 'utf8')
+      expect(source, panel).not.toMatch(/\.rowsStored\b/)
+      expect(source, panel).toMatch(/resultRows\(entry\.handle\.getSnapshot\(\)\)/)
+    }
   })
 })

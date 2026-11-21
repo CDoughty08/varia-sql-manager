@@ -198,7 +198,8 @@ internal static partial class BigQueryExecutionChecks
             // Another viewer's read-ahead is its own: viewer 8 jumping does not cancel viewer 7's.
         }
 
-        // A cancelled read stops the fetch it started that no other read waits for; its viewer's read-ahead runs on.
+        // A cancelled read hands the fetch it started to its viewer: the viewer's next read of those rows joins it (nothing
+        // fetched twice), and a jump stops it with the rest of the viewer's read-ahead.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
             var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -208,11 +209,27 @@ internal static partial class BigQueryExecutionChecks
             SpinWait.SpinUntil(() => remote.FetchingBlocks() >= 4, 15_000);
             stop.Cancel();
             try { await reading; } catch (OperationCanceledException) { }
+            var again = ReadRemote(remote, 20 * 256 + 5, 10, viewer: 3);
             blocks.Gate.SetResult();
-            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
-            var cached = remote.CachedBlocks();
-            check(!cached.Contains(20) && new long[] { 19, 21 }.All(cached.Contains),
-                $"a cancelled read stops its own fetch and leaves its viewer's read-ahead running: {string.Join(",", cached)}");
+            var (next, rows) = await again;
+            check(next >= 20 * 256 + 15 && Consecutive(rows, 20 * 256 + 5, 10) && blocks.Calls.Count(call => call.First == 20 * 256) == 1,
+                $"a cancelled read's fetch is joined by its viewer's next read, not fetched again: {next} {blocks.Calls.Count(call => call.First == 20 * 256)}");
+            // After a cancelled read, a jump stops that read's fetch.
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var jumped = Remote(store, held);
+            using var stopJump = new CancellationTokenSource();
+            var first = jumped.ReadAsync(40 * 256, 10, 4, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(15), stopJump.Token);
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() >= 4, 15_000);
+            stopJump.Cancel();
+            try { await first; } catch (OperationCanceledException) { }
+            await ReadRemote(jumped, 300 * 256, 10, viewer: 4, waitMs: 50);
+            held.Gate.SetResult();
+            SpinWait.SpinUntil(() => jumped.FetchingBlocks() == 0, 15_000);
+            var cached = jumped.CachedBlocks();
+            check(!cached.Contains(40) && cached.Contains(300),
+                $"a jump after a cancelled read stops that read's fetch: {string.Join(",", cached)} fetching {jumped.FetchingBlocks()} cancelled {held.Cancelled} calls {string.Join(",", held.Calls.Select(c => c.First / 256))}");
+            // The blocks the jump cancelled (never fetched) leave the cache's lists.
+            check(jumped.ListedBlocks() == cached.Length, $"blocks a jump cancelled are not kept: {jumped.ListedBlocks()} listed, {cached.Length} cached");
         }
 
         // A cache that holds two blocks reads ahead one beside the read's own, and never evicts the block on screen for it.
