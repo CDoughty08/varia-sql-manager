@@ -238,9 +238,11 @@ internal static class DesignerSql
     /// <summary>The first of the @take names in @names (0-based) that the catalog collation, which keeps a table's column
     /// names unique, finds equal to an earlier one; no row when they all differ. Only SQL Server knows every collation's
     /// rules (Turkish I and ı, Swedish å apart from a even ignoring accents, Czech ch apart from cH even ignoring case),
-    /// so this is the only check of them, before any DDL; the renderer checks only trailing spaces. SUBSTRING counts UTF-16 units under a binary collation that is not _SC; any
-    /// database's sys.all_columns has thousands of rows.</summary>
-    public const string DuplicateName = "WITH numbers AS (SELECT TOP (@take) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b), "
+    /// so this is the only check of them, before any DDL; the renderer checks only trailing spaces. SUBSTRING counts UTF-16 units under a binary collation that
+    /// is not _SC. The slot numbers come from constants (10,000 rows): a catalog view would wait on any other session's
+    /// uncommitted DDL in the database, and show a login only what it may see.</summary>
+    public const string DuplicateName = "WITH digits AS (SELECT d FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)) AS t(d)), "
+        + "numbers AS (SELECT TOP (@take) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM digits AS a CROSS JOIN digits AS b CROSS JOIN digits AS c CROSS JOIN digits AS e), "
         + "names AS (SELECT n, CONVERT(nvarchar(128), SUBSTRING(@names COLLATE Latin1_General_100_BIN2, (n - 1) * 128 + 1, 128)) COLLATE CATALOG_DEFAULT AS column_name FROM numbers) "
         + "SELECT TOP (1) r.n - 1 AS duplicate_column FROM (SELECT n, ROW_NUMBER() OVER (PARTITION BY column_name ORDER BY n) AS k FROM names) AS r WHERE r.k = 2 ORDER BY r.n;";
 
