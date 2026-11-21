@@ -733,6 +733,12 @@ internal sealed partial class ResultStore
                 throw nextViewId == 0 ? new RequestException("BACKEND_ERROR", "View identifiers are exhausted. Restart the SQL backend.")
                     : new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.");
             }
+            // Switched to windowed while the view was built (Demote drops views under this lock): its pages are gone.
+            if (set.IsRemote)
+            {
+                Return(set.Budget, charged);
+                throw SqlService.RemoteRefused();
+            }
             if (replaces is { } old && views.TryGetValue(old, out var replaced) && replaced.Set == set && views.Remove(old)) dropped.Add(replaced);
             var own = views.Values.Where(item => item.Set == set).OrderBy(item => item.ViewId).ToList();
             for (var i = 0; i <= own.Count - MaxViewsPerResult; i++)
@@ -890,14 +896,6 @@ internal sealed partial class ResultStore
         }
         Interlocked.Add(ref windowCacheUsed, bytes);
         return true;
-    }
-
-    /// <summary>Charges a block's bytes past its estimate whatever the budget (its pages are already built); the caller counts
-    /// them in its own figure.</summary>
-    internal void ForceCache(long bytes)
-    {
-        Interlocked.Add(ref used, bytes);
-        Interlocked.Add(ref windowCacheUsed, bytes);
     }
 
     /// <summary>Gives back a block cache's bytes (<see cref="TryReserveCache"/>).</summary>

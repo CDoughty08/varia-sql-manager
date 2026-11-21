@@ -164,7 +164,14 @@ internal sealed partial class SqlService
                 sets.Add(set);
                 currentSet = set;
                 BigQueryWindow? window = null;
-                var windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, childPlan, first, set, budget!, messages, value => window = value, token);
+                RemoteResult? windowed;
+                // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it.
+                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, childPlan, first, set, budget!, messages, value => window = value, token); }
+                catch
+                {
+                    first.Dispose();
+                    throw;
+                }
                 events.Opened(set);
                 if (windowed is null) await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages);
                 else first.Dispose();

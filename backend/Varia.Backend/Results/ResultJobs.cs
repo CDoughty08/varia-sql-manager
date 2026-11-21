@@ -116,7 +116,13 @@ internal sealed class ResultJobs(ResultStore store)
             this.named = named;
             this.token = token;
             pin = source.Set.Pin();
-            pages = source.Set.SealedSnapshot();
+            // A set switched to windowed since its lease is refused (REMOTE_RESULT): the pin goes with it.
+            try { pages = source.Set.SealedSnapshot(); }
+            catch
+            {
+                pin.Dispose();
+                throw;
+            }
             access = new(pages, source.Set.Columns.Count);
         }
 
@@ -433,7 +439,13 @@ internal sealed class ResultJobs(ResultStore store)
         var set = store.Find(resultId);
         // A windowed result's Copy and Save stream from BigQuery (docs/bigquery.md, Windowed): not through the store's pages.
         if (set is { IsRemote: true }) throw SqlService.RemoteRefused();
-        if (set is not null && set.TryLease()) return set;
+        if (set is not null && set.TryLease())
+        {
+            // Switched to windowed between the check and the lease: its pages are gone.
+            if (!set.IsRemote) return set;
+            set.ReleaseLease();
+            throw SqlService.RemoteRefused();
+        }
         throw store.WasReleased(resultId)
             ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")
             : new RequestException("RESULT_NOT_FOUND", "These results do not exist.");
@@ -511,7 +523,8 @@ internal sealed class ResultJobs(ResultStore store)
         for (var row = first; row <= last;)
         {
             var pages = set.PagesFor(row, (int)Math.Min(last - row + 1, 1 << 24));
-            if (pages.Count == 0) yield break;
+            // A set switched to windowed under the copy has no pages left: refused, never a short copy that looks whole.
+            if (pages.Count == 0) { if (set.IsRemote) throw SqlService.RemoteRefused(); yield break; }
             foreach (var page in pages)
             {
                 yield return page;

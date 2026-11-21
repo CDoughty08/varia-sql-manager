@@ -35,6 +35,10 @@ internal static partial class BigQueryExecutionChecks
         await LoadIntoMemoryAsync(check);
         Trace("DemoteAccounting");
         DemoteAccounting(check);
+        Trace("RemoteRaces");
+        await RemoteRacesAsync(check);
+        Trace("TwoLoads");
+        await TwoLoadsAsync(check);
     }
 
     /// <summary>A scripted remote table for <see cref="RemoteResult"/>: row n reads "r{n}", padded; it records each fetch,
@@ -104,8 +108,10 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task RemoteBlocksAsync(Action<bool, string> check)
     {
-        check(RemoteResult.BlockRowsFor(16_384) == 256 && RemoteResult.BlockRowsFor(1) == RemoteResult.MaxBlockRows && RemoteResult.BlockRowsFor(1 << 20) == RemoteResult.MinBlockRows
+        check(RemoteResult.BlockRowsFor(16_384) == 256 && RemoteResult.BlockRowsFor(1) == RemoteResult.MaxBlockRows && RemoteResult.BlockRowsFor(1 << 20, 4096L << 20) == RemoteResult.MinBlockRows
             && RemoteResult.BlockRowsFor(1024) == 4096, "a block is about 4 MiB of measured rows, clamped to 256..16,384 rows");
+        check(RemoteResult.BlockRowsFor(1 << 20) == 32 && RemoteResult.BlockRowsFor(1 << 20, 16L << 20) == 8 && RemoteResult.BlockRowsFor(64L << 20, 16L << 20) == 1,
+            "a block of very wide rows holds no more than half its cache (one row at least)");
 
         // The first page is seeded and read without a fetch; rowBytes answers from the cache only.
         {
@@ -528,6 +534,36 @@ internal static partial class BigQueryExecutionChecks
         }
     }
 
+    /// <summary>Two loads of one result at once (two clicks, two windows): the one that finds it already promoted is refused
+    /// and never switches the winner's set back to windowed.</summary>
+    static async Task TwoLoadsAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Jobs.HangPages = true;
+        var winnerId = Guid.NewGuid().ToString();
+        Task<(string Code, QueryResult? Result, List<JsonElement> Events, string Message)>? winner = null;
+        var fired = 0;
+        // The loser has passed its check when the winner starts, and promotes only once the winner is reading.
+        harness.Service.LoadPromoting = () =>
+        {
+            if (Interlocked.Exchange(ref fired, 1) == 1) return;
+            winner = Run(harness, "results.remoteQuery", Load(id, winnerId));
+            harness.Jobs.Polling.Task.Wait(15_000);
+        };
+        var (loser, loserResult, _, loserMessage) = await Run(harness, "results.remoteQuery", Load(id));
+        var stillLoading = harness.Service.Results.Find(id) is { IsRemote: false, Revision: 1 };
+        harness.Service.LoadPromoting = null;
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = winnerId });
+        var (code, result, _, _) = winner is null ? ("none", null, [], "") : await winner;
+        check(fired == 1 && loser == "INVALID_PARAMS" && loserResult is null && stillLoading && code == "ok" && result?.Status == "cancelled"
+            && result.ResultSets.Single() is { Residence: "remote", Revision: 2 },
+            $"a load that loses the race is refused and leaves the winner loading: {fired} {loser} {loserMessage} {stillLoading} {code} {result?.Status}");
+    }
+
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>
     static void DemoteAccounting(Action<bool, string> check)
     {
@@ -548,5 +584,95 @@ internal static partial class BigQueryExecutionChecks
         store.Release([released.ResultId]);
         var late = new RemoteResult(store, released.ResultId, released.Wires, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
         check(!store.Demote(released, late, 10) && store.UsedBytes == 0, "a released set does not demote");
+
+        // A reader that found the set in memory and takes its hold after the switch is refused, never handed no pages.
+        var switching = TextChecks.Synthetic(store, "W1", 2000);
+        var pinned = switching.Pin();
+        var sealedBefore = switching.SealedSnapshot().Length;
+        var windowedLate = new RemoteResult(store, switching.ResultId, switching.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        store.Demote(switching, windowedLate, 2000);
+        string? snapshot = null;
+        try { switching.SealedSnapshot(); snapshot = "pages"; }
+        catch (RequestException error) { snapshot = error.Code; }
+        string? viewed = null;
+        try { store.AddView(switching, [0, 1], [], false, true, 0, null); viewed = "view"; }
+        catch (RequestException error) { viewed = error.Code; }
+        check(sealedBefore > 0 && snapshot == "REMOTE_RESULT" && switching.Released.IsCancellationRequested && viewed == "REMOTE_RESULT",
+            $"a set switched to windowed refuses a snapshot and a view, and an operation's release token is already cancelled: {sealedBefore} {snapshot} {switching.Released.IsCancellationRequested} {viewed}");
+        pinned.Dispose();
+        store.Release([switching.ResultId]);
+    }
+
+    /// <summary>The block cache under races: very wide rows, a table that expires part way through a read, a cache disposed
+    /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
+    static async Task RemoteRacesAsync(Action<bool, string> check)
+    {
+        // Rows of about 200 KB: a block holds what half of a 16 MiB cache holds, so the cache never passes its limit.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 200_000 };
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+            var (next, rows) = await ReadRemote(remote, 0, 10);
+            var most = remote.CachedBytes;
+            SpinWait.SpinUntil(() => blocks.Calls.Count >= 3 && remote.CachedBlocks().Length >= 1, 5000);
+            for (var i = 0; i < 50; i++) { most = Math.Max(most, remote.CachedBytes); Thread.Sleep(10); }
+            check(next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
+                $"very wide rows read in blocks that fit the cache, which stays within its limit: {next} {remote.BlockRows} {most} {remote.CacheLimit}");
+        }
+        // The table expires after some blocks were cached: a read across them answers with the cached rows, not an error.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
+            blocks.Expire = true;
+            string outcome;
+            long next = -1;
+            try { (next, _) = await ReadRemote(remote, 0, 4 * remote.BlockRows); outcome = "ok"; }
+            catch (RemoteExpiredException) { outcome = "expired"; }
+            check(outcome == "ok" && next == 3L * remote.BlockRows && remote.Expired,
+                $"a read across cached blocks and an expired one answers with the cached rows: {outcome} {next} {remote.Expired}");
+        }
+        // Disposed under a waiting read (released, or replaced by Load into memory): the read answers short, never an error.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            var remote = Remote(store, blocks);
+            var waiting = ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => !blocks.Calls.IsEmpty, 5000);
+            remote.Dispose();
+            string outcome;
+            long next = -1;
+            try { (next, _) = await waiting.WaitAsync(TimeSpan.FromSeconds(15)); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            string after;
+            try { after = (await ReadRemote(remote, 5, 10)).Next.ToString(Inv); }
+            catch (Exception error) { after = error.GetType().Name; }
+            check(outcome == "ok" && next == 0 && after == "5" && store.WindowCacheBytes == 0,
+                $"a read waiting when the cache is disposed answers short, and so does a read after: {outcome} {next} {after} {store.WindowCacheBytes}");
+        }
+        // A block evicted after the read-ahead chose it, while a read asks for the same rows again: nothing stays charged.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            var remote = Remote(store, blocks);
+            Task<(long Next, List<long> Rows)>? again = null;
+            var fired = 0;
+            remote.AheadChosen = index =>
+            {
+                if (index != 1 || Interlocked.Exchange(ref fired, 1) == 1) return;
+                remote.EvictForChecks(1);
+                again = ReadRemote(remote, remote.BlockRows, 1);
+            };
+            await ReadRemote(remote, 0, 10);
+            if (again is not null) await again;
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
+            Thread.Sleep(100);
+            remote.Dispose();
+            var freed = SpinWait.SpinUntil(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
+            check(fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
+                $"a block evicted between the read-ahead's choice and its fetch is not fetched, and nothing stays charged: {fired} {store.WindowCacheBytes} {blocks.Calls.Count(call => call.First == remote.BlockRows)}");
+        }
     }
 }

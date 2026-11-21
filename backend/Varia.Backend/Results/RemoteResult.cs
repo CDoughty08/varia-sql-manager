@@ -139,11 +139,18 @@ internal sealed class RemoteResult : IDisposable
         Rows = rows;
         Capped = capped;
         CacheLimit = Math.Max(TargetBlockBytes, cacheLimit);
-        BlockRows = BlockRowsFor(rowBytes);
+        BlockRows = BlockRowsFor(rowBytes, CacheLimit);
     }
 
-    /// <summary>A block's rows for a row's measured bytes: about <see cref="TargetBlockBytes"/>, clamped.</summary>
-    public static int BlockRowsFor(double rowBytes) => (int)Math.Clamp(TargetBlockBytes / Math.Max(1, rowBytes), MinBlockRows, MaxBlockRows);
+    /// <summary>A block's rows for a row's measured bytes: about <see cref="TargetBlockBytes"/>, clamped to
+    /// <see cref="MinBlockRows"/>..<see cref="MaxBlockRows"/>, but never more than half of <paramref name="cacheLimit"/> holds
+    /// (one row at least), so a block of very wide rows still fits its cache.</summary>
+    public static int BlockRowsFor(double rowBytes, long cacheLimit = DefaultCacheBytes)
+    {
+        var bytes = Math.Max(1, rowBytes);
+        var floor = (int)Math.Clamp(cacheLimit / 2 / bytes, 1, MinBlockRows);
+        return (int)Math.Clamp(TargetBlockBytes / bytes, floor, MaxBlockRows);
+    }
 
     public long Rows { get; }
     /// <summary>BigQuery holds more rows than <see cref="Rows"/> (the 32-bit cap or a row limit).</summary>
@@ -197,7 +204,7 @@ internal sealed class RemoteResult : IDisposable
         var targets = new List<Block>();
         lock (gate)
         {
-            ObjectDisposedException.ThrowIf(disposed.IsCancellationRequested, this);
+            if (disposed.IsCancellationRequested) return firstRow;
             for (var index = first; index <= last; index++)
             {
                 var block = BlockLocked(index);
@@ -223,21 +230,24 @@ internal sealed class RemoteResult : IDisposable
                     lock (gate)
                     {
                         if (block.Filled >= need) break;
-                        if (expired) throw new RemoteExpiredException();
+                        // The table is gone: the cached rows already sent are the answer; none sent is REMOTE_EXPIRED.
+                        if (expired) return next > firstRow ? next : throw new RemoteExpiredException();
+                        // Released, or replaced by Load into memory: the rows sent so far are the answer (the caller tells a
+                        // release apart), and the grid reads again under the new revision.
+                        if (disposed.IsCancellationRequested) return next;
                         fetching = block.Fetching;
                     }
                     fetching ??= Ensure(block, 0, need);
-                    // Nothing to wait for: the rows came meanwhile, the table is gone, or the result was released.
-                    if (fetching is null)
-                    {
-                        lock (gate) if (block.Filled >= need || expired) continue;
-                        throw new ObjectDisposedException(nameof(RemoteResult));
-                    }
+                    // Nothing to wait for: the rows came meanwhile, the table is gone, or the cache was disposed; the loop says which.
+                    if (fetching is null) continue;
                     try { await fetching.WaitAsync(limit.Token); }
                     // The read's own wait passed: it answers with the rows it has, and the grid draws the rest as loading.
                     catch (OperationCanceledException) when (limit.IsCancellationRequested && !token.IsCancellationRequested) { return next; }
-                    // A read-ahead fetch cancelled under this read (its viewer jumped): asked for again as the read's own.
-                    catch (OperationCanceledException) when (!token.IsCancellationRequested && !disposed.IsCancellationRequested) { }
+                    // A read-ahead fetch cancelled under this read (its viewer jumped), or the cache disposed under it: the loop
+                    // asks again as the read's own, or answers with the rows sent.
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                    // Gone under this read after it sent some rows: those are the answer.
+                    catch (RemoteExpiredException) when (next > firstRow) { return next; }
                 }
                 RemotePage[] pages;
                 lock (gate) pages = [.. block.Pages];
@@ -299,7 +309,8 @@ internal sealed class RemoteResult : IDisposable
     {
         lock (gate)
         {
-            if (disposed.IsCancellationRequested || expired || block.Filled >= need) return block.Fetching;
+            // A block evicted since it was looked up is no longer the cache's: a fetch for it would charge bytes nothing frees.
+            if (disposed.IsCancellationRequested || expired || block.Filled >= need || block.Node is null) return block.Fetching;
             if (block.Fetching is { } running)
             {
                 // A read now needs a block its viewer's read-ahead is fetching: it is the read's own from here.
@@ -340,8 +351,8 @@ internal sealed class RemoteResult : IDisposable
                 var rows = (int)(block.End - from);
                 if (rows <= 0) return;
                 // The block's estimated cost is reserved before it is read, evicting this result's least recent blocks for
-                // room; what it really cost is settled once its pages are built. At most half the cache, so very wide rows (a
-                // block of the fewest rows past the cache) still read: the overrun is charged when the pages are built.
+                // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
+                // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min((long)Math.Ceiling(rows * rowBytes * 1.25) + ResultStore.PageOverhead, CacheLimit / 2);
                 Reserve(estimate, block);
                 var writer = new RemoteBlockWriter(resultId, wires, from);
@@ -365,10 +376,18 @@ internal sealed class RemoteResult : IDisposable
                 }
                 var cost = pages.Sum(page => page.Cost);
                 if (cost < estimate) store.ReturnCache(ref held, estimate - cost);
-                else if (cost > estimate && !store.TryReserveCache(ref held, long.MaxValue, cost - estimate)) Force(cost - estimate);
+                else if (cost > estimate)
+                {
+                    try { Reserve(cost - estimate, block); }
+                    catch
+                    {
+                        store.ReturnCache(ref held, estimate);
+                        throw;
+                    }
+                }
                 lock (gate)
                 {
-                    if (disposed.IsCancellationRequested || !blocks.ContainsKey(block.Index))
+                    if (disposed.IsCancellationRequested || !blocks.TryGetValue(block.Index, out var cached) || cached != block)
                     {
                         store.ReturnCache(ref held, cost);
                         return;
@@ -398,13 +417,6 @@ internal sealed class RemoteResult : IDisposable
             }
             if (victim is null) throw new RequestException("TOO_LARGE", "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
         }
-    }
-
-    /// <summary>A block whose pages came out larger than estimated keeps them: the difference is charged whatever the limit.</summary>
-    private void Force(long bytes)
-    {
-        Interlocked.Add(ref held, bytes);
-        store.ForceCache(bytes);
     }
 
     private void EvictLocked(Block block)
@@ -445,7 +457,20 @@ internal sealed class RemoteResult : IDisposable
             foreach (var index in new[] { first - 1, last + 1, viewer.Direction > 0 ? last + 2 : first - 2 })
                 if (index >= 0 && index <= maxBlock) ahead.Add(BlockLocked(index));
         }
-        foreach (var block in ahead) _ = Ensure(block, key, block.End);
+        foreach (var block in ahead)
+        {
+            AheadChosen?.Invoke(block.Index);
+            _ = Ensure(block, key, block.End);
+        }
+    }
+
+    /// <summary>Checks only: called once the read-ahead's blocks are chosen, outside the lock, before each one's fetch starts.</summary>
+    internal Action<long>? AheadChosen { get; set; }
+
+    /// <summary>Checks only: evicts the block as <see cref="Reserve"/> would, if no read waits for it and no fetch runs.</summary>
+    internal void EvictForChecks(long index)
+    {
+        lock (gate) if (blocks.TryGetValue(index, out var block) && block.Waiters == 0 && block.Fetching is null) EvictLocked(block);
     }
 
     public void Dispose()

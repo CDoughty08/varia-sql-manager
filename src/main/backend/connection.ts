@@ -122,6 +122,9 @@ function clip(line: string): string {
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut
 }
 
+/** Requests that run a query (and are never re-sent): a lost backend reports them with the query sentence and counts them. */
+const runsQuery = (method: string): boolean => method === 'query.execute' || method === 'results.remoteQuery'
+
 const frameNames = Object.fromEntries(Object.entries(FrameKind).map(([name, kind]) => [kind, name])) as Record<number, string>
 const maxRequestId = wire.ids.maxRequestId
 
@@ -214,7 +217,7 @@ export class BackendConnection {
   get lost(): Loss | undefined { return this.loss }
   get pendingCount(): number { return this.pending.size }
   /** Scripts written to (or queued for) this generation that have not finished. */
-  get runningQueries(): number { let count = 0; for (const request of this.pending.values()) if (request.method === 'query.execute') count++; return count }
+  get runningQueries(): number { let count = 0; for (const request of this.pending.values()) if (runsQuery(request.method)) count++; return count }
   get info(): BackendHello | undefined { return this.hello }
   /** Settles once the process has exited and its pipes have closed, so `stderr` then holds everything it wrote. */
   get closed(): Promise<void> { return this.exited }
@@ -233,7 +236,7 @@ export class BackendConnection {
    *  local error (limits, backstop TIMEOUT, STREAM_PROTOCOL, BACKEND_LOST). */
   send(method: BackendMethod, params: unknown, o: SendOptions): { id: number; done: Promise<unknown> } {
     const refuse = (code: ErrorCode, message: string) => ({ id: 0, done: Promise.reject(new BackendError(code, message)) })
-    if (this.loss) return refuse('BACKEND_LOST', method === 'query.execute' ? sentences.lostQuery : sentences.lost)
+    if (this.loss) return refuse('BACKEND_LOST', runsQuery(method) ? sentences.lostQuery : sentences.lost)
     const policy = methodPolicies[method]
     // Cancellation and cleanup stay available however many ordinary requests are outstanding.
     if (this.pending.size >= this.limits.pending + (policy.lane === 'control' ? this.limits.control : 0)) return refuse('TOO_MANY_REQUESTS', sentences.tooMany)
@@ -496,7 +499,7 @@ export class BackendConnection {
     const unavailable = failureMessage(loss, this.packaged)
     for (const request of pending) {
       this.clock.clearTimeout(request.timer)
-      request.reject(error ?? (unavailable ? new BackendError('BACKEND_UNAVAILABLE', unavailable) : new BackendError('BACKEND_LOST', request.method === 'query.execute' ? sentences.lostQuery : sentences.lost)))
+      request.reject(error ?? (unavailable ? new BackendError('BACKEND_UNAVAILABLE', unavailable) : new BackendError('BACKEND_LOST', runsQuery(request.method) ? sentences.lostQuery : sentences.lost)))
     }
     for (const queued of this.queue.splice(0)) if (queued.sensitive) queued.frame.fill(0)
     this.queuedBytes = 0

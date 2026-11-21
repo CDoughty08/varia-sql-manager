@@ -581,8 +581,6 @@ export class ResultsWorkerCore {
     }
   }
 
-  /** Results the backend already released: their pages go, and reads still bringing rows of them end, since main would
-   *  refuse to read them again. No results.close is sent. */
   /** A new revision of a result (resultSet.residence): its pages go, and its reads in flight end without an error, so their
    *  windows answer with the rows still cached (none) and the grid reads them again from the new revision. */
   private revise(key: ResultKey): void {
@@ -599,6 +597,8 @@ export class ResultsWorkerCore {
     for (const waiter of settled) waiter.settle()
   }
 
+  /** Results the backend already released: their pages go, and reads still bringing rows of them end, since main would
+   *  refuse to read them again. No results.close is sent. */
   private forgetResults(generation: number, resultIds: readonly number[]): void {
     const results = new Set(resultIds.map(resultId => resultOf({ generation, resultId })))
     for (const read of [...this.reads.values()]) if (!read.cancelled && results.has(baseOf(read.result))) this.abandonRead(read, 'RESULT_RELEASED', released)

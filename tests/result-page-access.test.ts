@@ -46,7 +46,7 @@ describe('result page access', () => {
     // set through Stored(...), which answers REMOTE_RESULT; only these find a set another way, each for its own reason.
     const service = sources.filter(file => /^backend\/Varia\.Backend\/SqlService[^/]*\.cs$/.test(file))
     const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
-      .filter(([, , line]) => /\bstore\.Find\(/.test(line) && !/\bStored\(store\.Find\(/.test(line))
+      .filter(([, , line]) => /\b_?[sS]tore\.Find\(/.test(line) && !/\bStored\(store\.Find\(/.test(line))
       .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
     expect(unguarded.sort()).toEqual([
       // Visibility only asks whether the result exists.
@@ -62,8 +62,18 @@ describe('result page access', () => {
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? new ResultsRowBytesResult\(args\.FirstRow, remote\.RowBytes\(args\.FirstRow, args\.Count\), remote\.Rows, \[\]\) : throw RemoteRefused\(\);/)
-    // Copy and Save lease the set first; the lease refuses a windowed one.
-    expect(readFileSync('backend/Varia.Backend/Results/ResultJobs.cs', 'utf8')).toMatch(/var set = store\.Find\(resultId\);\n\s*\/\/[^\n]*\n\s*if \(set is \{ IsRemote: true \}\) throw SqlService\.RemoteRefused\(\);/)
+    // Copy and Save lease the set first; the lease refuses a windowed one, before and after it is taken (a switch between
+    // the check and the lease), and a copy the switch overtakes is refused rather than cut short.
+    const jobs = readFileSync('backend/Varia.Backend/Results/ResultJobs.cs', 'utf8')
+    expect(jobs).toMatch(/var set = store\.Find\(resultId\);\n\s*\/\/[^\n]*\n\s*if \(set is \{ IsRemote: true \}\) throw SqlService\.RemoteRefused\(\);/)
+    expect(jobs).toMatch(/if \(set is not null && set\.TryLease\(\)\)\n\s*\{\n\s*\/\/[^\n]*\n\s*if \(!set\.IsRemote\) return set;\n\s*set\.ReleaseLease\(\);\n\s*throw SqlService\.RemoteRefused\(\);/)
+    expect(jobs).toMatch(/if \(pages\.Count == 0\) \{ if \(set\.IsRemote\) throw SqlService\.RemoteRefused\(\); yield break; \}/)
+    // A switch between a reader's check and its hold: the snapshot, a view and an operation's release token refuse it under
+    // the locks Demote takes (BigQueryExecutionChecks.Residence.cs drives each).
+    const buffer = readFileSync('backend/Varia.Backend/Results/ResultSetBuffer.cs', 'utf8')
+    expect(buffer).toMatch(/lock \(gate\) return remote is null \? \[\.\. pages\] : throw SqlService\.RemoteRefused\(\);/)
+    expect(buffer).toMatch(/lock \(gate\) return state == 2 \|\| remote is not null \? new CancellationToken\(true\)/)
+    expect(readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')).toMatch(/if \(set\.IsRemote\)\n\s*\{\n\s*Return\(set\.Budget, charged\);\n\s*throw SqlService\.RemoteRefused\(\);/)
     expect(readFileSync('backend/Varia.Backend/SqlService.BigQueryResidence.cs', 'utf8')).toMatch(/internal static ResultSetBuffer Stored\(ResultSetBuffer set\) => set\.IsRemote \? throw RemoteRefused\(\) : set;/)
   })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {

@@ -239,10 +239,19 @@ describe('ResultClient', () => {
     expect(reads).toEqual([expect.objectContaining({ resultId: 3, firstRow: 0, viewer: 5 })])
     serve()
     expect((await again).count).toBe(4)
+    // A window the worker answers from the old revision's rows while the switch is on its way is neither kept nor shown.
+    const revisions = descriptor({ residence: 'remote', revision: 1, rowsTotal: 10, rowsStored: 0, bytesStored: 0, state: 'complete' })
+    const late = handle.getWindow(0, 3)
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: { ...revisions, revision: 2, residence: 'memory', rowsStored: 0 } } })
+    const stale = await late
+    await settle()
+    expect(handle.getSnapshot().revision).toBe(2)
+    expect(stale.count).toBe(0)
+    expect(handle.peekWindow(0, 3)).toBeUndefined()
     // A descriptor of an older revision changes nothing.
     worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.closed', descriptor: { ...opened, revision: 0, rowsStored: 10 } } })
     await settle()
-    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsStored: 0 })
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 0 })
   })
 
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {

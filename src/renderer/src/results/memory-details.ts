@@ -86,8 +86,9 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
     { label: 'Ratio', ...isCompressed ? { value: ratio.toFixed(2), unit: '×' } : { value: dash }, note: codecNote },
     { label: 'Saved', value: saved.value, unit: saved.unit, note: logical > 0 ? `${percent(givenBack, logical)}% of ${bytes(logical)}` : 'No rows held', ...givenBack > 0 ? { tone: 'saved' as const } : {} }
   ]
-  // Both bars share one scale, so the lower one's shortfall is what compression gave back.
-  const scale = Math.max(logical, memory, 1)
+  // Both bars share one scale, so the lower one's shortfall is what compression gave back; the window cache adds to the
+  // rows as read, so the lower bar (its parts plus what was given back) never overflows it.
+  const scale = Math.max(logical + window, memory, 1)
   const segment = (part: Segment['part'], bytes: number): Segment => ({ part, label: partLabels[part], bytes, share: bytes / scale })
   const asRead = [segment('raw', Math.max(0, logical - packedLogical)), segment('packed', packedLogical)].filter(part => part.bytes > 0)
   const now = [segment('raw', rawBytes), segment('packed', compressed), segment('cache', cache), segment('window', window), segment('returned', givenBack)].filter(part => part.bytes > 0)

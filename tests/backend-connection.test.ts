@@ -151,8 +151,12 @@ describe('BackendConnection lifetime', () => {
     await connection.ready
     const loss = lossOf(connection)
     const script = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0 }).done
+    // Load into memory runs a query too: never re-sent, counted and told as one.
+    const load = connection.send('results.remoteQuery', { queryId: crypto.randomUUID(), resultId: 3, generation: 1, kind: 'load' }, { deadlineMs: 0 }).done
+    expect(connection.runningQueries).toBe(2)
     expect(await failure(script)).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
-    expect(await loss).toMatchObject({ reason: 'exit', exitCode: 1 })
+    expect(await failure(load)).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(await loss).toMatchObject({ reason: 'exit', exitCode: 1, queries: 2 })
     expect(await failure(health(connection))).toMatchObject({ code: 'BACKEND_LOST' })
   })
   it('reports a backend crash from its GOAWAY', async () => {

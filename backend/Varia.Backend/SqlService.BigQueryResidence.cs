@@ -246,6 +246,9 @@ internal sealed partial class SqlService
             throw BigQueryErrors.Map(error, (remote.Source as BigQueryWindow)?.Project ?? "") as RequestException
                 ?? new RequestException("BACKEND_ERROR", "BigQuery's rows could not be read: " + BigQueryErrors.Sanitize(error.Message));
         }
+        // The cache answers with the rows it sent once it is disposed: a release is RESULT_RELEASED, while Load into memory
+        // (a new revision, its resultSet.residence on the way) answers short, and the grid reads again.
+        if (pages == 0 && set.IsReleased) throw Unavailable(args.ResultId);
         rows = (int)Math.Max(0, Math.Min(next, args.FirstRow + args.MaxRows) - args.FirstRow);
         var available = remote.Rows;
         return new ResultsReadResult(Math.Max(next, args.FirstRow), available, next >= available, pages, rows);
@@ -261,6 +264,9 @@ internal sealed partial class SqlService
     /// A refusal part way switches it back to windowed, as an Automatic query's read would, and so does Stop: the result stays
     /// whole either way. The answer is a query summary.
     /// </summary>
+    /// <summary>Checks only: called as a load is about to promote its set, after its checks.</summary>
+    internal Action? LoadPromoting { get; set; }
+
     private async Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context)
     {
         if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load")
@@ -273,6 +279,14 @@ internal sealed partial class SqlService
         using var cancellation = new CancellationTokenSource();
         var running = new RunningQuery(connection.Id, args.QueryId, cancellation);
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        // Promoted here, not inside the try below: a load that lost the race to another (two clicks, two windows) must not
+        // switch the winner's set back to windowed on its way out.
+        LoadPromoting?.Invoke();
+        if (!set.Promote(window.TotalRows))
+        {
+            queries.TryRemove(new(args.QueryId, running));
+            throw set.IsReleased ? Unavailable(args.ResultId) : new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");
+        }
         using var cancelled = context?.Token.Register(running.Cancel);
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         var messages = new QueryMessages(events.Message);
@@ -282,12 +296,17 @@ internal sealed partial class SqlService
         QueryFailure? failure = null;
         try
         {
-            if (!set.Promote(window.TotalRows)) throw Unavailable(args.ResultId);
             set.SwitchesOnRefusal = true;
             events.Residence(set);
             var first = await bigQuery.QueryResultsAsync(connection, window.Project, window.JobId, window.Location, null, BigQueryFirstPageRows, 0, token);
             var loadArgs = window.Args;
-            var readSession = await BigQueryStorageSessionAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, messages, token);
+            BigQueryReadSession? readSession;
+            try { readSession = await BigQueryStorageSessionAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, messages, token); }
+            catch
+            {
+                first.Dispose();
+                throw;
+            }
             if (readSession is null) await ReadBigQueryRowsAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
             else
             {

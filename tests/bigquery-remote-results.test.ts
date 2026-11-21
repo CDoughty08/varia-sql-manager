@@ -84,6 +84,12 @@ describe('BigQuery remote results', () => {
     expect(model.givenBack).toBe(0)
     expect(model.bars[1].segments.map(segment => [segment.part, segment.label, segment.bytes])).toEqual([['raw', 'Raw pages', 100 * MB], ['window', 'Window cache', 64 * MB]])
     expect(model.legend.map(segment => segment.part)).toEqual(['raw', 'window'])
+    // Beside rows compression gave back, the bar's parts still fit its width: "Given back" is never cut off.
+    const packed = nerdMetrics({ ...detail, storedBytes: 30 * MB, compressedBytes: 30 * MB, packedLogicalBytes: 100 * MB, windowCacheBytes: 20 * MB }, () => ({ result: 'Result 1' }))
+    const now = packed.bars[1].segments
+    expect(now.map(segment => [segment.part, segment.bytes])).toEqual([['packed', 30 * MB], ['window', 20 * MB], ['returned', 70 * MB]])
+    expect(now.reduce((sum, segment) => sum + segment.share, 0)).toBeLessThanOrEqual(1 + 1e-9)
+    expect(packed.bars[0].segments.reduce((sum, segment) => sum + segment.share, 0)).toBeLessThanOrEqual(1 + 1e-9)
     // A backend without windowed results reports none, and nothing changes.
     const { windowCacheBytes: _, ...plain } = detail
     expect(nerdMetrics(plain, () => ({ result: 'Result 1' })).bars[1].segments.map(segment => segment.part)).toEqual(['raw'])

@@ -1077,6 +1077,8 @@ export class ResultClient implements Disposable {
     const rows = Math.max(0, Math.min(Math.floor(count), wire.worker.windowRows, Math.floor(wire.worker.windowCells / width), state.snapshot.rowsAvailable - start))
     if (rows === 0) return { first: start, count: 0, colStart, colEnd, text: [], flags: new Uint8Array(0) }
     this.windowRequests++
+    // A window answered from the rows of an earlier revision (read before resultSet.residence) is neither kept nor shown.
+    const revision = state.snapshot.revision
     let response: WorkerResponse
     try {
       response = await this.request(id => ({
@@ -1085,6 +1087,7 @@ export class ResultClient implements Disposable {
       }), o.signal)
     } finally { this.windowRequests-- }
     if (response.type !== 'window') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+    if (state.snapshot.revision !== revision) return { first: start, count: 0, colStart, colEnd, text: [], flags: new Uint8Array(0) }
     const window: RowWindow = { first: response.first, count: response.count, colStart: response.colStart, colEnd: response.colEnd, text: response.text, flags: response.flags }
     // A result released or lost meanwhile keeps nothing.
     if (this.tracked(state)) this.windows.set(WindowCache.key(state.id, start, Math.floor(count), colStart, colEnd, maxCellChars, display), state.id, window)

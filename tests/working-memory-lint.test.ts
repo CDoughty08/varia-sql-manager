@@ -101,11 +101,17 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const fetch = between('private async Task FetchAsync(', 'private void Reserve(')
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
-  // A failed fetch gives its estimate back; a built one settles what it really cost.
-  expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(2)
-  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate && !store\.TryReserveCache\(ref held, long\.MaxValue, cost - estimate\)\) Force\(cost - estimate\);/)
+  // The block is read in one place, however it is spelled, so nothing reads one before its reservation.
+  expect(count(fetch, /\bfetch(?:\.Invoke)?\s*\(/g)).toBe(1)
+  // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
+  // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
+  expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
+  expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ Reserve\(cost - estimate, block\); \}/)
+  expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
+  // A block's rows fit half its cache, so its capped estimate is what it should cost.
+  expect(remote).toMatch(/var floor = \(int\)Math\.Clamp\(cacheLimit \/ 2 \/ bytes, 1, MinBlockRows\);/)
   // The reservation is the cache's own limit and the global budget, evicting blocks no read waits for, else TOO_LARGE.
-  const reserve = between('private void Reserve(', 'private void Force(')
+  const reserve = between('private void Reserve(', 'private void EvictLocked(')
   expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes\)\)/)
   expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
   expect(reserve).toMatch(/throw new RequestException\("TOO_LARGE"/)

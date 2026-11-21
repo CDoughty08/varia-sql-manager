@@ -506,14 +506,14 @@ internal sealed class ResultSetBuffer
         return freed;
     }
 
-    /// <summary>Cancelled when the set is released (already cancelled once it has been), so an operation over the whole
-    /// result (a sort, profile, diff or pivot) stops at once rather than keeping the pages it pins, and their budget,
-    /// until it finishes.</summary>
+    /// <summary>Cancelled when the set is released or switched to windowed (already cancelled once it has been), so an
+    /// operation over the whole result (a sort, profile, diff or pivot) stops at once rather than keeping the pages it pins,
+    /// and their budget, until it finishes, or reading the pages a switch took away.</summary>
     public CancellationToken Released
     {
         get
         {
-            lock (gate) return state == 2 ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
+            lock (gate) return state == 2 || remote is not null ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
         }
     }
 
@@ -1291,7 +1291,8 @@ internal sealed class ResultSetBuffer
     /// the list stays valid while more are sealed.</summary>
     public StoredPage[] SealedSnapshot()
     {
-        lock (gate) return [.. pages];
+        // Under the lock Demote takes: a set switched to windowed since its reader's check is refused, never read as empty.
+        lock (gate) return remote is null ? [.. pages] : throw SqlService.RemoteRefused();
     }
 
     /// <summary>The bytes (sum of DATALENGTH) of up to <paramref name="count"/> rows from <paramref name="firstRow"/>, as far
