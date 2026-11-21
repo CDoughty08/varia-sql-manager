@@ -707,6 +707,116 @@ internal static partial class BigQueryExecutionChecks
                 $"a read past the seeded rows answers with the cached ones when {(expire ? "the table expired" : "its wait passes")}: {outcome} next {next}");
         }
 
+        // A part-cached (seeded) block whose remainder fetch stops on a rate limit or another failure: the read answers short with
+        // the rows it has rather than drawing them as loading or failing.
+        foreach (var kind in new[] { "retry", "error" })
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            RemoteFetch fetch = async (first, rows, writer, token) =>
+            {
+                await Task.Yield();
+                if (kind == "retry") throw new RemoteRetryException(new HttpRequestException("429"));
+                throw new HttpRequestException("No connection could be made.");
+            };
+            using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 100, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
+            var seed = new RemoteBlockWriter(1, OneText, 0);
+            for (var row = 0; row < 100; row++) Blocks.Write(seed, row, 0);
+            remote.Seed(seed.Finish());
+            string outcome;
+            long next = 0;
+            try { (next, _) = await ReadRemote(remote, 50, 100, viewer: 1); outcome = "ok"; }
+            catch (Exception error) { outcome = error.GetType().Name; }
+            check(outcome == "ok" && next == 100, $"a part-cached block whose fetch stops ({kind}) answers with its rows: {outcome}, next {next}");
+        }
+
+        // Scrolling up keeps its direction while reads stay inside the same block.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 10 * size, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 9 * size + 100, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var chosen = new List<long>();
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 9 * size + 50, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.Length > 0 && order[0] == 8, $"scrolling up keeps its direction while reads stay inside one block: read ahead [{string.Join(",", order)}]");
+        }
+
+
+        // Read-ahead takes only as many blocks as the cache holds beside the read's own (a read across two blocks).
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks(), rowBytes: 16_384, cache: 16L << 20);
+            var size = remote.BlockRows;
+            var chosen = new List<long>();
+            remote.AheadChosen = index => { lock (chosen) chosen.Add(index); };
+            await ReadRemote(remote, 10L * size + size - 50, 100, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            long[] order;
+            lock (chosen) order = [.. chosen];
+            check(order.SequenceEqual(new long[] { 12 }), $"read-ahead takes only the room beside a two-block read: read ahead [{string.Join(",", order)}]");
+        }
+
+        // A read-ahead estimate the cache's limit refuses (the read's own block not reserved yet) is not taken past the limit.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 2_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            remote.Reserving = index =>
+            {
+                if (index == 1) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(0), 15_000);
+                if (index == 51) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(50), 15_000);
+            };
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 50 * remote.BlockRows, 10, viewer: 3);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var evicted = remote.Evictions;
+            var aheadTried = 0;
+            var aheadReserved = 0;
+            blocks.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Holds = first => first == 21L * remote.BlockRows;
+            remote.Reserved = index => { if (index == 21) Interlocked.Exchange(ref aheadReserved, 1); };
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => Volatile.Read(ref aheadReserved) == 1 || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
+            var reading = ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            var (next, _) = await reading;
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(aheadReserved == 0 && remote.PeakBytes <= remote.CacheLimit && remote.Evictions == evicted && next > 20L * remote.BlockRows,
+                $"a refused read-ahead estimate is never taken past the limit: reserved {aheadReserved}, peak {remote.PeakBytes} of {remote.CacheLimit}, {remote.Evictions - evicted} evicted, next {next}");
+        }
+
+        // Once the table is gone, a read of rows never cached is REMOTE_EXPIRED, and asks BigQuery nothing more.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            blocks.Expire = true;
+            string first;
+            try { await ReadRemote(remote, 40L * remote.BlockRows, 10, viewer: 1); first = "ok"; }
+            catch (RemoteExpiredException) { first = "expired"; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var calls = blocks.Calls.Count;
+            string second;
+            long next = -1;
+            try { (next, _) = await ReadRemote(remote, 70L * remote.BlockRows, 10, viewer: 1); second = "ok"; }
+            catch (RemoteExpiredException) { second = "expired"; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(remote.Expired && first == "expired" && second == "expired" && blocks.Calls.Count == calls,
+                $"after the table expired a read of rows never cached is REMOTE_EXPIRED and asks BigQuery nothing: first {first}, second {second} next {next}, calls {calls} -> {blocks.Calls.Count}");
+        }
+
         // The cache evicts its least recent blocks within its limit, and gives every byte back when released.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
