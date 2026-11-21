@@ -559,7 +559,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   and drops their answers.
 - **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
-  `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database, names, definitions, by
+  `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, names, definitions, by
   `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
   held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by

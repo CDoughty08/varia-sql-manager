@@ -55,6 +55,15 @@ internal static class IndexMemory
     /// <summary>A database's reference to one pooled text (<see cref="DatabaseIndex.Pooled"/>).</summary>
     public const long SlotBytes = 8;
 
+    /// <summary>A type in a table's <see cref="ObjectDetails"/>: its name's and schema's text ids, its id, its system type id and flags.</summary>
+    public const long TypeBytes = 16;
+    /// <summary>A column's, parameter's or function's type: its entry, type, length, precision, scale, ordinal and flags.</summary>
+    public const long TypedBytes = 13;
+    /// <summary>An index's or key's column list: its entry, where its columns start, how many, and a foreign key's table.</summary>
+    public const long KeyBytes = 14;
+    /// <summary>One column of an index or key: its column_id, a foreign key's referenced column_id, and flags.</summary>
+    public const long KeyColumnBytes = 5;
+
     /// <summary>A string of <paramref name="length"/> UTF-16 code units: header, method table, length and terminator, 8-aligned.</summary>
     public static long StringBytes(int length) => (22L + 2L * length + 7) & ~7L;
 }
