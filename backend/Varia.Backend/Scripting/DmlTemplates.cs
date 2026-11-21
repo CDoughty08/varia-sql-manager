@@ -89,7 +89,7 @@ internal static class DmlTemplates
     /// <summary>EXECUTE To, in sqltoolsservice's layout: DECLAREs for the return code and every parameter, the TODO line,
     /// then the call with one parameter per line. The space after the object name is SSMS's. A CLR procedure is called
     /// without a return code; a scalar function's return code has its return type. The return code is @RC unless a
-    /// parameter has that name as the loosest collation compares it: then @RC1, @RC2 and on.</summary>
+    /// parameter could have that name under some collation: then @RC1, @RC2 and on.</summary>
     public static string Execute(string obj, IReadOnlyList<ParameterRow> parameters, bool clr, bool schemaQualify)
     {
         var returnValue = parameters.FirstOrDefault(parameter => parameter.Id == 0);
@@ -108,17 +108,25 @@ internal static class DmlTemplates
         return text.ToString();
     }
 
-    // Case-, width-, kana- and accent-insensitive collations (the default SQL_Latin1_General_CP1_CI_AS is width-insensitive,
-    // so a fullwidth @RC is @RC) all clash; a needless @RC1 under a stricter one is harmless.
-    private static readonly StringComparer VariableNames = StringComparer.Create(CultureInfo.InvariantCulture,
-        CompareOptions.IgnoreCase | CompareOptions.IgnoreWidth | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreNonSpace);
-
     private static string ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
     {
-        var taken = inputs.Select(parameter => parameter.Name).ToHashSet(VariableNames);
+        var taken = inputs.Select(parameter => Skeleton(parameter.Name)).ToHashSet(StringComparer.Ordinal);
         var name = "@RC";
         for (var suffix = 1; taken.Contains(name); suffix++) name = "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
         return name;
+    }
+
+    // What a parameter name could equal under the loosest collation, judged conservatively: case, width and accents
+    // folded, and every other non-ASCII character dropped, since a collation may weigh it zero (the default
+    // SQL_Latin1_General_CP1_CI_AS ignores thousands, so @RC followed by U+0219 is @RC). A needless @RC1 is harmless.
+    private static string Skeleton(string name)
+    {
+        string folded;
+        try { folded = name.Normalize(NormalizationForm.FormKD); }
+        catch (ArgumentException) { folded = name; }
+        var ascii = new StringBuilder(folded.Length);
+        foreach (var c in folded) if (c < 128) ascii.Append(char.ToUpperInvariant(c));
+        return ascii.ToString();
     }
 
     /// <summary>SELECT To on a function: FROM a table-valued one, or the value of a scalar one, with a placeholder per parameter.</summary>
