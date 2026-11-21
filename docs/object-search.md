@@ -112,10 +112,15 @@ the reads held when it is made:
   under `CATALOG_DEFAULT`, which reads no catalog row. Where that is unknown (a batch that failed part way) names compare
   without case. Accent- and kana-insensitive collations are not followed. A database's own name matches exactly, else
   the one known name that differs from it only in case.
-- Every answer carries its database's state: `Ready`; `Partial` with its gaps (children left out, definitions left out
-  by the build, definitions cut); `Building` (a build is running and has not read it yet, while an earlier read still
-  answers); `Skipped` with the skip of its last read (an earlier read still answers where there is one); `Absent`. It
-  also carries when the read it answers from finished, and the database's case rule.
+- A database's answer (and every object lookup, which carries it) gives its state: `Ready` (its last read was whole);
+  `Partial` with its gaps (children left out, definitions left out by the build, definitions cut); `Building` (a running
+  build has not reached it yet, while an earlier read still answers); `Skipped` with the skip of its last read (a read
+  that failed part way, or an earlier one, still answers where there is one); `Absent`. Each database keeps its last
+  outcome across builds: a stopped build, or one whose listing fails, leaves the databases it did not reach as they were,
+  and only a whole read clears a skip. It also carries when the read it answers from finished, and the database's case
+  rule. Columns, keys and foreign keys are asked of an object found that way.
+- A lookup is a snapshot: make one per request. One kept across a rebuild or a disconnect keeps the reads it holds alive
+  outside the memory budget.
 
 ### Failures and skipped databases
 

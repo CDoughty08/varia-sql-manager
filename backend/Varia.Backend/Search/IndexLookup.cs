@@ -3,7 +3,7 @@ namespace Varia.Backend.Search;
 /// <summary>How far the index can answer for one database.</summary>
 internal enum LookupState
 {
-    /// <summary>Read whole by the last build (or this one).</summary>
+    /// <summary>Its last read was whole.</summary>
     Ready,
     /// <summary>Read, with something left out (<see cref="LookupGaps"/>).</summary>
     Partial,
@@ -152,9 +152,44 @@ internal sealed class TableLookup
 }
 
 /// <summary>
+/// What the editor's lookup needs to know of a connection's builds, kept across them (the state's gate guards it): when the
+/// running or last build started, the databases its listing named, and each database whose last read failed, with that skip
+/// and when. A database's next whole read (or one without its children, which is partial, not failed) clears its skip; a build
+/// that is stopped, or whose listing fails, leaves the skips of the databases it did not reach as they were; a listing drops
+/// the skips of databases it no longer names.
+/// </summary>
+internal sealed class LookupLedger
+{
+    private DateTime? started;
+    private HashSet<string> listed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ObjectIndexSkip Skip, DateTime At)> skips = new(StringComparer.Ordinal);
+
+    /// <summary>What a lookup reads, copied.</summary>
+    internal sealed record View(DateTime? Started, IReadOnlySet<string> Listed, IReadOnlyDictionary<string, (ObjectIndexSkip Skip, DateTime At)> Skips);
+
+    public void Start(DateTime now) => started = now;
+
+    public void List(IEnumerable<string> names)
+    {
+        listed = names.ToHashSet(StringComparer.Ordinal);
+        foreach (var name in skips.Keys.Where(name => !listed.Contains(name)).ToList()) skips.Remove(name);
+    }
+
+    public void Done(string database, ObjectIndexSkip? skip, DateTime now)
+    {
+        if (skip is null or { Code: ObjectSearchService.ChildrenLeftOut }) skips.Remove(database);
+        else skips[database] = (skip, now);
+    }
+
+    public View Snapshot() => new(started, listed.ToHashSet(StringComparer.Ordinal), new Dictionary<string, (ObjectIndexSkip, DateTime)>(skips, StringComparer.Ordinal));
+}
+
+/// <summary>
 /// The editor's in-process view of a connection's index (no IPC): objects by database, schema and name, their columns,
-/// parameters, indexes, keys and foreign keys in and out, each answer with its database's state. A snapshot of the build's state
-/// when it was made; the databases it answers from are the reads held then, which never change.
+/// parameters, indexes, keys and foreign keys in and out. <see cref="Database"/> and <see cref="Objects"/> answer with the
+/// database's state; the other calls take an object one of them found. A snapshot of the build's state when it was made; the
+/// databases it answers from are the reads held then, which never change. Make one per request and let it go: one kept across a
+/// rebuild or a disconnect keeps the reads it holds alive outside the index's memory budget.
 /// Names compare as the database's catalog collation does for case (<see cref="DatabaseIndex.CaseSensitive"/>; without case where
 /// that is unknown), ordinally otherwise: an accent- or kana-insensitive collation is not followed.
 /// </summary>
@@ -166,17 +201,15 @@ internal sealed class IndexLookup
     private readonly bool building;
     private readonly DateTime? buildStarted;
     private readonly IReadOnlySet<string> listed;
-    private readonly IReadOnlyDictionary<string, ObjectIndexSkip> skipped;
+    private readonly IReadOnlyDictionary<string, (ObjectIndexSkip Skip, DateTime At)> skipped;
 
-    internal IndexLookup(ConnectionIndex index, IndexBudget budget, bool building, DateTime? buildStarted, IReadOnlySet<string> listed, IReadOnlyDictionary<string, ObjectIndexSkip> skipped)
+    internal IndexLookup(ConnectionIndex index, IndexBudget budget, bool building, LookupLedger.View builds)
     {
         this.budget = budget;
         held = index.Databases.ToDictionary(value => value.Database, StringComparer.Ordinal);
         resource = index.Resource;
         this.building = building;
-        this.buildStarted = buildStarted;
-        this.listed = listed;
-        this.skipped = skipped;
+        (buildStarted, listed, skipped) = (builds.Started, builds.Listed, builds.Skips);
     }
 
     /// <summary>The database's name as the index knows it: as given, else the one name that differs from it only in case.</summary>
@@ -191,15 +224,17 @@ internal sealed class IndexLookup
     {
         var database = Resolve(name);
         held.TryGetValue(database, out var read);
-        // A read without children is reported as a skip too, but it is a partial read: its gap says so.
-        if (skipped.TryGetValue(database, out var skip) && skip.Code == ObjectSearchService.ChildrenLeftOut) skip = null;
+        var failed = skipped.TryGetValue(database, out var last) ? last : ((ObjectIndexSkip Skip, DateTime At)?)null;
         var gaps = read is null ? LookupGaps.None
             : (read.ChildrenLeftOut ? LookupGaps.ChildrenLeftOut : 0) | (read.DefinitionsLeftOut ? LookupGaps.DefinitionsLeftOut : 0) | (read.Cut > 0 ? LookupGaps.DefinitionsCut : 0);
-        var state = read is null ? skip is not null ? LookupState.Skipped : building && listed.Contains(database) ? LookupState.Building : LookupState.Absent
-            : skip is not null ? LookupState.Skipped
-            : building && (buildStarted is not { } started || read.ReadAt < started) ? LookupState.Building
+        // A running build has reached a database once it has an outcome in it: a read, or a skip, since it started.
+        var reached = buildStarted is not { } started || read?.ReadAt >= started || failed?.At >= started;
+        var known = read is not null || failed is not null || listed.Contains(database);
+        var state = building && known && !reached ? LookupState.Building
+            : failed is not null ? LookupState.Skipped
+            : read is null ? LookupState.Absent
             : gaps != LookupGaps.None ? LookupState.Partial : LookupState.Ready;
-        return new(database, state, gaps, skip, read?.ReadAt, read?.CaseSensitive) { Held = read };
+        return new(database, state, gaps, failed?.Skip, read?.ReadAt, read?.CaseSensitive) { Held = read };
     }
 
     /// <summary>The objects named <paramref name="name"/> in <paramref name="schema"/> (any schema when null) of a database, its own

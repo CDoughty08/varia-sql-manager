@@ -20,8 +20,7 @@ internal static class SearchLookupChecks
         Service(check).GetAwaiter().GetResult();
     }
 
-    private static readonly IReadOnlySet<string> NoNames = new HashSet<string>(StringComparer.Ordinal);
-    private static readonly IReadOnlyDictionary<string, ObjectIndexSkip> NoSkips = new Dictionary<string, ObjectIndexSkip>(StringComparer.Ordinal);
+    private static readonly LookupLedger.View Idle = new LookupLedger().Snapshot();
 
     private static void Sql(Action<bool, string> check)
     {
@@ -49,7 +48,13 @@ internal static class SearchLookupChecks
         var (index, budget, connection, _) = await Read(caseSensitive: false);
         check(index.CaseSensitive == false && index.DefinitionsLeftOut && (await Read(caseSensitive: null)).Index.CaseSensitive is null && (await Read(caseSensitive: true)).Index.CaseSensitive == true,
             "a read keeps whether its database's names tell case apart (unknown when the batch stopped before saying), and that it was read without definitions");
-        var lookup = new IndexLookup(connection, budget, false, null, NoNames, NoSkips);
+        // A read that fails part way (here on its last result set) and is kept as it is says what it read too.
+        var failing = new DatabaseReader("Sales", new ObjectIndexLimits(), new StringPool(new IndexBudget(1 << 24)));
+        Exception? failure = null;
+        try { await failing.ReadAsync(Broken(), false, CancellationToken.None); } catch (InvalidCastException error) { failure = error; }
+        check(failure is not null && failing.Partial() is { DefinitionsLeftOut: true, CaseSensitive: null } partial && partial.Table.Count > 0,
+            "a read kept after it failed part way keeps that it was read without definitions, and its case rule as unknown");
+        var lookup = new IndexLookup(connection, budget, false, Idle);
         var orders = lookup.Objects("Sales", "dbo", "Orders");
         check(orders is { Database: { State: LookupState.Partial, Gaps: LookupGaps.DefinitionsLeftOut, CaseSensitive: false }, Value: [{ Kind: "table", Schema: "dbo", Name: "Orders" }] },
             "an object is found by database, schema and name, with its database's state (read without definitions: partial)");
@@ -95,11 +100,29 @@ internal static class SearchLookupChecks
         check(budget.Used == 0, "dropping the connection gives back the read and its lookup arrays");
     }
 
+    /// <summary>The detail fixture with a case set whose column is not a bit: the read fails on its very last value.</summary>
+    private static System.Data.DataTableReader Broken()
+    {
+        var whole = SearchDetailChecks.Fixture(caseSensitive: true);
+        var tables = new List<System.Data.DataTable>();
+        while (!whole.IsClosed)
+        {
+            var table = new System.Data.DataTable();
+            table.Load(whole);
+            tables.Add(table);
+        }
+        var wrong = new System.Data.DataTable();
+        wrong.Columns.Add("cased", typeof(int));
+        wrong.Rows.Add(1);
+        tables[^1] = wrong;
+        return new System.Data.DataTableReader([.. tables]);
+    }
+
     private static async Task Arrays(Action<bool, string> check)
     {
         var (index, budget, connection, pool) = await Read();
         var before = budget.Used;
-        var lookup = new IndexLookup(connection, budget, false, null, NoNames, NoSkips);
+        var lookup = new IndexLookup(connection, budget, false, Idle);
         check(index.LookupBytes == 0, "a read builds no lookup arrays until the first lookup");
         lookup.Objects("Sales", "dbo", "Orders");
         var table = index.Table;
@@ -129,7 +152,7 @@ internal static class SearchLookupChecks
         var tight = await Read();
         var spare = tight.Budget.Limit - tight.Budget.Used;
         tight.Budget.Force(spare - 3);
-        var scanned = new IndexLookup(tight.Connection, tight.Budget, false, null, NoNames, NoSkips);
+        var scanned = new IndexLookup(tight.Connection, tight.Budget, false, Idle);
         var orders = scanned.Objects("Sales", "dbo", "Orders").Value.Single();
         check(tight.Index.LookupBytes == 0 && tight.Index.Lookup(tight.Budget) is null && scanned.Columns(orders).Count == 9 && scanned.ForeignKeys(orders).Count == 2
             && scanned.ReferencedBy(scanned.Objects("Sales", "dbo", "Customers").Value.Single()).Count == 1,
@@ -153,7 +176,7 @@ internal static class SearchLookupChecks
         connection.Put(Held("Cased", true, null, Table("dbo", "Item"), Table("dbo", "ITEM"), Table("Sales", "item")));
         connection.Put(Held("Plain", false, null, Table("dbo", "Item")));
         connection.Put(Held("Unknown", null, null, Table("dbo", "Item")));
-        var lookup = new IndexLookup(connection, budget, false, null, NoNames, NoSkips);
+        var lookup = new IndexLookup(connection, budget, false, Idle);
         check(lookup.Objects("Cased", "dbo", "Item").Value is [{ Name: "Item" }] && lookup.Objects("Cased", "dbo", "ITEM").Value is [{ Name: "ITEM" }]
             && lookup.Objects("Cased", "dbo", "item").Value.Count == 0 && lookup.Objects("Cased", "sales", "item").Value.Count == 0 && lookup.Objects("Cased", "Sales", "item").Value is [{ Schema: "Sales" }]
             && lookup.Objects("Cased", null, "item").Value is [{ Schema: "Sales" }],
@@ -161,7 +184,7 @@ internal static class SearchLookupChecks
         check(lookup.Objects("Plain", "DBO", "ITEM").Value.Count == 1 && lookup.Objects("Unknown", "dbo", "iTeM").Value.Count == 1,
             "one that ignores case, or whose rule is unknown, finds names in any case");
         connection.Put(Held("cased", true, null, Table("dbo", "Other")));
-        var two = new IndexLookup(connection, budget, false, null, NoNames, NoSkips);
+        var two = new IndexLookup(connection, budget, false, Idle);
         check(lookup.Database("CASED").Database == "Cased" && two.Database("CASED").Database == "CASED" && two.Objects("CASED", "dbo", "Item").Database.State == LookupState.Absent
             && two.Database("cased").Held?.Table.Name(0) == "Other" && two.Database("Cased").Held?.Table.Count == 3,
             "a database name that differs only in case from one known name resolves to it, from more than one to none of them; an exact name always wins (a lookup sees the reads held when it was made)");
@@ -171,39 +194,56 @@ internal static class SearchLookupChecks
     {
         var budget = new IndexBudget(1 << 20);
         var connection = new ConnectionIndex(budget);
+        var first = new DateTime(2026, 11, 20, 11, 0, 0, DateTimeKind.Utc);
         var started = new DateTime(2026, 11, 20, 12, 0, 0, DateTimeKind.Utc);
         var item = new IndexedObject("table", "tables", "dbo", "Item");
-        connection.Put(Held("Old", false, started.AddMinutes(-5), item));
-        connection.Put(Held("New", false, started.AddMinutes(1), item));
-        var left = Held("Left", false, started.AddMinutes(1), item);
+        // The first build: Old and Cut read, Timed read then a rebuild of it timed out (its read kept), Broken failed part way (its
+        // partial read held), Denied refused, Left read without its children.
+        var ledger = new LookupLedger();
+        ledger.Start(first);
+        ledger.List(["Old", "Timed", "Broken", "Denied", "Left", "Cut"]);
+        connection.Put(Held("Old", false, first.AddMinutes(1), item));
+        connection.Put(Held("Timed", false, first.AddMinutes(1), item));
+        connection.Put(Held("Broken", false, first.AddMinutes(2), item));
+        var left = Held("Left", false, first.AddMinutes(1), item);
         left.ChildrenLeftOut = true;
         connection.Put(left);
-        connection.Put(Held("Timed", false, started.AddMinutes(-5), item));
-        var cut = new DatabaseIndex("Cut", ObjectTable.Of([item]), 0, 1, 1, readAt: started.AddMinutes(1));
-        connection.Put(cut);
-        var listed = new HashSet<string>(StringComparer.Ordinal) { "Old", "New", "Left", "Timed", "Cut", "Waiting", "Denied" };
-        var skips = new Dictionary<string, ObjectIndexSkip>(StringComparer.Ordinal)
-        {
-            ["Left"] = new("Left", ObjectSearchService.ChildrenLeftOut, "left out"),
-            ["Timed"] = new("Timed", "TIMEOUT", "too slow"),
-            ["Denied"] = new("Denied", "NO_DB_ACCESS", "no access")
-        };
-        var building = new IndexLookup(connection, budget, true, started, listed, skips);
-        check(building.Database("Old") is { State: LookupState.Building, ReadAt: { } old, Held: not null } && old < started
-            && building.Objects("Old", "dbo", "Item").Value.Count == 1,
-            "during a build, a database read only by an earlier build is building, and its earlier read still answers");
-        check(building.Database("New") is { State: LookupState.Ready, Gaps: LookupGaps.None, Skip: null } && building.Database("Waiting") is { State: LookupState.Building, Held: null, ReadAt: null }
-            && building.Database("Gone") is { State: LookupState.Absent },
-            "one this build read is ready; one it listed but has not read is building with nothing held; one it does not know is absent");
-        check(building.Database("Left") is { State: LookupState.Partial, Gaps: LookupGaps.ChildrenLeftOut, Skip: null }
-            && building.Database("Cut") is { State: LookupState.Partial, Gaps: LookupGaps.DefinitionsCut },
-            "a read without its children, or with definitions cut, is partial with the gap named (CHILDREN_LEFT_OUT is not a skip)");
-        check(building.Database("Timed") is { State: LookupState.Skipped, Skip.Code: "TIMEOUT", Held: not null } && building.Database("Denied") is { State: LookupState.Skipped, Skip.Code: "NO_DB_ACCESS", Held: null }
-            && building.Objects("Denied", "dbo", "Item") is { Database.State: LookupState.Skipped, Value.Count: 0 },
-            "a database this build could not read is skipped with its reason, an earlier read still answering where there is one");
-        var after = new IndexLookup(connection, budget, false, started, listed, skips);
-        check(after.Database("Old") is { State: LookupState.Ready } && after.Database("Waiting") is { State: LookupState.Absent },
-            "once the build ends, an earlier read is ready and a database it never read is absent");
+        connection.Put(new DatabaseIndex("Cut", ObjectTable.Of([item]), 0, 1, 1, readAt: first.AddMinutes(1)));
+        foreach (var name in new[] { "Old", "Timed", "Cut" }) ledger.Done(name, null, first.AddMinutes(1));
+        ledger.Done("Broken", new("Broken", "CATALOG_ERROR", "failed part way"), first.AddMinutes(2));
+        ledger.Done("Denied", new("Denied", "NO_DB_ACCESS", "no access"), first.AddMinutes(2));
+        ledger.Done("Left", new("Left", ObjectSearchService.ChildrenLeftOut, "left out"), first.AddMinutes(1));
+        ledger.Done("Timed", new("Timed", "TIMEOUT", "too slow"), first.AddMinutes(3));
+        LookupDatabase At(bool building, string name) => new IndexLookup(connection, budget, building, ledger.Snapshot()).Database(name);
+
+        check(At(false, "Old") is { State: LookupState.Ready, Gaps: LookupGaps.None, Skip: null } && At(false, "Gone") is { State: LookupState.Absent },
+            "after a build, a database it read whole is ready and one it does not know absent");
+        check(At(false, "Left") is { State: LookupState.Partial, Gaps: LookupGaps.ChildrenLeftOut, Skip: null } && At(false, "Cut") is { State: LookupState.Partial, Gaps: LookupGaps.DefinitionsCut },
+            "a read without its children, or with definitions cut, is partial with the gap named (CHILDREN_LEFT_OUT is not a failure)");
+        check(At(false, "Broken") is { State: LookupState.Skipped, Skip.Code: "CATALOG_ERROR", Held: not null } && At(false, "Timed") is { State: LookupState.Skipped, Skip.Code: "TIMEOUT", Held: not null }
+            && At(false, "Denied") is { State: LookupState.Skipped, Skip.Code: "NO_DB_ACCESS", Held: null }
+            && new IndexLookup(connection, budget, false, ledger.Snapshot()).Objects("Denied", "dbo", "Item") is { Database.State: LookupState.Skipped, Value.Count: 0 },
+            "a database whose last read failed is skipped with its reason, a partial or earlier read still answering where there is one");
+
+        // A second build starts and lists the same databases plus a new one.
+        ledger.Start(started);
+        ledger.List(["Old", "Timed", "Broken", "Denied", "Left", "Cut", "New"]);
+        check(At(true, "Old") is { State: LookupState.Building, Held: not null } && At(true, "Broken") is { State: LookupState.Building, Skip.Code: "CATALOG_ERROR" }
+            && At(true, "New") is { State: LookupState.Building, Held: null, ReadAt: null } && At(true, "Gone") is { State: LookupState.Absent }
+            && new IndexLookup(connection, budget, true, ledger.Snapshot()).Objects("Old", "dbo", "Item").Value.Count == 1,
+            "during a build, a database it has not reached is building, its earlier read and skip still there; one it does not know is absent");
+        // It is stopped (or its listing fails) after reading only Old again: the databases it did not reach keep their last outcome.
+        connection.Put(Held("Old", false, started.AddMinutes(1), item));
+        ledger.Done("Old", null, started.AddMinutes(1));
+        check(At(true, "Old") is { State: LookupState.Ready } && At(false, "Broken") is { State: LookupState.Skipped, Skip.Code: "CATALOG_ERROR" }
+            && At(false, "Denied") is { State: LookupState.Skipped } && At(false, "Timed") is { State: LookupState.Skipped } && At(false, "New") is { State: LookupState.Absent },
+            "a stopped build leaves each database it did not reach as its last read left it: a partial read stays skipped, never ready");
+        // A later build reads Broken whole and no longer lists Denied.
+        connection.Put(Held("Broken", false, started.AddMinutes(5), item));
+        ledger.Done("Broken", null, started.AddMinutes(5));
+        ledger.List(["Old", "Timed", "Broken", "Left", "Cut", "New"]);
+        check(At(false, "Broken") is { State: LookupState.Ready, Skip: null } && At(false, "Denied") is { State: LookupState.Absent, Skip: null },
+            "a whole read clears a database's skip, and a listing that no longer names a database drops its skip");
     }
 
     private static void Resource(Action<bool, string> check)
@@ -214,7 +254,7 @@ internal static class SearchLookupChecks
         var system = ObjectTable.Of([view, ObjectSearchChild(view, "name"), ObjectSearchChild(view, "object_id")]);
         connection.PutResource(new ResourceSet(new ResourceKey("17.0.1000.7", 3, 1, null, 1, false), system, 0, 0));
         connection.Put(Held("Sales", false, null, new IndexedObject("table", "tables", "dbo", "Orders")));
-        var lookup = new IndexLookup(connection, budget, false, null, NoNames, NoSkips);
+        var lookup = new IndexLookup(connection, budget, false, Idle);
         var found = lookup.Objects("Sales", "sys", "objects");
         check(found.Value is [{ Database: "Sales", Source: null, Kind: "view" } objects] && lookup.Columns(objects).Select(column => column.Name).SequenceEqual(["name", "object_id"])
             && lookup.Objects("Elsewhere", "sys", "objects").Value.Count == 0,
