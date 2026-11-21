@@ -109,3 +109,14 @@ describe('row counts of a windowed result', () => {
     }
   })
 })
+
+describe('Load into memory and the query that made the result', () => {
+  it('waits for that query to end: its budget is marked executing until every set is final', () => {
+    const execution = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.BigQueryExecution.cs'), 'utf8')
+    expect(execution).toMatch(/budget = store\.BeginQuery\(args\.SessionId\);\n\s*budget\.Executing = true;/)
+    expect(execution).toMatch(/set\.Complete\(\);\n\s*events\.Closed\(set\);\n\s*\}\n(?:\s*\/\/[^\n]*\n)*\s*if \(budget is not null\) budget\.Executing = false;/)
+    const residence = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.BigQueryResidence.cs'), 'utf8')
+    expect(residence.indexOf('if (set.Budget.Executing) throw new RequestException("BUSY"')).toBeGreaterThan(0)
+    expect(residence.indexOf('if (set.Budget.Executing) throw new RequestException("BUSY"')).toBeLessThan(residence.indexOf('set.Promote(window.TotalRows)'))
+  })
+})

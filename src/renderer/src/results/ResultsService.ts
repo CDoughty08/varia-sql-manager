@@ -1639,9 +1639,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     this.settle(run, descriptor)
     const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
+    // Among several results the sentence names which one switched.
+    const subject = entry && run.sets.length > 1 ? distinctName(entry, run.sets) : 'The result'
     const text = (descriptor.residence === 'remote'
-      ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
-      : 'The result is loading into memory.') + removed
+      ? `${subject} is now windowed in BigQuery: rows are read as you scroll.`
+      : `${subject} is loading into memory.`) + removed
     if (announce) this.announce(tabId, text)
     return text
   }

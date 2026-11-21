@@ -214,6 +214,7 @@ internal sealed partial class SqlService
             session.StopActive = running.Cancel;
             // This query now owns the tab, so the tab's earlier results are released before any new row is stored.
             budget = store.BeginQuery(args.SessionId);
+            budget.Executing = true;
             if (session.Tail is { } tail)
             {
                 // The session's last job (stopped, or cut off by the network) must reach DONE first; Stop cancels it.
@@ -457,6 +458,8 @@ internal sealed partial class SqlService
                 set.Complete();
                 events.Closed(set);
             }
+            // Its sets are final now: Load into memory may take one.
+            if (budget is not null) budget.Executing = false;
             if (queued)
             {
                 session.StopActive = null;

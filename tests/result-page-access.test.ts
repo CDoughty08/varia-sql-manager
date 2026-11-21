@@ -45,10 +45,12 @@ describe('result page access', () => {
     // A windowed result has no stored pages: its rows stay in BigQuery (docs/architecture.md, Results). Each reader finds its
     // set through Stored(...), which answers REMOTE_RESULT; only these find a set another way, each for its own reason.
     // Inside the store's own partial files a bare Find( is the store's; everywhere else any spelling of a store's Find(.
-    const service = sources.filter(file => file.startsWith('backend/Varia.Backend/') && file !== 'backend/Varia.Backend/Results/ResultStore.cs')
-    const finds = (file: string) => /\/ResultStore\.[^/]+\.cs$/.test(file) ? /(?:^|[^\w.]|\bthis\.)Find\(|\b_?[sS]tore\??\.Find\(/ : /\b_?[sS]tore\??\.Find\(/
+    // Whatever a store is called (store, _store, Results, resultStore), and its partial files' own bare calls.
+    const service = sources.filter(file => file.startsWith('backend/Varia.Backend/'))
+    const anyStore = /\b\w*(?:[sS]tore|Results)\??\.Find\(/
+    const finds = (file: string) => /\/ResultStore(?:\.[^/]+)?\.cs$/.test(file) ? new RegExp(`(?:^|[^\\w.]|\\bthis\\.)Find\\(|${anyStore.source}`) : anyStore
     const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
-      .filter(([file, , line]) => finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line))
+      .filter(([file, , line]) => finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line) && !/public ResultSetBuffer\? Find\(/.test(line))
       .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
     expect(unguarded.sort()).toEqual([
       // Visibility only asks whether the result exists.
@@ -91,6 +93,13 @@ describe('result page access', () => {
     expect(readFileSync('backend/Varia.Backend/Results/ResultSearch.cs', 'utf8')).toMatch(/set\.IsReleased \|\| set\.Revision != revision \|\|/)
     expect(service2).toMatch(/if \(set\.Revision != revision\) throw RemoteRefused\(\);/)
     expect(service2).toMatch(/sets\.Select\(\(set, i\) => set\.IsRemote \|\| set\.Revision != revisions\[i\]\)\.Any\(moved => moved\)/)
+    // Only the residence code builds a block cache or switches a set, so every switch bumps the revision, sends
+    // resultSet.residence and settles the budget there; the store's Demote is the one caller of the set's.
+    const callers = (pattern: RegExp) => [...new Set(lines(pattern, []).filter(at => at.startsWith('backend/Varia.Backend/')).map(at => at.replace(/:\d+$/, '')))].sort()
+    expect(callers(/\bnew RemoteResult\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\.Promote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\bstore\.Demote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    expect(callers(/\.Demote\(/)).toEqual(['backend/Varia.Backend/Results/ResultStore.cs', 'backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(readFileSync('backend/Varia.Backend/SqlService.BigQueryResidence.cs', 'utf8')).toMatch(/internal static ResultSetBuffer Stored\(ResultSetBuffer set\) => set\.IsRemote \? throw RemoteRefused\(\) : set;/)
   })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {

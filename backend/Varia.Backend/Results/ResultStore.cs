@@ -22,6 +22,10 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
     private int stopped;
     private long refusedBytes, stoppedBytes;
     public string SessionId { get; } = sessionId;
+    private volatile bool executing;
+    /// <summary>The query that owns this budget is still executing (BigQuery): its sets may still change, so Load into
+    /// memory waits for it to end.</summary>
+    public bool Executing { get => executing; set => executing = value; }
     /// <summary>The live subscription this budget belongs to, or null for a query's.</summary>
     public LiveBudget? Live { get; } = live;
     public long MaxBytes { get; } = maxBytes;

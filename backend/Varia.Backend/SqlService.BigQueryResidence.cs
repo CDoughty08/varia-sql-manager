@@ -67,7 +67,8 @@ internal sealed partial class SqlService
         if (residence == BigQueryResidence.Memory || first.PageToken is null || first.RowCount == 0) return null;
         // The first page's rows as pages: what a row costs in the store, and the cache's first block.
         var measured = new RemoteBlockWriter(set.ResultId, set.Wires, 0);
-        WriteRows(first, plan, measured, int.MaxValue);
+        // Its values' read warnings go to Messages here: the column plan says each once, so no later read of this page would.
+        WriteRows(first, plan, measured, int.MaxValue, warn: text => messages.Add(text));
         var pages = measured.Finish();
         var rowCost = (double)pages.Sum(page => page.Cost) / Math.Max(1, measured.Rows);
         var wanted = args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
@@ -149,7 +150,7 @@ internal sealed partial class SqlService
     }
 
     /// <summary>Writes a page's rows (after <paramref name="skip"/>, at most <paramref name="max"/>) into a block writer.</summary>
-    private static void WriteRows(BigQueryPage page, BigQueryColumnPlan plan, RemoteBlockWriter writer, int max, int skip = 0)
+    private static void WriteRows(BigQueryPage page, BigQueryColumnPlan plan, RemoteBlockWriter writer, int max, int skip = 0, Action<string>? warn = null)
     {
         if (page.Rows.ValueKind != System.Text.Json.JsonValueKind.Array) return;
         var at = 0;
@@ -159,7 +160,7 @@ internal sealed partial class SqlService
             if (at++ < skip) continue;
             if (written++ >= max) break;
             var builder = writer.BeginRow();
-            try { plan.ReadRow(row, builder, NoWarning); }
+            try { plan.ReadRow(row, builder, warn ?? NoWarning); }
             catch { writer.AbortRow(); throw; }
             writer.CommitRow();
         }
@@ -275,6 +276,8 @@ internal sealed partial class SqlService
         if (set.Remote is not { Source: BigQueryWindow window } remote) throw new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");
         var connection = window.Connection;
         if (bigQuery.Find(connection.Id) != connection) throw new RequestException("NOT_CONNECTED", "The connection was closed.");
+        // The script that made it is still running: its end would complete the set under the load, and its budget is shared.
+        if (set.Budget.Executing) throw new RequestException("BUSY", "This result's query is still running. Load it into memory once the query has finished.");
         if (BudgetStopped(set.Budget) is { } stopped) throw stopped;
         using var cancellation = new CancellationTokenSource();
         var running = new RunningQuery(connection.Id, args.QueryId, cancellation);

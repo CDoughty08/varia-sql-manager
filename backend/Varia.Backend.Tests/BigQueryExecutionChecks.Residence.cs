@@ -39,6 +39,35 @@ internal static partial class BigQueryExecutionChecks
         await RemoteRacesAsync(check);
         Trace("TwoLoads");
         await TwoLoadsAsync(check);
+        Trace("LoadWhileRunning");
+        await LoadWhileRunningAsync(check);
+    }
+
+    /// <summary>Load into memory waits for the result's own query to end; a first page's unreadable values are said whichever
+    /// residence the result takes.</summary>
+    static async Task LoadWhileRunningAsync(Action<bool, string> check)
+    {
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var set = harness.Service.Results.Find(executed!.ResultSets.Single().ResultId)!;
+            var finished = !set.Budget.Executing;
+            set.Budget.Executing = true;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            check(finished && code == "BUSY" && result is null && set.IsRemote && set.Revision == 0,
+                $"a load while its query still runs is refused and leaves the result windowed: {finished} {code} {message} {set.IsRemote} {set.Revision}");
+        }
+        foreach (var (name, change) in new (string, Action<JsonObject>?)[] { ("windowed", Windowed), ("in memory", null) })
+        {
+            var jobs = Lines(3000);
+            jobs.Rows[0] = Row("12x", "bad");
+            using var harness = new Harness(jobs);
+            await harness.ConnectAsync();
+            var (code, result, _) = await harness.Execute("SELECT n, s FROM t", change);
+            check(code == "ok" && result!.Messages.Count(entry => entry.Text.Contains("could not be read", StringComparison.Ordinal)) == 1,
+                $"a first page's unreadable value is said once for a result kept {name}: {code} {string.Join(" / ", result?.Messages.Select(entry => entry.Text) ?? [])}");
+        }
     }
 
     /// <summary>A scripted remote table for <see cref="RemoteResult"/>: row n reads "r{n}", padded; it records each fetch,
@@ -692,8 +721,8 @@ internal static partial class BigQueryExecutionChecks
             using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
             var (next, rows) = await ReadRemote(remote, 0, 10);
             var most = remote.CachedBytes;
-            SpinWait.SpinUntil(() => blocks.Calls.Count >= 3 && remote.CachedBlocks().Length >= 1, 5000);
-            for (var i = 0; i < 50; i++) { most = Math.Max(most, remote.CachedBytes); Thread.Sleep(10); }
+            // Sampled until the read-ahead's fetches have all settled.
+            SpinWait.SpinUntil(() => { most = Math.Max(most, remote.CachedBytes); return blocks.Calls.Count >= 3 && remote.FetchingBlocks() == 0; }, 15_000);
             check(next >= 10 && Consecutive(rows, 0, 10) && remote.BlockRows < RemoteResult.MinBlockRows && most <= remote.CacheLimit && store.WindowCacheBytes <= remote.CacheLimit,
                 $"very wide rows read in blocks that fit the cache, which stays within its limit: {next} {remote.BlockRows} {most} {remote.CacheLimit}");
         }
@@ -790,8 +819,8 @@ internal static partial class BigQueryExecutionChecks
             };
             await ReadRemote(remote, 0, 10);
             if (again is not null) await again;
-            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2], 10_000);
-            Thread.Sleep(100);
+            // Every fetch settled: a stray second fetch of block 1 would have started by now.
+            SpinWait.SpinUntil(() => remote.CachedBlocks() is [0, 1, 2] && remote.FetchingBlocks() == 0, 10_000);
             remote.Dispose();
             var freed = SpinWait.SpinUntil(() => store.WindowCacheBytes == 0 && store.UsedBytes == 0, 5000);
             check(fired == 1 && freed && blocks.Calls.Count(call => call.First == remote.BlockRows) == 1,
