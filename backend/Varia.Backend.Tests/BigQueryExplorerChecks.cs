@@ -349,6 +349,7 @@ internal static class BigQueryExplorerChecks
         JsonNode? ddl = "CREATE TABLE `varia-alpha.sales.orders`\n(\n  id INT64 NOT NULL\n)";
         var rows = 1;
         var hold = false;
+        JsonObject? jobError = null;
         BigQueryFake Routes(BigQueryFake fake) => fake
             .On("POST", BigQueryFake.Jobs, request =>
             {
@@ -359,7 +360,9 @@ internal static class BigQueryExplorerChecks
                 return new BigQueryFake.Reply(200, new JsonObject
                 {
                     ["kind"] = "bigquery#job", ["jobReference"] = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = id, ["location"] = "EU" },
-                    ["status"] = new JsonObject { ["state"] = "RUNNING" }, ["configuration"] = new JsonObject { ["jobType"] = "QUERY" }
+                    ["status"] = jobError is null ? new JsonObject { ["state"] = "RUNNING" }
+                        : new JsonObject { ["state"] = "DONE", ["errorResult"] = jobError.DeepClone(), ["errors"] = new JsonArray(jobError.DeepClone()) },
+                    ["configuration"] = new JsonObject { ["jobType"] = "QUERY" }
                 }.ToJsonString());
             })
             .On("GET", Base + "/queries/[^/]+", request =>
@@ -422,6 +425,13 @@ internal static class BigQueryExplorerChecks
             capped.Service.BigQuery.DdlPoll = TimeSpan.FromMilliseconds(5);
             await capped.ConnectAsync(key, cap: 1_048_576);
             var run = await capped.Script("create", (JsonObject)orders.DeepClone(), cap: 50_000_000);
+            jobError = new JsonObject { ["reason"] = "bytesBilledLimitExceeded", ["message"] = "Query exceeded limit for bytes billed: 1048576. 10485760 or higher required." };
+            var overCap = await capped.Script("create", (JsonObject)orders.DeepClone());
+            jobError = new JsonObject { ["reason"] = "accessDenied", ["message"] = "Access Denied: Table varia-alpha:sales.INFORMATION_SCHEMA.TABLES" };
+            var denied = await capped.Script("create", (JsonObject)orders.DeepClone());
+            jobError = null;
+            check(overCap.Result?.Error?.Code == "COST_CAP" && denied.Result?.Error?.Code == "PERMISSION_DENIED",
+                $"a CREATE job BigQuery fails keeps its own error (COST_CAP, PERMISSION_DENIED): {overCap.Result?.Error?.Code} {overCap.Result?.Error?.Message} {denied.Result?.Error?.Code}");
             check(run.Result?.Error is null && inserts.Last()["configuration"]!["query"]!["maximumBytesBilled"]!.ToString() == "1048576",
                 "the connection's own cap wins over the one the prompts set: " + inserts.Last()["configuration"]!["query"]!["maximumBytesBilled"]);
 
