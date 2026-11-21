@@ -316,8 +316,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     }
     const rowOf = (column: number | undefined) => column === undefined ? undefined : state.rows.indexOf(rows[column])
     const typeProblems = rows.flatMap((row, column) => row.typeError ? [{ column, property: 'dataType' as const, message: row.typeError }] : [])
-    const comparison = state.model ? { caseSensitive: state.model.caseSensitiveNames, accentSensitive: state.model.accentSensitiveNames } : undefined
-    const problems = [...typeProblems, ...designProblems(design, state.model?.band, comparison).filter(problem => !(problem.property === 'dataType' && rows[problem.column ?? -1]?.typeError))]
+    const problems = [...typeProblems, ...designProblems(design, state.model?.band).filter(problem => !(problem.property === 'dataType' && rows[problem.column ?? -1]?.typeError))]
       .sort((a, b) => (a.column ?? -1) - (b.column ?? -1))
       .map(problem => ({ ...problem, row: rowOf(problem.column) }))
     return { design, problems }
@@ -378,8 +377,11 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       : !result.ok && result.code === 'CANCELLED' ? designerStrings.stoppedUnknown
         : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? unknownOutcomeMessage
           : value?.error?.message ?? error(result) ?? 'The table could not be saved.'
-    this.patch(id, { phase: 'ready', error: message })
+    // The preflight's refusal of a column (a name the catalog collation finds used twice) makes its name cell current.
+    const row = value?.error?.column === undefined ? -1 : state.rows.indexOf(TableDesignerService.columnRows(state)[value.error.column])
+    this.patch(id, { phase: 'ready', error: message, ...row >= 0 ? { current: { row, column: 'name' as const } } : {} })
     this.show(id)
+    if (row >= 0) this.options.focus?.(id)
     return false
   }
   /** The first problem refuses Save or Generate Change Script: it shows, and its cell becomes current. */

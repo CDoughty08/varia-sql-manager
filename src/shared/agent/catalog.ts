@@ -212,7 +212,7 @@ export const agentPlatformGates: { readonly [F in AgentFeature]: AgentGate } = {
   eventLogNotifications: { title: 'Write to the Windows Application event log', platforms: ['windows'] },
   errorLogs: { title: 'Agent error logs', platforms: ['windows', 'linux', 'managedInstance'], note: 'Managed Instance reads them through `sp_readmierrorlog`; the others through `xp_readerrorlog`.' },
   errorLogArchives: { title: 'Agent error log archives (`xp_enumerrorlogs`)', platforms: ['windows'], note: 'SQL Server 2022 on Linux answers `xp_enumerrorlogs 2` with no result set, so Linux shows Current only; Managed Instance too until a Managed Instance check shows archives list there.' },
-  agentPropertiesWrite: { title: 'Changing SQL Server Agent Properties', platforms: ['windows', 'linux'] },
+  agentPropertiesWrite: { title: 'Changing SQL Server Agent Properties', platforms: ['windows'], note: 'On Linux mssql-conf sets them (`sp_set_sqlagent_properties` writes the registry); Delete old history still runs there.' },
   windowsCredentials: { title: 'Credentials with a Windows identity', platforms: ['windows', 'linux'] },
   serviceControl: { title: 'Start, Stop and Restart of the Agent service', platforms: ['windows'], note: 'Not on a failover cluster instance (`SERVERPROPERTY(\'IsClustered\') = 1`), where the cluster owns the service.' },
   multiServerTargets: { title: 'Multi-server (MSX/TSX) targets', platforms: [], note: 'Later on every platform; the Targets section shows the local server only.' }
@@ -330,7 +330,17 @@ export const agentLimits = {
   /** How long the live checks wait for Agent to come up after the server does, in ms. */
   agentUpWaitMs: 120_000,
   /** `agent.profile`'s own budget from the moment it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role). */
-  profileMs: 10_000
+  profileMs: 10_000,
+  /** SQL Server Agent Properties › History (AG-8a): the largest Maximum job history log size it sends, in rows (Maximum rows per job is 1 to it). */
+  historyMaxRows: 999_999,
+  /** The days of history "What this keeps" measures each job's rate over. */
+  retentionDays: 7,
+  /** Jobs "What this keeps" lists, those with the most rows first; more set `truncated`. */
+  retentionJobs: 200,
+  /** Ages, in whole days, the describe counts history rows by (older rows count in the last), so "Delete old history now" can say about how many rows it removes. */
+  historyAgeDays: 400,
+  /** The most days, weeks or months "Delete old history now" goes back: 999 months stays inside `datetime`, so the cut-off is never NULL. */
+  purgeCount: 999
 } as const
 export type AgentLimit = keyof typeof agentLimits
 
@@ -408,7 +418,8 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_stop_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id'] },
   { name: 'sp_update_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@enabled', '@new_name'] },
   { name: 'sp_delete_job', lane: 'AG-2', database: 'msdb', arguments: ['@job_id', '@delete_history', '@delete_unused_schedule'] },
-  { name: 'sp_purge_jobhistory', lane: 'AG-6a', database: 'msdb' },
+  // Agent Properties' server-wide purge (AG-8a) passes only @oldest_date; Delete History (AG-5a) adds @job_id with its own template.
+  { name: 'sp_purge_jobhistory', lane: 'AG-8a', database: 'msdb', arguments: ['@oldest_date'] },
   { name: 'sp_add_job', lane: 'AG-6a', database: 'msdb' },
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb' },
   { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb' },
@@ -429,7 +440,7 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_add_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_update_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_delete_notification', lane: 'AG-7', database: 'msdb' },
-  { name: 'sp_set_sqlagent_properties', lane: 'AG-8a', database: 'msdb' },
+  { name: 'sp_set_sqlagent_properties', lane: 'AG-8a', database: 'msdb', arguments: ['@sqlserver_restart', '@monitor_autostart', '@jobhistory_max_rows', '@jobhistory_max_rows_per_job'] },
   { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb' },
   { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb' },
   { name: 'sp_delete_proxy', lane: 'AG-8b', database: 'msdb' },
@@ -448,6 +459,7 @@ export const agentErrorNumbers: readonly { readonly number: number, readonly cod
   { number: 14234, code: 'SQL_ERROR', meaning: 'An argument is not valid (such as an owner login that does not exist).' },
   { number: 14266, code: 'SQL_ERROR', meaning: 'An argument is not one of its valid values (such as a schedule\'s frequency type).' },
   { number: 14372, code: 'IN_USE', meaning: 'A schedule is still used by a job.' },
+  { number: 14392, code: 'PERMISSION_DENIED', meaning: 'Only sysadmin and SQLAgentOperatorRole may purge the history of every job, or of a job the login does not own.' },
   { number: 15281, code: 'AGENT_STOPPED', meaning: 'Agent XPs is off (SQL Server Agent is stopped or disabled).' },
   { number: 22022, code: 'JOB_STATE', meaning: 'SQL Server Agent refused a start or stop; decided by a re-read, never by number.' },
   { number: 22003, code: 'SQL_ERROR', meaning: 'Every `xp_servicecontrol` failure (only its `QueryState` read is used); the Windows code is in its text.' }
