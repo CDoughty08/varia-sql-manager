@@ -1242,7 +1242,8 @@ export class GridView {
     if (slot?.header && slot.header.column >= 0) title = this.rotated ? this.rowTitle(slot.header.column, slot.header.label) : this.headerTitle(slot.header.column)
     else if (slot?.cell) {
       const bits = slot.cell.bits
-      if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
+      if (bits & LOAD) title = ''
+      else if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
       else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column)}.`
       else if (bits & LINK) title = 'Open in a new tab (Enter)'
     } else if (this.rotated && slot?.row && slot.row.row >= 0) title = this.headerTitle(slot.row.row)
@@ -1734,7 +1735,7 @@ export class GridView {
       // 4980.00", in two rows "Price, old value 5120.00" on the − half and "Price, new value 4980.00" on the + half.
       const changedName = bits & CHG && active ? this.changedName(activeCell, active.row, active.column) : undefined
       const diff = changedName ? '' : bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
-      const label = bits & LOAD ? 'Loading' : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
+      const label = bits & LOAD ? (bits & ERR ? 'Not loaded, use Retry to read these rows again' : 'Loading') : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
         + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned && !changedName ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
@@ -1971,7 +1972,11 @@ export class GridView {
     // The cell's place in the result: its text, link and marks are read there; the selection and the active cell are as drawn.
     const sourceRow = this.rotated ? column : row, sourceColumn = this.rotated ? row : column
     const window = tile(sourceRow, sourceColumn)
-    if (!window || sourceRow - window.first >= window.count) bits = LOAD
+    if (!window || sourceRow - window.first >= window.count) {
+      bits = LOAD
+      // A tile whose read failed (the strip offers Retry) is not loading: LOAD with ERR names it as not loaded.
+      if (this.data.failed(tileKey(Math.floor(sourceRow / this.tiles.rows), Math.floor(sourceColumn / this.tiles.columns)))) bits |= ERR
+    }
     else {
       const index = (sourceRow - window.first) * (window.colEnd - window.colStart) + sourceColumn - window.colStart
       const flags = window.flags[index]
