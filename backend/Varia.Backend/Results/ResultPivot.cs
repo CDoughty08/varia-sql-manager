@@ -232,7 +232,8 @@ internal static class ResultPivoter
                         Add(item, cell, parsed, number);
                         Add(item, totalCell, parsed, number);
                     }
-                    else if (double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+                    // A float or real whose display text reads back as another value adds its exact value.
+                    else if (view.TryExact(value.Column, r, out var number) || double.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out number))
                     {
                         if (cell >= 0) { item.Doubles[cell] += number; item.Counts[cell]++; }
                         item.Doubles[totalCell] += number;
@@ -689,7 +690,7 @@ internal static class PivotOutput
         if (!figures.Exact)
         {
             var approximate = figures.Doubles[cell];
-            builder.EndFormatted(CellFormat.WriteFloat(builder.BeginFormatted(), value.Aggregate == PivotAggregate.Avg ? approximate / count : approximate));
+            builder.AppendFloat(value.Aggregate == PivotAggregate.Avg ? approximate / count : approximate);
             return 0;
         }
         // An overflow (past decimal(38)'s digits) shows as a cell that could not be read, where SQL Server's SUM would fail.
@@ -741,6 +742,8 @@ internal static class PivotOutput
         var span = view.Span(column, at);
         if (view.Wire(column) == WireKind.Binary) builder.AppendBinary(span, cut);
         else builder.AppendUtf8(span, cut);
+        // A float or real's exact value goes with its text, so the pivot's rows sort and filter as its source's do.
+        if (ColumnTypes.HoldsExact(source.Columns[column]) && lengths.TryExact(at, column, out var exact)) builder.KeepExact(exact);
         var rule = source.Lengths[column];
         CellSize size;
         if (lengths.TryCell(at, column, out var kept)) size = new CellSize(kept.Chars, kept.Bytes, kept.Exact && !rule.Estimated);

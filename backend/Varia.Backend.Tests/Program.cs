@@ -489,6 +489,7 @@ if (liveGroup is null)
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
+        ("FloatExact", Sync(() => FloatExactChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
         ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
         ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
@@ -558,7 +559,7 @@ if (liveGroup is null)
     // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
     // job meets packed pages through the accessor, and every packed page however small gets its n-gram filter, uncapped (PageFilter), so
     // every search there passes over the pages it can. Alone, after the first pass: the defaults are process-wide.
-    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "FloatExact", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
     Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = 0;
