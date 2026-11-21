@@ -28,6 +28,8 @@ export class RowSizes {
   private profileMax = 0
   private readMax = 0
   private disposed = false
+  /** The result's revision the blocks were read under: a residence switch reads them again. */
+  private revision: number | undefined
 
   constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void) {}
 
@@ -39,6 +41,13 @@ export class RowSizes {
     if (this.disposed) return
     const snapshot = this.handle.getSnapshot()
     if (snapshot.state === 'released' || snapshot.state === 'lost' || snapshot.rowsAvailable <= 0) return
+    if (snapshot.revision !== this.revision) {
+      this.revision = snapshot.revision
+      for (const controller of this.pending.values()) controller.abort()
+      this.pending.clear()
+      this.blocks.clear()
+      this.failed.clear()
+    }
     // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
     // rows again for every page, and compete with the reads that paint its first rows.
     const waited = this.profileFailedAt === undefined || performance.now() - this.profileFailedAt >= rowSizeLimits.retryMs
@@ -80,14 +89,19 @@ export class RowSizes {
     this.abort.signal.addEventListener('abort', stop)
     this.pending.set(block, controller)
     const first = block * rowSizeLimits.blockRows
+    const revision = this.revision
     this.handle.rowBytes(first, rowSizeLimits.blockRows, controller.signal).then(result => {
-      if (this.disposed) return
+      if (this.disposed || revision !== this.revision) return
       const estimated = new Set(result.estimated)
       this.blocks.set(block, { bytes: result.bytes, estimated })
       while (this.blocks.size > rowSizeLimits.blocks) this.blocks.delete(this.blocks.keys().next().value!)
       for (const bytes of result.bytes) if (bytes > this.readMax) this.readMax = bytes
-      this.failed.delete(block)
-      this.changed()
+      // A windowed result answers only the rows its block cache holds: a short block is asked again once it has waited, as a
+      // failed one is, not on every paint (its rows may be fetching, or never fit the cache).
+      const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
+      if (short && this.handle.getSnapshot().residence === 'remote') this.failed.set(block, performance.now())
+      else this.failed.delete(block)
+      if (result.bytes.length > 0) this.changed()
     }, () => {
       // A failed read leaves the block's bars empty; the grid asks again as it scrolls, once the block has waited.
       if (!this.disposed && !controller.signal.aborted) this.failed.set(block, performance.now())

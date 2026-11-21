@@ -102,10 +102,11 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
   // The block is read in one place, however it is spelled, so nothing reads one before its reservation.
-  // The delegate appears only as its field, the constructor's parameter and assignment (two), and that one call: never
-  // passed on, copied or called another way where a read could reach it unreserved.
-  expect(remote.match(/\bfetch\b/g)).toHaveLength(5)
-  for (const spelling of ['private readonly RemoteFetch fetch;', 'RemoteFetch fetch)', 'this.fetch = fetch;', 'await fetch(from, rows, writer, token);']) expect(remote).toContain(spelling)
+  // The delegate appears only as its field, Create's parameter and its pass to the constructor, the constructor's parameter
+  // and assignment (two), and that one call: never passed on, copied or called another way where a read could reach it
+  // unreserved.
+  expect(remote.match(/\bfetch\b/g)).toHaveLength(7)
+  for (const spelling of ['private readonly RemoteFetch fetch;', 'RemoteFetch fetch, object? source = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source };', 'RemoteFetch fetch)', 'this.fetch = fetch;', 'await fetch(from, rows, writer, token);']) expect(remote).toContain(spelling)
   expect(count(fetch, /\bfetch\s*\(/g)).toBe(1)
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.

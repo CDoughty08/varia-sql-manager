@@ -104,11 +104,14 @@ describe('result page access', () => {
     // Only the residence code builds a block cache or switches a set, so every switch bumps the revision, sends
     // resultSet.residence and settles the budget there; the store's Demote is the one caller of the set's.
     const callers = (pattern: RegExp) => [...new Set(lines(new RegExp(String.raw`^(?!\s*\/\/).*(?:${pattern.source})`), []).filter(at => at.startsWith('backend/Varia.Backend/')).map(at => at.replace(/:\d+$/, '')))].sort()
-    // Target-typed construction (RemoteResult cache = new(...)) counts too.
-    // So does a qualified one (new Results.RemoteResult(...)); a method group of Promote or Demote counts as a call.
-    const construct = /\bnew\s+(?:[\w.]+\.)?RemoteResult\s*\(|\bRemoteResult\??\s+\w+\s*=\s*new\s*\(/
-    expect(['var c = new Results.RemoteResult(s, 1);', 'RemoteResult? c = new(s, 1);', 'var c = new RemoteResult (s, 1);'].every(line => construct.test(line))).toBe(true)
-    expect(callers(construct)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    // The cache's constructor is private (a regex cannot see what a target-typed new( builds): it is built only through
+    // RemoteResult.Create, by the residence code; inside RemoteResult.cs only Create returns one. A method group of Promote
+    // or Demote counts as a call.
+    const remoteSource = readFileSync('backend/Varia.Backend/Results/RemoteResult.cs', 'utf8')
+    expect(remoteSource).toMatch(/\n\s*private RemoteResult\(ResultStore store,/)
+    expect(remoteSource).not.toMatch(/\b(?:public|internal|protected)\s+RemoteResult\s*\(/)
+    expect([...remoteSource.matchAll(/\bRemoteResult\s+(\w+)\s*\(/g)].map(match => match[1])).toEqual(['Create'])
+    expect(callers(/\bRemoteResult\.Create\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\.Promote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\bstore\.Demote\b/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\.Demote\b/)).toEqual(['backend/Varia.Backend/Results/ResultStore.cs', 'backend/Varia.Backend/SqlService.BigQueryResidence.cs'])

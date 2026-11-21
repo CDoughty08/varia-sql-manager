@@ -73,6 +73,11 @@ internal static partial class BigQueryExecutionChecks
     /// residence the result takes.</summary>
     static async Task LoadWhileRunningAsync(Action<bool, string> check)
     {
+        // The cap note is for the grid's 32-bit cap only: a Maximum rows below it caps the result itself, with no note.
+        var limited = SqlService.CapNoteFor(new QueryArgs("c", "s", null, "q", "id", 1_000_000_000, 0), 3_000_000_000L);
+        var unlimited = SqlService.CapNoteFor(new QueryArgs("c", "s", null, "q", "id", 0, 0), 3_000_000_000L);
+        check(limited is null && unlimited is not null && unlimited.Contains("of 3,000,000,000 rows", StringComparison.Ordinal),
+            "the cap note names the rows the grid would show, and only when its own cap keeps some back: " + limited + " / " + unlimited);
         // The refusal offers nothing a windowed result cannot do yet (filtering it, or loading it, has no command so far).
         var refusal = SqlService.RemoteRefused().Message;
         check(!refusal.Contains("Filter", StringComparison.Ordinal) && !refusal.Contains("load it", StringComparison.Ordinal), "a windowed result's refusal suggests nothing it cannot do yet: " + refusal);
@@ -145,7 +150,7 @@ internal static partial class BigQueryExecutionChecks
     }
 
     static RemoteResult Remote(ResultStore store, Blocks blocks, long rows = 100_000, double rowBytes = 16_384, long cache = 256L << 20, SemaphoreSlim? lane = null) =>
-        new(store, 1, OneText, rows, false, rowBytes, cache, lane ?? new SemaphoreSlim(RemoteResult.FetchesPerConnection), blocks.Fetch);
+        RemoteResult.Create(store, 1, OneText, rows, false, rowBytes, cache, lane ?? new SemaphoreSlim(RemoteResult.FetchesPerConnection), blocks.Fetch);
 
     /// <summary>Reads through the cache as results.read does; each row's number (the text after "r", before the padding).</summary>
     static async Task<(long Next, List<long> Rows)> ReadRemote(RemoteResult remote, long first, int max, uint viewer = 0, int waitMs = 15_000)
@@ -589,6 +594,23 @@ internal static partial class BigQueryExecutionChecks
             check(code == "ok" && read is { Rows: 0 } && stopped, $"a rate-limited block stops backing off once its reads have given up: {code} {read?.Rows} {remote.FetchingBlocks()}");
         }
 
+        // Reads that join a rate-limited fetch (the grid reading again) answer short, never with an error, when it stops; the
+        // limit counts the clock, each call's own retries of a 429 included.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(100);
+            harness.Service.RemoteReadWait = TimeSpan.FromMilliseconds(400);
+            lock (harness.Jobs.TableDataReplies) for (var i = 0; i < 2000; i++) harness.Jobs.TableDataReplies.Enqueue(429);
+            var codes = new List<string>();
+            for (var i = 0; i < 15; i++) codes.Add((await ReadRows(harness, id, 2500, 100)).Code);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            lock (harness.Jobs.TableDataReplies) harness.Jobs.TableDataReplies.Clear();
+            check(codes.All(code => code == "ok"), "reads joining a rate-limited fetch answer short when it stops, never QUOTA: " + string.Join(",", codes));
+        }
+
         // A read whose block is slow answers short within its wait; the grid reads again.
         using (var harness = new Harness(Lines(3000)))
         {
@@ -729,7 +751,7 @@ internal static partial class BigQueryExecutionChecks
         var set = TextChecks.Synthetic(store, "W1", 5000);
         var before = store.UsedBytes;
         var pin = set.Pin();
-        var remote = new RemoteResult(store, set.ResultId, set.Wires, 5000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var remote = RemoteResult.Create(store, set.ResultId, set.Wires, 5000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
         var demoted = store.Demote(set, remote, 5000);
         var held = store.UsedBytes;
         pin.Dispose();
@@ -740,14 +762,14 @@ internal static partial class BigQueryExecutionChecks
         check(store.UsedBytes == 0 && store.WindowCacheBytes == 0, "releasing a demoted set gives back everything: " + store.UsedBytes);
         var released = TextChecks.Synthetic(store, "W1", 10);
         store.Release([released.ResultId]);
-        var late = new RemoteResult(store, released.ResultId, released.Wires, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var late = RemoteResult.Create(store, released.ResultId, released.Wires, 10, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
         check(!store.Demote(released, late, 10) && store.UsedBytes == 0, "a released set does not demote");
 
         // A reader that found the set in memory and takes its hold after the switch is refused, never handed no pages.
         var switching = TextChecks.Synthetic(store, "W1", 2000);
         var pinned = switching.Pin();
         var sealedBefore = switching.SealedSnapshot().Length;
-        var windowedLate = new RemoteResult(store, switching.ResultId, switching.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
+        var windowedLate = RemoteResult.Create(store, switching.ResultId, switching.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch);
         store.Demote(switching, windowedLate, 2000);
         string? snapshot = null;
         try { switching.SealedSnapshot(); snapshot = "pages"; }
@@ -764,7 +786,7 @@ internal static partial class BigQueryExecutionChecks
         var searched = TextChecks.Synthetic(store, "W1", 2000);
         var stopped = ResultSearcher.Stopped(store, searched, null);
         var searchingBefore = stopped();
-        store.Demote(searched, new RemoteResult(store, searched.ResultId, searched.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+        store.Demote(searched, RemoteResult.Create(store, searched.ResultId, searched.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
         check(!searchingBefore && stopped(), $"a search stops once its set switches to windowed: {searchingBefore} {stopped()}");
         store.Release([searched.ResultId]);
     }
@@ -853,7 +875,7 @@ internal static partial class BigQueryExecutionChecks
             var set = TextChecks.Synthetic(results, "W1", 2000);
             using var gate = new ManualResetEventSlim();
             var running = harness.Service.UntilReleased(work => { gate.Wait(TimeSpan.FromSeconds(15)); work.ThrowIfCancellationRequested(); return 1; }, CancellationToken.None, set);
-            results.Demote(set, new RemoteResult(results, set.ResultId, set.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
+            results.Demote(set, RemoteResult.Create(results, set.ResultId, set.Wires, 2000, false, 100, 16L << 20, new SemaphoreSlim(4), new Blocks().Fetch), 2000);
             set.Promote(2000);
             gate.Set();
             string outcome;

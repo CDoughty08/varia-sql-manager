@@ -71,7 +71,7 @@ internal sealed partial class SqlService
         WriteRows(first, plan, measured, int.MaxValue, warn: text => messages.Add(text));
         var pages = measured.Finish();
         var rowCost = (double)pages.Sum(page => page.Cost) / Math.Max(1, measured.Rows);
-        var wanted = args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
+        var wanted = Wanted(args, total);
         var room = Math.Min(store.QueryLimit(budget) - budget.UsedBytes, store.GlobalBytes - store.UsedBytes);
         var fits = rowCost * wanted <= room / 2.0;
         if (residence == BigQueryResidence.Automatic && fits) return await KeepInMemoryAsync();
@@ -89,7 +89,7 @@ internal sealed partial class SqlService
         }
         remote.Seed(seed);
         if (!store.Demote(set, remote, total, bump: false)) return null;
-        if (remote.Capped && wanted > RemoteResult.MaxRows) messages.Add(CapNote(wanted));
+        if (CapNoteFor(args, total) is { } capped) messages.Add(capped);
         return remote;
 
         async Task<RemoteResult?> KeepInMemoryAsync()
@@ -109,15 +109,19 @@ internal sealed partial class SqlService
     internal static string CapNote(long total) => "The grid shows the first " + RemoteResult.MaxRows.ToString("N0", CultureInfo.InvariantCulture) + " of "
         + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Add a WHERE clause or LIMIT to the query to see the rest.";
 
+    /// <summary>The rows a result shows before the grid's own cap: BigQuery's total, within Maximum rows when one is set.</summary>
+    private static long Wanted(QueryArgs args, long total) => args.MaxRows > 0 ? Math.Min(total, args.MaxRows) : total;
+
+    /// <summary>The cap note when the grid's 32-bit cap, not Maximum rows, keeps rows from a windowed result; null otherwise.</summary>
+    internal static string? CapNoteFor(QueryArgs args, long total) => Wanted(args, total) is var wanted && wanted > RemoteResult.MaxRows ? CapNote(wanted) : null;
+
     /// <summary>A windowed result over <paramref name="context"/>'s destination table for the set, its blocks sized by the
     /// measured row cost and read on the connection's fetch lane.</summary>
     private RemoteResult Window(BigQueryWindow context, ResultSetBuffer set)
     {
-        var wanted = context.Args.MaxRows > 0 ? Math.Min(context.TotalRows, context.Args.MaxRows) : context.TotalRows;
-        var rows = Math.Min(wanted, RemoteResult.MaxRows);
-        return new RemoteResult(store, set.ResultId, set.Wires, rows, context.TotalRows > rows, context.RowCost, context.CacheBytes, context.Connection.FetchLane,
-            BigQueryFetch(context))
-        { Source = context };
+        var rows = Math.Min(Wanted(context.Args, context.TotalRows), RemoteResult.MaxRows);
+        return RemoteResult.Create(store, set.ResultId, set.Wires, rows, context.TotalRows > rows, context.RowCost, context.CacheBytes, context.Connection.FetchLane,
+            BigQueryFetch(context), context);
     }
 
     /// <summary>
@@ -131,7 +135,7 @@ internal sealed partial class SqlService
         if (!store.Demote(set, remote, context.TotalRows)) return false;
         events.Residence(set);
         messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.");
-        if (remote.Capped && context.TotalRows > RemoteResult.MaxRows) messages.Add(CapNote(context.TotalRows));
+        if (CapNoteFor(context.Args, context.TotalRows) is { } capped) messages.Add(capped);
         return true;
     }
 
@@ -175,16 +179,17 @@ internal sealed partial class SqlService
     /// <summary>
     /// A block's rows through tabledata.list (free, random access): from its first row, following page tokens, decoded by the
     /// query's column plan. A 404 means BigQuery's result table is gone (REMOTE_EXPIRED). A rate limit backs off with jitter
-    /// and tries again, for no longer in all than a read waits (<see cref="RemoteReadWait"/>) and within the attempts: past
-    /// that no read is left waiting, and backing off would hold a slot of the connection's lane for no one, so the block
-    /// fails and the next read of it asks again.
+    /// and tries again, never as an error, for no longer in all (by the clock, each call's own retries included) than a read
+    /// waits (<see cref="RemoteReadWait"/>) and within the attempts: past that it would hold a slot of the connection's lane
+    /// for no one, so it stops (<see cref="RemoteRetryException"/>), a read that joined it answers short, and the next read
+    /// asks again.
     /// </summary>
     private RemoteFetch BigQueryFetch(BigQueryWindow context) => async (firstRow, rows, writer, token) =>
     {
         // Fetches of one result run side by side: each decodes with its own fork of the plan.
         var plan = context.Plan.Fork();
         string? pageToken = null;
-        var backedOff = TimeSpan.Zero;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         for (var attempt = 1; writer.Rows < rows; )
         {
             BigQueryPage page;
@@ -193,11 +198,10 @@ internal sealed partial class SqlService
                 page = await bigQuery.TableRowsAsync(context.Connection, context.Table, pageToken is null ? firstRow + writer.Rows : null, (int)Math.Min(rows - writer.Rows, bigQuery.PageRows), pageToken, token);
             }
             catch (Exception error) when (!token.IsCancellationRequested && NotFound(error)) { throw new RemoteExpiredException(error); }
-            catch (Exception error) when (!token.IsCancellationRequested && RateLimited(error) && attempt < RateLimitAttempts)
+            catch (Exception error) when (!token.IsCancellationRequested && RateLimited(error))
             {
                 var delay = bigQuery.RetryDelay * (1 << Math.Min(attempt - 1, 5)) * (0.5 + Random.Shared.NextDouble());
-                if (backedOff + delay > RemoteReadWait) throw;
-                backedOff += delay;
+                if (attempt >= RateLimitAttempts || clock.Elapsed + delay > RemoteReadWait) throw new RemoteRetryException(error);
                 await Task.Delay(delay, token);
                 attempt++;
                 continue;

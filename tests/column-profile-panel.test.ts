@@ -10,7 +10,8 @@ import { ResultError, type ResultView } from '../src/renderer/src/results/Result
 import type { ErrorCode } from '../src/shared/ipc/wire/protocol'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import ColumnProfilePanel, { profiledEntry, profileTarget } from '../src/renderer/src/results/ColumnProfilePanel'
+import ColumnProfilePanel, { profiledEntry, profiledRevision, profiledRows, profileTarget } from '../src/renderer/src/results/ColumnProfilePanel'
+import type { ResultSnapshot } from '../src/renderer/src/results/ResultClient'
 import type { ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
 import { ResultOperations } from '../src/renderer/src/results/operations'
 import type { OperationProgressListener } from '../src/renderer/src/results/ResultClient'
@@ -475,5 +476,17 @@ describe('column profile selection peek', () => {
     expect(document.activeElement?.getAttribute('aria-label')).toBe('c2')
     view.unmount()
     view.container.remove()
+  })
+})
+
+describe('the rows a profile describes', () => {
+  it('change with a BigQuery residence switch (a new revision), so figures from the discarded rows are not carried over', () => {
+    const open = { rowsRead: 500, rowsStored: 500, rowsAvailable: 500, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false } as unknown as ResultSnapshot
+    const before = profiledRows({ ...open, revision: 0 }, undefined), after = profiledRows({ ...open, revision: 1 }, undefined)
+    expect(before.settled).not.toBe(after.settled)
+    expect(profiledRevision(before.settled)).not.toBe(profiledRevision(after.settled))
+    // More rows of the same revision keep the cards until their new figures arrive.
+    const complete = profiledRows({ ...open, state: 'complete', revision: 0 } as ResultSnapshot, undefined)
+    expect(profiledRevision(complete.settled)).toBe(profiledRevision(before.settled))
   })
 })

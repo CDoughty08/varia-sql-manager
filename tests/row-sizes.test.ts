@@ -7,7 +7,7 @@ interface Pending<T> { resolve(value: T): void; reject(error: unknown): void; si
 
 /** A handle whose rowBytes and profile requests the test answers. */
 function fixture(rowsAvailable = 1000, state = 'complete') {
-  const snapshot: { state: string; rowsAvailable: number; residence?: string } = { state, rowsAvailable }
+  const snapshot: { state: string; rowsAvailable: number; residence?: string; revision?: number } = { state, rowsAvailable }
   const reads: (Pending<ResultsRowBytesResult> & { first: number; count: number })[] = []
   const profiles: Pending<ResultsProfileResult>[] = []
   const handle = {
@@ -28,6 +28,28 @@ function fixture(rowsAvailable = 1000, state = 'complete') {
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
+  it('asks a windowed result for a block its cache does not hold yet once per wait, not on every paint', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const { sizes, reads, settle, snapshot, changed } = fixture(100_000)
+    snapshot.residence = 'remote'
+    for (let paint = 0; paint < 10; paint++) {
+      sizes.ensure(0, 40)
+      if (reads.length > paint) reads[paint].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+      await settle()
+    }
+    expect(reads).toHaveLength(1)
+    expect(changed).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(rowSizeLimits.retryMs)
+    sizes.ensure(0, 40)
+    expect(reads).toHaveLength(2)
+    // A residence switch (a new revision) reads the block again at once.
+    reads[1].resolve({ firstRow: 0, bytes: [], rowsAvailable: 100_000, estimated: [] })
+    await settle()
+    snapshot.revision = 1
+    sizes.ensure(0, 40)
+    expect(reads).toHaveLength(3)
+  })
+
   it('asks no profile of a windowed BigQuery result (it would be refused), and asks once the result is loaded into memory', () => {
     const { sizes, reads, profiles, snapshot } = fixture()
     snapshot.residence = 'remote'

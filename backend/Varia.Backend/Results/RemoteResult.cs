@@ -72,6 +72,10 @@ internal delegate Task RemoteFetch(long firstRow, int rows, RemoteBlockWriter wr
 /// <summary>The remote table is gone (BigQuery's 24-hour result table expired or was dropped): REMOTE_EXPIRED.</summary>
 internal sealed class RemoteExpiredException(Exception? inner = null) : Exception("The result table is gone.", inner);
 
+/// <summary>A block's fetch stopped backing off on rate limits (no read is left waiting for it): a read that joined it
+/// answers with the rows it has, and the next read asks again.</summary>
+internal sealed class RemoteRetryException(Exception inner) : Exception("BigQuery's rate limit was reached.", inner);
+
 /// <summary>
 /// A windowed result (docs/bigquery.md, Windowed results): its rows stay in a remote table and are read in blocks sized by
 /// bytes (about <see cref="TargetBlockBytes"/> of display text, <see cref="MinBlockRows"/> to <see cref="MaxBlockRows"/>
@@ -136,7 +140,12 @@ internal sealed class RemoteResult : IDisposable
     /// <param name="rows">The rows the grid shows: BigQuery's total, capped at <see cref="MaxRows"/> and a row limit.</param>
     /// <param name="rowBytes">A row's measured cost in pages (from the first page), which sizes blocks.</param>
     /// <param name="cacheLimit">The cache's own limit (queryResults.bigQuery.windowCacheMiB).</param>
-    public RemoteResult(ResultStore store, uint resultId, IReadOnlyList<WireKind> wires, long rows, bool capped, double rowBytes, long cacheLimit,
+    internal static RemoteResult Create(ResultStore store, uint resultId, IReadOnlyList<WireKind> wires, long rows, bool capped, double rowBytes, long cacheLimit,
+        SemaphoreSlim connectionLane, RemoteFetch fetch, object? source = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source };
+
+    // Private: a cache is built only through Create, which only the residence code calls (tests/result-page-access.test.ts),
+    // where every switch bumps the revision, sends resultSet.residence and settles the budget.
+    private RemoteResult(ResultStore store, uint resultId, IReadOnlyList<WireKind> wires, long rows, bool capped, double rowBytes, long cacheLimit,
         SemaphoreSlim connectionLane, RemoteFetch fetch)
     {
         this.store = store;
@@ -276,6 +285,8 @@ internal sealed class RemoteResult : IDisposable
                     // Gone under this read after it sent some rows, or refused room (a read across more blocks than the
                     // cache holds): those rows are the answer, and the grid reads the rest again from there.
                     catch (RemoteExpiredException) when (next > firstRow) { return next; }
+                    // Rate limited for longer than a read waits: the rows sent are the answer, never an error.
+                    catch (RemoteRetryException) { return next; }
                     catch (RequestException) when (next > firstRow) { return next; }
                 }
                 RemotePage[] pages;
