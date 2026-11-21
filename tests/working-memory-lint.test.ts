@@ -142,6 +142,22 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // (Code only: a message naming tabledata.list reads nothing.)
   const codeUses = (pattern: RegExp) => files.flatMap(({ file, code }) => Array.from(code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').matchAll(pattern), () => file))
   expect(codeUses(/\b(?:[Tt]abledata\w*|TableDataList\w*|[Gg]etQueryResults\w*|ExecuteQuery\w*)\b|\bListRows\w*\s*\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryPreview.cs'])
+  // The seeded cache goes straight to Demote, which keeps it (the set disposes it on release) or disposes it: no step
+  // between can leave its first page charged with no owner.
+  expect(residence).toMatch(/remote\.Seed\(seed\);\n\s*if \(!store\.Demote\(set, remote, total, bump: false\)\) return null;/)
+  expect(count(residence, /\bremote\.Seed\(/g)).toBe(1)
+  // Storage Read reads a query's own rows under the budget and Load into memory's: never a windowed result's rows around
+  // the cache.
+  expect(uses(/\bOpenReadSessionAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'SqlService.BigQueryStorageRead.cs'])
+  expect(uses(/\bBigQueryStorageSessionAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
+  expect(uses(/\bReadBigQueryArrowAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
+  for (const reader of ['BigQueryStorageSessionAsync(', 'ReadBigQueryArrowAsync(']) {
+    const at = residence.indexOf(reader)
+    expect(at).toBeGreaterThan(load)
+    expect(at).toBeLessThan(residence.indexOf('\n    }\n', load))
+  }
+  // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
+  expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
   const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
   expect(tableRows.indexOf('\n\n    ')).toBeGreaterThan(0)
@@ -225,6 +241,8 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(count(fetch, /\bestimate = /g)).toBe(1)
   expect(fetch).toMatch(/if \(!Reserve\(estimate, block\)\)\n\s*\{\n(\s*\/\/[^\n]*\n)*\s*bool waited;\n\s*lock \(gate\) waited = block\.Waiters > 0;\n\s*if \(!waited\) throw new RemoteRetryException\(RemoteBlockWriter\.CacheTooSmall\(\)\);\n\s*lock \(gate\)\n\s*\{\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*block\.Holding = true;\n\s*\}\n\s*NotePeak\(\);\n\s*\}/)
   expect(remote).toMatch(/private long OverLimit => CacheLimit \* 2;/)
+  // A refused overrun, whatever refused it, gives back the block's estimate before the failure goes on.
+  expect(fetch).toMatch(/try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}\n\s*catch\n\s*\{\n\s*store\.ReturnCache\(ref held, estimate\);\n\s*throw;\n\s*\}/)
   // ...and the cache trims back to its limit when a read lets go of its blocks and when a fetch settles.
   expect(count(remote, /TrimLocked\(\);/g)).toBe(2)
   // Each where it belongs, under the gate: after a read drops its holds, and after a fetch settles.

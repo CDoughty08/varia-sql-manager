@@ -1562,6 +1562,10 @@ internal static partial class BigQueryExecutionChecks
             await Task.WhenAll(v2, v3);
             check(outcome.StartsWith("next ", StringComparison.Ordinal) || outcome.Contains("window cache", StringComparison.Ordinal),
                 "a read refused past twice the window cache names the cache, not the global budget: " + outcome);
+            // A refused overrun gives back its block's estimate too: the cache charges only the pages it holds.
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(store.WindowCacheBytes == remote.CachedBytes && remote.CachedBytes == remote.CachedPageCost(),
+                $"a refused overrun leaves no charge behind: window cache {store.WindowCacheBytes}, held {remote.CachedBytes}, pages {remote.CachedPageCost()}");
         }
 
         // A block whose last, partly filled page takes it just past the cache (419 rows of 10,000 characters in 4 MiB): refused
@@ -1619,8 +1623,28 @@ internal static partial class BigQueryExecutionChecks
                 catch (RequestException error) { failures.Add($"{first}: {error.Code}"); }
                 SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
                 if (remote.CachedBytes > remote.CacheLimit) failures.Add($"{first}: cache {remote.CachedBytes}");
+                // A read-ahead overrun refused (or stopped) gives back its block's estimate: only cached pages stay charged.
+                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{first}: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
             }
             check(failures.Count == 0, "rows wider than the estimate allows wait for the other fetch, never TOO_LARGE: " + string.Join(", ", failures));
+        }
+
+        // Blocks read ahead far wider than measured beside the rows on screen: their overruns are refused (nothing they may
+        // evict), and each gives back its block's estimate, so only the cached pages stay charged.
+        {
+            var failures = new List<string>();
+            foreach (var wide in new[] { 2.2, 2.6, 3.0 })
+            {
+                var store = new ResultStore(1L << 30, 1L << 29);
+                var blocks = new Blocks { Pad = 2_000 };
+                using var remote = Remote(store, blocks, rows: 1_000_000, rowBytes: CostPerRow(2_000), cache: 16L << 20);
+                var size = remote.BlockRows;
+                blocks.PadOf = row => row < size ? 2_000 : (int)(2_000 * wide);
+                await ReadRemote(remote, 0, 10, viewer: 1);
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+            }
+            check(failures.Count == 0, "a refused read-ahead overrun gives back its estimate: " + string.Join(", ", failures));
         }
 
         // Rows a little wider than measured, read with a block read ahead beside: the two still fit the cache, so the read's
@@ -1639,6 +1663,7 @@ internal static partial class BigQueryExecutionChecks
                 }
                 catch (RequestException error) { refused.Add(error.Code); }
                 SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                if (store.WindowCacheBytes != remote.CachedPageCost()) refused.Add($"charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
             }
             check(refused.Count == 0, "rows wider than measured still read with a block ahead: " + string.Join(",", refused));
         }
