@@ -367,6 +367,13 @@ internal static class ExplorerChecks
         check(optional is not null && optional.SetEquals(["@x", "@y", "@Y"]) && !optional.Contains("@X")
             && values is not null && !values.ContainsKey("@X") && values["@y"] == "2" && values["@Y"] == "3",
             "case-distinct catalog parameters keep independent optional flags and default values");
+        // A Turkish server collation tells @i and @I apart (I lowers to ı), so they must not merge as .NET's case folding would.
+        const string turkish = "CREATE PROC p @i int = 1, @I int AS SELECT 1";
+        var turkishOptional = ModuleHeader.ParameterDefaults(turkish);
+        var turkishValues = ModuleHeader.ParameterDefaultTexts(turkish);
+        check(turkishOptional is not null && turkishOptional.SetEquals(["@i"]) && !turkishOptional.Contains("@I")
+            && turkishValues is not null && turkishValues.Count == 1 && turkishValues["@i"] == "1",
+            "a Turkish server's @i and @I keep separate defaults");
         // A "quoted" default (a string under QUOTED_IDENTIFIER OFF) keeps the others, and a native module's NOT NULL is passed over.
         var quoted = ModuleHeader.ParameterDefaultTexts("CREATE PROCEDURE p @s varchar(10) = \"abc\", @n int NOT NULL = 1, @b nvarchar(5) = [x] AS");
         check(quoted is not null && quoted["@s"] == "\"abc\"" && quoted["@n"] == "1" && quoted["@b"] == "[x]",
