@@ -238,6 +238,24 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
     await pressed
     expect(dialogs.current).toMatchObject({ phase: 'failed', model: { serverNow: '2026-03-31T11:00:00' } })
   })
+  it('cancels the read after a purge when OK, pressed during it, closes the dialog', async () => {
+    const { dialogs, api, settle } = setup(model())
+    dialogs.open('agentProperties', node)
+    await settle()
+    const reread = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(reread.promise)
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Delete old job history' }], messages: [], elapsedMs: 1 } })
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
+    const rereadId = api.describeObject.mock.calls[1]![0].requestId
+    dialogs.updateDraft({ monitorAutostart: false })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Save SQL Server Agent properties' }], messages: [], elapsedMs: 1 } })
+    await dialogs.ok()
+    expect(dialogs.current).toBeUndefined()
+    expect(api.cancelObjectActions.mock.calls.flatMap(call => call[0])).toContain(rereadId)
+    reread.resolve({ ok: true, value: { agentProperties: model(), elapsedMs: 1 } as ActionDescribeResult })
+    await settle()
+    expect(dialogs.current).toBeUndefined()
+  })
   it('shows a failed purge as a value and stays open', async () => {
     const { dialogs, api, settle } = setup(model())
     dialogs.open('agentProperties', node)

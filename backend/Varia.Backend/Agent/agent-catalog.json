@@ -22,7 +22,7 @@
     {"feature":"eventLogNotifications","platforms":["windows"]},
     {"feature":"errorLogs","platforms":["windows","linux","managedInstance"]},
     {"feature":"errorLogArchives","platforms":["windows"]},
-    {"feature":"agentPropertiesWrite","platforms":["windows","linux"]},
+    {"feature":"agentPropertiesWrite","platforms":["windows"]},
     {"feature":"windowsCredentials","platforms":["windows","linux"]},
     {"feature":"serviceControl","platforms":["windows"]},
     {"feature":"multiServerTargets","platforms":[]}

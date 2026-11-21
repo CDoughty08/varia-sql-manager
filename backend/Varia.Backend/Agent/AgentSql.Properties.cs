@@ -34,9 +34,13 @@ internal static partial class AgentSql
 
     public static IReadOnlyList<AgentWrite> ServerWrites { get; } = [SetProperties, PurgeHistory];
 
-    /// <summary>The server's clock as sysjobhistory uses it (local), its offset from UTC, and whether the login is sysadmin.</summary>
+    /// <summary>Whether SQL Server runs on Linux, read on the action's own connection: the connect probe can fall back to "not Linux".</summary>
+    public const string OnLinux = "CONVERT(int, CASE WHEN CONVERT(nvarchar(4), SERVERPROPERTY('PathSeparator')) = N'/' THEN 1 ELSE 0 END)";
+    public const string Platform = "SELECT " + OnLinux + " AS on_linux;";
+
+    /// <summary>The server's clock as sysjobhistory uses it (local), its offset from UTC, whether the login is sysadmin, and <see cref="OnLinux"/>.</summary>
     public const string Clock = "SELECT CONVERT(char(19), GETDATE(), 126) AS server_now, DATEDIFF(minute, GETUTCDATE(), GETDATE()) AS offset_minutes,\n"
-        + "CONVERT(int, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS is_sysadmin;";
+        + "CONVERT(int, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS is_sysadmin, " + OnLinux + " AS on_linux;";
 
     /// <summary>Every job's history for "What this keeps" and the purge's estimate (sysadmin: other logins cannot read sysjobhistory). Three
     /// result sets: the total and the rows the last @days days wrote; the @jobs jobs with the most rows (one more is read to tell truncation);
@@ -105,6 +109,7 @@ internal static partial class AgentSql
             yield return ("server write " + write.Id, problems);
         }
         yield return ("properties clock", LintRead(Clock, null));
+        yield return ("properties platform", LintRead(Platform, null));
         yield return ("properties history counts", LintRead(HistoryCounts, null));
     }
 }

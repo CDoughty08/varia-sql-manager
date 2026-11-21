@@ -59,14 +59,14 @@ internal sealed partial class ActionService
     {
         string now;
         int offset;
-        bool sysadmin;
+        bool sysadmin, linux;
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = AgentSql.Clock;
             command.CommandTimeout = 0;
             await using var reader = await command.ExecuteReaderAsync(token);
             if (!await reader.ReadAsync(token)) return new(null, 0, Error("SQL_ERROR", AgentReader.FailedMessage));
-            (now, offset, sysadmin) = (reader.GetString(0).Trim(), reader.GetInt32(1), reader.GetInt32(2) == 1);
+            (now, offset, sysadmin, linux) = (reader.GetString(0).Trim(), reader.GetInt32(1), reader.GetInt32(2) == 1, reader.GetInt32(3) == 1);
         }
         var (results, errors) = await new AgentReader().ReadAsync(connection, null, [AgentSql.AgentProperties], (_, _) => null, token);
         if (errors.FirstOrDefault() is { } failed)
@@ -79,7 +79,7 @@ internal sealed partial class ActionService
             Int(Value("auto_start")) is { } start ? start == 1 : null, Text(Value("startup_account")), Text(Value("errorlog_file")), Int(Value("errorlogging_level")));
         var managed = profile.Explorer(explorer).ServerEngine == "managedInstance";
         var readOnly = managed ? AgentPropertiesManagedInstance : sysadmin ? null : AgentPropertiesNotSysadmin;
-        var settingsNote = readOnly is null && profile.Linux ? AgentPropertiesLinux : null;
+        var settingsNote = readOnly is null && !WritesProperties(profile.EngineEdition, profile.Linux || linux) ? AgentPropertiesLinux : null;
         if (!sysadmin) return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, null, AgentHistoryHidden));
         try { return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, await ReadAgentHistoryAsync(connection, token), SettingsNote: settingsNote)); }
         catch (SqlException) when (!token.IsCancellationRequested && connection.State == ConnectionState.Open)
@@ -136,12 +136,16 @@ internal sealed partial class ActionService
         return "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties " + string.Join(", ", parts) + "\nGO\n";
     }
 
+    /// <summary>Whether the platform takes the settings write (the agentPropertiesWrite gate: Windows only; Linux sets them with mssql-conf).</summary>
+    private static bool WritesProperties(int engineEdition, bool linux) =>
+        AgentCatalog.Current.PlatformOf(engineEdition, linux) is { } platform && AgentCatalog.Current.Offers("agentPropertiesWrite", platform);
+
     private ActionError? AgentPropertiesRefusal(ActionArgs args)
     {
         var profile = host.Profile(args.ConnectionId);
         var engine = profile.Explorer(explorer).ServerEngine;
         if (engine == "managedInstance") return Error("NOT_SUPPORTED", AgentPropertiesManagedInstance);
-        if (profile.Linux && args.AgentProperties is not null) return Error("NOT_SUPPORTED", AgentPropertiesLinux);
+        if (args.AgentProperties is not null && profile.Linux && !WritesProperties(profile.EngineEdition, true)) return Error("NOT_SUPPORTED", AgentPropertiesLinux);
         return Serves("agentProperties", engine) ? null : Error("NOT_SUPPORTED", EngineMessage(engine));
     }
 
@@ -167,6 +171,14 @@ internal sealed partial class ActionService
         {
             try
             {
+                // The connect probe can fall back to "not Linux", so the settings write asks the server itself before msdb's registry writes.
+                if (write == AgentSql.SetProperties)
+                {
+                    await using var platform = connection.CreateCommand();
+                    platform.CommandText = AgentSql.Platform;
+                    if (Convert.ToInt32(await platform.ExecuteScalarAsync(context.Token), CultureInfo.InvariantCulture) == 1 && !WritesProperties(host.Profile(args.ConnectionId).EngineEdition, true))
+                        throw new StepRefusedException(Error("NOT_SUPPORTED", AgentPropertiesLinux));
+                }
                 await using var command = connection.CreateCommand();
                 command.CommandText = write.Text;
                 command.CommandTimeout = 0;

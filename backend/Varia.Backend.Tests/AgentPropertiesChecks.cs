@@ -45,7 +45,7 @@ internal static class AgentPropertiesChecks
     {
         var results = AgentSql.LintServerWrites().ToList();
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
-        check(failures.Count == 0 && results.Count == AgentSql.ServerWrites.Count + 2, "SQL Server Agent Properties' two server writes and its two reads pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
+        check(failures.Count == 0 && results.Count == AgentSql.ServerWrites.Count + 3, "SQL Server Agent Properties' two server writes and its three reads pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
         check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("server write ", StringComparison.Ordinal)) == AgentSql.ServerWrites.Count, "the Agent write lint (and so the object actions' lint) runs the server writes too");
         var set = AgentSql.SetProperties.Text;
         var purge = AgentSql.PurgeHistory.Text;
@@ -139,5 +139,8 @@ internal static class AgentPropertiesChecks
         check(saved.Error is { Code: "NOT_SUPPORTED" } && saved.Error.Message == ActionService.AgentPropertiesLinux && savedScript.Error is { Code: "NOT_SUPPORTED" }
             && purgeScript.Error is null && purgeScript.Text is not null && linux.Connections == 0,
             "on Linux the settings write and its Script answer NOT_SUPPORTED before any connection opens, and Delete old history still scripts");
+        check(AgentCatalog.Current.Offers("agentPropertiesWrite", "windows") && !AgentCatalog.Current.Offers("agentPropertiesWrite", "linux") && !AgentCatalog.Current.Offers("agentPropertiesWrite", "managedInstance")
+            && AgentSql.Clock.Contains(AgentSql.OnLinux, StringComparison.Ordinal) && AgentSql.Platform.Contains(AgentSql.OnLinux, StringComparison.Ordinal),
+            "the agentPropertiesWrite gate offers the settings write on Windows only, and the describe and the write read the platform themselves, apart from the connect probe");
     }
 }

@@ -212,7 +212,7 @@ export const agentPlatformGates: { readonly [F in AgentFeature]: AgentGate } = {
   eventLogNotifications: { title: 'Write to the Windows Application event log', platforms: ['windows'] },
   errorLogs: { title: 'Agent error logs', platforms: ['windows', 'linux', 'managedInstance'], note: 'Managed Instance reads them through `sp_readmierrorlog`; the others through `xp_readerrorlog`.' },
   errorLogArchives: { title: 'Agent error log archives (`xp_enumerrorlogs`)', platforms: ['windows'], note: 'SQL Server 2022 on Linux answers `xp_enumerrorlogs 2` with no result set, so Linux shows Current only; Managed Instance too until a Managed Instance check shows archives list there.' },
-  agentPropertiesWrite: { title: 'Changing SQL Server Agent Properties', platforms: ['windows', 'linux'] },
+  agentPropertiesWrite: { title: 'Changing SQL Server Agent Properties', platforms: ['windows'], note: 'On Linux mssql-conf sets them (`sp_set_sqlagent_properties` writes the registry); Delete old history still runs there.' },
   windowsCredentials: { title: 'Credentials with a Windows identity', platforms: ['windows', 'linux'] },
   serviceControl: { title: 'Start, Stop and Restart of the Agent service', platforms: ['windows'], note: 'Not on a failover cluster instance (`SERVERPROPERTY(\'IsClustered\') = 1`), where the cluster owns the service.' },
   multiServerTargets: { title: 'Multi-server (MSX/TSX) targets', platforms: [], note: 'Later on every platform; the Targets section shows the local server only.' }

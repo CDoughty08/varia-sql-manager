@@ -454,7 +454,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       this.cancelLookup()
       // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
-      else this.publish({})
+      else { this.cancelExtra(); this.publish({}) }
       try { definition.afterSuccess(this.effectsOf(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
@@ -504,11 +504,14 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(open, { phase: 'ready', inline: { state: 'failed', error: failure } })
   }
 
-  /** After a page's own run: reads the model again and swaps it in, keeping the phase, the draft and, if the read fails, the model it had. */
+  /** After a page's own run: reads the model again and swaps it in, keeping the phase, the draft and, if the read fails, the model it had. It is
+   *  one of the page's own describes (`extra`), not `request`, so OK may run beside it and Close, a disconnect and dispose still cancel it. */
   private async readAgain(open: OpenObjectDialog): Promise<void> {
-    const requestId = this.begin(open)
+    const requestId = this.newId()
+    this.extra.add(requestId)
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
-    if (!this.end(open, requestId)) return
+    this.extra.delete(requestId)
+    if (this.disposed || this.current?.id !== open.id || this.current.phase === 'disconnected') return
     const model = result.ok && !result.value.error ? definitionOf(open.dialog).modelOf(result.value) : undefined
     const current = this.current
     if (model && current && current.phase !== 'loading' && current.phase !== 'loadFailed') this.update(current, { model })
