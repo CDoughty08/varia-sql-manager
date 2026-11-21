@@ -195,9 +195,11 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
   }
   const status = sample.status ?? 4
   if ((runningExecutionStatuses as readonly number[]).includes(status)) {
-    // While it runs, its last run is the one before this run: the true baseline, which the grid's (read up to a sample or more
-    // earlier) may predate, as when a scheduled run ended in between.
-    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0, before: Math.max(job.before, sample.lastRun ?? 0) } }
+    // A last run older than this run's start is the one before it: the true baseline, which the grid's (read up to a sample or
+    // more earlier) may predate, as when a scheduled run ended in between. Not while completing (7) or with no start: msdb may
+    // already hold this run's own last run then.
+    const prior = status !== 7 && sample.started !== undefined && sample.lastRun !== undefined && sample.lastRun < sample.started ? sample.lastRun : 0
+    return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0, before: Math.max(job.before, prior) } }
   }
   const lastRun = sample.lastRun ?? 0
   if (lastRun > job.before && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }

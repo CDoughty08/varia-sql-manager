@@ -129,11 +129,17 @@ describe("agent.jobs' shared rules", () => {
     expect(ran.phase).toEqual({ phase: 'unknown', reason: 'gone' })
     // The grid's last run was read before a scheduled run ended: seen running, the sample's last run (that scheduled run) is
     // the baseline, so its outcome is never taken for the started run's.
-    let late = watchedPhase(start, { status: 1, step: 1, steps: 3, lastOutcome: 0, lastRun: 20261115100000 }, 'running')
+    let late = watchedPhase(start, { status: 1, step: 1, steps: 3, started: 20261115140000, lastOutcome: 0, lastRun: 20261115100000 }, 'running')
     expect(late.job.before).toBe(20261115100000)
     late = watchedPhase(late.job, { status: 4, steps: 3, lastOutcome: 0, lastRun: 20261115100000 }, 'running')
     expect(late.phase).toEqual({ phase: 'running', retrying: false })
     expect(watchedPhase(late.job, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115140000 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140000 })
+    // Completing (7), msdb already holds this run as the last run: it is no baseline, so the idle sample after ends the run.
+    const completing = watchedPhase(start, { status: 7, steps: 3, started: 20261115140000, lastOutcome: 1, lastRun: 20261115140000 }, 'running')
+    expect(completing.job.before).toBe(start.before)
+    expect(watchedPhase(completing.job, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115140000 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140000 })
+    // With no start read, nothing raises the baseline either.
+    expect(watchedPhase(start, { status: 1, steps: 3, lastOutcome: 1, lastRun: 20261115140000 }, 'running').job.before).toBe(start.before)
     expect(watchedPhase(start, idle, 'stopped').phase).toEqual({ phase: 'unknown', reason: 'agentStopped' })
     // A job msdb no longer has ends at once; a slot not read keeps the phase but counts, so Starting… never waits forever.
     expect(watchedPhase(ran.job, { status: watchedGoneStatus }, 'running').phase).toEqual({ phase: 'unknown', reason: 'gone' })

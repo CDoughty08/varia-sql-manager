@@ -126,15 +126,25 @@ internal static class AgentJobsChecks
             + string.Join(" | ", rows.Values.Select(row => string.Join(",", row))));
         check(sample.Raw?.Values.SequenceEqual([2d, 2d, 1d, 1d]) == true, "the tiles count running (1, 2, 3, 7), last run failed, between retries and disabled jobs from the same read");
         var lastRun = sample.Tables[1].Rows.Select(Texts).ToList();
+        check(sample.Tables[1].More == 0, "a whole history read leaves the last run complete");
         check(lastRun.Select(row => row[1]).SequenceEqual(["1", "2", "3", "0"]) && lastRun[3][3] == "Failed" && lastRun[2][7] == "error" && lastRun[0][7] == "NULL"
             && lastRun[1][5] == "00:16:31" && lastRun[2][6].Length == (int)AgentCatalog.Current.Limit("gridMessageChars") && lastRun[2][6].EndsWith('…') && lastRun[3][2] == "(Job outcome)",
             "the expanded job's last run is the step rows after the previous job outcome row, then its own outcome row; messages are cut to gridMessageChars: " + string.Join(" | ", lastRun.Select(row => string.Join(",", row))));
         var cap = LiveCatalog.Current.Probes[AgentJobsReader.ListProbe].Tables[1].RowCap;
         var history = AgentSql.LastRunHistory;
         List<object?[]> many = [.. Enumerable.Range(1, cap + 10).Select(at => HistoryRow(history, at, 1 + at % 50, "Loop", 1, 20261115, 23000, 0, "ok")), HistoryRow(history, cap + 11, 0, "(Job outcome)", 1, 20261115, 23000, 5, "The job succeeded.")];
-        var capped = reader.LastRun(new AgentResult(history.Columns, many, false)).Select(Texts).ToList();
-        check(capped.Count == cap && capped[^1][2] == "(Job outcome)" && capped[0][0] == "12",
-            "a run with more step rows than the last run table keeps keeps its newest steps and its outcome row: " + capped.Count + " rows, first " + capped[0][0] + ", last " + capped[^1][2]);
+        var (cappedRows, cappedMore) = reader.LastRun(new AgentResult(history.Columns, many, false));
+        var capped = cappedRows.Select(Texts).ToList();
+        check(capped.Count == cap && capped[^1][2] == "(Job outcome)" && capped[0][0] == "12" && cappedMore == 11,
+            "a run with more step rows than the last run table keeps keeps its newest steps and its outcome row, and counts the steps left out: " + capped.Count + " rows, first " + capped[0][0] + ", last " + capped[^1][2] + ", more " + cappedMore);
+        // A capped read (newest first) that stopped inside the run: its first steps may be missing, or, with only the run in
+        // progress in the window, no finished run is in it at all; either way the table says it is truncated, not complete or empty.
+        List<object?[]> cut = [.. Enumerable.Range(1, 5).Select(at => HistoryRow(history, at, at, "Step", 1, 20261115, 23000, 0, "ok")), HistoryRow(history, 6, 0, "(Job outcome)", 1, 20261115, 23000, 5, "done")];
+        var (cutRows, cutMore) = reader.LastRun(new AgentResult(history.Columns, cut, true));
+        var (noneRows, noneMore) = reader.LastRun(new AgentResult(history.Columns, [.. Enumerable.Range(1, 5).Select(at => HistoryRow(history, at, 1, "Loop", 1, 20261115, 23000, 0, "ok"))], true));
+        var (wholeRows, wholeMore) = reader.LastRun(new AgentResult(history.Columns, cut, false));
+        check(cutRows.Count == 6 && cutMore == 1 && noneRows.Count == 0 && noneMore == 1 && wholeRows.Count == 6 && wholeMore == 0,
+            "a truncated history read without the previous outcome row marks the last run truncated, and one without any outcome row is truncated, not empty");
         check(AgentSql.LastRunHistory.Cap == "lastRunRows" && AgentCatalog.Current.Limit("lastRunRows") == cap + 1 && AgentSql.LastRunHistory.Text == AgentSql.History.Text,
             "the last run reads sp_help_jobhistory's newest rows only, as many as the table keeps plus the run's outcome row, and cancels the rest");
         bool Keeps(LiveReaderTable table, string name) => table.View?.Invoke(table.Rows.Single(row => row.Cells[Col("name")].Text == name)) ?? true;

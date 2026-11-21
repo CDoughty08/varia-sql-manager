@@ -176,8 +176,11 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
             <button type="button" aria-label="Hide the last run" onClick={() => service.toggleExpanded(documentId, undefined)}><Icon name="close" /></button>
           </div>
           {problems.lastRun ? <InlineError role="status" message={problems.lastRun} code={probe?.error?.code} actions={[{ label: 'Retry', run: () => service.refresh(documentId) }]} />
-            : lastRun && lastRun.descriptor.rowsAvailable === 0 ? <p className="agent-last-run-empty">This job has no finished run in its history.</p>
-            : <LiveGridPane live={handle} probe={agentJobsProbe} table={1} label={`Last run of ${state.expanded.name}`} toneLabel={tone => tone === 'error' ? 'failed' : tone === 'running' ? 'in progress' : undefined} />}
+            : lastRun && lastRun.descriptor.rowsAvailable === 0 ? <p className="agent-last-run-empty">{lastRun.descriptor.truncated
+              ? 'The newest history rows hold no finished run (the run in progress wrote them all), so the last run is not shown.'
+              : 'This job has no finished run in its history.'}</p>
+            : <>{lastRun?.descriptor.truncated && <p className="agent-last-run-empty" role="note">Only this run's newest steps are shown: the rest are past what one read keeps.</p>}
+              <LiveGridPane live={handle} probe={agentJobsProbe} table={1} label={`Last run of ${state.expanded.name}`} toneLabel={tone => tone === 'error' ? 'failed' : tone === 'running' ? 'in progress' : undefined} /></>}
         </section>}
       </>}
       <BulkResults state={state} onStop={() => service.stopBulk(documentId)} onClose={() => service.closeBulk(documentId)} />

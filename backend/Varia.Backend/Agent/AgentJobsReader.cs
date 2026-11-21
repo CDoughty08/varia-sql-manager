@@ -138,7 +138,11 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
         if (now.Expand is { } expand && Guid.TryParse(expand, out var expanded) && list.Any(job => job.Id == expanded))
         {
             var (history, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.LastRunHistory], (_, _) => expanded, token).ConfigureAwait(false);
-            if (history.TryGetValue(AgentSql.LastRunHistory.Id, out var runs)) tables.Add(new(1, LastRun(runs)));
+            if (history.TryGetValue(AgentSql.LastRunHistory.Id, out var runs))
+            {
+                var (lastRows, more) = LastRun(runs);
+                tables.Add(new(1, lastRows, more));
+            }
             else
             {
                 probeErrors.Add(Error(ListProbe, failed[0]) with { Tables = [1] });
@@ -215,29 +219,32 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
     }
 
     /// <summary>The last finished run of a job, from its history: its job outcome row (step 0, the run's highest instance_id, whose
-    /// start is the run's) and the step rows Agent wrote after the previous outcome row that started at or after this run's start.</summary>
-    internal List<LiveRow> LastRun(AgentResult history)
+    /// start is the run's) and the step rows Agent wrote after the previous outcome row that started at or after this run's start.
+    /// More counts what it leaves out: older steps past the table's cap, and, when the capped read stopped before the previous
+    /// outcome row (or before any), the rows it could not see, so the table says it is truncated rather than complete or empty.</summary>
+    internal (List<LiveRow> Rows, long More) LastRun(AgentResult history)
     {
         var rows = history.Rows.Select(row => new HistoryRow(
             Convert.ToInt32(history.Value(row, "instance_id"), CultureInfo.InvariantCulture), Convert.ToInt32(history.Value(row, "step_id"), CultureInfo.InvariantCulture),
             history.Value(row, "step_name") as string, Convert.ToInt32(history.Value(row, "run_status"), CultureInfo.InvariantCulture),
             When(Int(history.Value(row, "run_date")), Int(history.Value(row, "run_time"))), Int(history.Value(row, "run_duration")), history.Value(row, "message") as string)).ToList();
         var outcomes = rows.Where(row => row.Step == 0).OrderByDescending(row => row.Instance).ToList();
-        if (outcomes.Count == 0) return [];
+        if (outcomes.Count == 0) return ([], history.Truncated ? 1 : 0);
         var last = outcomes[0];
         var previous = outcomes.Count > 1 ? outcomes[1].Instance : 0;
         // The table keeps its first rowCap rows: a run with more steps than that keeps its newest, so the outcome row always shows.
         var cap = LiveCatalog.Current.Probes[ListProbe].Tables[1].RowCap is > 1 and var rowCap ? rowCap : int.MaxValue;
-        var steps = rows.Where(row => row.Step > 0 && row.Instance > previous && row.Instance < last.Instance && (last.Started is null || row.Started is null || row.Started >= last.Started))
-            .OrderByDescending(row => row.Instance).Take(cap - 1).OrderBy(row => row.Instance);
+        var all = rows.Where(row => row.Step > 0 && row.Instance > previous && row.Instance < last.Instance && (last.Started is null || row.Started is null || row.Started >= last.Started)).ToList();
+        var steps = all.OrderByDescending(row => row.Instance).Take(cap - 1).OrderBy(row => row.Instance).ToList();
+        long more = all.Count - steps.Count + (history.Truncated && outcomes.Count == 1 ? 1 : 0);
         var maxChars = (int)catalog.Limit("gridMessageChars");
-        return [.. steps.Append(last).Select(row => new LiveRow([
+        return ([.. steps.Append(last).Select(row => new LiveRow([
             LiveCell.Of((long)row.Instance), LiveCell.Of((long)row.Step), LiveCell.Of(row.Step == 0 ? "(Job outcome)" : row.Name),
             LiveCell.Of(Label(catalog.RunStatuses, row.Status) ?? row.Status.ToString(CultureInfo.InvariantCulture)), Time(row.Started),
             DecodeDuration(row.Duration) is { } seconds ? new LiveCell(seconds, Duration(seconds)) : LiveCell.Null,
             LiveCell.Of(row.Message is { } message && message.Length > maxChars ? message[..(maxChars - 1)] + "…" : row.Message),
             catalog.RunStatusTones.TryGetValue(row.Status, out var tone) ? LiveCell.Of(tone) : LiveCell.Null
-        ]))];
+        ]))], more);
     }
 
     private sealed record HistoryRow(int Instance, int Step, string? Name, int Status, DateTime? Started, int? Duration, string? Message);

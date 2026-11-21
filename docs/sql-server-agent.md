@@ -65,7 +65,8 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box and
   the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
   shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
-  `lastRunRows` rows of `sp_help_jobhistory`).
+  `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
+  show, or that no finished run is among those rows).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
   the job's identity from the list, and list one result line per job; Stop on that list sends no more. A login msdb
   refuses sees "No access to SQL Server Agent" with the roles that grant it; Agent stopped or Agent XPs off is a banner,
