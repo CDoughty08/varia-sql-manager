@@ -167,7 +167,7 @@ internal sealed partial class SqlService
                 RemoteResult? windowed;
                 // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
                 // the set is still announced, so the run's end closes a set the grid heard open.
-                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, childPlan, first, set, budget!, messages, value => window = value, token); }
+                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token); }
                 catch
                 {
                     first.Dispose();
@@ -375,7 +375,7 @@ internal sealed partial class SqlService
                             BigQueryWindow? window = null;
                             RemoteResult? windowed;
                             // Announced even when deciding fails or is stopped, so the run's end closes a set the grid heard open.
-                            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, plan, page, currentSet, budget, messages, value => window = value, token); }
+                            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, false, plan, page, currentSet, budget, messages, value => window = value, token); }
                             catch
                             {
                                 events.Opened(currentSet);

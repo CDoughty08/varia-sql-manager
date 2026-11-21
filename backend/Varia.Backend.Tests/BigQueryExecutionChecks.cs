@@ -37,6 +37,8 @@ internal static partial class BigQueryExecutionChecks
         private readonly System.Collections.Concurrent.ConcurrentDictionary<(int Offset, int Count), string> cachedRows = new();
         public int PollsBeforeDone;
         public string StatementType = "SELECT";
+        /// <summary>A script (statementType SCRIPT) whose one SELECT child, child_1, answers these rows: jobs.list names it.</summary>
+        public bool ScriptChild;
         public long? DmlAffected;
         public string? DdlOperation;
         public JsonNode? Statistics;
@@ -67,6 +69,7 @@ internal static partial class BigQueryExecutionChecks
         /// <summary>Set when a held getQueryResults arrives: the query is running.</summary>
         public TaskCompletionSource Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int polls;
+        public const string ChildId = "child_1";
 
         public BigQueryFake Fake()
         {
@@ -84,7 +87,17 @@ internal static partial class BigQueryExecutionChecks
             fake.On("GET", Base + "/queries/[^/]+", Results);
             fake.On("GET", Base + "/jobs/[^/]+", Get);
             // A script's children, listed between polls: these jobs have none.
-            fake.On("GET", Base + "/jobs", new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#jobList\"}"));
+            fake.On("GET", Base + "/jobs", request => !ScriptChild || HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] is not { } parent
+                ? new(200, "{\"kind\":\"bigquery#jobList\"}")
+                : new(200, new JsonObject
+                {
+                    ["kind"] = "bigquery#jobList",
+                    ["jobs"] = new JsonArray(new JsonObject
+                    {
+                        ["jobReference"] = Reference(ChildId), ["state"] = "DONE", ["status"] = new JsonObject { ["state"] = "DONE" },
+                        ["statistics"] = new JsonObject { ["creationTime"] = "1", ["parentJobId"] = parent, ["query"] = new JsonObject { ["statementType"] = "SELECT" } },
+                    }),
+                }.ToJsonString()));
             // Stop's jobs.cancel, best-effort.
             fake.On("POST", Base + "/jobs/[^/]+/cancel", request => { Cancels.Enqueue(request.Url.Split('/')[^2]); return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}"); });
             fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+", Table);
@@ -173,9 +186,9 @@ internal static partial class BigQueryExecutionChecks
         {
             var id = Id(request);
             bool known;
-            lock (Created) known = Created.Contains(id);
+            lock (Created) known = Created.Contains(id) || ScriptChild && id == ChildId;
             if (!known) return BigQueryFake.Fixture("error-not-found", 404);
-            var query = new JsonObject { ["statementType"] = StatementType };
+            var query = new JsonObject { ["statementType"] = ScriptChild && id == ChildId ? "SELECT" : StatementType };
             if (DmlAffected is { } dml) query["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (DdlOperation is not null) query["ddlOperationPerformed"] = DdlOperation;
             var statistics = Statistics?.DeepClone().AsObject() ?? new JsonObject();

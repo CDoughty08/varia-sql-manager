@@ -25,7 +25,7 @@ internal sealed partial class SqlService
 
     /// <summary>What a windowed BigQuery result reads from: its job and destination table, and what decided its blocks.</summary>
     internal sealed record BigQueryWindow(QueryArgs Args, BigQueryConnection Connection, string Project, string JobId, string? Location, TableReference Table,
-        BigQueryColumnPlan Plan, double RowCost, long TotalRows, long CacheBytes);
+        BigQueryColumnPlan Plan, double RowCost, long TotalRows, bool Child, long CacheBytes);
 
     internal enum BigQueryResidence { Automatic, Memory, Windowed }
 
@@ -57,7 +57,7 @@ internal sealed partial class SqlService
     /// windowed if the budget refuses it later (<paramref name="window"/>). Otherwise the set becomes windowed here, its first
     /// page kept in the cache, and the window is returned. A result whose destination table cannot be read stays in memory.
     /// </summary>
-    private async Task<RemoteResult?> DecideResidenceAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, Job? job,
+    private async Task<RemoteResult?> DecideResidenceAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, Job? job, bool child,
         BigQueryColumnPlan plan, BigQueryPage first, ResultSetBuffer set, QueryBudget budget, QueryMessages messages, Action<BigQueryWindow?> window, CancellationToken token)
     {
         var residence = ResidenceOf(args.Residence);
@@ -77,7 +77,7 @@ internal sealed partial class SqlService
         if (residence == BigQueryResidence.Automatic && fits) return await KeepInMemoryAsync();
         var table = await DestinationAsync(connection, project, jobId, location, job, token);
         if (table is null) return null;
-        var context = new BigQueryWindow(args, connection, project, jobId, location, table, plan, rowCost, total, CacheBytesOf(args.WindowCacheMiB));
+        var context = new BigQueryWindow(args, connection, project, jobId, location, table, plan, rowCost, total, child, CacheBytesOf(args.WindowCacheMiB));
         var remote = Window(context, set);
         // The first page stays readable at once: rebuilt per block, so each page lies inside one.
         var seed = new List<RemotePage>();
@@ -99,7 +99,7 @@ internal sealed partial class SqlService
             var found = await DestinationAsync(connection, project, jobId, location, job, token);
             if (found is not null)
             {
-                window(new BigQueryWindow(args, connection, project, jobId, location, found, plan, rowCost, total, CacheBytesOf(args.WindowCacheMiB)));
+                window(new BigQueryWindow(args, connection, project, jobId, location, found, plan, rowCost, total, child, CacheBytesOf(args.WindowCacheMiB)));
                 set.SwitchesOnRefusal = true;
             }
             return null;
@@ -351,7 +351,9 @@ internal sealed partial class SqlService
             var first = await bigQuery.QueryResultsAsync(connection, window.Project, window.JobId, window.Location, null, BigQueryFirstPageRows, 0, token);
             var loadArgs = window.Args;
             BigQueryReadSession? readSession;
-            try { readSession = await BigQueryStorageSessionAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, messages, token); }
+            // A script child's rows load through REST, as its query.execute read them: the text is the whole script's, so
+            // whether its order matters (an ORDER BY inside EXECUTE IMMEDIATE or a procedure) cannot be read from it.
+            try { readSession = window.Child ? null : await BigQueryStorageSessionAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, messages, token); }
             catch
             {
                 first.Dispose();

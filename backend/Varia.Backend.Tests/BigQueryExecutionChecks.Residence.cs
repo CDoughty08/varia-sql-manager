@@ -1422,6 +1422,23 @@ internal static partial class BigQueryExecutionChecks
             check(code == "ok" && set is { Residence: "remote" } && Says(result, "low on memory, so the result stays windowed") && !Says(result, "did not fit in memory"),
                 $"a load refused for low memory says so even once the switch back relieved it: {code} {message} res={set?.Residence} msgs={Texts(result?.Messages ?? [])}");
         }
+        // A script child's load reads in the order its grid showed: its rows are the child's, but the text is the whole script's,
+        // where an ORDER BY may not show (EXECUTE IMMEDIATE, a procedure), so no read of it may split into streams.
+        {
+            var (jobs, storage) = Numbers(5000, 250, jobs => { jobs.StatementType = "SCRIPT"; jobs.ScriptChild = true; });
+            using var harness = StorageHarness(jobs, storage);
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("DECLARE q STRING DEFAULT 'SELECT n, s FROM t ORDER BY n'; EXECUTE IMMEDIATE q", Windowed);
+            var executedSet = executed?.ResultSets.SingleOrDefault();
+            var before = storage.Sessions.Count;
+            var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(executedSet?.ResultId ?? 0));
+            var set = result?.ResultSets.SingleOrDefault();
+            var rows = set is null ? [] : harness.Rows(set);
+            var streams = storage.Sessions.Skip(before).Select(session => session.MaxStreamCount).ToList();
+            check(executedSet is { Residence: "remote" } && code == "ok" && set is { Residence: "memory", RowsStored: 5000 } && streams.All(count => count == 1)
+                && rows.Select(row => row[0].Text).SequenceEqual(Enumerable.Range(0, 5000).Select(i => i.ToString(Inv))),
+                $"a script child's load reads its rows in order, never split into streams: {executedSet?.Residence} {code} {message} res={set?.Residence} stored={set?.RowsStored} streams={string.Join(",", streams)}");
+        }
         // A Storage Read load refused for low memory switches back to windowed, whole, as REST's does.
         {
             var low = 0;
