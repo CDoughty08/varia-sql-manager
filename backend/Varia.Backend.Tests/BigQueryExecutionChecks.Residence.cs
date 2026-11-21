@@ -44,6 +44,8 @@ internal static partial class BigQueryExecutionChecks
         await LoadAfterDisconnectAsync(check);
         Trace("LoadReleased");
         await LoadReleasedAsync(check);
+        Trace("LoadFailed");
+        await LoadFailedAsync(check);
         Trace("LoadWhileRunning");
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
@@ -805,6 +807,22 @@ internal static partial class BigQueryExecutionChecks
         harness.Jobs.HangPages = false;
         check(ended && code == "ok" && result is { Status: "failed", Error.Code: "RESULT_RELEASED" } && !Says(result, "loaded into memory"),
             $"a load whose result is closed stops at once and says so: {ended} {code} {message} {result?.Status} {result?.Error?.Code}");
+    }
+
+    /// <summary>A load that BigQuery refuses part way: the result goes back to windowed and the summary carries BigQuery's
+    /// error, not a cancel (the switch back must not read as the user stopping it).</summary>
+    static async Task LoadFailedAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Jobs.DenyPages = true;
+        var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(id));
+        harness.Jobs.DenyPages = false;
+        var set = harness.Service.Results.Find(id);
+        check(code == "ok" && result is { Status: "failed", Error.Code: "PERMISSION_DENIED" } && !Says(result, "was cancelled") && set is { IsRemote: true },
+            $"a load BigQuery refuses part way fails with BigQuery's error and stays windowed: {code} {message} {result?.Status} {result?.Error?.Code} {set?.IsRemote}");
     }
 
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>

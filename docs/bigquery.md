@@ -293,7 +293,7 @@ which is free to read. So a result is either **in memory**, as SQL Server's are,
 backend keeps only the blocks the grid is showing, reads the rest as you scroll, and the caption says "windowed in
 BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is docs/ipc.md's Remote results).
 
-- **Setting.** Options › Query Results › BigQuery › Results: **Keep results** (`queryResults.bigQuery.residence`):
+- **Setting.** Tools › Options › Query Results › BigQuery › Results: **Keep results** (`queryResults.bigQuery.residence`):
   Automatically, by size (the default), Always in memory (the budget truncates) or Always windowed in
   BigQuery; and **Block cache per windowed result** (`queryResults.bigQuery.windowCacheMiB`, 16 – 4,096 MiB, default 64), the blocks each
   windowed result keeps. Each query takes them as it starts.
@@ -315,7 +315,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   where the cache is full, then the grid shows the rows it has and asks again.
 - **Load into memory.** `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
-  result windowed, whole, and a second load of a result already loading is refused. Reads under way when it starts
+  result windowed, whole, and a second load of a result already loading is refused. Closing the result stops the load,
+  which then says the result was closed. Reads under way when it starts
   answer with the rows they have, and the grid reads again from memory.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
   of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and

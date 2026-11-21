@@ -1127,7 +1127,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   that made the result still runs the backend answers `BUSY`. `load` (Load into
   memory) empties the set and reads the whole table into it under a new revision (`resultSet.residence`), then
   `resultSet.closed`; a refusal part way, a failure or Stop switches it back to windowed, whole, under another revision.
-  Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already loading).
+  Closing the result (Close Results, the tab closed or run again) stops the load, whose summary fails with
+  `RESULT_RELEASED`. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
+  loading; `RESULT_RELEASED` for one already closed, `BUDGET_STOPPED` once the budget has stopped).
 
 ## Cell lengths and row sizes
 

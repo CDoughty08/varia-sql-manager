@@ -343,6 +343,9 @@ internal sealed partial class SqlService
         }
         catch (Exception error)
         {
+            // Read before the switch back: its Demote fires `gone`, which would make a failure read as the user's cancel.
+            var userStopped = token.IsCancellationRequested;
+            gone.Dispose();
             // Stopped or failed part way: the result goes back to windowed, whole, rather than staying a partial copy.
             if (set.IsOpen && !set.IsReleased && set.Revision == loaded) SwitchBack();
             if (set.IsReleased)
@@ -352,7 +355,7 @@ internal sealed partial class SqlService
                 failure = new(closed.Code, closed.Message, 1, 1);
                 messages.Add(closed.Message, MessageKind.Error);
             }
-            else if (token.IsCancellationRequested)
+            else if (userStopped)
             {
                 status = "cancelled";
                 failure = new("CANCELLED", "Loading into memory was cancelled. The result stays windowed in BigQuery.", 1, 1);

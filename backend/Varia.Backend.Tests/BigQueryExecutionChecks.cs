@@ -49,6 +49,8 @@ internal static partial class BigQueryExecutionChecks
         public bool Hang;
         /// <summary>Holds only the later pages (a finished job's rows still loading).</summary>
         public bool HangPages;
+        /// <summary>Refuses the later pages (403 accessDenied): a read that fails part way.</summary>
+        public bool DenyPages;
         /// <summary>Replaces the next page's token (one Varia cannot send back).</summary>
         public string? Token;
         public string? Location;
@@ -186,6 +188,7 @@ internal static partial class BigQueryExecutionChecks
             var parameters = HttpUtility.ParseQueryString(request.Uri.Query);
             if (Failure is not null)
                 return new(400, new JsonObject { ["error"] = new JsonObject { ["code"] = 400, ["message"] = Failure["message"]?.DeepClone(), ["errors"] = new JsonArray(Failure.DeepClone()) } }.ToJsonString());
+            if (DenyPages && parameters["pageToken"] is not null) return BigQueryFake.Fixture("error-access-denied", 403);
             if (Interlocked.Increment(ref polls) <= PollsBeforeDone)
                 return new(200, new JsonObject { ["kind"] = "bigquery#getQueryResultsResponse", ["jobReference"] = Reference(id), ["jobComplete"] = false }.ToJsonString());
             var offset = parameters["pageToken"] is { } token ? int.Parse(token[5..], System.Globalization.CultureInfo.InvariantCulture) : 0;

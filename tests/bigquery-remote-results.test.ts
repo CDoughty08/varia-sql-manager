@@ -168,5 +168,15 @@ describe('the user-facing text about windowed results', () => {
     const limits = guide.slice(guide.indexOf('limits:'))
     expect(limits).toMatch(/<SettingRef id="queryResults\.bigQuery\.residence" \/>/)
     expect(limits).not.toMatch(/<p>Results stay in memory\./)
+    // A result windowed from the start writes no Messages line; its caption is what says so.
+    expect(limits).not.toMatch(/Messages line says so/)
+    const bigquery = readFileSync(join(__dirname, '..', 'docs', 'bigquery.md'), 'utf8')
+    expect(bigquery).not.toMatch(/(?<!Tools › )Options › Query Results › BigQuery/)
+    // A load stopped because its result was closed is documented where the method is.
+    const ipc = readFileSync(join(__dirname, '..', 'docs', 'ipc.md'), 'utf8')
+    const start = ipc.indexOf('- **`results.remoteQuery')
+    const remoteQuery = ipc.slice(start, ipc.indexOf('\n- ', start + 3))
+    expect(remoteQuery).toMatch(/`RESULT_RELEASED`/)
+    expect(bigquery.slice(bigquery.indexOf('- **Load into memory.**'), bigquery.indexOf('- **What waits.**'))).toMatch(/Closing the result stops the load/)
   })
 })
