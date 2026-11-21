@@ -96,10 +96,11 @@ internal static class ColumnProfiler
         var count = set.Wires.Count;
         // A packed result is read fused: each run unpacks the page it is about to read into a room of its own, reserved from
         // the budget (refused: the profile is too large, and SqlService tries again on one thread, which needs one room).
+        // A page with no set (a view read's, its own bytes) is read as it is, as the other fused readers read it (PageRooms.Over).
         var largest = 0;
-        foreach (var page in pages) if (set.Raw(page) is null) largest = Math.Max(largest, page.Length);
+        foreach (var page in pages) if (page.Set is not null && set.Raw(page) is null) largest = Math.Max(largest, page.Length);
         using var rooms = largest > 0 ? new PageRooms(set, largest, 0, () => new ProfileTooLargeException()) : null;
-        ReadOnlySpan<byte> Body(StoredPage page, PageRoom? room) => room is null ? page.Body() : set.Read(page, room.Bytes).AsSpan(0, page.Length);
+        ReadOnlySpan<byte> Body(StoredPage page, PageRoom? room) => room is null || page.Set is null ? page.Body() : set.Read(page, room.Bytes).AsSpan(0, page.Length);
         // A run for each thread asked for (the working memory is reserved for that many), read on the share of the
         // threads the gate gives. A run is one item, so a profile holding more than its share gives a thread back only
         // as one of its runs ends; more, smaller runs would each need figures (and memory) of their own.
