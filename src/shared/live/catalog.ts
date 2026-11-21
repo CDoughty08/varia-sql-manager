@@ -327,7 +327,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'agent.jobs.watched': {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or a job no longer there, has no values. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
+    description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
     series: agentWatchedSeries
   },
   'explorer.availability': {

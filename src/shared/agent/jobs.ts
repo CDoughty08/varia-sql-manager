@@ -22,7 +22,11 @@ export const agentJobColumnFilterSchema = z.object({
   blanks: z.boolean().optional(),
   nonBlanks: z.boolean().optional(),
   exclude: z.boolean().optional()
-}).strict()
+}).strict().superRefine((filter, context) => {
+  // The backend's rules (AgentJobsArgs.Check), as Activity Monitor's column filters have them.
+  if (!filter.values?.length && !filter.blanks && !filter.nonBlanks) context.addIssue({ code: 'custom', message: 'A column filter needs a value, (Blanks) or (Non-blanks).' })
+  if (filter.exclude && (!filter.values?.length || filter.nonBlanks)) context.addIssue({ code: 'custom', message: 'An excluding filter names values, without (Non-blanks).' })
+})
 export type AgentJobColumnFilter = z.infer<typeof agentJobColumnFilterSchema>
 
 /** `agent.jobs`' args: the job whose last run the list reads, the jobs the status bar watches (slots by order), and the list's
@@ -115,6 +119,13 @@ export function tileValue(tile: AgentJobTile, count: number | null | undefined, 
   return count ?? undefined
 }
 
+/** A view chip's count: what its tile shows, so Running reads 0 or nothing (unknown) while Agent cannot run jobs. */
+export function viewCount(series: AgentJobViewSpec['series'], counts: readonly (number | null)[] | undefined, availability: AgentAvailability): number | undefined {
+  const tile = agentJobTiles.find(item => item.id === series)
+  const value = tile && tileValue(tile, counts?.[tile.series], availability)
+  return typeof value === 'number' ? value : undefined
+}
+
 // --- Bulk actions -------------------------------------------------------------------------------------------------
 
 export type AgentBulkVerb = 'startJob' | 'stopJob' | 'enable' | 'disable'
@@ -144,6 +155,8 @@ export function watchedSlot(metrics: readonly (number | null)[] | undefined, slo
   if (value(0) === undefined) return undefined
   return { status: value(0), step: value(1), steps: value(2), started: value(3), lastOutcome: value(4), lastRun: value(5) }
 }
+/** A watched slot's status for a job msdb no longer has (AgentJobsReader.GoneStatus); a slot with no status was not read. */
+export const watchedGoneStatus = -1
 /** How many samples in a row may read the job idle with an older last run before following gives up: before it runs (sp_start_job
  *  only posts the request) and after (Agent may show it idle a sample before it writes the run's outcome). */
 export const watchStartSamples = 3
@@ -173,7 +186,13 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
   if (availability === 'stopped') return { phase: { phase: 'unknown', reason: 'agentStopped' }, job }
   if (availability === 'xpsOff') return { phase: { phase: 'unknown', reason: 'xpsOff' }, job }
   if (availability === 'unknown') return { phase: { phase: 'unknown', reason: 'unreadable' }, job }
-  if (!sample) return { phase: job.seenRunning || job.idleSamples > 0 ? { phase: 'unknown', reason: 'gone' } : { phase: 'starting' }, job }
+  if (sample?.status === watchedGoneStatus) return { phase: { phase: 'unknown', reason: 'gone' }, job }
+  // A slot not read this sample (a refused read) changes nothing yet, but counts toward giving up, so it never waits forever.
+  if (!sample) {
+    const next = { ...job, idleSamples: job.idleSamples + 1 }
+    if (next.idleSamples > watchStartSamples) return { phase: { phase: 'unknown', reason: 'gone' }, job: next }
+    return { phase: job.seenRunning ? { phase: 'running', retrying: false } : { phase: 'starting' }, job: next }
+  }
   const status = sample.status ?? 4
   if ((runningExecutionStatuses as readonly number[]).includes(status)) {
     return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0 } }

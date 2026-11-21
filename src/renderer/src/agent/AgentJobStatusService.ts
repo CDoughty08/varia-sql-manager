@@ -90,7 +90,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     const entry = this.getSnapshot().jobs.find(item => item.key === key)
     if (!entry) return
     this.publish({ ...this.getSnapshot(), jobs: this.getSnapshot().jobs.filter(item => item.key !== key) })
-    if (active(entry)) this.follow(entry.connectionId)
+    this.follow(entry.connectionId)
   }
 
   /** Stop Job (AG-2's verb) on a followed job; its end shows when the next sample reads it. */
@@ -114,7 +114,12 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     if (current && current.slots.length === slots.length && current.slots.every((key, at) => key === slots[at])) return
     current?.stop()
     this.views.delete(connectionId)
-    if (!slots.length) { this.services.delete(connectionId); this.publishAgent(); return }
+    if (!slots.length) {
+      // Agent's last state stays while a job ended on it (Agent stopped or its XPs off) still shows, on a live connection.
+      if (!this.isLive(connectionId) || !this.getSnapshot().jobs.some(entry => entry.connectionId === connectionId && entry.phase.phase === 'unknown' && (entry.phase.reason === 'agentStopped' || entry.phase.reason === 'xpsOff'))) this.services.delete(connectionId)
+      this.publishAgent()
+      return
+    }
     const ids = slots.map(key => this.getSnapshot().jobs.find(entry => entry.key === key)!.id)
     let ended = false
     const owner = {

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // The status bar's SQL Server Agent stopped item (AG-3): with Agent stopped on one server, it opens that server's Job Activity
-// Monitor, not the active document's server.
+// Monitor, not the active document's server; a followed job's end always shows its date.
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -37,5 +37,11 @@ describe("The status bar's Agent stopped item", () => {
     await act(async () => { button.click() })
     expect(fixture.documents.active?.id).toBe(monitor)
     expect(Object.values(fixture.jobActivity.getSnapshot().documents).map(state => state.connectionId)).toEqual(['c1'])
+    // A followed job's end shows its start with the date: the client's today is not the server's.
+    fixture.agentJobs.watch('c2', { id: '11111111-1111-1111-1111-111111111111', name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+    const view = (fixture.live.handles as FakeLiveHandle[]).at(-1)!
+    const today = new Date(), stamp = today.getFullYear() * 10_000_000_000 + (today.getMonth() + 1) * 100_000_000 + today.getDate() * 1_000_000 + 140000
+    await act(async () => { view.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: [4, null, 3, null, 1, stamp, ...Array.from({ length: 12 }, () => null)] }] }) })
+    expect(host.querySelector('.agent-job-status')?.textContent).toContain(`Nightly: Succeeded (started ${String(stamp).slice(0, 4)}-${String(stamp).slice(4, 6)}-${String(stamp).slice(6, 8)} 14:00:00, server time)`)
   })
 })

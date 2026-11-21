@@ -93,7 +93,8 @@ export const jobActivityText = {
 
 /** The args a document's state sends: only what applies. */
 export function jobActivityArgs(state: Pick<JobActivityState, 'expanded' | 'columnFilters'>): AgentJobsArgs {
-  const filters = state.columnFilters.filter(filter => filter.values?.length || filter.blanks || filter.nonBlanks).map(filter => ({
+  // Only filters both schemas accept: one that names something, and an excluding one only with values and without (Non-blanks).
+  const filters = state.columnFilters.filter(filter => (filter.values?.length || filter.blanks || filter.nonBlanks) && !(filter.exclude && (!filter.values?.length || filter.nonBlanks))).map(filter => ({
     ...filter, ...filter.values ? { values: filter.values.slice(0, agentJobFilterLimits.values).map(value => value.slice(0, agentJobFilterLimits.chars)) } : {}
   }))
   return { ...state.expanded ? { expand: state.expanded.id } : {}, ...filters.length ? { filters } : {} }
@@ -199,11 +200,10 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
           const value = (id: string) => { const entry = sample.status!.find(item => item.id === id); return typeof entry?.value === 'number' ? entry.value : undefined }
           const service: AgentServiceSample = { agentXps: value('agentXps'), serviceState: value('serviceState'), startupType: value('startupType') }
           const before = this.get(state.id)?.service
-          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType) {
-            patch = { ...patch, service }
-            // Agent usable again after a list read stopped on AGENT_DISABLED: subscribe again so the list resumes by itself.
-            if (agentAvailability(service) === 'running' && agentAvailability(before) !== 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()
-          }
+          if (before?.agentXps !== service.agentXps || before?.serviceState !== service.serviceState || before?.startupType !== service.startupType) patch = { ...patch, service }
+          // Agent usable while the list stopped on AGENT_DISABLED (it may have restarted between two service samples): read again
+          // so the list resumes by itself.
+          if (agentAvailability(service) === 'running' && handle.getSnapshot().probes[agentJobsProbe]?.error?.code === 'AGENT_DISABLED') handle.refresh()
         }
       }
       if (Object.keys(patch).length) this.patch(state.id, patch)

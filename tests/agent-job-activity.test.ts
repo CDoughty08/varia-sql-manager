@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentLimits } from '../src/shared/agent/catalog'
 import {
-  agentAvailability, agentBanner, agentJobTiles, agentJobsArgsSchema, agentStatusOverride, bulkUnavailable, stampText, tileValue, watchedPhase, watchedSlot, watchedText,
+  agentAvailability, agentBanner, agentJobTiles, agentJobsArgsSchema, agentStatusOverride, bulkUnavailable, stampText, tileValue, viewCount, watchedGoneStatus, watchedPhase, watchedSlot, watchedText,
   type WatchedJob
 } from '../src/shared/agent/jobs'
 import { commandDescriptor } from '../src/shared/commands/catalog'
@@ -83,10 +83,14 @@ describe("agent.jobs' shared rules", () => {
     expect(schema).toBe(agentJobsArgsSchema)
     expect(schema.safeParse({ expand: nightly, watch: [nightly, backup], filters: [{ column: 'status', values: ['Executing'] }] }).success).toBe(true)
     for (const refused of [{ expand: 'x' }, { watch: [] }, { watch: [nightly, nightly.toUpperCase()] }, { watch: [nightly, backup, nightly.replace('1', '3'), nightly.replace('1', '4')] },
-      { filters: [{ column: 'owner', values: ['sa'] }] }, { filters: [{ column: 'status' }, { column: 'status' }] }, { other: 1 }]) expect(schema.safeParse(refused).success, JSON.stringify(refused)).toBe(false)
+      { filters: [{ column: 'owner', values: ['sa'] }] }, { filters: [{ column: 'status' }, { column: 'status' }] }, { other: 1 },
+      // The backend's column filter rules: something named, and an excluding filter only with values and without (Non-blanks).
+      { filters: [{ column: 'status' }] }, { filters: [{ column: 'status', exclude: true, blanks: true }] }, { filters: [{ column: 'status', values: ['Idle'], exclude: true, nonBlanks: true }] }]) expect(schema.safeParse(refused).success, JSON.stringify(refused)).toBe(false)
     expect(jobActivityArgs({ columnFilters: [] })).toEqual({})
     expect(jobActivityArgs({ expanded: { id: nightly, name: 'Nightly' }, columnFilters: [{ column: 'category', values: ['ETL'] }, { column: 'status' }] }))
       .toEqual({ expand: nightly, filters: [{ column: 'category', values: ['ETL'] }] })
+    expect(jobActivityArgs({ columnFilters: [{ column: 'status', exclude: true, blanks: true }, { column: 'category', values: ['ETL'], exclude: true, blanks: true }] }))
+      .toEqual({ filters: [{ column: 'category', values: ['ETL'], exclude: true, blanks: true }] })
     expect(activeFilters({ view: 'failed', text: ' x ', columnFilters: [{ column: 'status', values: ['Idle'] }] })).toBe(3)
   })
   it('follows a started job: Starting… until it runs or a newer run ends, then its outcome; unknown when it never shows', () => {
@@ -112,6 +116,20 @@ describe("agent.jobs' shared rules", () => {
     for (let sample = 0; sample < 3; sample++) ran = watchedPhase(ran.job, idle, 'running')
     expect(ran.phase).toEqual({ phase: 'unknown', reason: 'gone' })
     expect(watchedPhase(start, idle, 'stopped').phase).toEqual({ phase: 'unknown', reason: 'agentStopped' })
+    // A job msdb no longer has ends at once; a slot not read keeps the phase but counts, so Starting… never waits forever.
+    expect(watchedPhase(ran.job, { status: watchedGoneStatus }, 'running').phase).toEqual({ phase: 'unknown', reason: 'gone' })
+    let unread = watchedPhase(start, { status: 1, step: 1, steps: 3, lastOutcome: 1, lastRun: 20261115023000 }, 'running')
+    unread = watchedPhase(unread.job, undefined, 'running')
+    expect(unread.phase).toEqual({ phase: 'running', retrying: false })
+    let never2 = { phase: { phase: 'starting' } as ReturnType<typeof watchedPhase>['phase'], job: start }
+    for (let sample = 0; sample < 3; sample++) never2 = watchedPhase(never2.job, undefined, 'running')
+    expect(never2.phase).toEqual({ phase: 'starting' })
+    expect(watchedPhase(never2.job, undefined, 'running').phase).toEqual({ phase: 'unknown', reason: 'gone' })
+    // A view chip counts what its tile shows.
+    expect(viewCount('running', [2, 1, 0, 3], 'stopped')).toBe(0)
+    expect(viewCount('running', [2, 1, 0, 3], 'unknown')).toBeUndefined()
+    expect(viewCount('disabled', [2, 1, 0, 3], 'stopped')).toBe(3)
+    expect(viewCount(undefined, [2, 1, 0, 3], 'running')).toBeUndefined()
     expect(watchedSlot([4, null, 3, null, 1, 20261115023000, null, null, null, null, null, null], 0)).toEqual({ status: 4, step: undefined, steps: 3, started: undefined, lastOutcome: 1, lastRun: 20261115023000 })
     expect(watchedSlot([4, null, 3, null, 1, 0, null, null, null, null, null, null], 1)).toBeUndefined()
     expect(stampText(20261114235959, 20261115)).toBe('2026-11-14 23:59:59')
@@ -183,6 +201,9 @@ describe('Job Activity Monitor', () => {
     handle().deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] })
     expect(jobActivity.availability(id)).toBe('running')
     expect(handle().refreshes).toBe(1)
+    // Agent restarted between two service samples: no change to see, but the list stopped on AGENT_DISABLED reads again.
+    handle().deliver({ type: 'live.tick', seq: 3, sampledAt: 3, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] })
+    expect(handle().refreshes).toBe(2)
   })
   it('says why when msdb refuses the login, in place of the rows', () => {
     const { jobActivity, handle } = monitor()
@@ -269,6 +290,11 @@ describe("The status bar's running job", () => {
     await agentJobs.stop(key)
     expect(api.executeObjectAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'stopJob', connectionId: 'c1', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' } }))
     handles().at(-1)!.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 0 }, { id: 'serviceState', value: 1 }] }] })
+    await settled()
+    // The view closes with nothing left to follow, but Agent's state stays while the job it ended shows; Dismiss clears it.
     expect(agentJobs.getSnapshot()).toMatchObject({ jobs: [{ phase: { phase: 'unknown', reason: 'agentStopped' } }], agent: { c1: 'stopped' } })
+    expect(handles().at(-1)!.disposed).toBe(true)
+    agentJobs.dismiss(key)
+    expect(agentJobs.getSnapshot()).toEqual({ jobs: [], agent: {} })
   })
 })

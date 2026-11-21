@@ -3,7 +3,6 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import type { WatchedEntry } from './AgentJobStatusService'
 
-const todayStamp = () => { const now = new Date(); return now.getFullYear() * 10_000 + (now.getMonth() + 1) * 100 + now.getDate() }
 const running = (entry: WatchedEntry) => entry.phase.phase === 'starting' || entry.phase.phase === 'running'
 
 /**
@@ -35,7 +34,7 @@ export default function AgentJobStatus() {
     {newest && <span className="agent-job-status" role="status" data-phase={newest.phase.phase}>
       <Icon name={running(newest) ? 'agent-activity' : newest.phase.phase === 'ended' && newest.phase.outcome === 1 ? 'pass' : 'warning'} />
       <span className="agent-job-status-text" title={`${newest.server}: ${watchedText(newest.name, newest.phase)}${newest.error ? ` · ${newest.error}` : ''}`}>
-        {watchedText(newest.name, newest.phase, todayStamp())}{newest.error ? ` · ${newest.error}` : ''}
+        {/* Always with its date: the client's today is not the server's. */}{watchedText(newest.name, newest.phase)}{newest.error ? ` · ${newest.error}` : ''}
       </span>
       {more > 0 && <span className="agent-job-status-more" title={jobs.slice(1).map(entry => watchedText(entry.name, entry.phase)).join('\n')}>+{more}</span>}
       {running(newest) && <button type="button" disabled={!!newest.stopping} onClick={() => void agentJobs.stop(newest.key)} aria-label={`Stop ${newest.name}`}>Stop</button>}

@@ -61,6 +61,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
     /// <summary>The execution statuses that count as running (src/shared/agent/catalog.ts runningExecutionStatuses).</summary>
     private static readonly int[] Running = [1, 2, 3, 7];
     private static readonly string[] WatchedFields = ["Status", "Step", "Steps", "Started", "LastOutcome", "LastRun"];
+    /// <summary>A watched slot's status for a job msdb no longer has (src/shared/agent/jobs.ts watchedGoneStatus).</summary>
+    public const int GoneStatus = -1;
 
     private readonly AgentCatalog catalog = catalog ?? AgentCatalog.Current;
     private readonly Lock gate = new();
@@ -224,8 +226,10 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
         if (outcomes.Count == 0) return [];
         var last = outcomes[0];
         var previous = outcomes.Count > 1 ? outcomes[1].Instance : 0;
+        // The table keeps its first rowCap rows: a run with more steps than that keeps its newest, so the outcome row always shows.
+        var cap = LiveCatalog.Current.Probes[ListProbe].Tables[1].RowCap is > 1 and var rowCap ? rowCap : int.MaxValue;
         var steps = rows.Where(row => row.Step > 0 && row.Instance > previous && row.Instance < last.Instance && (last.Started is null || row.Started is null || row.Started >= last.Started))
-            .OrderBy(row => row.Instance);
+            .OrderByDescending(row => row.Instance).Take(cap - 1).OrderBy(row => row.Instance);
         var maxChars = (int)catalog.Limit("gridMessageChars");
         return [.. steps.Append(last).Select(row => new LiveRow([
             LiveCell.Of((long)row.Instance), LiveCell.Of((long)row.Step), LiveCell.Of(row.Step == 0 ? "(Job outcome)" : row.Name),
@@ -276,8 +280,10 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
             var id = watched[slot];
             var (results, failed) = await Reader.ReadAsync(connection, prologue, [AgentSql.WatchedJob], (_, _) => id, token).ConfigureAwait(false);
             if (results.TryGetValue(AgentSql.WatchedJob.Id, out var job) && job.Rows.Count > 0) jobs[slot] = Job.Of(job, job.Rows[0]);
-            // A job deleted since (14262, NOT_FOUND) leaves its slot empty; any other refusal is said once.
-            else if (failed.Count > 0 && failed[0].Code != "NOT_FOUND" && errors.Count == 0) errors.Add(Error(WatchedProbe, failed[0]));
+            // A job deleted since (14262, NOT_FOUND) reads status -1 (GoneStatus); any other refusal leaves its slot empty, read
+            // again next sample, and is said once.
+            else if (failed.Count > 0 && failed[0].Code == "NOT_FOUND") values[slot * WatchedFields.Length] = GoneStatus;
+            else if (failed.Count > 0 && errors.Count == 0) errors.Add(Error(WatchedProbe, failed[0]));
         }
         Dictionary<Guid, DateTime> starts = [];
         if (jobs.Any(job => job?.IsRunning == true)) (starts, _) = await StartsAsync(connection, prologue, WatchedProbe, errors, null, token).ConfigureAwait(false);

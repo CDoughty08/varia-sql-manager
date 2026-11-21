@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import {
   agentBanner, agentBulkCommands, agentBulkTitles, agentBulkVerbs, agentJobFilterColumns, agentJobFilterLimits, agentJobTiles, agentJobViewSpecs, agentJobsProbe, agentServiceProbe,
-  agentStatusOverride, jobActivityTitle, tileValue
+  agentStatusOverride, jobActivityTitle, tileValue, viewCount
 } from '../../../shared/agent/jobs'
 import { liveProbes, type LiveTone } from '../../../shared/live/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -144,7 +144,7 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
         <div className="activity-pane-tools one-row agent-jobs-tools" role="toolbar" aria-label="Job filters">
           <ChipGroup label="View" dense>
             {agentJobViewSpecs.map(view => <Chip key={view.id} label={view.label} pressed={state.view === view.id}
-              count={view.series ? state.counts?.[agentJobTiles.findIndex(tile => tile.id === view.series)] ?? undefined : undefined}
+              count={viewCount(view.series, state.counts, availability)}
               onToggle={() => service.setView(documentId, view.id)} />)}
           </ChipGroup>
           <FilterBox id={documentId} value={state.text} onCommit={text => service.setText(documentId, text)} />

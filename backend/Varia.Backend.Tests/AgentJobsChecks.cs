@@ -129,6 +129,12 @@ internal static class AgentJobsChecks
         check(lastRun.Select(row => row[1]).SequenceEqual(["1", "2", "3", "0"]) && lastRun[3][3] == "Failed" && lastRun[2][7] == "error" && lastRun[0][7] == "NULL"
             && lastRun[1][5] == "00:16:31" && lastRun[2][6].Length == (int)AgentCatalog.Current.Limit("gridMessageChars") && lastRun[2][6].EndsWith('…') && lastRun[3][2] == "(Job outcome)",
             "the expanded job's last run is the step rows after the previous job outcome row, then its own outcome row; messages are cut to gridMessageChars: " + string.Join(" | ", lastRun.Select(row => string.Join(",", row))));
+        var cap = LiveCatalog.Current.Probes[AgentJobsReader.ListProbe].Tables[1].RowCap;
+        var history = AgentSql.History;
+        List<object?[]> many = [.. Enumerable.Range(1, cap + 10).Select(at => HistoryRow(history, at, 1 + at % 50, "Loop", 1, 20261115, 23000, 0, "ok")), HistoryRow(history, cap + 11, 0, "(Job outcome)", 1, 20261115, 23000, 5, "The job succeeded.")];
+        var capped = reader.LastRun(new AgentResult(history.Columns, many, false)).Select(Texts).ToList();
+        check(capped.Count == cap && capped[^1][2] == "(Job outcome)" && capped[0][0] == "12",
+            "a run with more step rows than the last run table keeps keeps its newest steps and its outcome row: " + capped.Count + " rows, first " + capped[0][0] + ", last " + capped[^1][2]);
         bool Keeps(LiveReaderTable table, string name) => table.View?.Invoke(table.Rows.Single(row => row.Cells[Col("name")].Text == name)) ?? true;
         var running = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "running"), null, CancellationToken.None)).Tables[0];
         var failed = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "failed"), null, CancellationToken.None)).Tables[0];
@@ -174,9 +180,9 @@ internal static class AgentJobsChecks
         var sample = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.WatchedProbe), null, CancellationToken.None);
         var values = sample.Raw!.Values;
         check(LiveCatalog.Current.Probes[AgentJobsReader.WatchedProbe].Series.Count == values.Length && values.Length == 18 && sample.Errors.Count == 0
-            && values[..6].SequenceEqual([1d, 2d, 4d, 20261115140000d, 1d, 20261115010000d]) && values[6..12].All(value => value is null)
+            && values[..6].SequenceEqual([1d, 2d, 4d, 20261115140000d, 1d, 20261115010000d]) && values[6] == AgentJobsReader.GoneStatus && values[7..12].All(value => value is null)
             && values[12..].SequenceEqual([4d, null, 3d, null, 0d, 20261115023000d]),
-            "each watched job fills its slot: status, current step, step count, start (from its activity row) while running, last outcome and last run; a job gone since (14262) leaves its slot empty: "
+            "each watched job fills its slot: status, current step, step count, start (from its activity row) while running, last outcome and last run; a job gone since (14262) reads status -1 and nothing else: "
             + string.Join(",", values.Select(value => value?.ToString() ?? "null")));
         var idle = new AgentJobsReader(new(Watch: [Nightly.ToString()])) { Reader = Fake(ran = []) };
         await idle.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.WatchedProbe), null, CancellationToken.None);
