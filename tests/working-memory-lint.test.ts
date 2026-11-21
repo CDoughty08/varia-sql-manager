@@ -160,11 +160,17 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
     expect(at).toBeLessThan(residence.indexOf('\n    }\n', load))
   }
   // A query's rows through jobs.query, and a session's streams however their request is spelled, are read nowhere else.
-  expect(codeUses(/\bJobs\s*\.\s*Query\b/g)).toEqual([])
+  expect(codeUses(/\b[Jj]obs\s*\.\s*Query\b/g)).toEqual([])
   // The bans on the jobs resource look only at BigQuery code: its folder, SqlService's BigQuery files and any file naming
   // Google's BigQuery clients or a BigQuery connection (SQL Server Agent's AgentSql.Jobs or SMO's JobServer.Jobs is no jobs
   // resource).
-  const bigQueryUses = (pattern: RegExp) => files.filter(({ file, code }) => file.startsWith('BigQuery/') || file.startsWith('SqlService.BigQuery') || /\b(?:Google\.Apis\.Bigquery|Google\.Cloud\.BigQuery|BigqueryService|BigQueryConnection)\b/.test(code))
+  // (A file reaching the client through a connection, `bigQuery.Find(id).Client.Service`, is BigQuery code too.)
+  const isBigQueryCode = (file: string, code: string) => file.startsWith('BigQuery/') || file.startsWith('SqlService.BigQuery')
+    || /\b(?:Google\.Apis\.Bigquery|Google\.Cloud\.BigQuery|BigqueryService|BigQueryConnection)\b|\bClient\s*\.\s*Service\b|\bbigQuery\s*\.\s*Find\s*\(/.test(code)
+  expect(isBigQueryCode('Explorer/AgentListings.cs', '_ = results.ContainsKey(AgentSql.Jobs.Id); var jobs = server.JobServer.Jobs;')).toBe(false)
+  expect(isBigQueryCode('SqlService.Load.cs', 'var connection = bigQuery.Find(id); var jobs = connection.Client.Service.Jobs;')).toBe(true)
+  expect(isBigQueryCode('Results/Helper.cs', 'var service = connection.Client.Service; var jobs = service.Jobs;')).toBe(true)
+  const bigQueryUses = (pattern: RegExp) => files.filter(({ file, code }) => isBigQueryCode(file, code))
     .flatMap(({ file, code }) => Array.from(code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').matchAll(pattern), () => file))
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
   // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
