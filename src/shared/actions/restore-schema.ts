@@ -26,7 +26,8 @@ export const restoreSourceSchema = z.discriminatedUnion('kind', [
 
 const setSchema = z.object({
   id: z.string().max(restoreLimits.setId).regex(restoreSetIdPattern), devices, file: position, type: z.enum(plannedSetTypes),
-  name: z.string().max(restoreLimits.setName).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional()
+  name: z.string().max(restoreLimits.setName).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(),
+  guid: uuid.optional()
 }).strict()
 const moveSchema = z.object({ logical: ident, physical: path }).strict()
 

@@ -37,7 +37,7 @@ internal sealed partial class ActionService
         for (var index = 0; index < sets.Count; index++)
         {
             var set = sets[index];
-            if (set is null || set.Id is null || set.Id.Length > Restore.Limit("setId") || !RestoreSetId().IsMatch(set.Id) || set.File < 1 || set.File > Restore.Limit("position")
+            if (set is null || set.Id is null || set.Id.Length > Restore.Limit("setId") || !RestoreSetId().IsMatch(set.Id) || (set.Guid is { } guid && !RestoreUuid().IsMatch(guid)) || set.File < 1 || set.File > Restore.Limit("position")
                 || (set.Name is { } name && (name.Length > Restore.Limit("setName") || name.Contains('\0')))) throw Invalid("restoreFiles.sets.");
             RestoreDevices(set.Devices);
             var fits = index == 0 ? set.Type is "full" or "file" : set.Type == "log";
@@ -217,24 +217,28 @@ internal sealed partial class ActionService
             var recovery = index == last ? options.Recovery : "norecovery";
             var title = index == 0 ? Restore.Step("files") : Restore.Step("log") + (logs > 1 ? " " + index.ToString(CultureInfo.InvariantCulture) + " of " + logs.ToString(CultureInfo.InvariantCulture) : "");
             var text = RestoreFilesText(Restore, options, index, recovery);
-            steps.Add(new(title, context => RunMediaAsync(connection, text, command =>
+            steps.Add(new(title, async context =>
             {
-                Add(command, "@db", SqlDbType.NVarChar, 128, database);
-                for (var device = 0; device < set.Devices.Count; device++) Add(command, "@d" + (device + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, set.Devices[device]);
-                Add(command, "@file", SqlDbType.Int, 0, set.File);
-                if (first)
+                if (await RestoreChain.RecheckAsync(connection, catalog, set, context.Token) is { } changed) throw new StepRefusedException(changed);
+                await RunMediaAsync(connection, text, command =>
                 {
-                    for (var item = 0; item < options.Files.Count; item++) Add(command, "@f" + (item + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 128, options.Files[item]);
-                    for (var item = 0; item < options.Filegroups.Count; item++) Add(command, "@g" + (item + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 128, options.Filegroups[item]);
-                    for (var item = 0; item < options.Relocate.Count; item++)
+                    Add(command, "@db", SqlDbType.NVarChar, 128, database);
+                    for (var device = 0; device < set.Devices.Count; device++) Add(command, "@d" + (device + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, set.Devices[device]);
+                    Add(command, "@file", SqlDbType.Int, 0, set.File);
+                    if (first)
                     {
-                        var number = (item + 1).ToString(CultureInfo.InvariantCulture);
-                        Add(command, "@l" + number, SqlDbType.NVarChar, 128, options.Relocate[item].Logical);
-                        Add(command, "@p" + number, SqlDbType.NVarChar, 260, options.Relocate[item].Physical);
+                        for (var item = 0; item < options.Files.Count; item++) Add(command, "@f" + (item + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 128, options.Files[item]);
+                        for (var item = 0; item < options.Filegroups.Count; item++) Add(command, "@g" + (item + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 128, options.Filegroups[item]);
+                        for (var item = 0; item < options.Relocate.Count; item++)
+                        {
+                            var number = (item + 1).ToString(CultureInfo.InvariantCulture);
+                            Add(command, "@l" + number, SqlDbType.NVarChar, 128, options.Relocate[item].Logical);
+                            Add(command, "@p" + number, SqlDbType.NVarChar, 260, options.Relocate[item].Physical);
+                        }
                     }
-                }
-                if (recovery == "standby") Add(command, "@standby", SqlDbType.NVarChar, 260, options.StandbyFile);
-            }, context.Token), Detail: RestoreChain.Where(set) + ", position " + set.File.ToString(CultureInfo.InvariantCulture)));
+                    if (recovery == "standby") Add(command, "@standby", SqlDbType.NVarChar, 260, options.StandbyFile);
+                }, context.Token);
+            }, Detail: RestoreChain.Where(set) + ", position " + set.File.ToString(CultureInfo.InvariantCulture)));
         }
         if (options.LogBackup is { } backup)
         {
