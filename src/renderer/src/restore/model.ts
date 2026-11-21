@@ -5,7 +5,7 @@ import {
   backupSetTypeSpecs, pathFileName, restoreAsPath, restoreLimits, restoreMessages, restoreTargetProblem, standbyFile, tailLogFile, type BackupFileRow, type BackupSetRow, type RestoreDestination,
   type RestoreMove, type RestoreOptions, type RestorePlanSet, type RestoreRecovery, type RestoreServerFacts
 } from '../../../shared/actions/restore.ts'
-import { dependants, lastBackupTaken, orderSelection, planRestore, reachesPoint, selectionProblem, usableSet } from '../../../shared/actions/restore-plan.ts'
+import { dependants, lastBackupTaken, logCoverage, orderSelection, planRestore, pointAllowed, selectionCoverage, selectionProblem, selectionReaches, usableSet, type Coverage } from '../../../shared/actions/restore-plan.ts'
 import { restoreOptionsProblems, type RestoreRequest } from '../../../shared/actions/restore-schema.ts'
 import { folderPath, sameServerPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
 import type { RestoreFilesDraft } from './files'
@@ -119,15 +119,31 @@ export function draftPlan(draft: RestoreDraft, facts: RestoreFacts): DraftPlan {
     const ids = orderSelection(sets, draft.manual)
     let problem = selectionProblem(sets, ids), stopAt: string | undefined
     // A point the checked sets stop at takes STOPAT on their last log; one they cannot stop at is a problem, never dropped.
-    const atBase = sets.find(set => set.id === ids.at(-1))?.type !== 'log' && lastBackupTaken(sets, ids) === draft.stopAt
-    if (draft.stopAt && !atBase) {
-      if (reachesPoint(sets, ids, draft.stopAt)) stopAt = draft.stopAt
-      else problem ??= restoreMessages.notReached
-    }
+    const reach = draft.stopAt ? selectionReaches(sets, ids, draft.stopAt) : undefined
+    if (reach === 'log') stopAt = draft.stopAt
+    else if (draft.stopAt && !reach) problem ??= restoreMessages.notReached
     return { ids, ...stopAt ? { stopAt } : {}, ...problem ? { problem } : {}, manual: true }
   }
   const plan = planRestore(sets, draft.stopAt ? { stopAt: draft.stopAt } : {})
   return { ids: plan.ids, ...plan.stopAt ? { stopAt: plan.stopAt } : {}, ...plan.problem ? { problem: plan.problem } : {}, manual: false }
+}
+/** The last backup taken by the plan without a point (the checked sets' last under Manual Selection), whatever point is set. */
+export function lastBackupOf(draft: RestoreDraft, facts: RestoreFacts): string | undefined {
+  return lastBackupTaken(sourceSets(draft, facts), draftPlan({ ...draft, stopAt: undefined }, facts).ids)
+}
+/** The Backup Timeline's covered stretches: the planner's, or under Manual Selection the stretch the checked sets' last log stops in. */
+export function timelineCoverage(draft: RestoreDraft, facts: RestoreFacts): Coverage[] {
+  const sets = sourceSets(draft, facts)
+  return draft.manual ? selectionCoverage(sets, orderSelection(sets, draft.manual)) : logCoverage(sets)
+}
+/**
+ * Whether the Backup Timeline may put its point here: where draftPlan restores to it without a point problem. The planner's
+ * plans (pointAllowed), or under Manual Selection the checked sets' (their last base's finish, or their last log's stretch).
+ * Pass `covered` (timelineCoverage) to reuse it while the point moves.
+ */
+export function timelinePointAllowed(draft: RestoreDraft, facts: RestoreFacts, point: string, covered: readonly Coverage[] = timelineCoverage(draft, facts)): boolean {
+  const sets = sourceSets(draft, facts)
+  return draft.manual ? !!selectionReaches(sets, orderSelection(sets, draft.manual), point) : pointAllowed(sets, point, covered)
 }
 /** Whether the grid may check a set: Manual Selection is on, and the planner could use the set (not striped, damaged or of a kind it does not plan). */
 export const checkable = (draft: RestoreDraft, set: BackupSetRow): boolean => !!draft.manual && usableSet(set)
@@ -237,7 +253,7 @@ export function restoreRequest(draft: RestoreDraft, facts: RestoreFacts, ids: { 
   const byId = new Map(sourceSets(draft, facts).map(set => [set.id, set]))
   const sets: RestorePlanSet[] = plan.ids.map(id => {
     const set = byId.get(id)!
-    return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {} }
+    return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {}, ...set.backupSetGuid ? { guid: set.backupSetGuid } : {} }
   })
   const relocate: RestoreMove[] = fileRows(draft, facts).filter(row => !sameServerPath(row.restoreAs, row.file.physical, facts.server?.separator ?? '\\')).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
   const destination = destinationOf(facts, draft.destination)

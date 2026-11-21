@@ -722,7 +722,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
 | `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background'` |
-| `2_service` | Sto**p** | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
+| `2_service` | S**t**op | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
 | `2_service` | R**e**start | `explorer.restartAgent` | `explorerActionRestartAgent != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
@@ -1083,7 +1083,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (174)
+## Context keys (177)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1266,6 +1266,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 | `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
+| `resultsGridComparison` | boolean | state | The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is. |
+| `comparisonInputsOpen` | boolean | state | Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable. |
+| `outputGridComparison` | boolean | target | The menu is for a comparison's results grid. |
 
 ## Reserved keys
 

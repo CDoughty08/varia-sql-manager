@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (293)
+## Color keys (295)
 
 ### Base
 
@@ -305,7 +305,9 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.diffRemovedBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | A faint wash over the cells and row number of a row a comparison removes (−), in place of the row stripe. Translucent, as the added wash is. |
 | `resultsGrid.diffChangedAddedBackground` | Varia | `$green/18` | `#6fbf8a2e` | `#2e7d4f2e` | A changed value on the new (+) row of a changed row in a comparison, drawn bold; the row's other cells are not tinted. Also the kind bar on the row number of an added row and of a changed row's new half. |
 | `resultsGrid.diffChangedRemovedBackground` | Varia | `$red/18` | `#e667672e` | `#c42b3c2e` | A changed value on the old (−) row of a changed row in a comparison, struck through; the row's other cells are not tinted. Also the kind bar on the row number of a removed row and of a changed row's old half. |
-| `resultsGrid.diffChangedBackground` | Varia | `$blue/26` | `#6ea4ea42` | `#2563a842` | A changed value in a comparison that shows one row per entry, drawn as old → new. Not used yet; reserved for the comparison's one-row layout. |
+| `resultsGrid.diffChangedBackground` | Varia | `$blue/26` | `#6ea4ea42` | `#2563a842` | A changed value in a comparison that shows one row per entry, drawn as old → new. Translucent: a highlight, a search match and the selection lie over it. |
+| `resultsGrid.diffOldForeground` | Varia | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | The previous value in a changed cell of a comparison that shows one row per entry, struck through before the arrow and the new value. |
+| `resultsGrid.diffContextForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | The unchanged values of a changed row in a comparison (one row per entry, or the old and new rows of a changed row in two rows), so its changed values stand out. |
 | `resultsGrid.diffSoftUnderline` | Varia | `$warning` | `#e4bb6a` | `#875800` | The dotted underline of a result diff value equal to the other only by collation (case or trailing spaces). |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
