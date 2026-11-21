@@ -16,6 +16,7 @@ internal sealed partial class ActionService
     internal const string DeleteJobHistoryAction = "deleteJobHistory";
     internal const string DeleteHistoryStep = "Delete job history";
     internal const string HistoryMessageGone = "This history row no longer exists: SQL Server Agent's history cap or a purge removed it. Refresh the Log File Viewer.";
+    internal const string HistoryMessageBeyond = "This row is older than the newest history rows of the job this login can read, so its whole message cannot be read here; the grid shows its start.";
 
     /// <summary>Re-validates deleteJobHistoryRequestSchema (src/shared/agent/history.ts). Null for any other action, after refusing agentHistory
     /// on it.</summary>
@@ -122,7 +123,7 @@ internal sealed partial class ActionService
         if (!results.TryGetValue(AgentSql.History.Id, out var history)) return new(null, 0, HistoryReadError(errors[0]));
         foreach (var row in history.Rows)
             if (Convert.ToInt32(history.Value(row, "instance_id"), CultureInfo.InvariantCulture) == instance) return new(history.Value(row, "message") as string, 0);
-        return new(null, 0, Error("NOT_FOUND", HistoryMessageGone));
+        return new(null, 0, Error("NOT_FOUND", history.Truncated ? HistoryMessageBeyond : HistoryMessageGone));
     }
 
     private ActionError HistoryReadError(AgentReadError failed) => failed.Code switch

@@ -48,8 +48,9 @@ internal enum AgentOrphanLabel { Unknown, XpsOff }
 /// <summary>One run: its job outcome row (null for step rows with none), its step rows in instance order, and its outcome.</summary>
 internal sealed record AgentHistoryRun(Guid Job, AgentHistoryRow? Outcome, List<AgentHistoryRow> Steps, string OutcomeId)
 {
-    /// <summary>Its newest row's instance_id: the outcome row's, which Agent writes last, else the newest step row's.</summary>
-    public int Key => Outcome?.Instance ?? Steps.Max(row => row.Instance);
+    /// <summary>Its outcome row's instance_id (Agent writes it last), else its first step row's, which stays the same while a running job writes
+    /// more steps, so a selected In progress run stays selected until its outcome row lands.</summary>
+    public int Key => Outcome?.Instance ?? Steps.Min(row => row.Instance);
     public DateTime? Started => Outcome?.Started ?? Steps.Select(row => row.Started).Where(time => time is not null).Min();
     public IEnumerable<AgentHistoryRow> Rows => Outcome is null ? Steps : Steps.Prepend(Outcome);
 }
@@ -188,18 +189,33 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         List<AgentHistoryRow>? rows = null;
         var truncated = false;
         AgentReadError? historyError = null;
-        if (checkedJobs is not { Count: 0 })
+        if (checkedJobs is null)
         {
-            var one = checkedJobs is { Count: 1 } ? checkedJobs.First() : (Guid?)null;
-            var statement = one is null ? (now.Days is null ? AgentSql.HistoryAll : AgentSql.HistoryAllSince) : now.Days is null ? AgentSql.History : AgentSql.HistorySince;
-            var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement],
-                (_, parameter) => parameter.Name == "@job_id" ? one : parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
+            var statement = now.Days is null ? AgentSql.HistoryAll : AgentSql.HistoryAllSince;
+            var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement], (_, parameter) => parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
             if (history.TryGetValue(statement.Id, out var result))
             {
-                rows = [.. result.Rows.Select(row => Row(result, row)).Where(row => checkedJobs is null || checkedJobs.Contains(row.Job))];
+                rows = [.. result.Rows.Select(row => Row(result, row))];
                 truncated = result.Truncated;
             }
             else historyError = refused[0];
+        }
+        else if (checkedJobs.Count > 0)
+        {
+            // Each checked job is read by its id, so other jobs' rows never use up the cap; once the checked jobs' rows reach it, the
+            // jobs not yet read are left out and the read says it was cut.
+            var statement = now.Days is null ? AgentSql.History : AgentSql.HistorySince;
+            var cap = catalog.Limit("historyRows");
+            rows = [];
+            foreach (var one in checkedJobs.Order())
+            {
+                if (rows.Count >= cap) { truncated = true; break; }
+                var (history, refused) = await Reader.ReadAsync(connection, prologue, [statement],
+                    (_, parameter) => parameter.Name == "@job_id" ? one : parameter.Name == "@days" ? now.Days : null, token).ConfigureAwait(false);
+                if (!history.TryGetValue(statement.Id, out var result)) { historyError = refused[0]; rows = null; break; }
+                rows.AddRange(result.Rows.Select(row => Row(result, row)).Where(row => row.Job == one));
+                truncated |= result.Truncated;
+            }
         }
         // Step rows with no outcome row of a job that is not running read Unknown, unless Agent XPs is off with the service not read as stopped:
         // then sp_help_job reports every job idle and whether the job still runs cannot be read.
@@ -247,11 +263,13 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         var since = now.Days is { } days && read.ServerNow is { } clock ? clock.AddDays(-days) : (DateTime?)null;
         var kept = runs.Where(run => Passes(run, now, since)).OrderByDescending(run => run.Started ?? DateTime.MinValue).ThenByDescending(run => run.Key).ToList();
         var maxChars = (int)catalog.Limit("gridMessageChars");
-        var runRows = kept.Select(run => RunRow(run, names, maxChars)).ToList();
+        // Checked jobs read one by one may hold more runs than the table keeps: the newest stay and the table says it was cut.
+        var cap = (int)catalog.Limit("historyRows");
+        var runRows = kept.Take(cap).Select(run => RunRow(run, names, maxChars)).ToList();
         var steps = new List<LiveRow>();
         if (now.Run is { } selected && Guid.TryParse(selected.Job, out var job) && runs.FirstOrDefault(run => run.Job == job && run.Key == selected.Instance) is { } chosen)
             steps = [.. chosen.Rows.Select(row => StepRow(row, maxChars))];
-        return new(null, [new(0, runRows, read.Truncated ? 1 : 0), new(1, steps), jobsTable], errors, Status: Status());
+        return new(null, [new(0, runRows, read.Truncated || kept.Count > cap ? 1 : 0), new(1, steps), jobsTable], errors, Status: Status());
     }
 
     private List<LiveStatus> Status()
@@ -265,11 +283,12 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
         return status;
     }
 
-    /// <summary>Whether a run passes the filters: started in the window (a run with no start stays), the outcome, a message of any of its rows
+    /// <summary>Whether a run passes the filters: started in the window (a run with no start stays), the outcome (Unknown and In progress
+    /// also match In progress or unknown, Agent XPs off), a message of any of its rows
     /// containing the text (case-insensitive), a row of the step.</summary>
     internal static bool Passes(AgentHistoryRun run, AgentHistoryLiveArgs args, DateTime? since) =>
         (since is null || run.Started is null || run.Started >= since)
-        && (args.Outcome is null || run.OutcomeId == args.Outcome)
+        && (args.Outcome is null || run.OutcomeId == args.Outcome || run.OutcomeId == "xpsOff" && args.Outcome is "unknown" or "inProgress")
         && (args.Text is null || run.Rows.Any(row => row.Message?.Contains(args.Text, StringComparison.CurrentCultureIgnoreCase) == true))
         && (args.Step is null || run.Rows.Any(row => row.Step == args.Step));
 
@@ -313,35 +332,34 @@ internal sealed class AgentHistoryReader(AgentHistoryLiveArgs? args = null, Agen
     /// Step rows that match none group by the outcome rows around them: those after the job's last outcome row are In progress while the job runs
     /// (only those that started at or after its current start, where that is readable), the rest Unknown (Agent stopped or crashed mid-run) or, with
     /// <see cref="AgentOrphanLabel.XpsOff"/>, In progress or unknown. With <paramref name="bounded"/> (a date-window read, which may hold the steps of
-    /// a run whose outcome row is older than the window) step rows older than the job's first outcome row are left out.
+    /// a run whose outcome row is older than the window) step rows before the job's first outcome row that it does not claim are left out. One pass
+    /// over each job's rows, so a full read (historyRows) groups in linear time.
     /// </summary>
     internal static List<AgentHistoryRun> Group(IEnumerable<AgentHistoryRow> rows, IReadOnlyDictionary<Guid, AgentHistoryJobState> states, AgentOrphanLabel label, bool bounded)
     {
         var runs = new List<AgentHistoryRun>();
         foreach (var job in rows.GroupBy(row => row.Job))
         {
-            var ordered = job.OrderBy(row => row.Instance).ToList();
-            var outcomes = ordered.Where(row => row.Step == 0).ToList();
-            var claimed = new HashSet<int>();
-            var previous = 0;
-            foreach (var outcome in outcomes)
+            // One pass in instance order: the step rows since the job's previous outcome row wait in `pending` until the next one.
+            var pending = new List<AgentHistoryRow>();
+            var seenOutcome = false;
+            foreach (var row in job.OrderBy(row => row.Instance))
             {
-                var steps = ordered.Where(row => row.Step > 0 && row.Instance > previous && row.Instance < outcome.Instance
-                    && (outcome.Started is null || row.Started is null || row.Started >= outcome.Started)).ToList();
-                foreach (var step in steps) claimed.Add(step.Instance);
-                runs.Add(new(job.Key, outcome, steps, OutcomeOf(outcome.Status)));
-                previous = outcome.Instance;
+                if (row.Step > 0) { pending.Add(row); continue; }
+                var steps = pending.Where(step => row.Started is null || step.Started is null || step.Started >= row.Started).ToList();
+                runs.Add(new(job.Key, row, steps, OutcomeOf(row.Status)));
+                // Step rows between two outcome rows that the later one does not claim: one Unknown run per gap (before the first outcome row
+                // of a date-window read they may belong to a run older than the window, so they are left out).
+                var gap = steps.Count == pending.Count ? [] : pending.Except(steps).ToList();
+                if (gap.Count > 0 && !(bounded && !seenOutcome)) runs.Add(new(job.Key, null, gap, "unknown"));
+                pending.Clear();
+                seenOutcome = true;
             }
-            var first = outcomes.Count > 0 ? outcomes[0].Instance : int.MaxValue;
-            var last = outcomes.Count > 0 ? outcomes[^1].Instance : 0;
-            var orphans = ordered.Where(row => row.Step > 0 && !claimed.Contains(row.Instance) && !(bounded && row.Instance < first)).ToList();
+            if (pending.Count == 0) continue;
             var state = states.TryGetValue(job.Key, out var known) ? known : new AgentHistoryJobState(false, null);
             var unknown = label == AgentOrphanLabel.XpsOff ? "xpsOff" : "unknown";
-            // Between two outcome rows: one Unknown run per gap.
-            foreach (var gap in orphans.Where(row => row.Instance < last).GroupBy(row => outcomes.First(outcome => outcome.Instance > row.Instance).Instance))
-                runs.Add(new(job.Key, null, [.. gap], "unknown"));
-            var tail = orphans.Where(row => row.Instance > last).ToList();
-            if (tail.Count == 0) continue;
+            // After the job's last outcome row: the running job's current run, the rest left by a run that never wrote one.
+            var tail = pending;
             var current = state.Running ? tail.Where(row => state.Start is not { } start || row.Started is null || row.Started >= start).ToList() : [];
             var before = tail.Except(current).ToList();
             if (before.Count > 0) runs.Add(new(job.Key, null, before, state.Running ? "unknown" : unknown));

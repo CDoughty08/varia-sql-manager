@@ -71,6 +71,13 @@ internal static class AgentHistoryChecks
         var bounded = AgentHistoryReader.Group([Row(Backup, 20, 2, 1, 0), Row(Backup, 21, 0, 1, 1), Row(Backup, 22, 1, 1, 6), Row(Backup, 23, 0, 1, 6)], states, AgentOrphanLabel.Unknown, bounded: true);
         check(bounded.Select(run => run.Key).SequenceEqual([21, 23]),
             "a date-window read drops step rows older than the job's first outcome row read: their outcome row may be before the window");
+        var running = AgentHistoryReader.Group([Row(Backup, 30, 0, 1, 1), Row(Backup, 31, 1, 1, 2), Row(Backup, 32, 2, 1, 3)],
+            new Dictionary<Guid, AgentHistoryJobState> { [Backup] = new(true, Day.AddHours(2)) }, AgentOrphanLabel.Unknown, bounded: false);
+        check(running.Single(run => run.OutcomeId == "inProgress").Key == 31,
+            "an In progress run is keyed by its first step row, so it keeps its key (and the grid its selection) as the running job writes more steps");
+        var xpsOff = off.Single(run => run.Job == Backup && run.Key == 13);
+        check(AgentHistoryReader.Passes(xpsOff, new(Outcome: "unknown"), null) && AgentHistoryReader.Passes(xpsOff, new(Outcome: "inProgress"), null) && !AgentHistoryReader.Passes(xpsOff, new(Outcome: "failed"), null),
+            "the Unknown and In progress outcome filters keep the runs that read In progress or unknown with Agent XPs off");
         var args = new AgentHistoryLiveArgs(Outcome: "failed", Text: "FAILED", Step: 2);
         var nightly5 = runs.Single(run => run.Job == Nightly && run.Key == 5);
         check(AgentHistoryReader.Passes(nightly5, args, Day.AddHours(1)) && !AgentHistoryReader.Passes(nightly5, args, Day.AddHours(5))
@@ -192,6 +199,32 @@ internal static class AgentHistoryChecks
         var one = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
         check(ran.SequenceEqual(["jobActivity", "clock", "historySince"]) && one.Tables[0].Rows.All(row => row.Cells[1].Text == "Nightly") && one.Tables[2].Rows.Count == 2,
             "one checked job with a window reads only that job's history from the window's start (and the clock, for the window), and still lists every job: " + string.Join(", ", ran));
+        reader.Apply(new AgentHistoryLiveArgs([Nightly.ToString(), Backup.ToString()]));
+        ran.Clear();
+        var two = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(ran.SequenceEqual(["jobActivity", "activities", "clock", "history", "history"]) && two.Tables[0].Rows.Count == 4 && two.Tables[0].More == 0,
+            "two checked jobs read each job's history by its id, so other jobs' rows never use up the cap: " + string.Join(", ", ran));
+        var full = new List<string>();
+        // Nightly (the lower id) is read first and fills the cap with its own rows, so Backup is never read.
+        var filling = Fake(full);
+        var rowsCap = (int)AgentCatalog.Current.Limit("historyRows");
+        var cappedJobs = new AgentHistoryReader(new([Nightly.ToString(), Backup.ToString()]))
+        {
+            Reader = new AgentReader
+            {
+                TestRun = (statement, values, cap) =>
+                {
+                    if (statement.Id != "history") return filling.TestRun!(statement, values, cap);
+                    full.Add(statement.Id);
+                    var job = (Guid)values["@job_id"]!;
+                    return Task.FromResult(new AgentResult(statement.Columns, [.. Enumerable.Range(1, rowsCap).Select(index => HistoryRow(statement, new(index, job, 0, null, null, null, "Run " + index, 1, Day.AddMinutes(-index), 5, 0)))], false));
+                }
+            },
+            TestService = () => (1, 4)
+        };
+        var stopped = await cappedJobs.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
+        check(full.Count(id => id == "history") == 1 && stopped.Tables[0].More == 1 && stopped.Tables[0].Rows.Count == rowsCap,
+            "once the checked jobs' rows reach historyRows the jobs not yet read are left out and the runs say they were cut: " + string.Join(", ", full));
         reader.Apply(new AgentHistoryLiveArgs([]));
         ran.Clear();
         var none = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
@@ -208,6 +241,17 @@ internal static class AgentHistoryChecks
         var sample = await denied.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
         check(!sample.Sampled && sample.Errors is [{ Code: "PERMISSION_DENIED" }] && !sample.Errors[0].Message.Contains("sp_", StringComparison.Ordinal),
             "a login msdb refuses sp_help_job fails the probe with PERMISSION_DENIED, naming no procedure");
+        // agent.historyMessage below sysadmin: sysjobhistory refused, the job's history through msdb; a row past that read's cap is not "gone".
+        using (var service = new ActionService(new ActionChecks.FakeHost()))
+        {
+            AgentReader Below(bool truncated) => Fake([], statement => statement.Id == "historyMessage" ? throw ConnectionFailureChecks.Sql(229, 5, 14, "server", "The SELECT permission was denied on the object 'sysjobhistory'.")
+                : statement.Id == "history" ? new(statement.Columns, [.. History.Where(row => row.Job == Nightly).Select(row => HistoryRow(statement, row))], truncated) : null);
+            var found = await service.ReadHistoryMessageAsync(Below(false), null, Nightly, 2, CancellationToken.None);
+            var gone = await service.ReadHistoryMessageAsync(Below(false), null, Nightly, 999, CancellationToken.None);
+            var beyond = await service.ReadHistoryMessageAsync(Below(true), null, Nightly, 999, CancellationToken.None);
+            check(found is { Error: null, Message: not null } && gone.Error is { Code: "NOT_FOUND", Message: ActionService.HistoryMessageGone } && beyond.Error is { Code: "NOT_FOUND", Message: ActionService.HistoryMessageBeyond },
+                "below sysadmin the message reads through the job's history; a row missing from a full read is gone, and one past a capped read says it is too old to read here");
+        }
         var partial = new AgentHistoryReader { Reader = Fake([], statement => statement.Id == "historyAll" ? throw ConnectionFailureChecks.Sql(15281, 1, 16, "server", "SQL Server blocked access to procedure 'dbo.sp_help_jobhistory' of component 'Agent XPs'.") : null), TestService = () => (1, 4) };
         var some = await partial.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(), null, CancellationToken.None);
         check(some.Sampled && some.Tables[0].Rows.Count == 0 && some.Tables[1].Rows.Count == 0 && some.Tables[2].Rows.Count == 2 && some.Errors is [{ Code: "AGENT_DISABLED", Tables: [0, 1] }],

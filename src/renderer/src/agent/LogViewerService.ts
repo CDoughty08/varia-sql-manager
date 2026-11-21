@@ -8,7 +8,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
-  agentHistoryProbe, agentHistorySource, deleteHistoryUnavailable, historyActiveFilters, historyArgs, historyDefaultDays, logViewerTabName, parseHistoryRunKey,
+  agentHistoryProbe, agentHistorySource, deleteHistoryUnavailable, historyActiveFilters, historyArgs, historyDefaultDays, historyUnitLabels, logViewerTabName, parseHistoryRunKey,
   type AgentHistoryDelete, type AgentPurgeUnit, type HistoryFilters, type HistoryOutcome
 } from '../../../shared/agent/history'
 import { agentAvailability, agentJobsSource, agentServiceProbe, type AgentAvailability, type AgentServiceSample } from '../../../shared/agent/jobs'
@@ -83,20 +83,22 @@ export const logViewerText = {
   failed: 'The Log File Viewer stopped reading the history.',
   tooMany: `Check at most ${agentLimits.historyJobs} jobs, or check All jobs.`,
   lost: 'The connection closed; whether the history was deleted is unknown. Refresh to check.',
-  deleted: (jobs: number) => `Deleted the history of ${jobs} ${jobs === 1 ? 'job' : 'jobs'}.`
+  deleted: (jobs: number) => `Deleted the history of ${jobs} ${jobs === 1 ? 'job' : 'jobs'}.`,
+  deletedOlder: (jobs: number, count: number, unit: AgentPurgeUnit) => `Deleted the history older than ${count} ${count === 1 ? historyUnitLabels[unit].slice(0, -1) : historyUnitLabels[unit]} of ${jobs} ${jobs === 1 ? 'job' : 'jobs'}.`,
+  ambiguous: (name: string) => `Several jobs are named ${name}: check the one you want in Select logs.`
 } as const
 
 /** Where a viewer opens: every job, the jobs given by id (Job Activity Monitor's selection), or one job by name (its node's menu). */
 export type LogViewerOpen = { readonly jobs?: readonly string[]; readonly jobName?: string }
 
 /** A Delete History request's outcome line, or its failure. */
-export function deleteOutcome(result: ApiResult<ActionExecuteResult> | undefined, jobs: number, thrown?: unknown): { readonly ok: true; readonly line: string } | { readonly ok: false; readonly code?: string; readonly message: string } {
+export function deleteOutcome(result: ApiResult<ActionExecuteResult> | undefined, jobs: number, thrown?: unknown, olderThan?: { readonly count: number; readonly unit: AgentPurgeUnit }): { readonly ok: true; readonly line: string } | { readonly ok: false; readonly code?: string; readonly message: string } {
   if (thrown !== undefined) return { ok: false, message: thrown instanceof Error ? thrown.message : String(thrown) }
   if (!result) return { ok: false, message: logViewerText.lost }
   if (!result.ok) return { ok: false, code: result.code, message: result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? logViewerText.lost : result.error }
   if (result.value.error) return { ok: false, code: result.value.error.code, message: result.value.error.message }
   const messages = result.value.messages.filter(Boolean)
-  return { ok: true, line: [logViewerText.deleted(jobs), ...messages].join(' ') }
+  return { ok: true, line: [olderThan ? logViewerText.deletedOlder(jobs, olderThan.count, olderThan.unit) : logViewerText.deleted(jobs), ...messages].join(' ') }
 }
 
 /**
@@ -240,8 +242,10 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
     if (!state) return
     if (JSON.stringify(state.jobs) !== JSON.stringify(jobs)) this.patch(id, { jobs })
     if (state.pendingJob !== undefined) {
-      const job = jobs.find(item => item.name === state.pendingJob)
-      if (job) this.setFilters(id, { checked: [job.id] }, { pendingJob: undefined })
+      const named = jobs.filter(item => item.name === state.pendingJob)
+      // Two jobs may share a name (a multi-server job and a local one): check neither and say so, rather than guess.
+      if (named.length > 1) this.patch(id, { pendingJob: undefined, note: logViewerText.ambiguous(state.pendingJob) })
+      else if (named.length === 1) this.setFilters(id, { checked: [named[0].id] }, { pendingJob: undefined })
       else if (window.count || table.descriptor.rowsAvailable === 0) this.patch(id, { pendingJob: undefined, note: `The job ${state.pendingJob} is not in the jobs this login sees.` })
     }
   }
@@ -249,7 +253,13 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
   private following(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       const connectionId = this.options.documents.get(state.id)?.connectionId
-      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId, selectedStep: undefined, message: undefined, profile: { status: 'unknown' } })
+      if (connectionId === state.connectionId) continue
+      // Another server: its jobs, caps and the login's role are its own, so the old server's checked jobs and run go (not when the document only
+      // lost its connection), and the role is read again.
+      const moved = connectionId !== undefined && state.connectionId !== undefined
+      this.patch(state.id, { connectionId, selectedStep: undefined, message: undefined, profile: { status: 'unknown' }, ...moved ? { jobs: [], caps: undefined, note: undefined, pendingJob: undefined } : {} })
+      if (moved) this.setFilters(state.id, { checked: undefined, run: undefined })
+      if (connectionId) void this.readProfile(state.id)
     }
   }
 
@@ -432,7 +442,7 @@ export class LogViewerService extends SnapshotStore<LogViewerSnapshot> implement
       result = await this.options.api.executeObjectAction({ action: 'deleteJobHistory', connectionId: state.connectionId, requestId: this.newId(), target: { kind: 'agent' }, agentHistory })
     } catch (failure) { thrown = failure }
     if (!this.get(id)) return
-    const outcome = deleteOutcome(result, jobs.length, thrown)
+    const outcome = deleteOutcome(result, jobs.length, thrown, agentHistory.olderThan)
     if (!outcome.ok) { this.patch(id, { confirm: { ...confirm, running: false, error: { ...outcome.code ? { code: outcome.code } : {}, message: outcome.message } } }); return }
     this.patch(id, { confirm: undefined, deleted: outcome.line, message: undefined, selectedStep: undefined })
     this.options.focus?.(id)
