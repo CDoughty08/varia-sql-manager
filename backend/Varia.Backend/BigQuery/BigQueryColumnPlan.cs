@@ -210,6 +210,22 @@ internal sealed class BigQueryColumnPlan
         DescriptorBytes = ColumnPlan.DescriptorBytesOf(Columns);
     }
 
+    private BigQueryColumnPlan(BigQueryColumnPlan from)
+    {
+        fields = from.fields;
+        TruncatedColumns = from.TruncatedColumns;
+        Columns = from.Columns;
+        Wires = from.Wires;
+        Lengths = from.Lengths;
+        caps = from.caps;
+        warned = (bool[])from.warned.Clone();
+        DescriptorBytes = from.DescriptorBytes;
+    }
+
+    /// <summary>The same columns with working buffers of its own: a plan decodes on one thread at a time, so each concurrent
+    /// reader of a result (a windowed result's block fetches, Load into memory) takes a fork.</summary>
+    internal BigQueryColumnPlan Fork() => new(this);
+
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
     public IReadOnlyList<ColumnLength> Lengths { get; }

@@ -294,6 +294,25 @@ describe('ResultsSearchService', () => {
     expect(search()).toMatchObject({ total: 2, current: 0 })
   })
 
+  it('says when a windowed BigQuery result could not be searched while others were, and forgets it once none is skipped', async () => {
+    const { service, searches, set, show, settle, advance, answerAll, search } = fixture()
+    show([set(0, ['a'], [[1, 0]]), set(1, ['b'], [[0, 0]])])
+    service.setText('t1', 'x', true)
+    searches.shift()!.resolve()
+    await settle()
+    searches.shift()!.reject(new ResultError('REMOTE_RESULT', 'This result is windowed in BigQuery.'))
+    await settle()
+    expect(search()).toMatchObject({ status: 'done', total: 1, skipped: true })
+    expect(searchCount(search(), String)).toBe('1 of 1+')
+    advance(announceDelayMs)
+    expect(search().announcement).toBe('1 of 1 matches. A result windowed in BigQuery was not searched')
+    show([set(0, ['a'], [[1, 0]])], 'q2')
+    service.setText('t1', 'y', true)
+    await answerAll()
+    expect(search().skipped).toBeUndefined()
+    expect(searchCount(search(), String)).toBe('1 of 1')
+  })
+
   it('says a failure only when no grid could be searched, counts a loading grid as partial, and forgets a closed tab', async () => {
     const { service, searches, set, show, hide, answerAll, search, settle } = fixture()
     show([set(0, ['a'], [[1, 0]], 100, false), set(1, ['b'], [[0, 0]])], 'q1', false)

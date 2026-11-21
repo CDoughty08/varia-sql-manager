@@ -42,7 +42,8 @@ export class RowSizes {
     // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
     // rows again for every page, and compete with the reads that paint its first rows.
     const waited = this.profileFailedAt === undefined || performance.now() - this.profileFailedAt >= rowSizeLimits.retryMs
-    if (!this.profiled && waited && snapshot.state === 'complete') this.profile()
+    // A windowed BigQuery result has no profile (REMOTE_RESULT) until it is loaded into memory.
+    if (!this.profiled && waited && snapshot.state === 'complete' && snapshot.residence !== 'remote') this.profile()
     const end = Math.min(last, snapshot.rowsAvailable - 1)
     for (let block = Math.floor(Math.max(0, first) / rowSizeLimits.blockRows); block * rowSizeLimits.blockRows <= end; block++) {
       const held = this.blocks.get(block)

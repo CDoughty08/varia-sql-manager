@@ -45,13 +45,13 @@ internal sealed partial class SqlService
     /// architecture's page-access invariant): its rows stay in BigQuery, and its sort, filter and value lists go through
     /// results.remoteQuery instead.</summary>
     internal static RequestException RemoteRefused() =>
-        new("REMOTE_RESULT", "This result is windowed in BigQuery: its rows are not in memory. Filter the result, or load it into memory first.");
+        new("REMOTE_RESULT", "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet.");
 
     /// <summary>Refuses a windowed result before a reader of stored pages does any work (REMOTE_RESULT).</summary>
     internal static ResultSetBuffer Stored(ResultSetBuffer set) => set.IsRemote ? throw RemoteRefused() : set;
 
     /// <summary>
-    /// Decides a result's residence after its first page (docs/bigquery.md, Choosing the residence), before the set is
+    /// Decides a result's residence after its first page (docs/bigquery.md, Residence: Deciding), before the set is
     /// announced. In memory when the rows arrived whole, under Always in memory, or when the projection from the first page's
     /// measured row cost fits in half of what the query may still take; then null, and an Automatic read switches to
     /// windowed if the budget refuses it later (<paramref name="window"/>). Otherwise the set becomes windowed here, its first
@@ -107,7 +107,7 @@ internal sealed partial class SqlService
 
     /// <summary>The row cap's note (decision 31): the grid's 32-bit row indexes show this many, and the rest are a filter away.</summary>
     internal static string CapNote(long total) => "The grid shows the first " + RemoteResult.MaxRows.ToString("N0", CultureInfo.InvariantCulture) + " of "
-        + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Filter the result to see the rest.";
+        + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Add a WHERE clause or LIMIT to the query to see the rest.";
 
     /// <summary>A windowed result over <paramref name="context"/>'s destination table for the set, its blocks sized by the
     /// measured row cost and read on the connection's fetch lane.</summary>
@@ -121,7 +121,7 @@ internal sealed partial class SqlService
     }
 
     /// <summary>
-    /// Switches an Automatic in-memory read that the budget refused to windowed (docs/bigquery.md, A misestimate): its pages
+    /// Switches an Automatic in-memory read that the budget refused to windowed (docs/bigquery.md, Residence: Misestimate): its pages
     /// are released, it gets a new revision, and resultSet.residence tells the grid. Messages says why. False when the set
     /// was released meanwhile.
     /// </summary>
@@ -179,6 +179,8 @@ internal sealed partial class SqlService
     /// </summary>
     private RemoteFetch BigQueryFetch(BigQueryWindow context) => async (firstRow, rows, writer, token) =>
     {
+        // Fetches of one result run side by side: each decodes with its own fork of the plan.
+        var plan = context.Plan.Fork();
         string? pageToken = null;
         for (var attempt = 1; writer.Rows < rows; )
         {
@@ -199,7 +201,7 @@ internal sealed partial class SqlService
             using (page)
             {
                 var count = page.RowCount;
-                WriteRows(page, context.Plan, writer, (int)(rows - writer.Rows));
+                WriteRows(page, plan, writer, (int)(rows - writer.Rows));
                 pageToken = page.PageToken;
                 if (count == 0 || pageToken is null) break;
             }
@@ -312,7 +314,7 @@ internal sealed partial class SqlService
                 first.Dispose();
                 throw;
             }
-            if (readSession is null) await ReadBigQueryRowsAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan, first, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
+            if (readSession is null) await ReadBigQueryRowsAsync(loadArgs, connection, window.Project, window.JobId, window.Location, window.Plan.Fork(), first, set, set.Budget, window.TotalRows, new RoomWaited(), events, NoWarning, token, window, messages);
             else
             {
                 first.Dispose();

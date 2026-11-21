@@ -861,7 +861,7 @@ internal sealed partial class ResultStore
 
     public int IdentityCount { get { lock (gate) return identities.Count; } }
 
-    /// <summary>Switches a stored set to windowed (docs/bigquery.md, A misestimate): its views, snapshots and identities go
+    /// <summary>Switches a stored set to windowed (docs/bigquery.md, Residence: Misestimate): its views, snapshots and identities go
     /// first, as on a release, then its pages (<see cref="ResultSetBuffer.Demote"/>). False once it was released, and the
     /// remote result is then disposed.</summary>
     public bool Demote(ResultSetBuffer set, RemoteResult remote, long totalRows, bool bump = true)

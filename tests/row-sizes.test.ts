@@ -7,7 +7,7 @@ interface Pending<T> { resolve(value: T): void; reject(error: unknown): void; si
 
 /** A handle whose rowBytes and profile requests the test answers. */
 function fixture(rowsAvailable = 1000, state = 'complete') {
-  const snapshot = { state, rowsAvailable }
+  const snapshot: { state: string; rowsAvailable: number; residence?: string } = { state, rowsAvailable }
   const reads: (Pending<ResultsRowBytesResult> & { first: number; count: number })[] = []
   const profiles: Pending<ResultsProfileResult>[] = []
   const handle = {
@@ -28,6 +28,19 @@ function fixture(rowsAvailable = 1000, state = 'complete') {
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
+  it('asks no profile of a windowed BigQuery result (it would be refused), and asks once the result is loaded into memory', () => {
+    const { sizes, reads, profiles, snapshot } = fixture()
+    snapshot.residence = 'remote'
+    sizes.ensure(0, 100)
+    sizes.ensure(0, 100)
+    expect(profiles).toHaveLength(0)
+    // Its row sizes are still read, from the block cache (results.rowBytes).
+    expect(reads).toHaveLength(1)
+    snapshot.residence = 'memory'
+    sizes.ensure(0, 100)
+    expect(profiles).toHaveLength(1)
+  })
+
   it('reads only the blocks in view, at most 2 at once, and scales each row by the largest the profile reports', async () => {
     const { sizes, reads, profiles, changed, answer, settle } = fixture()
     sizes.ensure(300, 800)

@@ -46,6 +46,21 @@ describe('highlights', () => {
     expect(highlightColors).toEqual(['yellow', 'green', 'blue', 'purple', 'red'])
   })
 
+  it('says when the rows cannot be told apart, and tries again on the next highlight (a windowed result loaded meanwhile)', async () => {
+    const { results, highlights, run, shown } = fixture()
+    const handle = run(1)
+    const notify = vi.spyOn(results, 'notify')
+    vi.mocked(handle.identify).mockRejectedValueOnce(new Error('This result is windowed in BigQuery.'))
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 3))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    await settle()
+    expect(notify).toHaveBeenCalledWith('t1', 'Could not find the highlighted rows: This result is windowed in BigQuery.')
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
+    await settle()
+    expect(handle.identify).toHaveBeenCalledTimes(2)
+    expect(shown()).toMatchObject({ count: 2, found: 2 })
+  })
+
   it('tells the rows apart on the first highlight, colours the selected rows, and turns a colour off when every row has it', async () => {
     const { results, highlights, run, shown } = fixture()
     const handle = run(1)

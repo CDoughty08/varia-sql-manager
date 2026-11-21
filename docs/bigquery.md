@@ -177,7 +177,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
 - **Rows in memory.** `BigQueryColumnPlan` decodes each REST row straight into the result store's pages, as SQL
   Server's reader does: the same row limit, result budget (each page is charged while its rows are decoded), cell caps
   (text 65,535 characters, documents 2 MiB, bytes 32,766) and truncation notes. Rows past a limit stay in BigQuery and
-  are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
+  are counted from its `totalRows`; a result too large for the budget may instead stay in BigQuery
+  ([Residence](#residence)). More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
   is NULL with the read-error flag and one message for its column. Discard results reads no rows.
 - **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
   (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
@@ -317,8 +318,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   result windowed, whole, and a second load of a result already loading is refused. Reads under way when it starts
   answer with the rows they have, and the grid reads again from memory. The button that runs it comes in a later update.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
-  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; later lanes run them in
-  BigQuery; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
+  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
   filters are removed when its result switches (the screen reader hears so). A destination table lasts
   about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
 
@@ -395,6 +395,9 @@ Messages).
 | `RESULT_TOO_LARGE` | `responseTooLarge` | Over BigQuery's 10 GB result limit: filter or aggregate |
 | `COST_CAP` | `bytesBilledLimitExceeded` | Names the cap the job carried (the connection's own, else Options') and Google's figure, in bytes alone under Bytes only; raise the cap or read less |
 | `CANCELLED` | `stopped` | The job was cancelled |
+| `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
+| `REMOTE_EXPIRED` | Rows of a windowed result not cached once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
+| `BUSY` | Load into memory while the query that made the result still runs | Load it once the query has finished |
 
 ## Emulator mode
 

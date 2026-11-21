@@ -215,7 +215,7 @@ internal sealed class ResultSetBuffer
     /// row, so a check or benchmark that asks for a raw result gets one.</summary>
     internal bool SealRaw { get; set; }
 
-    /// <summary>An Automatic in-memory BigQuery read (docs/bigquery.md, Choosing the residence): a refusal (the budget, low
+    /// <summary>An Automatic in-memory BigQuery read (docs/bigquery.md, Residence: Deciding): a refusal (the budget, low
     /// system memory) neither stops the query nor truncates the set; its reader switches it to windowed instead
     /// (<see cref="ResultStore.Demote"/>), so a refusal ends only this set's storing, as a derived set's does.</summary>
     public bool SwitchesOnRefusal { get; set; }
@@ -240,7 +240,7 @@ internal sealed class ResultSetBuffer
         }
     }
 
-    /// <summary>Switches the set to windowed (docs/bigquery.md, A misestimate): its stored pages go, with their budget (when
+    /// <summary>Switches the set to windowed (docs/bigquery.md, Residence: Misestimate): its stored pages go, with their budget (when
     /// the last pin or lease ends, if one holds them), and it becomes a complete remote result read through
     /// <paramref name="windowed"/>, under a new revision. An operation over its rows ends at once. Called only through
     /// <see cref="ResultStore.Demote"/>, which drops its views, snapshots and identities. False once it was released.</summary>

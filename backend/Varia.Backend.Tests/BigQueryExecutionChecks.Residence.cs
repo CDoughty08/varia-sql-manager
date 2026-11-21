@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Apache.Arrow;
 using Apache.Arrow.Types;
+using Varia.Backend.BigQuery;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
@@ -41,12 +42,40 @@ internal static partial class BigQueryExecutionChecks
         await TwoLoadsAsync(check);
         Trace("LoadWhileRunning");
         await LoadWhileRunningAsync(check);
+        Trace("ForkedPlans");
+        ForkedPlans(check);
+    }
+
+    /// <summary>Forks of one column plan decode side by side exactly as one plan decodes alone (block fetches run in parallel).</summary>
+    static void ForkedPlans(Action<bool, string> check)
+    {
+        var plan = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("t", "TIMESTAMP"), Field("j", "JSON"), Field("d", "NUMERIC"))))!;
+        var rows = Enumerable.Range(0, 400).Select(i => JsonSerializer.SerializeToElement(Row((1_700_000_000L + i * 7919).ToString(Inv) + ".123456", "{\"k\":" + i + ",\"s\":\"" + new string('x', i % 50) + "\"}", (i * 3.25).ToString(Inv)))).ToArray();
+        byte[] Decode(BigQueryColumnPlan reader)
+        {
+            var builder = new PageBuilder(1, reader.Wires);
+            foreach (var row in rows)
+            {
+                builder.BeginRow();
+                reader.ReadRow(row, builder, _ => { });
+                builder.CommitRow();
+            }
+            return builder.Seal();
+        }
+        var serial = Decode(plan.Fork());
+        var parallel = new byte[8][];
+        Parallel.For(0, parallel.Length, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => parallel[i] = Decode(plan.Fork()));
+        check(parallel.All(body => body.AsSpan().SequenceEqual(serial)) && Decode(plan).AsSpan().SequenceEqual(serial),
+            "forks of a column plan decode in parallel exactly as the plan decodes alone");
     }
 
     /// <summary>Load into memory waits for the result's own query to end; a first page's unreadable values are said whichever
     /// residence the result takes.</summary>
     static async Task LoadWhileRunningAsync(Action<bool, string> check)
     {
+        // The refusal offers nothing a windowed result cannot do yet (filtering it, or loading it, has no command so far).
+        var refusal = SqlService.RemoteRefused().Message;
+        check(!refusal.Contains("Filter", StringComparison.Ordinal) && !refusal.Contains("load it", StringComparison.Ordinal), "a windowed result's refusal suggests nothing it cannot do yet: " + refusal);
         using (var harness = new Harness(Lines(3000)))
         {
             await harness.ConnectAsync();
@@ -444,7 +473,7 @@ internal static partial class BigQueryExecutionChecks
             await harness.ConnectAsync();
             var (_, result, _) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
-            check(set is { Residence: "remote", RowsTotal: 3_000_000_000, RowsAvailable: int.MaxValue } && Says(result, "the most it can address"),
+            check(set is { Residence: "remote", RowsTotal: 3_000_000_000, RowsAvailable: int.MaxValue } && Says(result, "the most it can address") && !Says(result, "Filter the result"),
                 $"a result past the row cap shows the first 2,147,483,647 rows and says why: {set?.RowsTotal} {set?.RowsAvailable} {Texts(result?.Messages ?? [])}");
         }
     }

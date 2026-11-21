@@ -47,10 +47,11 @@ describe('result page access', () => {
     // Inside the store's own partial files a bare Find( is the store's; everywhere else any spelling of a store's Find(.
     // Whatever a store is called (store, _store, Results, resultStore), and its partial files' own bare calls.
     const service = sources.filter(file => file.startsWith('backend/Varia.Backend/'))
-    const anyStore = /\b\w*(?:[sS]tore|Results)\??\.Find\(/
+    // Null-conditional and null-forgiving calls, and a method group (no parenthesis), count too.
+    const anyStore = /\b\w*(?:[sS]tore|[rR]esults)[?!]?\.Find\b/
     const finds = (file: string) => /\/ResultStore(?:\.[^/]+)?\.cs$/.test(file) ? new RegExp(`(?:^|[^\\w.]|\\bthis\\.)Find\\(|${anyStore.source}`) : anyStore
     const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
-      .filter(([file, , line]) => finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line) && !/public ResultSetBuffer\? Find\(/.test(line))
+      .filter(([file, , line]) => !/^\s*\/\//.test(line) && finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line) && !/public ResultSetBuffer\? Find\(/.test(line))
       .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
     expect(unguarded.sort()).toEqual([
       // Visibility only asks whether the result exists.
@@ -96,7 +97,8 @@ describe('result page access', () => {
     // Only the residence code builds a block cache or switches a set, so every switch bumps the revision, sends
     // resultSet.residence and settles the budget there; the store's Demote is the one caller of the set's.
     const callers = (pattern: RegExp) => [...new Set(lines(pattern, []).filter(at => at.startsWith('backend/Varia.Backend/')).map(at => at.replace(/:\d+$/, '')))].sort()
-    expect(callers(/\bnew RemoteResult\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
+    // Target-typed construction (RemoteResult cache = new(...)) counts too.
+    expect(callers(/\bnew RemoteResult\(|\bRemoteResult\??\s+\w+\s*=\s*new\s*\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\.Promote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\bstore\.Demote\(/)).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(callers(/\.Demote\(/)).toEqual(['backend/Varia.Backend/Results/ResultStore.cs', 'backend/Varia.Backend/SqlService.BigQueryResidence.cs'])

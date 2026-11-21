@@ -120,3 +120,15 @@ describe('Load into memory and the query that made the result', () => {
     expect(residence.indexOf('if (set.Budget.Executing) throw new RequestException("BUSY"')).toBeLessThan(residence.indexOf('set.Promote(window.TotalRows)'))
   })
 })
+
+describe('decoding a windowed result on several threads', () => {
+  it('gives each block fetch and each load its own fork of the column plan, whose buffers are not shared', () => {
+    const residence = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'SqlService.BigQueryResidence.cs'), 'utf8')
+    const fetch = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('), residence.indexOf('};', residence.indexOf('private RemoteFetch BigQueryFetch(')))
+    expect(fetch).toMatch(/var plan = context\.Plan\.Fork\(\);/)
+    expect(fetch).not.toMatch(/context\.Plan\b(?!\.Fork\(\))/)
+    // Outside the query's own thread (deciding residence and seeding run on it) the window's plan is only ever forked.
+    expect(residence).not.toMatch(/window\.Plan, first, set,/)
+    expect(residence).toMatch(/window\.Plan\.Fork\(\), first, set,/)
+  })
+})

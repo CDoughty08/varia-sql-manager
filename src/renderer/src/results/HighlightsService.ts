@@ -270,8 +270,11 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         marks.by ??= result.column < 0 || !picked ? { row: true } : { column: picked.name, dataType: picked.dataType, ...picked.sortKind ? { sortKind: picked.sortKind } : {}, ordinal: result.column }
         return true
       }, error => {
-        if (marks.bound === binding && (error as Error).name !== 'AbortError')
+        if (marks.bound === binding && (error as Error).name !== 'AbortError') {
           this.results.notify(tabId, 'Could not find the highlighted rows: ' + (error instanceof Error ? error.message : 'The rows could not be told apart.'))
+          // Unbound, so the next highlight asks again (and says so again) rather than finding this failure silently.
+          marks.bound = undefined
+        }
         return false
       })
     }
