@@ -85,6 +85,8 @@ export interface GridShellProps {
   readonly gone?: string
   /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy), and a button after it that acts on it. */
   readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead }
+  /** Drawn above the grid in its frame (a comparison's toolbar), outside the grid's own focus and keys. */
+  readonly head?: ReactNode
   /** What the render error strip calls the grid's contents. */
   readonly contents?: 'result' | 'rows'
   /** How cells show white space, when not the results setting (a grid whose menu has no White space item). */
@@ -102,7 +104,7 @@ export interface GridShellProps {
  */
 export interface GridShellBusy { readonly shown: boolean; readonly held: boolean; readonly column?: number; readonly percent?: number; readonly label: string }
 
-export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
+export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, busy, onHeld, gone, strip, head, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values, setting = values['queryResults.grid.whitespace']
   const filterWidth = values['queryResults.grid.filterPopupWidth'], filterHeight = values['queryResults.grid.filterPopupHeight']
@@ -197,6 +199,7 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
   const columnName = funnel && funnels?.columnName(funnel.column)
   // The grid holds only rows; its strips and the overlay are its siblings, outside the table structure.
   return <div {...frameProps} className={'rg-frame' + (frameProps?.className ? ' ' + frameProps.className : '')}>
+    {head}
     {busy?.shown && <div className={'rg-op-bar' + (busy.percent === undefined ? ' indeterminate' : '')} aria-hidden="true" title={busy.label}><span style={busy.percent === undefined ? undefined : { width: `${busy.percent}%` }} /></div>}
     <div {...rootProps} ref={setRoot} className={'results-grid rg' + (rootProps.className ? ' ' + rootProps.className : '')} role="grid" tabIndex={0}
       aria-multiselectable="true" aria-readonly="true" aria-busy={heldShown ? true : undefined} data-held={heldShown ? '' : undefined} onKeyDown={keyDown}>
