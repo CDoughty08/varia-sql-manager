@@ -76,7 +76,7 @@ export function NerdDetails({ model }: { model: NerdMetricsModel }) {
     </div>
     <div className="memory-group">
       <h4>Biggest results<span className="memory-group-aside">rows <Icon name="arrow-right" /> stored</span></h4>
-      {model.biggest.length === 0 ? <p className="memory-nerd-empty">No results held.</p> : <ul className="memory-biggest" aria-label="Biggest results">
+      {model.biggest.length === 0 ? <p className="memory-nerd-empty">{model.biggestEmpty}</p> : <ul className="memory-biggest" aria-label="Biggest results">
         {model.biggest.map(row => <li key={row.resultId}>
           <ResultName name={row.name} label={row.label} />
           <span className="memory-mini" aria-hidden="true"><span style={width(row.logicalShare)} /><span data-state={row.state} style={width(row.storedShare)} /></span>

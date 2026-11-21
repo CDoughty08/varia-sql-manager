@@ -3,13 +3,14 @@ import type { BackendNotice } from './services/backend'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useCommandEnabled } from './core/useCommand'
 
-const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+const count = (n: number, noun: string, plural = noun + 's') => `${n} ${n === 1 ? noun : plural}`
 const were = (n: number) => n === 1 ? 'was' : 'were'
 
-/** The sentence for losses the user has not dismissed yet. Nothing is ever re-run, and the banner says so. */
+/** The sentence for losses the user has not dismissed yet. Nothing is ever re-run, and the banner says so. A running query is
+ *  a script or a BigQuery result loading into memory. */
 export function noticeText(notice: BackendNotice): string {
   if (!notice.unexpected) return `The SQL backend was restarted. ${count(notice.connections, 'connection')} ${were(notice.connections)} closed.`
-  return `The SQL backend stopped unexpectedly and was restarted. ${count(notice.connections, 'connection')} ${were(notice.connections)} lost and ${count(notice.queries, 'running script')} ${were(notice.queries)} stopped; nothing was re-run.`
+  return `The SQL backend stopped unexpectedly and was restarted. ${count(notice.connections, 'connection')} ${were(notice.connections)} lost and ${count(notice.queries, 'running query', 'running queries')} ${were(notice.queries)} stopped; nothing was re-run.`
 }
 
 /** The backend's problems: not responding, failed, or restarted with connections lost. */

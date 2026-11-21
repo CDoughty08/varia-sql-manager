@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ResultDescriptor } from '../src/shared/contracts'
 import { gridTarget } from '../src/renderer/src/grid/anchor'
 import { GridView } from '../src/renderer/src/grid/GridView'
+import { gridLimits } from '../src/renderer/src/grid/constants'
 import { GridStats } from '../src/renderer/src/grid/stats'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import { MenuTargetService, outputTarget } from '../src/renderer/src/menus/targets'
@@ -244,6 +245,36 @@ describe("the grid's accessible name", () => {
     expect(unnamed.root.getAttribute('aria-label')).toMatch(/^Result 2 of 5, /)
     unnamed.view.dispose()
     unnamed.root.remove()
+  })
+})
+
+describe('the first measure', () => {
+  it('measures again when it answered no rows (a windowed result not read yet), rather than sizing from headers for good', async () => {
+    let calls = 0
+    const grid = mount({ rows: 500, columns: 3, unsized: true, before: handle => {
+      vi.mocked(handle.measure).mockImplementation(async (_first: number, _count: number, colStart: number, colEnd: number) =>
+        ({ rows: calls++ === 0 ? 0 : 128, widths: Uint16Array.from({ length: colEnd - colStart }, () => calls === 1 ? 0 : 30) }))
+    } })
+    await grid.frame()
+    expect(grid.state.sized).toBe(false)
+    await vi.waitFor(async () => { await grid.frame(); expect(grid.state.sized).toBe(true) }, { timeout: 5000 })
+    expect(calls).toBe(2)
+    grid.view.dispose()
+    grid.root.remove()
+  })
+})
+
+describe('a first measure that never reads rows', () => {
+  it('is tried again a bounded number of times, then sizes the columns from their headers and stops', async () => {
+    let calls = 0
+    const grid = mount({ rows: 500, columns: 3, unsized: true, before: handle => {
+      vi.mocked(handle.measure).mockImplementation(async (_first: number, _count: number, colStart: number, colEnd: number) => { calls++; return { rows: 0, widths: new Uint16Array(colEnd - colStart) } })
+    } })
+    await vi.waitFor(async () => { await grid.frame(); expect(grid.state.sized).toBe(true) }, { timeout: 10_000, interval: 50 })
+    expect(calls).toBe(gridLimits.measureRetries + 1)
+    expect((grid.view as unknown as { retries: Set<unknown> }).retries.size).toBe(0)
+    grid.view.dispose()
+    grid.root.remove()
   })
 })
 
