@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type ApplyHost, type LaunchFacts } from '../src/main/update-install'
+import { applyUpdate, installTargetFor, relaunchEnv, removeReplaced, replacedAppImage, testUpdateTarget, type ApplyHost, type LaunchFacts } from '../src/main/update-install'
 import { applyStaged, helperStaging, stagingLimits, type StagingPaths } from '../src/main/update-staging'
 import { StagingBusy } from '../src/main/updater'
 
@@ -84,7 +84,7 @@ describe('applyUpdate', () => {
     expect(await readFile(target, 'utf8')).toBe('new')
     expect(await readFile(`${target}.old`, 'utf8')).toBe('old')
     expect(calls).toEqual([{ command: target, args: [], env: { KEEP: '1' }, detached: true }])
-    await removeReplacedPortable(env)
+    await removeReplaced('portable', env)
     expect((await readdir(dir)).sort()).toEqual(['Varia-SQL-Manager-1.0.0-Windows-x64-Portable.exe'])
   })
   it('puts the portable executable back when the new one cannot take its place', async () => {
@@ -95,14 +95,27 @@ describe('applyUpdate', () => {
     expect(await readFile(target, 'utf8')).toBe('old')
     expect(calls).toEqual([])
   })
-  it('replaces the AppImage, renaming it when its name carried the old version', async () => {
+  /** A started AppImage that confirms as the real one does at its start, by removing the image it replaced. */
+  function confirmingSpawn() {
+    const started = fakeSpawn()
+    const spawn = ((command: string, args: readonly string[], options: never) => {
+      const child = started.spawn(command, args, options)
+      child.once('spawn', () => { void removeReplaced('appimage', { APPIMAGE: command }) })
+      return child
+    }) as NonNullable<ApplyHost['spawn']>
+    return { calls: started.calls, spawn }
+  }
+  async function appImage() {
     await mkdir(join(dir, 'a'))
     const current = join(dir, 'a', 'Varia-SQL-Manager-1.0.0-linux-x86_64.AppImage'), staged = join(dir, 'a', '.Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage.update')
     await writeFile(current, 'old')
     await writeFile(staged, 'new')
-    const { calls, spawn } = fakeSpawn()
+    return { current, staged, renamed: join(dir, 'a', 'Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage') }
+  }
+  it('replaces the AppImage, renaming it when its name carried the old version, once the new one has started', async () => {
+    const { current, staged, renamed } = await appImage()
+    const { calls, spawn } = confirmingSpawn()
     await applyUpdate('appimage', staged, '1.1.0', { env: { APPIMAGE: current, APPDIR: '/tmp/.mount', ARGV0: 'x', OWD: dir, HOME: '/home/u' }, currentVersion: '1.0.0', spawn })
-    const renamed = join(dir, 'a', 'Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage')
     expect(await readdir(join(dir, 'a'))).toEqual(['Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage'])
     expect(await readFile(renamed, 'utf8')).toBe('new')
     expect(calls).toEqual([{ command: renamed, args: [], env: { HOME: '/home/u' }, detached: true }])
@@ -112,6 +125,49 @@ describe('applyUpdate', () => {
     await writeFile(staged, 'newer')
     await applyUpdate('appimage', staged, '1.2.0', { env: { APPIMAGE: plain }, currentVersion: '1.1.0', spawn })
     expect(await readFile(plain, 'utf8')).toBe('newer')
+    expect((await readdir(join(dir, 'a'))).sort()).toEqual(['Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage', 'varia.AppImage'])
+  })
+  it('keeps the previous AppImage until a later start removes it when the new one never says it started', async () => {
+    const { current, staged, renamed } = await appImage()
+    await applyUpdate('appimage', staged, '1.1.0', { env: { APPIMAGE: current }, currentVersion: '1.0.0', spawn: fakeSpawn().spawn, confirmMs: 10 })
+    expect(await readFile(renamed, 'utf8')).toBe('new')
+    expect(await readFile(replacedAppImage(renamed), 'utf8')).toBe('old')
+    await removeReplaced('appimage', { APPIMAGE: renamed })
+    expect(await readdir(join(dir, 'a'))).toEqual(['Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage'])
+  })
+  // A new image that cannot run (a noexec mount, no FUSE, a broken download) must not leave the user without Varia.
+  it('puts the previous AppImage back when the new one cannot start or stops before it has started', async () => {
+    const throwing = (() => { throw new Error('spawn EINVAL') }) as unknown as NonNullable<ApplyHost['spawn']>
+    const failures: [string, NonNullable<ApplyHost['spawn']>, string][] = [
+      ['spawn throws', throwing, 'EINVAL'],
+      ['spawn emits an error', fakeSpawn(new Error('spawn EACCES')).spawn, 'EACCES'],
+      ['the new copy exits at once', fakeSpawn(undefined, 127).spawn, 'stopped before it started'],
+    ]
+    for (const [name, spawn, message] of failures) {
+      const { current, staged } = await appImage()
+      await expect(applyUpdate('appimage', staged, '1.1.0', { env: { APPIMAGE: current }, currentVersion: '1.0.0', spawn }), name).rejects.toThrow(message)
+      expect(await readdir(join(dir, 'a')), name).toEqual(['Varia-SQL-Manager-1.0.0-linux-x86_64.AppImage'])
+      expect(await readFile(current, 'utf8'), name).toBe('old')
+      // The same name: the new image is replaced by the previous one again.
+      const plain = join(dir, 'a', 'varia.AppImage')
+      await writeFile(plain, 'old')
+      await writeFile(staged, 'new')
+      await expect(applyUpdate('appimage', staged, '1.1.0', { env: { APPIMAGE: plain }, currentVersion: '1.0.0', spawn }), name).rejects.toThrow(message)
+      expect(await readFile(plain, 'utf8'), name).toBe('old')
+      expect((await readdir(join(dir, 'a'))).sort(), name).toEqual(['Varia-SQL-Manager-1.0.0-linux-x86_64.AppImage', 'varia.AppImage'])
+      await rm(join(dir, 'a'), { recursive: true })
+    }
+  })
+  // Main's start is the new AppImage's confirmation: without it every update would wait out the whole confirmation window.
+  it('removes the copy an update replaced at every start outside smoke runs', () => {
+    expect(readFileSync(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')).toContain("if (!feed) void removeReplaced(target.kind, process.env)")
+  })
+  it('keeps the AppImage when the new one cannot take its place', async () => {
+    const { current } = await appImage()
+    const { calls, spawn } = fakeSpawn()
+    await expect(applyUpdate('appimage', join(dir, 'a', 'missing.update'), '1.1.0', { env: { APPIMAGE: current }, currentVersion: '1.0.0', spawn })).rejects.toThrow()
+    expect((await readdir(join(dir, 'a'))).sort()).toEqual(['.Varia-SQL-Manager-1.1.0-linux-x86_64.AppImage.update', 'Varia-SQL-Manager-1.0.0-linux-x86_64.AppImage'])
+    expect(calls).toEqual([])
   })
   it('installs nothing for a copy that cannot update itself', async () => {
     const { calls, spawn } = fakeSpawn()

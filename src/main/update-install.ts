@@ -1,5 +1,5 @@
 import { spawn, type SpawnOptions } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { InstallKind } from '../shared/updates'
@@ -62,6 +62,16 @@ export interface ApplyHost {
   readonly env: NodeJS.ProcessEnv
   readonly currentVersion: string
   readonly spawn?: (command: string, args: readonly string[], options: SpawnOptions) => ReturnType<typeof spawn>
+  /** How long a replaced AppImage waits for the new one to say it started (tests shorten it). */
+  readonly confirmMs?: number
+}
+
+/** The new AppImage normally confirms within a few seconds; after this the previous one stays until the next start removes it. */
+export const appImageConfirmMs = 30_000
+
+/** Where the AppImage an update replaces waits, named after the image that replaced it so that one can find and remove it. */
+export function replacedAppImage(image: string): string {
+  return join(dirname(image), `.${basename(image)}.old`)
 }
 
 /** Starts a program that outlives this one, resolving once it has started (or rejecting when it cannot). */
@@ -70,6 +80,35 @@ function launch(host: ApplyHost, command: string, args: readonly string[], env: 
     const child = (host.spawn ?? spawn)(command, args, { detached: true, stdio: 'ignore', env })
     child.once('error', reject)
     child.once('spawn', () => { child.unref(); resolve() })
+  })
+}
+
+/**
+ * Starts the new AppImage and waits for it to confirm it started by removing the previous image (`removeReplaced` at its
+ * start), or until the wait ends. It fails when it cannot start or exits before confirming, so the previous one can be put back.
+ */
+function launchConfirmed(host: ApplyHost, command: string, env: NodeJS.ProcessEnv, previous: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let watcher: FSWatcher | undefined, timer: NodeJS.Timeout | undefined, settled = false
+    const finish = (error?: unknown) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      watcher?.close()
+      if (error) reject(error instanceof Error ? error : new Error(String(error)))
+      else resolve()
+    }
+    const confirmed = () => { if (!existsSync(previous)) finish() }
+    const child = (host.spawn ?? spawn)(command, [], { detached: true, stdio: 'ignore', env })
+    child.once('error', finish)
+    child.once('exit', () => { if (existsSync(previous)) finish(new Error('The updated AppImage stopped before it started.')); else finish() })
+    child.once('spawn', () => {
+      child.unref()
+      // Without a watch (an unusual filesystem) only an early exit or the end of the wait settles it.
+      try { watcher = watch(dirname(previous), confirmed).on('error', () => {}) } catch { /* no watch */ }
+      timer = setTimeout(finish, host.confirmMs ?? appImageConfirmMs)
+      confirmed()
+    })
   })
 }
 
@@ -87,7 +126,8 @@ export function relaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  *   per-machine, then starts Varia (`--force-run`);
  * - the portable executable is swapped: Windows lets a running file be renamed, so the old one becomes `.old` (removed
  *   at the next start) and the new one takes its name, then starts;
- * - the AppImage is replaced (renamed to the new version when its name carried the old one), then starts.
+ * - the AppImage is replaced (renamed to the new version when its name carried the old one), then starts; the previous
+ *   one stays beside it, hidden, until the new one has started, and is put back when the new one cannot start or exits first.
  */
 export async function applyUpdate(kind: InstallKind, file: string, version: string, host: ApplyHost): Promise<void> {
   if (kind === 'nsis') return launch(host, file, ['--updated', '/S', '--force-run'], relaunchEnv(host.env))
@@ -105,15 +145,28 @@ export async function applyUpdate(kind: InstallKind, file: string, version: stri
     if (!current) throw new Error('The AppImage is unknown.')
     const name = basename(current)
     const target = name.includes(host.currentVersion) ? join(dirname(current), name.replace(host.currentVersion, version)) : current
-    await rename(file, target)
-    if (target !== current) await rm(current, { force: true }).catch(() => {})
-    return launch(host, target, [], relaunchEnv(host.env))
+    const previous = replacedAppImage(target)
+    await rm(previous, { force: true })
+    await rename(current, previous)
+    try { await rename(file, target) } catch (error) { await rename(previous, current).catch(() => {}); throw error }
+    try { await launchConfirmed(host, target, relaunchEnv(host.env), previous) } catch (error) {
+      try {
+        await rename(previous, current)
+        if (target !== current) await rm(target, { force: true })
+      } catch { /* the error below still says the update failed */ }
+      throw error
+    }
+    return
   }
   throw new Error('This copy of Varia cannot update itself.')
 }
 
-/** The portable executable an earlier update replaced; its launcher may still hold it for a moment, so failures wait. */
-export async function removeReplacedPortable(env: NodeJS.ProcessEnv): Promise<void> {
-  const target = env.PORTABLE_EXECUTABLE_FILE
-  if (target) await rm(`${target}.old`, { force: true }).catch(() => {})
+/**
+ * At start, the copy an earlier update replaced: the portable executable's launcher may still hold it for a moment, so
+ * failures wait for a later start. Removing the previous AppImage is also how the new one confirms it started.
+ */
+export async function removeReplaced(kind: InstallKind, env: NodeJS.ProcessEnv): Promise<void> {
+  const previous = kind === 'portable' && env.PORTABLE_EXECUTABLE_FILE ? `${env.PORTABLE_EXECUTABLE_FILE}.old`
+    : kind === 'appimage' && env.APPIMAGE ? replacedAppImage(env.APPIMAGE) : undefined
+  if (previous) await rm(previous, { force: true }).catch(() => {})
 }
