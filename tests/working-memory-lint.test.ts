@@ -95,7 +95,12 @@ it('lists every method that reserves working memory, so a new one is added to th
 // fetches the block, within the cache's own limit, evicting its least recent blocks for room, and settles the difference
 // once the pages are built; a seeded page is reserved before it is kept. Without them a cache would grow uncounted.
 const remote = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'RemoteResult.cs'), 'utf8'))
-const between = (from: string, to: string) => remote.slice(remote.indexOf(from), remote.indexOf(to, remote.indexOf(from)))
+// Both anchors must be found (comments are stripped, so a doc comment never anchors): a missing one fails, never a vacuous slice.
+const between = (from: string, to: string) => {
+  const start = remote.indexOf(from), end = start < 0 ? -1 : remote.indexOf(to, start)
+  if (start < 0 || end < 0) throw new Error(`anchor not found: ${start < 0 ? from : to}`)
+  return remote.slice(start, end)
+}
 
 it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const fetch = between('private async Task FetchAsync(', 'private void Reserve(')
@@ -113,7 +118,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ await ReserveOverrunAsync\(cost - estimate, block, token\); \}/)
   // An overrun reserves through Reserve too; only the cache's own limit (never the global budget) turns into a short answer.
-  const overrun = between('private async Task ReserveOverrunAsync(', '/// <summary>Reserves a block')
+  const overrun = between('private async Task ReserveOverrunAsync(', 'private void Reserve(')
   expect(overrun).toMatch(/Reserve\(bytes, keep\);/)
   expect(overrun).toMatch(/catch \(RequestException error\) when \(error\.Code == "TOO_LARGE" && Interlocked\.Read\(ref held\) \+ bytes > CacheLimit\)/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
