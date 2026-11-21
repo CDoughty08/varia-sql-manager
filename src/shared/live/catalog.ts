@@ -130,7 +130,10 @@ const operationsSettle = defaultSettle
 export const agentJobViews = ['running', 'failed', 'disabled'] as const
 /** What each watched job slot carries, in order (agent.jobs.watched): job0Status … job2LastRun. */
 export const agentWatchedFields = ['Status', 'Step', 'Steps', 'Started', 'LastOutcome', 'LastRun'] as const
-const agentWatchedSeries: readonly LiveSeriesSpec[] = Array.from({ length: agentLimits.watchedJobs }, (_, slot) => agentWatchedFields.map((field): LiveSeriesSpec => ({ id: `job${slot}${field}`, unit: 'count', label: `Watched job ${slot + 1}: ${field}`, counter: 'gauge' }))).flat()
+const agentWatchedSeries: readonly LiveSeriesSpec[] = [
+  ...Array.from({ length: agentLimits.watchedJobs }, (_, slot) => agentWatchedFields.map((field): LiveSeriesSpec => ({ id: `job${slot}${field}`, unit: 'count', label: `Watched job ${slot + 1}: ${field}`, counter: 'gauge' }))).flat(),
+  { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
+]
 
 export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
@@ -327,7 +330,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'agent.jobs.watched': {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
+    description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. The last series is the server's clock (yyyymmddhhmmss, server local time), by which the status bar dates a Start in server time. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
     series: agentWatchedSeries
   },
   'explorer.availability': {

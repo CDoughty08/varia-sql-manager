@@ -1803,6 +1803,8 @@ function agentJobsSample(live, probe) {
       const run = job && agentRuns.get(job.id)
       if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? 1 : null, job.steps, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
     })
+    // The server's clock, on the same clock as a run's start.
+    metrics[metrics.length - 1] = agentStamp(new Date().toISOString().slice(0, 19).replace('T', ' '))
     return { metrics }
   }
   const tone = job => agentRunning(job) ? 'running' : job.outcome === 0 ? 'error' : job.enabled ? null : 'muted'

@@ -62,11 +62,11 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
   and a tone per row (last run failed, running, disabled). Tiles count Running, Last run failed, Between retries and
-  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box and
-  the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
+  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box (the
+  job's own columns, never the last run) and the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
   shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
   `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
-  show, or that no finished run is among those rows).
+  show, or that no finished run is among those rows; a job that left the list says so).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
   the job's identity from the list, and list one result line per job; Stop on that list sends no more. A login msdb
   refuses sees "No access to SQL Server Agent" with the roles that grant it; Agent stopped or Agent XPs off is a banner,
@@ -76,7 +76,8 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   of 3", then its outcome and start in server time) with Stop and Dismiss, and +N for more; at most `watchedJobs` per
   connection are followed. Each connection has one view of `agent.jobs.watched` and `agent.jobs.service` with
   `whileHidden: 'statusOnly'`, so the job's end is seen while the window is hidden; a run counts only when its start is
-  later than the job's last run before the start (the list's, or the one a sample reads while the job runs). Agent
+  later than the job's last run before the start (the list's, or the one a sample reads while the job runs) and not
+  before the Start itself, dated in server time by the watched probe's clock. Agent
   stopped (or its XPs off) on a server a monitor or a followed job reads shows as its own item, which opens that server's
   Job Activity Monitor; after a followed job ends that way, the service probe alone keeps reading Agent's state until it
   runs again. The connection item is unchanged.
@@ -457,7 +458,7 @@ msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISAB
 | `stepsPerJob` | 50 | Steps one job save may hold |
 | `schedulesPerJob` | 16 | Schedules one job save may hold |
 | `scheduleJobChanges` | 64 | Jobs one schedule save may attach or detach |
-| `lastRunRows` | 201 | History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest |
+| `lastRunRows` | 202 | History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest |
 | `startJobs` | 100 | Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name |
 | `watchedJobs` | 3 | Jobs the status bar follows with live progress |
 | `serviceStatementMs` | 30,000 | One service Start or Stop statement, in ms |

@@ -63,6 +63,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
     private static readonly string[] WatchedFields = ["Status", "Step", "Steps", "Started", "LastOutcome", "LastRun"];
     /// <summary>A watched slot's status for a job msdb no longer has (src/shared/agent/jobs.ts watchedGoneStatus).</summary>
     public const int GoneStatus = -1;
+    /// <summary>The last run's words for an expanded job no longer in the list.</summary>
+    public const string GoneMessage = "This job is no longer in the list: it was deleted, or this login no longer sees it.";
 
     private readonly AgentCatalog catalog = catalog ?? AgentCatalog.Current;
     private readonly Lock gate = new();
@@ -149,7 +151,12 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
                 tables.Add(new(1, []));
             }
         }
-        else tables.Add(new(1, []));
+        else
+        {
+            // The expanded job left the list (deleted, or this login no longer sees it): its last run says so, not "no run".
+            if (now.Expand is not null) probeErrors.Add(LiveErrors.Create(ListProbe, "NOT_FOUND", GoneMessage) with { Tables = [1] });
+            tables.Add(new(1, []));
+        }
         double?[] values =
         [
             list.Count(job => job.IsRunning), list.Count(job => job.LastOutcome == 0), list.Count(job => job.Status == 3), list.Count(job => !job.Enabled)
@@ -278,7 +285,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
     private async Task<LiveReaderSample> WatchedAsync(SqlConnection? connection, string prologue, AgentJobsLiveArgs now, CancellationToken token)
     {
         var slots = (int)catalog.Limit("watchedJobs");
-        var values = new double?[slots * WatchedFields.Length];
+        // The slots, then the server's clock (yyyymmddhhmmss, server local time): the renderer dates a Start in server time by it.
+        var values = new double?[slots * WatchedFields.Length + 1];
         var errors = new List<LiveProbeError>();
         var watched = (now.Watch ?? []).Select(id => Guid.TryParse(id, out var guid) ? guid : Guid.Empty).ToList();
         var jobs = new Job?[watched.Count];
@@ -293,7 +301,15 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
             else if (failed.Count > 0 && errors.Count == 0) errors.Add(Error(WatchedProbe, failed[0]));
         }
         Dictionary<Guid, DateTime> starts = [];
-        if (jobs.Any(job => job?.IsRunning == true)) (starts, _) = await StartsAsync(connection, prologue, WatchedProbe, errors, null, token).ConfigureAwait(false);
+        DateTime? serverNow = null;
+        if (jobs.Any(job => job?.IsRunning == true)) (starts, serverNow) = await StartsAsync(connection, prologue, WatchedProbe, errors, null, token).ConfigureAwait(false);
+        if (serverNow is null && jobs.Any(job => job is not null))
+        {
+            // A refused clock read leaves the series empty: the renderer then counts any newer run, as before it had the clock.
+            var (clock, _) = await Reader.ReadAsync(connection, prologue, [AgentSql.Clock], NoValues, token).ConfigureAwait(false);
+            if (clock.TryGetValue(AgentSql.Clock.Id, out var read) && read.Rows.Count > 0 && read.Value(read.Rows[0], "server_now") is DateTime time) serverNow = time;
+        }
+        values[^1] = serverNow is { } stamp ? Stamp(stamp) : null;
         for (var slot = 0; slot < jobs.Length; slot++)
         {
             if (jobs[slot] is not { } job) continue;

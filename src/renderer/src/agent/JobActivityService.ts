@@ -8,7 +8,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
-  agentAvailability, agentBulkTitles, agentJobFilterLimits, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
+  agentAvailability, agentBulkTitles, agentJobFilterLimits, agentJobTextColumns, agentJobsProbe, agentJobsSource, agentServiceProbe, bulkUnavailable, jobActivityTabName,
   type AgentAvailability, type AgentBulkVerb, type AgentJobColumnFilter, type AgentJobsArgs, type AgentJobView, type AgentServiceSample
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
@@ -259,7 +259,7 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
     if (!state || state.text === text) return
     this.patch(id, { text })
     const trimmed = text.trim()
-    this.handles.get(id)?.setProbe(agentJobsProbe, { filter: trimmed ? { text: trimmed.slice(0, 128) } : undefined })
+    this.handles.get(id)?.setProbe(agentJobsProbe, { filter: trimmed ? { text: trimmed.slice(0, 128), columns: [...agentJobTextColumns] } : undefined })
   }
   setColumnFilter(id: string, column: AgentJobColumnFilter['column'], filter: { readonly values?: readonly string[]; readonly blanks?: boolean; readonly nonBlanks?: boolean; readonly exclude?: boolean } | undefined): void {
     const state = this.get(id)

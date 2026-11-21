@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentLimits } from '../src/shared/agent/catalog'
 import {
-  agentAvailability, agentBanner, agentJobTiles, agentJobsArgsSchema, agentStatusOverride, bulkUnavailable, stampText, tileValue, viewCount, watchedGoneStatus, watchedPhase, watchedSlot, watchedText,
+  agentAvailability, agentBanner, agentJobTiles, agentJobsArgsSchema, agentStatusOverride, bulkUnavailable, stampMinus, stampText, tileValue, viewCount, watchedGoneStatus, watchedServerNow, agentJobTextColumns, watchedPhase, watchedSlot, watchedText,
   type WatchedJob
 } from '../src/shared/agent/jobs'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { liveArgsSchemas } from '../src/shared/live/schema'
+import { liveProbes } from '../src/shared/live/catalog'
+import { limits } from '../src/shared/ipc/wire/protocol'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { stampOf } from '../src/renderer/src/agent/AgentJobStatusService'
@@ -93,6 +95,12 @@ describe("agent.jobs' shared rules", () => {
       .toEqual({ filters: [{ column: 'category', values: ['ETL'], exclude: true, blanks: true }] })
     expect(activeFilters({ view: 'failed', text: ' x ', columnFilters: [{ column: 'status', values: ['Idle'] }] })).toBe(3)
   })
+  it('searches only the list\'s own columns, so the filter box never filters the last run', () => {
+    const [jobs, runs] = liveProbes['agent.jobs.list'].tables!
+    expect(agentJobTextColumns.every(column => jobs.columns.some(item => item.id === column))).toBe(true)
+    expect(agentJobTextColumns.some(column => runs.columns.some(item => item.id === column))).toBe(false)
+    expect(agentJobTextColumns.length).toBeLessThanOrEqual(limits.live.filterColumns)
+  })
   it('fails the list only for an error of the list itself; a refused elapsed time or last run leaves the rows fresh', () => {
     const probe = (error?: object, state = 'failing') => ({ state, intervalMs: 5000, effectiveIntervalMs: 5000, lastSampleAt: 1, ...error ? { error: { probe: 'agent.jobs.list', ...error } } : {} }) as never
     expect(listProblems(probe({ code: 'BLOCKED', message: 'History blocked.', tables: [1] }))).toEqual({ stale: false, lastRun: 'History blocked.' })
@@ -158,6 +166,14 @@ describe("agent.jobs' shared rules", () => {
     expect(watchedSlot([4, null, 3, null, 1, 20261115023000, null, null, null, null, null, null], 0)).toEqual({ status: 4, step: undefined, steps: 3, started: undefined, lastOutcome: 1, lastRun: 20261115023000 })
     expect(watchedSlot([4, null, 3, null, 1, 0, null, null, null, null, null, null], 1)).toBeUndefined()
     expect(stampText(20261114235959, 20261115)).toBe('2026-11-14 23:59:59')
+    expect(stampMinus(20261115000005, 10)).toBe(20261114235955)
+    expect(stampMinus(20260301000000, 1)).toBe(20260228235959)
+    expect(watchedServerNow([...Array.from({ length: 18 }, () => null), 20261115140000])).toBe(20261115140000)
+    expect(watchedServerNow(Array.from({ length: 18 }, () => null))).toBeUndefined()
+    // A run newer than the grid's but older than the Start (a scheduled run that ended in between) is not this Start's.
+    const dated: WatchedJob = { before: 20261115023000, idleSamples: 0, seenRunning: false, requested: 20261115140000 }
+    expect(watchedPhase(dated, { status: 4, steps: 3, lastOutcome: 0, lastRun: 20261115135955 }, 'running').phase).toEqual({ phase: 'starting' })
+    expect(watchedPhase(dated, { status: 4, steps: 3, lastOutcome: 1, lastRun: 20261115140001 }, 'running').phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140001 })
     expect(stampOf('2026-11-15 02:30:00')).toBe(20261115023000)
     expect(stampOf('')).toBe(0)
   })
@@ -196,7 +212,7 @@ describe('Job Activity Monitor', () => {
     expect(live.open).toHaveBeenCalledTimes(1)
     jobActivity.setView(id, 'failed')
     jobActivity.setText(id, ' night ')
-    expect(handle().probes).toEqual([{ probe: 'agent.jobs.list', patch: { view: 'failed' } }, { probe: 'agent.jobs.list', patch: { filter: { text: 'night' } } }])
+    expect(handle().probes).toEqual([{ probe: 'agent.jobs.list', patch: { view: 'failed' } }, { probe: 'agent.jobs.list', patch: { filter: { text: 'night', columns: [...agentJobTextColumns] } } }])
     jobActivity.setColumnFilter(id, 'category', { values: ['ETL'] })
     jobActivity.toggleExpanded(id, { id: nightly.toUpperCase(), name: 'Nightly' })
     expect(handle().args).toEqual([{ filters: [{ column: 'category', values: ['ETL'] }] }, { expand: nightly, filters: [{ column: 'category', values: ['ETL'] }] }])
@@ -348,6 +364,19 @@ describe("The status bar's running job", () => {
     expect(handles().at(-1)!.disposed).toBe(true)
     agentJobs.dismiss(key)
     expect(agentJobs.getSnapshot()).toEqual({ jobs: [], agent: {} })
+  })
+  it("dates the Start by the first sample's server clock, so a run that ended just before it is not taken for its outcome", () => {
+    // The hand-over and the first sample at the same client time: the Start is the clock less a second for rounding.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    cleanups.push(() => clock.mockRestore())
+    const { agentJobs, handles } = monitor()
+    agentJobs.watch('c1', { id: nightly, name: 'Nightly', created: '2026-01-02T03:04:05', lastRun: '2026-11-15 02:30:00' })
+    const view = handles().at(-1)!
+    const slots = (status: number, lastOutcome: number, lastRun: number) => [status, null, 3, null, lastOutcome, lastRun, ...Array.from({ length: 12 }, () => null), 20261115140000]
+    view.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: slots(4, 0, 20261115135930) }] })
+    expect(agentJobs.getSnapshot().jobs[0]).toMatchObject({ phase: { phase: 'starting' }, job: { requested: 20261115135959 } })
+    view.deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 5000, metrics: slots(4, 1, 20261115140001) }] })
+    expect(agentJobs.getSnapshot().jobs[0].phase).toEqual({ phase: 'ended', outcome: 1, lastRun: 20261115140001 })
   })
   it("a view that ends on its own (BUSY at the server's limit) leaves its jobs' outcome unknown and frees the slots", async () => {
     const { agentJobs, handles } = monitor()

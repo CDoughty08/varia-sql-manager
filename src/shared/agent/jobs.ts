@@ -13,6 +13,9 @@ export const agentWatchedProbe = 'agent.jobs.watched' as const
 /** The list's columns a column value filter may name (the faceted ones). */
 export const agentJobFilterColumns = ['status', 'lastOutcome', 'category'] as const
 export type AgentJobFilterColumn = typeof agentJobFilterColumns[number]
+/** The list's columns the filter box searches: naming them leaves the last run table unfiltered (a probe's named filter columns
+ *  of another table leave a table alone), so a filter that finds a job never empties its last run. */
+export const agentJobTextColumns = ['name', 'status', 'step', 'lastOutcome', 'category', 'owner', 'jobId'] as const
 /** Bounds of the column value filters: values per filter and characters per value. */
 export const agentJobFilterLimits = { values: 64, chars: 128 } as const
 
@@ -174,6 +177,9 @@ export interface WatchedJob {
   readonly idleSamples: number
   /** The job was seen running since the start. */
   readonly seenRunning: boolean
+  /** The Start's time in server time (yyyymmddhhmmss, from the first watched sample's clock less the time since): a run that
+   *  started before it is not this Start's, however recent. Unset until a sample carries the clock. */
+  readonly requested?: number
 }
 /**
  * The watched job's phase after a sample: Starting… until it is seen running or an idle sample carries a run newer than the
@@ -202,11 +208,23 @@ export function watchedPhase(job: WatchedJob, sample: WatchedSample | undefined,
     return { phase: { phase: 'running', step: sample.step || undefined, steps: sample.steps || undefined, retrying: status === 3 }, job: { ...job, seenRunning: true, idleSamples: 0, before: Math.max(job.before, prior) } }
   }
   const lastRun = sample.lastRun ?? 0
-  if (lastRun > job.before && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }
+  if (lastRun > job.before && (job.requested === undefined || lastRun >= job.requested) && sample.lastOutcome !== undefined) return { phase: { phase: 'ended', outcome: sample.lastOutcome, lastRun }, job }
   // An idle read without a newer run is not yet an end: msdb may show the job idle a sample before its last run is written.
   const next = { ...job, idleSamples: job.idleSamples + 1 }
   if (next.idleSamples > watchStartSamples) return { phase: { phase: 'unknown', reason: 'gone' }, job: next }
   return { phase: job.seenRunning ? { phase: 'running', retrying: false } : { phase: 'starting' }, job: next }
+}
+
+/** The server's clock a watched sample carries (its last series), or undefined. */
+export function watchedServerNow(metrics: readonly (number | null)[] | undefined): number | undefined {
+  const value = metrics?.[agentLimits.watchedJobs * agentWatchedFields.length]
+  return typeof value === 'number' ? value : undefined
+}
+/** yyyymmddhhmmss less some seconds, as a calendar would count them (no time zone: both are server local time). */
+export function stampMinus(stamp: number, seconds: number): number {
+  const text = String(Math.trunc(stamp)).padStart(14, '0')
+  const date = new Date(Date.UTC(Number(text.slice(0, 4)), Number(text.slice(4, 6)) - 1, Number(text.slice(6, 8)), Number(text.slice(8, 10)), Number(text.slice(10, 12)), Number(text.slice(12, 14))) - seconds * 1000)
+  return date.getUTCFullYear() * 10_000_000_000 + (date.getUTCMonth() + 1) * 100_000_000 + date.getUTCDate() * 1_000_000 + date.getUTCHours() * 10_000 + date.getUTCMinutes() * 100 + date.getUTCSeconds()
 }
 
 /** yyyymmddhhmmss (server local time) as "hh:mm:ss", with the date when it is not `today` (yyyymmdd). */

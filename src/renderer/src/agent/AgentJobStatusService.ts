@@ -7,7 +7,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema'
 import { agentLimits } from '../../../shared/agent/catalog'
 import {
-  agentAvailability, agentJobsSource, agentServiceProbe, agentWatchedProbe, watchedPhase, watchedSlot,
+  agentAvailability, agentJobsSource, agentServiceProbe, agentWatchedProbe, stampMinus, watchedPhase, watchedServerNow, watchedSlot,
   type AgentAvailability, type AgentServiceSample, type WatchedJob, type WatchedPhase
 } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
@@ -27,6 +27,8 @@ export interface WatchedEntry {
   readonly created: string
   readonly job: WatchedJob
   readonly phase: WatchedPhase
+  /** When this window handed the job over (client ms): with a sample's server clock, the Start's time in server time. */
+  readonly watchedAt: number
   /** A Stop Job is on its way for it. */
   readonly stopping?: true
   readonly error?: string
@@ -43,6 +45,7 @@ export interface AgentJobStatusServiceOptions {
   readonly live: Pick<LiveService, 'open'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly newId?: () => string
+  readonly now?: () => number
 }
 
 /** A grid's yyyy-MM-dd HH:mm:ss (server time) as yyyymmddhhmmss; 0 for '' (never ran). */
@@ -54,6 +57,7 @@ const active = (entry: WatchedEntry) => entry.phase.phase === 'starting' || entr
 
 export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot> implements Disposable {
   private readonly newId: () => string
+  private readonly now: () => number
   /** Each connection's view and the job keys its slots name, in order. */
   private readonly views = new Map<string, { readonly handle: LiveHandle; readonly slots: readonly string[]; readonly waiting: boolean; readonly stop: () => void }>()
   private readonly services = new Map<string, AgentServiceSample>()
@@ -65,6 +69,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
   constructor(private readonly options: AgentJobStatusServiceOptions) {
     super({ jobs: [], agent: {} })
     this.newId = options.newId ?? (() => crypto.randomUUID())
+    this.now = options.now ?? (() => Date.now())
     // A closed or lost connection ends its jobs' following: their outcome is unknown from here.
     this.stopConnections = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
   }
@@ -78,7 +83,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     const others = this.getSnapshot().jobs.filter(entry => !(entry.connectionId === connectionId && entry.id === id))
     const entry: WatchedEntry = {
       key: this.newId(), connectionId, server: connection.displayName || connection.server, id, name: job.name, created: job.created,
-      job: { before: stampOf(job.lastRun), idleSamples: 0, seenRunning: false }, phase: { phase: 'starting' }
+      job: { before: stampOf(job.lastRun), idleSamples: 0, seenRunning: false }, phase: { phase: 'starting' }, watchedAt: this.now()
     }
     // At most agentLimits.watchedJobs followed per connection: the oldest still followed gives its slot up.
     const followed = others.filter(item => item.connectionId === connectionId && active(item))
@@ -162,10 +167,14 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
       const effective = availability === 'pending' ? 'running' : availability
       if (!watched && effective === 'running') return
       let jobs = this.getSnapshot().jobs, changed = false
+      const serverNow = watched ? watchedServerNow(watched.metrics) : undefined
       slots.forEach((key, slot) => {
         const entry = jobs.find(item => item.key === key)
         if (!entry || !active(entry)) return
-        const next = watchedPhase(entry.job, watched ? watchedSlot(watched.metrics!, slot) : undefined, effective)
+        // The first clock dates the Start in server time: now less the time since the hand-over, and a second for rounding.
+        const job = entry.job.requested === undefined && serverNow !== undefined
+          ? { ...entry.job, requested: stampMinus(serverNow, Math.ceil((this.now() - entry.watchedAt) / 1000) + 1) } : entry.job
+        const next = watchedPhase(job, watched ? watchedSlot(watched.metrics!, slot) : undefined, effective)
         if (!watched && next.phase.phase !== 'unknown') return
         if (JSON.stringify(next.phase) === JSON.stringify(entry.phase) && JSON.stringify(next.job) === JSON.stringify(entry.job)) return
         jobs = jobs.map(item => item.key === key ? { ...item, phase: next.phase, job: next.job } : item)

@@ -145,8 +145,12 @@ internal static class AgentJobsChecks
         var (wholeRows, wholeMore) = reader.LastRun(new AgentResult(history.Columns, cut, false));
         check(cutRows.Count == 6 && cutMore == 1 && noneRows.Count == 0 && noneMore == 1 && wholeRows.Count == 6 && wholeMore == 0,
             "a truncated history read without the previous outcome row marks the last run truncated, and one without any outcome row is truncated, not empty");
-        check(AgentSql.LastRunHistory.Cap == "lastRunRows" && AgentCatalog.Current.Limit("lastRunRows") == cap + 1 && AgentSql.LastRunHistory.Text == AgentSql.History.Text,
-            "the last run reads sp_help_jobhistory's newest rows only, as many as the table keeps plus the run's outcome row, and cancels the rest");
+        check(AgentSql.LastRunHistory.Cap == "lastRunRows" && AgentCatalog.Current.Limit("lastRunRows") == cap + 2 && AgentSql.LastRunHistory.Text == AgentSql.History.Text,
+            "the last run reads sp_help_jobhistory's newest rows only, as many as the table keeps plus the run's outcome row and the previous one's, and cancels the rest");
+        var gone = new AgentJobsReader(new("99999999-9999-9999-9999-999999999999")) { Reader = Fake([]) };
+        var goneSample = await gone.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe), null, CancellationToken.None);
+        check(goneSample.Tables[1].Rows.Count == 0 && goneSample.Errors.Single() is { Code: "NOT_FOUND", Tables: [1] } && goneSample.Errors[0].Message == AgentJobsReader.GoneMessage,
+            "an expanded job no longer in the list says so on the last run (NOT_FOUND, table 1) rather than showing no run");
         bool Keeps(LiveReaderTable table, string name) => table.View?.Invoke(table.Rows.Single(row => row.Cells[Col("name")].Text == name)) ?? true;
         var running = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "running"), null, CancellationToken.None)).Tables[0];
         var failed = (await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.ListProbe, "failed"), null, CancellationToken.None)).Tables[0];
@@ -191,14 +195,14 @@ internal static class AgentJobsChecks
         };
         var sample = await reader.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.WatchedProbe), null, CancellationToken.None);
         var values = sample.Raw!.Values;
-        check(LiveCatalog.Current.Probes[AgentJobsReader.WatchedProbe].Series.Count == values.Length && values.Length == 18 && sample.Errors.Count == 0
+        check(LiveCatalog.Current.Probes[AgentJobsReader.WatchedProbe].Series.Count == values.Length && values.Length == 19 && sample.Errors.Count == 0 && values[18] == 20261115141204d
             && values[..6].SequenceEqual([1d, 2d, 4d, 20261115140000d, 1d, 20261115010000d]) && values[6] == AgentJobsReader.GoneStatus && values[7..12].All(value => value is null)
-            && values[12..].SequenceEqual([4d, null, 3d, null, 0d, 20261115023000d]),
-            "each watched job fills its slot: status, current step, step count, start (from its activity row) while running, last outcome and last run; a job gone since (14262) reads status -1 and nothing else: "
+            && values[12..18].SequenceEqual([4d, null, 3d, null, 0d, 20261115023000d]),
+            "each watched job fills its slot: status, current step, step count, start (from its activity row) while running, last outcome and last run; a job gone since (14262) reads status -1 and nothing else; the last series is the server's clock: "
             + string.Join(",", values.Select(value => value?.ToString() ?? "null")));
         var idle = new AgentJobsReader(new(Watch: [Nightly.ToString()])) { Reader = Fake(ran = []) };
         await idle.ReadAsync(null!, LiveSql.UncommittedPrologue, Due(AgentJobsReader.WatchedProbe), null, CancellationToken.None);
-        check(ran.SequenceEqual(["watchedJob"]), "watched jobs that all idle read no activity rows");
+        check(ran.SequenceEqual(["watchedJob", "clock"]), "watched jobs that all idle read no activity rows, only the server's clock");
     }
 
     private static async Task ServiceAsync(Action<bool, string> check)
