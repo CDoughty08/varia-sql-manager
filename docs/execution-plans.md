@@ -46,7 +46,7 @@ the plan document.
   camera. It does not guess a location in an edited query, a repeated statement, a procedure or dynamic SQL.
 - **Go to XML** opens the source plan document at the operator, verified by NodeId and document revision; it is
   unavailable for live-only operators. Graph/XML switches keep the XML caret and the graph selection independently.
-  Moving the XML caret or editing XML lets Graph select the containing operator. The lookup runs only on navigation and
+  Moving the XML caret or editing XML lets Graph select the containing operator. Navigation builds the XML location index once per viewed revision and
   handles namespaces, nested statements, comments, CDATA and repeated NodeIds.
 - Forced colours mode uses the outline/properties view without GPU preparation; Statement SQL remains available. Every
   pointer action has a toolbar or keyboard path.
