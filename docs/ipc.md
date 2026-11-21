@@ -1129,7 +1129,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   `resultSet.closed`; a refusal part way, a failure or Stop switches it back to windowed, whole, under another revision.
   Closing the result (Close Results, the tab closed or run again) stops the load, whose summary fails with
   `RESULT_RELEASED`. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
-  loading; `RESULT_RELEASED` for one already closed, `BUDGET_STOPPED` once the budget has stopped).
+  loading; `BUDGET_STOPPED` once the budget has stopped). Main answers `RESULT_UNAVAILABLE` for a result its renderer no
+  longer owns, so the backend's `RESULT_RELEASED` reaches only a close that raced past that check.
 
 ## Cell lengths and row sizes
 
@@ -2468,6 +2469,7 @@ terminal for live probes. Display login text is never identity proof.
 | Code | Sentence |
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
+| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped while a result was loading into memory. The load was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |
 | `CONNECTION_LOST` | "This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone." |

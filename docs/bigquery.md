@@ -313,7 +313,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
   way it is scrolling (fewer when the cache holds few blocks); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks, or stops
   where the cache is full, then the grid shows the rows it has and asks again.
-- **Load into memory.** `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
+- **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, and a second load of a result already loading is refused. Closing the result stops the load,
   which then says the result was closed. Reads under way when it starts
@@ -398,7 +398,7 @@ Messages).
 | `CANCELLED` | `stopped` | The job was cancelled |
 | `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
 | `REMOTE_EXPIRED` | Rows of a windowed result not cached once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
-| `BUSY` | Load into memory while the query that made the result still runs | Load it once the query has finished |
+| `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs | Refused until that query has finished |
 
 ## Emulator mode
 

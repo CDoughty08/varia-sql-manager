@@ -58,9 +58,12 @@ const incompleteText = 'This result is incomplete because an error, cancellation
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
 export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
-  // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped at 32-bit row indexes.
-  if (o.residence === 'remote') return o.truncated ? `Only the first ${formatCount(o.rowsAvailable ?? 0)} of ${formatCount(o.rowsRead)} rows can be shown: a grid reads at most ${formatCount(2_147_483_647)} rows of a result windowed in BigQuery.` : undefined
-  const shown = `Only the first ${formatCount(o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
+  // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped by the rows-kept limit
+  // or, past that, by 32-bit row indexes.
+  const remote = o.residence === 'remote'
+  if (remote && !o.truncated) return undefined
+  if (remote && (o.rowsAvailable ?? 0) >= 2_147_483_647) return `Only the first ${formatCount(o.rowsAvailable ?? 0)} of ${formatCount(o.rowsRead)} rows can be shown: a grid reads at most ${formatCount(2_147_483_647)} rows of a result windowed in BigQuery.`
+  const shown = `Only the first ${formatCount(remote ? o.rowsAvailable ?? 0 : o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
   if (o.truncated === 'systemMemory') return `${shown} because the computer is low on memory. Execution continued.`
   if (o.truncated === 'queryBudget' || o.truncated === 'globalBudget') {
     // The figure the query stopped at when it did, not today's: the limit can change while the backend runs.

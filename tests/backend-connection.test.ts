@@ -151,11 +151,11 @@ describe('BackendConnection lifetime', () => {
     await connection.ready
     const loss = lossOf(connection)
     const script = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0 }).done
-    // Load into memory runs a query too: never re-sent, counted and told as one.
+    // Load into memory runs a query too: never re-sent and counted, but told as a load (it changed nothing to roll back).
     const load = connection.send('results.remoteQuery', { queryId: crypto.randomUUID(), resultId: 3, generation: 1, kind: 'load' }, { deadlineMs: 0 }).done
     expect(connection.runningQueries).toBe(2)
     expect(await failure(script)).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
-    expect(await failure(load)).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(await failure(load)).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostLoad })
     expect(await loss).toMatchObject({ reason: 'exit', exitCode: 1, queries: 2 })
     expect(await failure(health(connection))).toMatchObject({ code: 'BACKEND_LOST' })
   })

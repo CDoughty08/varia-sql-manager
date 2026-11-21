@@ -178,5 +178,16 @@ describe('the user-facing text about windowed results', () => {
     const remoteQuery = ipc.slice(start, ipc.indexOf('\n- ', start + 3))
     expect(remoteQuery).toMatch(/`RESULT_RELEASED`/)
     expect(bigquery.slice(bigquery.indexOf('- **Load into memory.**'), bigquery.indexOf('- **What waits.**'))).toMatch(/Closing the result stops the load/)
+    // No renderer command loads a windowed result yet: the docs must not tell the user to.
+    const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
+    const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
+    if (!sources.some(name => readFileSync(join(renderer, name), 'utf8').includes('remoteQuery('))) {
+      expect(bigquery).toMatch(/- \*\*Load into memory\.\*\* No command runs it yet/)
+      expect(bigquery).not.toMatch(/\| `BUSY` \|[^\n]*\| Load it /)
+    }
+    // CHANGELOG names every feature a windowed result waits for, as the guide does.
+    const changelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8')
+    const entry = changelog.slice(changelog.indexOf('- **BigQuery results larger than memory:**'), changelog.indexOf('\n', changelog.indexOf('- **BigQuery results larger than memory:**')))
+    for (const feature of ['Sorting', 'filtering', 'searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
   })
 })

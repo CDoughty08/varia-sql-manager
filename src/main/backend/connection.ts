@@ -124,6 +124,8 @@ function clip(line: string): string {
 
 /** Requests that run a query (and are never re-sent): a lost backend reports them with the query sentence and counts them. */
 const runsQuery = (method: string): boolean => method === 'query.execute' || method === 'results.remoteQuery'
+/** What a lost backend tells a request: a load only read, so it gets its own sentence rather than the script's. */
+const lostSentence = (method: string): string => method === 'results.remoteQuery' ? sentences.lostLoad : runsQuery(method) ? sentences.lostQuery : sentences.lost
 
 const frameNames = Object.fromEntries(Object.entries(FrameKind).map(([name, kind]) => [kind, name])) as Record<number, string>
 const maxRequestId = wire.ids.maxRequestId
@@ -236,7 +238,7 @@ export class BackendConnection {
    *  local error (limits, backstop TIMEOUT, STREAM_PROTOCOL, BACKEND_LOST). */
   send(method: BackendMethod, params: unknown, o: SendOptions): { id: number; done: Promise<unknown> } {
     const refuse = (code: ErrorCode, message: string) => ({ id: 0, done: Promise.reject(new BackendError(code, message)) })
-    if (this.loss) return refuse('BACKEND_LOST', runsQuery(method) ? sentences.lostQuery : sentences.lost)
+    if (this.loss) return refuse('BACKEND_LOST', lostSentence(method))
     const policy = methodPolicies[method]
     // Cancellation and cleanup stay available however many ordinary requests are outstanding.
     if (this.pending.size >= this.limits.pending + (policy.lane === 'control' ? this.limits.control : 0)) return refuse('TOO_MANY_REQUESTS', sentences.tooMany)
@@ -499,7 +501,7 @@ export class BackendConnection {
     const unavailable = failureMessage(loss, this.packaged)
     for (const request of pending) {
       this.clock.clearTimeout(request.timer)
-      request.reject(error ?? (unavailable ? new BackendError('BACKEND_UNAVAILABLE', unavailable) : new BackendError('BACKEND_LOST', runsQuery(request.method) ? sentences.lostQuery : sentences.lost)))
+      request.reject(error ?? (unavailable ? new BackendError('BACKEND_UNAVAILABLE', unavailable) : new BackendError('BACKEND_LOST', lostSentence(request.method))))
     }
     for (const queued of this.queue.splice(0)) if (queued.sensitive) queued.frame.fill(0)
     this.queuedBytes = 0
