@@ -22,7 +22,7 @@ import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
-import { designerDescribeIds } from '../designer/catalog.ts'
+import { designerDescribeIds, designerLimits } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
@@ -181,7 +181,8 @@ export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
-export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
+/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. */
+export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number }
 /** Something that stops or affects the DROP; `blocking` ones make it fail until they are dealt with. */
 export interface ActionWarning { readonly text: string; readonly blocking: boolean }
 /** The Delete Object dialog's row: SSMS's Object Name, Object Type and Owner, and what it found in the way. */
@@ -863,7 +864,7 @@ export const actionStepSchema = z.object({
   status: z.enum(actionStepStatuses), title: z.string().max(loginLimits.stepTitle), message: z.string().max(actionLimits.messageChars).optional(),
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
-const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
+const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean(), column: z.number().int().min(0).max(designerLimits.columns - 1).optional() }).strict() satisfies z.ZodType<ActionError>
 const fileRefSchema = z.object({
   fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
 }).strict() satisfies z.ZodType<DatabaseFileRef>

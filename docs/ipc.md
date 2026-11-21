@@ -593,11 +593,11 @@ lets a long run reach Restart only while the backend does not answer (a run on a
 crash resets the list.
 
 **Table Designer** (docs/table-designer.md). `dialog: 'tableDesigner'` (database target) answers `{ tableDesigner:
-{ database, band, schemas (≤ 2,048), schemasTruncated, defaultSchema, defaultFilegroup, caseSensitiveNames,
-accentSensitiveNames, canCreate? } }`. `action: 'createTable', design: { schema, name, columns: [{ name, type: { system,
+{ database, band, schemas (≤ 2,048), schemasTruncated, defaultSchema, defaultFilegroup, canCreate? } }`. `action: 'createTable', design: { schema, name, columns: [{ name, type: { system,
 length?, max?, precision?, scale?, dimensions? }, allowNulls, identity?: { seed, increment } }] (1–1,024), primaryKey:
 [index] (≤ 32) }`, checked by `designProblems` and `TableDesignValidator` (`INVALID_PARAMS`, also for a table name starting with `#` and
-column names differing only in trailing spaces). Script answers SSMS's change
+column names differing only in trailing spaces); the preflight refuses column names equal under the catalog collation
+(`NAME_IN_USE`, its `error.column` the later column's index). Script answers SSMS's change
 script (`designerLimits.scriptChars`) with refusals as warnings; execute runs CREATE TABLE, the key, `LOCK_ESCALATION` and
 `Commit` in one transaction; a failure or Stop rolls it back. The design is one JSON parameter shredded with OPENJSON (master below level 130:
 `NOT_SUPPORTED`).
