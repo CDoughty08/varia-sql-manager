@@ -189,6 +189,8 @@
     "resultsGrid.diffChangedAddedBackground": "#2e7d4f2e",
     "resultsGrid.diffChangedRemovedBackground": "#c42b3c2e",
     "resultsGrid.diffChangedBackground": "#2563a842",
+    "resultsGrid.diffOldForeground": "#8f1d24",
+    "resultsGrid.diffContextForeground": "#3a404b",
     "resultsGrid.diffSoftUnderline": "#875800",
     "resultsGrid.rowNumberForeground": "#5c6370",
     "resultsGrid.nullForeground": "#5c6370",

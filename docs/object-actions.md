@@ -27,7 +27,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `startJob` | Start Job at Step… | `explorer.startJob` | dialog (`startJobAtStep`) | `explorer.context` | `2_job` 1 | t | — | — | SQL Server, Managed Instance | `explorerActionStartJob` |
 | `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
 | `startAgent` | Start | `explorer.startAgent` | dialog (`startAgent`) | `explorer.context` | `2_service` 1 | s | — | — | SQL Server, Managed Instance | `explorerActionStartAgent` |
-| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
+| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | t | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
 | `restartAgent` | Restart | `explorer.restartAgent` | dialog (`restartAgent`) | `explorer.context` | `2_service` 3 | e | — | — | SQL Server, Managed Instance | `explorerActionRestartAgent` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
@@ -74,7 +74,7 @@ is reserved on Windows and Linux.
 | `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
 | `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
-| `agent` | none | – | – | – | – | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
+| `agent` | none | – | – | – | ✓ | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
 | `agentJob` | none | – | ✓ | ✓ | – | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
 
 ## Folder actions
@@ -139,6 +139,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `startAgent` | Start SQL Server Agent | Modal dialog | `startAgent` | General (`settings-gear`) | Yes |
 | `stopAgent` | Stop SQL Server Agent | Modal dialog | `stopAgent` | General (`settings-gear`) | Yes |
 | `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
+| `agentProperties` | SQL Server Agent Properties | Modal dialog | `agentProperties` | General (`settings-gear`), History (`history`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -713,9 +714,16 @@ Until the plan's full backup's files are read, Script waits: "The files of the f
 
 The Backup Timeline shows the backups over an interval (Hour, Six Hours, Day, Week; Day first) ending at the last
 backup: a large triangle for a full backup, a small one for a differential, a tick for a log, and a band where log
-backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an
-hour, Home and End to the interval's ends. A point outside the covered band (other than a full or differential
-backup's finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup
+backups cover. The band and the allowed points come from the planner's own full-rooted chains, so a log that a
+missing log cuts off from every full backup covers nothing until a later full or differential bridges the gap. Under
+Manual Selection they come from the checked sets instead: the band is the stretch their last log can stop in, and
+the finish of a last full or differential is allowed too. Its point is a slider that starts at the point already
+chosen, or else at the last backup taken: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down
+an hour, Home and End to the window's ends. The window opens ending at the last backup, or at the point when that
+would leave it out, and stays put while the point moves inside it; a point that leaves it slides it just far enough
+to show the point. A point the restore has no plan for (outside the covered band, other than the finish of the full
+or differential backup it would restore) leaves OK disabled. Last backup taken shows the finish of the plan without a
+point, even while a point is set. SSMS also allows a point after the last log backup, restoring the tail-log backup
 it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
 
 ### Options and script
@@ -755,22 +763,22 @@ Keep restoring).
 The backend first checks what the request names, on the action's own connection: the destination's identity (an
 existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
 tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
-each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues the set before it;
-`RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and the files the restore writes
-(`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths gives each file's path, which must be no
-other database's file and, unless it is a file of the destination, no file already on the server; a standby file or
-tail-log backup must be no database's file and have no database file's extension. Paths compare by a key
-(`ServerPath.Key`, `serverPathKey` in the renderer, both checked against `tests/fixtures/server-paths.json`): `.` and
-empty segments dropped, `..` resolved, and on Windows `/` as `\`, trailing dots and spaces trimmed, and case ignored.
-Files on disk are seen through `sys.dm_os_file_exists` (SQL Server 2017 and later) or `xp_fileexist` (2016, sysadmin
-only; otherwise not checked). Then the steps, each its own statement with every name, path and number a parameter
-(`RestoreSql`):
+each set's header on the media (`RESTORE HEADERONLY`: its BackupSetGUID is the plan's, its type, its family, and
+that it continues the set before it; `RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`),
+and the files the restore writes (`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths
+gives each file's path, which must be no other database's file and, unless it is a file of the destination, no file
+already on the server; a standby file or tail-log backup must be no database's file and have no database file's
+extension. Paths compare by a key (`ServerPath.Key`, `serverPathKey` in the renderer, both checked against
+`tests/fixtures/server-paths.json`): `.` and empty segments dropped, `..` resolved, and on Windows `/` as `\`,
+trailing dots and spaces trimmed, and case ignored. Files on disk are seen through `sys.dm_os_file_exists` (SQL Server
+2017 and later) or `xp_fileexist` (2016, sysadmin only; otherwise not checked). Then the steps, each its own statement
+with every name, path and number a parameter (`RestoreSql`):
 
 | Step | When |
 | --- | --- |
 | Close existing connections | Close existing connections is checked and the destination exists (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, after Varia's own pooled sessions in it are cleared) |
 | Back up the tail of the log | The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked) |
-| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last |
+| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last. Each first reads its set's header again: a backup file overwritten since the plan was made (the set at the position gone, of another kind or with another BackupSetGUID) fails the step with `MEDIA`, asking for the backups to be read again |
 | Restore multi-user access | After a RECOVERY restore that closed connections, unless Restrict access is checked |
 | Bring the database back online | Cleanup: the tail-log backup left the database restoring (it ended, or a Stop came as it finished), no RESTORE has written to it, and it is still RESTORING with the id the preflight read (`RESTORE DATABASE … WITH RECOVERY`) |
 | Restore multi-user access | Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted) |
@@ -846,7 +854,8 @@ the chain again before it runs: a log backup taken during the restore fails that
 The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
 256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
 database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
-the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
+the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant,
+each set's BackupSetGUID the plan's, read again right before each set's RESTORE as for Restore Database);
 that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
 that the plan reaches the log chain; that each file and filegroup is in the set, held by it, no log file and, online or
 offline, not of PRIMARY; under SIMPLE, Learn's rule

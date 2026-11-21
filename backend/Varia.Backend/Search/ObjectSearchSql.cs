@@ -81,7 +81,8 @@ internal static class ObjectSearchSql
     /// statistics, parameters with their types (and a scalar function's return type as parameter 0), then the editor's key
     /// metadata: each index's columns in key order, which index each primary or unique key is, and each foreign key's column
     /// pairs and referenced table, each by its object's id;</item>
-    /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id.</item>
+    /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id;</item>
+    /// <item>whether the database's catalog collation is case sensitive and whether it tells i from I (<see cref="CaseSensitive"/>).</item>
     /// </list>
     /// Every object of the database's own catalog is listed, Microsoft-shipped ones too (master's spt_ tables, msdb's procedures).
     /// The resource database's sys and INFORMATION_SCHEMA objects, the same in every database, are not in sys.objects: the
@@ -148,7 +149,14 @@ internal static class ObjectSearchSql
             ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL"
                 + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
                 + " UNION ALL SELECT dc.object_id, dc.definition FROM sys.default_constraints AS dc WHERE dc.definition IS NOT NULL ORDER BY object_id;\n"
-            : "");
+            : "")
+        + CaseSensitive;
+
+    /// <summary>Whether the database's catalog collation, which its object names compare under, tells case apart: a and A compared
+    /// under CATALOG_DEFAULT (the database's collation, or a contained database's fixed catalog collation). No catalog row, so no
+    /// metadata visibility can hide it.</summary>
+    internal const string CaseSensitive = "SELECT CONVERT(bit, CASE WHEN NCHAR(97) COLLATE CATALOG_DEFAULT = NCHAR(65) THEN 0 ELSE 1 END), "
+        + "CONVERT(bit, CASE WHEN NCHAR(105) COLLATE CATALOG_DEFAULT = NCHAR(73) THEN 0 ELSE 1 END);\n";
 
     /// <summary>The types columns and parameters name, by user_type_id: system ones, and with <paramref name="userDefined"/> the
     /// database's own (alias, CLR and table types) with their schema.</summary>

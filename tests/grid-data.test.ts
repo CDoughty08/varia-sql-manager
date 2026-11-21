@@ -8,7 +8,7 @@ import { manualTimers } from './fixtures/workbench'
 interface Read { first: number; count: number; o: WindowOptions; resolve(rows?: number): void; reject(error: unknown): void; aborted: () => boolean }
 
 /** A handle whose reads the test answers: a window lands in `cache` (as ResultClient's window cache) when answered. */
-function fixture(columns = 40, inflight = { value: 0 }, extra: { shape?: TileShape; also?: number; tone?: number } = {}) {
+function fixture(columns = 40, inflight = { value: 0 }, extra: { shape?: TileShape; also?: number; tone?: number; suffix?: number; previous?: number } = {}) {
   const cache = new Map<string, RowWindow>(), reads: Read[] = []
   const keyOf = (first: number, count: number, o: WindowShape) => `${first}:${count}:${o.colStart}:${o.colEnd}:${o.maxCellChars}:${o.display}`
   const handle = {
@@ -158,6 +158,26 @@ describe('grid data', () => {
     expect(past.data.plan(range(0, 30, 70, 80), 10_000)).toEqual([tileKey(0, 2), tileKey(0, 1)])
     past.data.also = undefined
     expect(past.data.plan(range(0, 30, 70, 80), 10_000)).toEqual([tileKey(0, 2)])
+  })
+  it('reads a one-row comparison\'s previous values with the columns in view, and none in two rows', async () => {
+    // 40 pairs: data 0-39, previous values 40-79, then the marker, row numbers and tone (80-83), in tiles of 32 columns.
+    const { data } = fixture(40, { value: 0 }, { tone: 83, suffix: 80, previous: 40 })
+    // Columns 0-9 are in tile 0, whose pairs' previous values (40-71) are in tiles 1 and 2; the suffix is in tile 2.
+    expect(data.plan(range(0, 30, 0, 9), 10_000)).toEqual([tileKey(0, 0), tileKey(0, 2), tileKey(0, 1)])
+    // Columns 32-39 (tile 1): previous values 72-79, in tile 2 with the suffix.
+    expect(data.plan(range(0, 30, 33, 39), 10_000)).toEqual([tileKey(0, 1), tileKey(0, 2)])
+    // The active cell out of view brings its previous values too.
+    const reads = fixture(40, { value: 0 }, { tone: 83, suffix: 80, previous: 40 })
+    reads.data.ensure(range(0, 30, 0, 9), 10_000, 0, 30, { row: 5000, column: 35 })
+    // Four reads a frame: the active row's previous values come in the next.
+    expect(reads.reads.map(read => [read.first, read.o.colStart])).toEqual([[0, 0], [0, 64], [0, 32], [4992, 32]])
+    for (const read of reads.reads) read.resolve()
+    await reads.settle()
+    reads.data.ensure(range(0, 30, 0, 9), 10_000, 0, 30, { row: 5000, column: 35 })
+    expect(reads.reads.slice(4).map(read => [read.first, read.o.colStart])).toEqual([[4992, 64]])
+    // Two rows a change (no previous values): only the suffix.
+    const unified = fixture(40, { value: 0 }, { tone: 43, suffix: 40 })
+    expect(unified.data.plan(range(0, 30, 0, 9), 10_000)).toEqual([tileKey(0, 0), tileKey(0, 1)])
   })
   it('reads the active cell\'s tile when the cell is out of view, after the view\'s own', () => {
     const { data, reads } = fixture()

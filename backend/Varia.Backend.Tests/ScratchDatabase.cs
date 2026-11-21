@@ -571,8 +571,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return SsisReference;
     }
 
-    /// <summary>Creates the empty, marked second table designer database, case- and accent-insensitive.</summary>
-    public Task<string> CreateDesignerOddAsync() => CreateMarkedAsync(DesignerOdd, "Latin1_General_100_CI_AI");
+    /// <summary>Creates the empty, marked second table designer database, case- and accent-insensitive with Turkish casing (I and ı, İ and i).</summary>
+    public Task<string> CreateDesignerOddAsync() => CreateMarkedAsync(DesignerOdd, "Turkish_100_CI_AI");
 
     /// <summary>For a bare scratch name: the low-privilege login (named like the database, so the sweep finds it), when the
     /// server accepts SQL logins; false when it accepts Windows logins only.</summary>

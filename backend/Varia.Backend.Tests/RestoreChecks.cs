@@ -255,14 +255,16 @@ internal static class RestoreChecks
         var chain = new List<RestorePlanSetDto> { Set("abcdef00-0000-0000-0000-000000000000", "full", 1, path), Set("1:2", "log", 2, path) };
         ActionArgs Script(RestoreOptionsDto? restore, string name = "Sales", DatabaseIdentityDto? identity = null, string action = "restore") =>
             new(action, Id(), Id(), new ObjectRefDto("database", Name: name), Identity: identity, Restore: restore);
-        var good = Options(chain);
+        var good = Options([chain[0] with { Guid = "abcdef00-0000-0000-0000-000000000000" }, chain[1] with { Guid = "abcdef00-0000-0000-0000-000000000001" }]);
         var scriptInvalid = new (string Name, ActionArgs Args)[]
         {
             ("no options", Script(null)), ("master", Script(good, "master")), ("msdb", Script(good, "msdb")), ("model", Script(good, "model")), ("tempdb", Script(good, "tempdb")),
             ("MSDB", Script(good, "MSDB")), ("Master", Script(good, "Master")), ("Model", Script(good, "Model")), ("TempDB", Script(good, "TempDB")),
             ("a log first", Script(Options([chain[1]]))), ("two fulls", Script(Options([chain[0], chain[0] with { Id = "1:3" }]))), ("a differential third", Script(Options([.. chain, Set("2:1", "differential", 1, path)]))),
             ("a set twice", Script(Options([chain[0], chain[1], chain[1]]))), ("a file set", Script(Options([chain[0], Set("2:1", "file", 1, path)]))),
-            ("a bad set id", Script(Options([chain[0] with { Id = "x" }]))), ("position 0", Script(Options([chain[0] with { File = 0 }]))), ("no devices", Script(Options([chain[0] with { Devices = [] }]))),
+            ("a bad set id", Script(Options([chain[0] with { Id = "x" }]))), ("an upper-case set GUID", Script(Options([chain[0] with { Guid = "ABCDEF00-0000-0000-0000-000000000000" }, chain[1]]))),
+            ("a set GUID that is no GUID", Script(Options([chain[0] with { Guid = "1:1" }, chain[1]]))), ("a 37-unit set GUID", Script(Options([chain[0] with { Guid = "abcdef00-0000-0000-0000-0000000000000" }, chain[1]]))),
+            ("position 0", Script(Options([chain[0] with { File = 0 }]))), ("no devices", Script(Options([chain[0] with { Devices = [] }]))),
             ("STOPAT on a full", Script(Options([chain[0]], stopAt: "2026-10-29T21:05:43"))), ("STOPAT with a fraction", Script(Options(chain, stopAt: "2026-10-29T21:05:43.5"))),
             ("standby without a file", Script(Options(chain, recovery: "standby"))), ("a file without standby", Script(Options(chain, standby: path))), ("an unknown recovery", Script(Options(chain, recovery: "online"))),
             ("keep replication left restoring", Script(Options(chain, recovery: "norecovery", keep: true))), ("a move twice", Script(Options(chain, moves: [new("a", "C:\\a.mdf"), new("a", "C:\\b.mdf")]))),
