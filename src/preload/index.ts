@@ -171,6 +171,7 @@ const api: VariaApi = {
   },
   checkSqlFiles: () => ipcRenderer.invoke('varia:files-check'),
   reloadSqlFile: fileId => ipcRenderer.invoke('varia:files-reload', fileId),
+  keepSqlFile: fileId => ipcRenderer.invoke('varia:files-keep', fileId),
   confirmReload: prompt => ipcRenderer.invoke('varia:confirm-reload', prompt),
   recentFiles: () => ipcRenderer.invoke('varia:recent-files'),
   openRecentFile: id => ipcRenderer.invoke('varia:recent-files-open', id),

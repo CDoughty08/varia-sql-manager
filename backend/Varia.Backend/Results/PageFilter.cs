@@ -121,6 +121,10 @@ internal sealed class PageFilter
         var chars = new char[256];
         var folded = new char[256];
         long bytes = 64 + 8L * count;
+        // What no filter of the page can go below: its header and each built column's characters (gram filters can be left
+        // out). Past the cap, there is no filter, so no cell is read and no fold awaited for one.
+        var floor = bytes;
+        if (floor > maxBytes) return null;
         var any = false;
         for (var c = 0; c < count; c++)
         {
@@ -187,6 +191,7 @@ internal sealed class PageFilter
                     Set(scratch, BuildWords * 64 - 1, gram);
                 }
             }
+            CellsRead += view.Rows;
             if (!vouched) continue;
             var words = BuildWords;
             if (!direct)
@@ -201,6 +206,8 @@ internal sealed class PageFilter
             var bits = Shrink(scratch, words);
             built[c] = new Column(space, fold, n, ascii0, ascii1, other, truncated, bits);
             bytes += ColumnBytes + (bits is null ? 0 : GramBytes(bits));
+            floor += ColumnBytes;
+            if (floor > maxBytes) return null;
             any = true;
         }
         if (!any) return null;
@@ -218,6 +225,9 @@ internal sealed class PageFilter
     }
 
     private const int ColumnBytes = 72;
+
+    /// <summary>Rows of the columns the calling thread's builds have read, for the checks.</summary>
+    [ThreadStatic] internal static long CellsRead;
     private static long GramBytes(ulong[] bits) => 24 + 8L * bits.Length;
 
     /// <summary>Whether two filters hold the same, for the checks.</summary>
