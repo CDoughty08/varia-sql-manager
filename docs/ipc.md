@@ -782,6 +782,10 @@ server changes, or it is lost.
   SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
   SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;`. A script's own SET statements then persist in the session. A
   session whose prologue fails is closed, and the next execution opens a new one.
+- **Database.** When `database` differs from the session's, the backend changes it before the first batch. A session
+  with `SET NOEXEC`, `PARSEONLY`, `FMTONLY` or `SHOWPLAN_*` on compiles that `USE` without running it, so when SqlClient's
+  catalog is unchanged the server confirms it (`DB_ID() = DB_ID(@database)`); when it does not, nothing runs and the result is
+  `failed` (batch 0) with `database` still the session's and a message naming the options that cause this.
 - **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
   `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
@@ -1568,7 +1572,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Find Next) into results of eleven collations, in base order, through a sort and a filter, packed and not, dense and
   one cell a row, and while a result loads, and compares every answer with a search of every row; breaking any rule
   above fails it. The value search narrows its distinct values the same way from the last search's marks, which its
-  snapshot already charges.
+  snapshot already charges; over a packed result it reads them in the row order its first search kept, so a key that
+  keeps most values costs no more than a search of every value.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a

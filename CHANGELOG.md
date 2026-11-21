@@ -54,6 +54,8 @@
 
 ### Fixes
 
+- **A query never runs in the wrong database:** With `SET NOEXEC`, `PARSEONLY` or `FMTONLY` left on in a query tab, choosing another database and executing a script that turned the option off ran it in the previous database, because SQL Server skipped the database change \(`SHOWPLAN` skips it too\)\. Varia now checks the change took effect; if not, it runs nothing and names the options that cause this\.
+- **Restore checks it is restoring the backups you reviewed:** Restore Database and Restore Files and Filegroups now check, before the run and again right before each backup set's RESTORE, that the set is the one the plan was made from \(its backup set GUID\), not just a backup of the same kind at the same position\. If a job overwrote a backup file after it was read, the restore stops at that set and asks you to read the backups again\.
 - **Empty text is not zero in a comparison:** Comparing a number column with a text column of the same name no longer treats empty text, a lone `-` or `.`, or other text that is not a number as 0 when the number is in the old result; the result is the same whichever way round you compare\. Trailing spaces after a number are underlined, or changed with Exact text, as in text\.
 - **Save keeps a new connection:** Saving a connection that has never connected no longer loses it\. It stays in History's new Saved group until it connects\.
 - **Escape always closes Connect:** Clicking Save, a History row's star or Remove, Add favorite, Register server or a blank part of the Connect dialog no longer leaves the keyboard outside it, so Escape and Tab keep working without tabbing back in\.

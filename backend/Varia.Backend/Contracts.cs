@@ -517,7 +517,7 @@ internal sealed record RestoreSourceDto(string Kind, string? Database = null, Li
 /// where the recovery fork changed inside the set (FirstForkGuid ≠ ForkGuid); FamilyGuid the database's family across restores.</summary>
 internal sealed record BackupSetDto(string Id, string Name, string Type, string Server, string Database, int Position, string FirstLsn, string LastLsn, string CheckpointLsn,
     string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
-    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
+    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null, string? BackupSetGuid = null);
 /// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
 /// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
@@ -531,7 +531,9 @@ internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<str
 /// recovery, norecovery or standby (with StandbyFile); StopAt the server's local yyyy-MM-ddTHH:mm:ss on the last log.</summary>
 internal sealed record RestoreOptionsDto(List<RestorePlanSetDto> Sets, List<RestoreMoveDto> Relocate, bool Replace, bool KeepReplication, bool RestrictedUser, string Recovery,
     bool CloseConnections, string? StopAt = null, string? StandbyFile = null, RestoreTailLogDto? TailLog = null);
-internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null);
+/// <summary>One set of a restore plan. Guid is the BackupSetGUID the plan was reviewed against (null: the header had none); the run
+/// refuses a set at that position whose GUID differs, so a backup file overwritten after review never restores in its place.</summary>
+internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null, string? Guid = null);
 internal sealed record RestoreMoveDto(string Logical, string Physical);
 internal sealed record RestoreTailLogDto(string File, bool NoRecovery);
 /// <summary>Attach Databases' Add: the primary data file to read (a server path of at most 260 UTF-16 units).</summary>

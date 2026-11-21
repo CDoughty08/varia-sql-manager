@@ -213,7 +213,7 @@ internal static partial class RestoreDescribe
                     Lsn(reader, 6), Lsn(reader, 7), Lsn(reader, 8), Lsn(reader, 9), reader.IsDBNull(10) ? "" : Time(reader.GetValue(10)), reader.IsDBNull(11) ? "" : Time(reader.GetValue(11)),
                     reader.IsDBNull(12) ? 0 : Long(reader.GetValue(12)), Text(reader, 13), !reader.IsDBNull(15) && reader.GetBoolean(15), !reader.IsDBNull(16) && reader.GetBoolean(16), [],
                     reader.IsDBNull(14) ? null : Time(reader.GetValue(14)), reader.IsDBNull(17) ? null : reader.GetString(17), ForkId(reader, 18), ForkId(reader, 19),
-                    ForkPointLsn: reader.IsDBNull(22) ? null : Lsn(reader, 22), FamilyGuid: ForkId(reader, 23));
+                    ForkPointLsn: reader.IsDBNull(22) ? null : Lsn(reader, 22), FamilyGuid: ForkId(reader, 23), BackupSetGuid: reader.GetGuid(0).ToString("D"));
                 rows.Add((set, reader.GetInt32(20), reader.IsDBNull(21) ? 1 : Convert.ToInt32(reader.GetValue(21), CultureInfo.InvariantCulture)));
             }
             await reader.NextResultAsync(token);
@@ -250,7 +250,7 @@ internal static partial class RestoreDescribe
             Last: Column("LastLSN"), Checkpoint: Column("CheckpointLSN"), Base: Column("DatabaseBackupLSN"), Start: Column("BackupStartDate"), Finish: Column("BackupFinishDate"),
             Size: Column("BackupSize"), User: Column("UserName"), Expiration: Column("ExpirationDate"), CopyOnly: Column("IsCopyOnly"), Damaged: Column("IsDamaged"),
             Model: Column("RecoveryModel"), FirstFork: Column("FirstRecoveryForkID"), Fork: Column("RecoveryForkID"), Snapshot: Column("IsSnapshot"), ForkPoint: Column("ForkPointLSN"),
-            Family: Column("FamilyGUID"));
+            Family: Column("FamilyGUID"), Guid: Column("BackupSetGUID"));
         while (await reader.ReadAsync(token))
         {
             if (SetType(Text(reader, c.Type)) is not { } type || (!reader.IsDBNull(c.Snapshot) && Convert.ToBoolean(reader.GetValue(c.Snapshot), CultureInfo.InvariantCulture))) continue;
@@ -261,7 +261,7 @@ internal static partial class RestoreDescribe
                 !reader.IsDBNull(c.CopyOnly) && Convert.ToBoolean(reader.GetValue(c.CopyOnly), CultureInfo.InvariantCulture),
                 !reader.IsDBNull(c.Damaged) && Convert.ToBoolean(reader.GetValue(c.Damaged), CultureInfo.InvariantCulture), paths,
                 reader.IsDBNull(c.Expiration) ? null : Time(reader.GetValue(c.Expiration)), reader.IsDBNull(c.Model) ? null : Text(reader, c.Model),
-                ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem, reader.IsDBNull(c.ForkPoint) ? null : Lsn(reader, c.ForkPoint), ForkId(reader, c.Family)));
+                ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem, reader.IsDBNull(c.ForkPoint) ? null : Lsn(reader, c.ForkPoint), ForkId(reader, c.Family), ForkId(reader, c.Guid)));
         }
         return sets;
     }
