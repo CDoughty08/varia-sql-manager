@@ -73,17 +73,38 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
     /// <paramref name="built"/> is told when this call built them. Null once it is dropped, or when the budget cannot take them:
     /// the lookup then scans the table.</summary>
+    private int lookupBuilds;
+
+    /// <summary>How many times this read's lookup arrays were built (a check's view: at most once, and never when refused).</summary>
+    internal int LookupBuilds => Volatile.Read(ref lookupBuilds);
+
     public TableLookup? Lookup(IndexBudget budget, Action? built = null)
     {
         if (Volatile.Read(ref lookup) is { } held) return held;
-        // Built outside the gate, which Put, Keep and Dispose take, and charged only once built; a concurrent build that loses
-        // the race is dropped.
-        var made = TableLookup.Build(Table);
+        lock (gate)
+            if (lookup is not null || dropped) return lookup;
+        // Charged before it is built, so a budget that refuses costs no build (the caller scans instead), and built outside the
+        // gate, which Put, Keep and Dispose take; a build that throws, or loses the race to another or to a drop, gives it back.
+        var bytes = TableLookup.BytesFor(Table);
+        if (!budget.TryTake(bytes)) return null;
+        TableLookup made;
+        try
+        {
+            made = TableLookup.Build(Table);
+            Interlocked.Increment(ref lookupBuilds);
+        }
+        catch
+        {
+            budget.Release(bytes);
+            throw;
+        }
         lock (gate)
         {
-            if (lookup is not null || dropped) return lookup;
-            var bytes = TableLookup.BytesFor(Table);
-            if (!budget.TryTake(bytes)) return null;
+            if (lookup is not null || dropped)
+            {
+                budget.Release(bytes);
+                return lookup;
+            }
             lookupBytes = bytes;
             Volatile.Write(ref lookup, made);
         }
@@ -420,8 +441,6 @@ internal sealed class SearchMatcher
     internal static bool Word(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
 }
 
-/// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
-/// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
 /// <summary>A process-wide sequence that orders reads and build outcomes for the lookup; the wall clock can step back.</summary>
 internal static class IndexClock
 {
@@ -430,6 +449,8 @@ internal static class IndexClock
     public static long Next() => Interlocked.Increment(ref now);
 }
 
+/// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
+/// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
 internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit,
     bool Fuzzy = false);
 

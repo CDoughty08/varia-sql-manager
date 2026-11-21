@@ -139,7 +139,7 @@ internal static class SearchLookupChecks
         check(bytes == 4 * (table.Count + 1) && index.LookupBytes == bytes && budget.Used == before + bytes,
             "the first lookup charges its arrays to the budget: 4 bytes per entry and per foreign key to a held table");
         lookup.Objects("Sales", "dbo", "Customers");
-        check(budget.Used == before + bytes && ReferenceEquals(index.Lookup(budget), index.Lookup(budget)), "later lookups reuse the arrays");
+        check(budget.Used == before + bytes && ReferenceEquals(index.Lookup(budget), index.Lookup(budget)) && index.LookupBuilds == 1, "later lookups reuse the arrays, built once");
         var detail = IndexMemoryReport.Detail(budget, pool, [connection], []);
         check(detail.RecordBytes == index.Bytes + bytes && detail.RecordBytes + detail.NameBytes + detail.DefinitionBytes == budget.Used && detail.ReadingBytes == 0,
             "the memory report counts the lookup arrays with the records, so nothing shows as reading");
@@ -153,7 +153,7 @@ internal static class SearchLookupChecks
         // A replacement read gives back the old read's arrays with it; a dropped read builds none.
         var again = (await new DatabaseReader("Sales", new ObjectIndexLimits(), pool).ReadAsync(SearchDetailChecks.Fixture(caseSensitive: true), false, CancellationToken.None))!;
         connection.Put(again);
-        check(index.LookupBytes == 0 && index.Lookup(budget) is null && budget.Used == before, "a replaced read gives back its arrays and builds no more: " + budget.Used + " vs " + before);
+        check(index.LookupBytes == 0 && index.Lookup(budget) is null && index.Lookup(budget) is null && index.LookupBuilds == 1 && budget.Used == before, "a replaced read gives back its arrays and builds no more: " + budget.Used + " vs " + before);
         connection.Dispose();
         check(budget.Used == 0, "and the connection gives back everything");
 
@@ -163,9 +163,9 @@ internal static class SearchLookupChecks
         tight.Budget.Force(spare - 3);
         var scanned = new IndexLookup(tight.Connection, tight.Budget, false, Idle);
         var orders = scanned.Objects("Sales", "dbo", "Orders").Value.Single();
-        check(tight.Index.LookupBytes == 0 && tight.Index.Lookup(tight.Budget) is null && scanned.Columns(orders).Count == 9 && scanned.ForeignKeys(orders).Count == 2
+        check(tight.Index.LookupBytes == 0 && tight.Index.Lookup(tight.Budget) is null && tight.Index.LookupBuilds == 0 && scanned.Columns(orders).Count == 9 && scanned.ForeignKeys(orders).Count == 2
             && scanned.ReferencedBy(scanned.Objects("Sales", "dbo", "Customers").Value.Single()).Count == 1,
-            "a budget that cannot take the arrays builds none, and lookups answer by scanning");
+            "a budget that cannot take the arrays builds none (not even to throw away), and lookups answer by scanning");
         tight.Budget.Release(spare - 3);
         tight.Connection.Dispose();
         check(tight.Budget.Used == 0, "nothing is charged for arrays the budget refused");
