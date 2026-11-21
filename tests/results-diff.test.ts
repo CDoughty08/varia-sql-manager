@@ -76,7 +76,7 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(first.diff).toHaveBeenCalledWith(second, { exact: false, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
     expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
@@ -101,7 +101,7 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
     await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
-    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, layout: 'entry', signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
     expect(sets()[2]).toMatchObject({ number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
     const info = compare.getSnapshot().info.get(setKey(sets()[2].descriptor))!
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
@@ -197,10 +197,14 @@ describe('result diffs', () => {
     expect(marks?.selector).toBe('.rg-c:is(.is-hit, .is-chg) .rg-ws, :where(.rg-row:is(.hl, .tone-added, .tone-removed)) .rg-c .rg-ws')
     expect(css.indexOf('.rg-c:is(.is-hit, .is-chg) .rg-ws')).toBeLessThan(css.indexOf('.rg-c.is-sel .rg-ws { color: inherit; }'))
     expect(screen.filter(rule => /is-null/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
-      .toEqual(['.rg-c.is-null', '.rg-c.is-sel.is-null'])
+      .toEqual(['.rg-c.is-null', '.rg-c.is-sel.is-null', '.rg-row:is(.tone-changed, .tone-changedOld, .tone-changedNew) .rg-c:not(.is-chg, .is-sel, .is-null, .is-link, .is-err)'])
+    // The context colour of a changed entry's unchanged cells leaves NULL, links, read errors and the selection their own.
+    expect(value('.rg-row:is(.tone-changed, .tone-changedOld, .tone-changedNew) .rg-c:not(.is-chg, .is-sel, .is-null, .is-link, .is-err)', 'color')).toBe('var(--varia-resultsGrid-diffContextForeground)')
     // A selected cell keeps its text colour: the selection is a tint, so an opaque fill's text colour would not fit it.
     expect(screen.filter(rule => /\.is-sel\b/.test(rule.selector) && rule.declarations.some(item => item.property === 'color')).map(rule => rule.selector).sort())
-      .toEqual(['.rg-c.is-sel .rg-ws', '.rg-c.is-sel.is-null', '.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after'])
+      .toEqual(['.rg-c.is-sel .rg-old, .rg-c.is-sel .rg-arrow', '.rg-c.is-sel .rg-ws', '.rg-c.is-sel.is-null', '.rg-c.is-trunc:is(.is-sel, .is-hit, .is-chg)::after, .rg-row:is(.hl, .tone-added, .tone-removed) .rg-c.is-trunc::after',
+        '.rg-row:is(.tone-changed, .tone-changedOld, .tone-changedNew) .rg-c:not(.is-chg, .is-sel, .is-null, .is-link, .is-err)'])
+    expect(value('.rg-c.is-sel .rg-old, .rg-c.is-sel .rg-arrow', 'color')).toBe('inherit')
     // The old half's strikethrough sets only the line, keeping a link's or read error's underline beside it.
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration')).toBeUndefined()
     expect(value('.rg-row.tone-changedOld .rg-c.is-chg', 'text-decoration-line')).toBe('line-through')
@@ -263,7 +267,7 @@ describe('result diffs', () => {
   })
 
   it('says when values were compared by their stored prefix', () => {
-    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto' as const, columns: ['Id'] }, layout: 'unified' as const, pairs: 1, columnChanges: [], exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show. Filters and sorts on the inputs were not applied.')
   })
 

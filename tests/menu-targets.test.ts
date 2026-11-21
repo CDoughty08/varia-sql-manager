@@ -19,7 +19,7 @@ describe('menu targets', () => {
       { kind: 'resultsTools', tabId: 't6' }, { kind: 'peekProperties', text: 'x' }, { kind: 'planOutline' }, { kind: 'planProperties', facts: [] }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeNameless: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeNameless: false, explorerNodePeekable: false, explorerNodeDependencies: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, explorerProvider: '', agentRole: '', outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false, outputGridComparison: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true, explorerNodeDependencies: true, explorerProvider: 'sqlserver' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }, none, none, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -243,10 +243,22 @@ describe('menu target service', () => {
     // A grid drawn transposed says so, and its menu's commands read that grid's own orientation as the toggle's state.
     grid.setAttribute('data-result-kind', 'rows')
     expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('transposed')
-    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: false })
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: false, resultsGridComparison: false, comparisonInputsOpen: false })
     grid.setAttribute('data-orientation', 'transposed')
     expect(service.targetFor(dom(grid))!.target).toMatchObject({ transposed: true })
-    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: true })
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: true, resultsGridComparison: false, comparisonInputsOpen: false })
+    grid.removeAttribute('data-orientation')
+    // A comparison's grid is one for its menu's commands and target keys, with its inputs open only while the grid says so.
+    grid.setAttribute('data-result-kind', 'diff')
+    expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridComparison).toBe(true)
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: false, resultsGridComparison: true, comparisonInputsOpen: false })
+    grid.setAttribute('data-comparison-inputs', 'open')
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: false, resultsGridComparison: true, comparisonInputsOpen: true })
+    grid.setAttribute('data-comparison-inputs', 'closed')
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toMatchObject({ comparisonInputsOpen: false })
+    grid.removeAttribute('data-comparison-inputs')
+    grid.setAttribute('data-result-kind', 'rows')
+    grid.setAttribute('data-orientation', 'transposed')
     // A grid drawn bare (Peek's rows) says so, which takes Pivot, Compare and the close commands out of its menu.
     expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('bare')
     expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridBare).toBe(false)

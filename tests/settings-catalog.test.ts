@@ -159,7 +159,7 @@ describe('settings catalogue', () => {
       for (const section of page.sections!) if (section.description) expect(section.description, `${page.id} › ${section.label}`).toMatch(/^[A-Z].*\.$/)
     }
     // The owner's example: Results to Grid as four sections, its execution plan rows together.
-    expect(pageById('queryResults.sqlServer.grid')?.sections?.map(section => section.label)).toEqual(['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan'])
+    expect(pageById('queryResults.sqlServer.grid')?.sections?.map(section => section.label)).toEqual(['Grid display', 'Copy and save', 'Limits and memory', 'Execution plan', 'Comparisons'])
     expect(settingDefs.filter(def => def.group === 'Execution plan').map(def => def.key)).toEqual(settingDefs.filter(def => def.key.startsWith('queryResults.plan.')).map(def => def.key))
   })
   it('gives a short label leaning on its section a full title, and keeps units and hints out of labels', () => {

@@ -64,8 +64,10 @@ let nextGridId = 1
 /** What a screen reader hears on a highlighted row's header. */
 const highlightLabel = (highlight: number): string => 'Highlighted ' + highlightColors[highlight - 1]
 
-/** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of `text` alone. */
-interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
+/** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of
+ *  `text` alone; `old`, a one-row comparison's changed cell's previous value as drawn before the new one (null for NULL,
+ *  undefined for none: an unchanged cell, or its tile not read yet). */
+interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; old: string | null | undefined; oldBits: number; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
 /**
  * A pooled row. `header` is its row header for screen readers, inside the row; `mark` draws the number in the sticky
  * row-number column (one composited layer for every row, where a sticky header in each row made a layer per row). The
@@ -186,6 +188,9 @@ export interface GridViewOptions {
   toneLabel?(tone: LiveTone): string | undefined
   /** A comparison's inputs as its gutter names them (diff-gutter.ts), and the larger one's row count. */
   readonly diffSides?: DiffSides
+  /** A one-row comparison's pairs that have changed cells (its answer's `columnChanges`): only their widths make room for
+   *  the previous value beside the new one. */
+  readonly diffChanged?: readonly boolean[]
   /** The columns the grid is sorted by, in order; their headers show it. */
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
@@ -714,7 +719,9 @@ export class GridView {
     return rowBytes && profile ? new RowSizes({ getSnapshot: () => handle.getSnapshot(), rowBytes: rowBytes.bind(handle), profile: profile.bind(handle) }, () => this.schedule()) : undefined
   }
   private dataFor(handle: GridSource): GridData {
-    return new GridData({ handle, columns: this.columns, tone: this.tone, suffix: this.columns, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
+    // A comparison's suffix read with each row tile starts at its marker; one row per entry, the previous values of the
+    // columns in view are read beside them.
+    return new GridData({ handle, columns: this.columns, tone: this.tone, suffix: this.diff ? this.diff.mark : this.columns, ...this.diff && this.diff.old >= 0 ? { previous: this.diff.old } : {}, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
     return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
@@ -1136,10 +1143,15 @@ export class GridView {
     this.fitting?.abort()
     const abort = this.fitting = new AbortController()
     const rows = this.rows(), top = Math.min(g.measureFitRows, rows), range = this.lastRange
-    const measures = top > 0 ? [this.handle.measure(0, top, column, column + 1, abort.signal)] : []
+    // A one-row comparison's changed column measures its previous values too: old → new shares the cell.
+    const old = this.previousOf(column)
+    const measure = (first: number, count: number) => old < 0 ? this.handle.measure(first, count, column, column + 1, abort.signal)
+      : Promise.all([this.handle.measure(first, count, column, column + 1, abort.signal), this.handle.measure(first, count, old, old + 1, abort.signal)])
+        .then(([value, previous]) => ({ rows: value.rows, widths: Uint16Array.of(withPrevious(value.widths[0] ?? 0, previous.widths[0] ?? 0)) }))
+    const measures = top > 0 ? [measure(0, top)] : []
     if (range && range.lastRow >= top) {
       const first = Math.max(top, range.firstRow)
-      measures.push(this.handle.measure(first, range.lastRow - first + 1, column, column + 1, abort.signal))
+      measures.push(measure(first, range.lastRow - first + 1))
     }
     const done = () => { if (this.fitting === abort) this.fitting = undefined }
     Promise.all(measures).then(results => {
@@ -1344,7 +1356,7 @@ export class GridView {
     el.style.display = 'none'
     el.append(text)
     parent.append(el)
-    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', mode: 'none', marked: false, label: '', shown: false, left: Number.NaN, width: -1 }
+    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', old: undefined, oldBits: 0, mode: 'none', marked: false, label: '', shown: false, left: Number.NaN, width: -1 }
     this.slots.set(el, { cell, ...row ? { row } : {} })
     return cell
   }
@@ -1408,12 +1420,12 @@ export class GridView {
     if (this.rotated) { this.measureShared(rows); return }
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
-        this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), widths[column] ?? 0, this.charWidth))
+        this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), withPrevious(widths[column] ?? 0, widths[this.previousOf(column)] ?? 0), this.charWidth))
       }
       state.sized = true
       this.schedule()
@@ -1426,6 +1438,18 @@ export class GridView {
       state.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
+  }
+
+  /** A one-row comparison's previous-value column of a pair that has changes, else -1. */
+  private previousOf(column: number): number {
+    return this.diff && this.diff.old >= 0 && this.o.diffChanged?.[column] ? this.diff.old + column : -1
+  }
+  /** Where the first measure's columns end: past the previous values of the pairs that have changes, so both runs of a
+   *  changed cell are measured. */
+  private measuredEnd(): number {
+    let end = this.columns
+    for (let column = 0; column < this.columns; column++) { const old = this.previousOf(column); if (old >= 0) end = Math.max(end, old + 1) }
+    return end
   }
 
   /** Transposed: the first frame after rows arrive sets the shared width from the widest value of their first 128 rows. */
@@ -1695,10 +1719,27 @@ export class GridView {
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
       const toned = active && !this.rotated ? this.activeTone(active.row) : undefined
-      const diff = bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
-      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned ? ', ' + toned : '')
+      // A comparison's changed cell names its column and its values: one row per entry "Price, changed from 5120.00 to
+      // 4980.00", in two rows "Price, old value 5120.00" on the − half and "Price, new value 4980.00" on the + half.
+      const changedName = bits & CHG && active ? this.changedName(activeCell, active.row, active.column) : undefined
+      const diff = changedName ? '' : bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
+      const label = bits & LOAD ? 'Loading' : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
+        + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned && !changedName ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
+  }
+
+  /** A comparison's changed cell's accessible name, or undefined when the cell is not one (or its previous value is not
+   *  read yet). A NULL is named NULL, a value that could not be read says so, and a cut-off previous value is marked. */
+  private changedName(cell: CellSlot, row: number, column: number): string | undefined {
+    if (!this.diff) return undefined
+    const name = columnTitle(this.descriptor.columns[column]?.name ?? '')
+    const said = (value: string | null, bits: number) => bits & ERR ? 'a value that could not be read' : (value === null ? 'NULL' : displayText(value)) + (bits & TRUNC ? ' (truncated)' : '')
+    const value = said(cell.bits & (NULL | ERR) ? null : cell.value, cell.bits & ERR)
+    if (cell.old !== undefined) return `${name}, changed from ${said(cell.old, cell.oldBits)} to ${value}`
+    const slot = this.pinSlot.shown && this.pinSlot.row === row ? this.pinSlot : this.rowSlots.find(item => item.shown && item.row === row)
+    const tone = slot && slot.tone ? rowTones[slot.tone - 1] : undefined
+    return tone === 'changedOld' ? `${name}, old value ${value}` : tone === 'changedNew' ? `${name}, new value ${value}` : undefined
   }
 
   /** The tone label of the active row (the toneLabel option), from the slot that painted it. */
@@ -1782,14 +1823,16 @@ export class GridView {
     slot.highlight = highlight
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
+    // One row per entry, a changed entry's changed cells draw their previous value before the new one (old → new).
+    const old = this.diff && this.diff.old >= 0 && rowTones[tone - 1] === 'changed' ? this.diff.old : -1
     for (let column = range.firstColumn; column <= range.lastColumn; column++) {
       const cell = slot.cells[column % perRow]
-      this.paintCell(cell, row, column, ranges, active, tile, columnsMoved, slot.cellMarks)
+      this.paintCell(cell, row, column, ranges, active, tile, columnsMoved, slot.cellMarks, old)
       if (cell.bits & ACT) activeCell = cell
     }
     for (const cell of slot.cells) if (cell.column < range.firstColumn || cell.column > range.lastColumn) this.hideCell(cell)
     if (active && active.row === row && (active.column < range.firstColumn || active.column > range.lastColumn)) {
-      this.paintCell(slot.pin, row, active.column, ranges, active, tile, columnsMoved, slot.cellMarks)
+      this.paintCell(slot.pin, row, active.column, ranges, active, tile, columnsMoved, slot.cellMarks, old)
       activeCell = slot.pin
     } else this.hideCell(slot.pin)
     return activeCell
@@ -1870,6 +1913,15 @@ export class GridView {
     return this.hiddenText(row, this.tone, tile) ?? ''
   }
 
+  /** A previous-value cell's text (null for NULL or a value that could not be read) and its ERR and TRUNC bits; undefined
+   *  while its tile is not read. */
+  private previousCell(row: number, column: number, tile: (row: number, column: number) => RowWindow | null): { readonly text: string | null; readonly bits: number } | undefined {
+    const window = tile(row, column)
+    if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return undefined
+    const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart, flags = window.flags[index]
+    return flags & (FLAG_NULL | FLAG_ERROR) ? { text: null, bits: flags & FLAG_ERROR ? ERR : 0 } : { text: window.text[index], bits: flags & FLAG_TRUNCATED ? TRUNC : 0 }
+  }
+
   /** A hidden suffix cell's text: null for NULL, undefined while its tile is not read. */
   private hiddenText(row: number, column: number, tile: (row: number, column: number) => RowWindow | null): string | null | undefined {
     const window = tile(row, column)
@@ -1896,7 +1948,7 @@ export class GridView {
   }
 
   private paintCell(cell: CellSlot, row: number, column: number, ranges: readonly CellRange[], active: { row: number; column: number } | undefined,
-    tile: (row: number, column: number) => RowWindow | null, columnsMoved: boolean, cellMarks?: ReadonlyMap<number, number>): void {
+    tile: (row: number, column: number) => RowWindow | null, columnsMoved: boolean, cellMarks?: ReadonlyMap<number, number>, old = -1): void {
     if (cell.column !== column || columnsMoved) {
       if (cell.column !== column) { cell.column = column; cell.el.setAttribute('aria-colindex', String(column + 2)) }
       const left = this.rowHeader + this.layout.xOf(column), width = this.layout.width(column)
@@ -1929,11 +1981,17 @@ export class GridView {
       cell.bits = bits
       cell.el.className = classes[bits]
     }
-    if (value !== cell.value || this.whitespace !== cell.mode) {
+    // A changed cell of a one-row comparison: its previous value, once its tile is read (until then the new value alone).
+    const read = old >= 0 && bits & CHG && !(bits & LOAD) ? this.previousCell(sourceRow, old + sourceColumn, tile) : undefined
+    const previous = read === undefined ? undefined : read.text, previousBits = read?.bits ?? 0
+    if (value !== cell.value || this.whitespace !== cell.mode || previous !== cell.old || previousBits !== cell.oldBits) {
       cell.value = value
       cell.mode = this.whitespace
+      cell.old = previous
+      cell.oldBits = previousBits
       const runs = bits & (NULL | ERR | LOAD) ? undefined : whitespaceRuns(value, this.whitespace)
-      if (runs) this.writeMarked(cell, runs)
+      if (read !== undefined) this.writeChange(cell, read, displayText(value))
+      else if (runs) this.writeMarked(cell, runs)
       else {
         if (cell.marked) { cell.marked = false; cell.el.replaceChildren(cell.text) }
         // Tiles hold the value's own text; a cell shows it on one line, as SSMS does (line breaks and tabs as spaces).
@@ -1958,6 +2016,27 @@ export class GridView {
       span.append(text)
       return span
     }))
+  }
+
+  /**
+   * A one-row comparison's changed cell: the previous value (removed colour, struck through, cut first with an ellipsis when
+   * the cell is narrow), an arrow, then the new value (bold), each a Text node in its own span. The arrow is hidden from
+   * screen readers, which hear "changed from … to …" in the active cell's label.
+   */
+  private writeChange(cell: CellSlot, previous: { readonly text: string | null; readonly bits: number }, value: string): void {
+    const doc = cell.el.ownerDocument
+    const run = (className: string, text: string, hidden = false) => {
+      const span = doc.createElement('span'), node = doc.createTextNode('')
+      node.nodeValue = text
+      span.className = className
+      if (hidden) span.setAttribute('aria-hidden', 'true')
+      span.append(node)
+      return span
+    }
+    cell.marked = true
+    // A previous value that could not be read draws as such a cell does (NULL, in the error colour).
+    const old = previous.bits & ERR ? 'rg-old is-err' : previous.text === null ? 'rg-old is-null' : 'rg-old'
+    cell.el.replaceChildren(run(old, previous.text === null ? 'NULL' : displayText(previous.text)), run('rg-arrow', '→', true), run('rg-new', value))
   }
 
   /** A slot out of use is hidden and forgets its position, so no stale row or column index stays in the DOM. */
@@ -2139,6 +2218,9 @@ export function cellMarksOf(text: string): ReadonlyMap<number, number> | undefin
   }
   return marks.size > 0 ? marks : undefined
 }
+
+/** A changed column's widest text in characters with room for its widest previous value and the arrow (" → ") beside it. */
+const withPrevious = (own: number, previous: number): number => previous > 0 ? own + previous + 3 : own
 
 /** A live table's hidden tone column: its last column, when that column's role is tone; else -1. */
 
