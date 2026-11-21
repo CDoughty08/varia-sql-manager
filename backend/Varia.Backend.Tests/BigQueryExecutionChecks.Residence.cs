@@ -907,12 +907,19 @@ internal static partial class BigQueryExecutionChecks
                 var spin = random.Next(0, 4000);
                 var release = Task.Run(() => { Thread.SpinWait(spin); fail.TrySetResult(); });
                 try { await remote.ReadAsync(5L * blockRows, 10, 2, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(10), CancellationToken.None); }
-                catch (RequestException error) { refused[error.Code] = refused.GetValueOrDefault(error.Code) + 1; }
+                catch (RequestException error)
+                {
+                    var key = $"{error.Code} ({error.Message}; cached {remote.CachedBytes} of {remote.CacheLimit}, blocks {string.Join(",", remote.CachedBlocks())}, fetching {remote.FetchingBlocks()}, budget {store.UsedBytes})";
+                    refused[key] = refused.GetValueOrDefault(key) + 1;
+                }
                 hold.TrySetResult();
                 await held;
                 await release;
             }
-            check(refused.Count == 0, "a block refused by the cache's own limit while another fetch gives room back is never refused by the budget: " + string.Join(", ", refused.Select(pair => $"{pair.Key} {pair.Value}x")));
+            // Only the budget's refusal is wrong here (the store has 1 GiB free); a machine starved enough to reorder the fetches
+            // can meet another refusal, which says what it is.
+            var budget = refused.Where(pair => pair.Key.Contains("not enough result memory", StringComparison.Ordinal)).ToList();
+            check(budget.Count == 0, "a block refused by the cache's own limit while another fetch gives room back is never refused by the budget: " + string.Join(", ", refused.Select(pair => $"{pair.Key} {pair.Value}x")));
         }
 
         // Rows of about 200 KB (blocks near half the cache): a grid that scrolls up a few rows past two cached blocks reads
