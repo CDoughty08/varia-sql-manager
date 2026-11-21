@@ -212,9 +212,10 @@ internal sealed partial class BigQueryService
     }
 
     /// <summary>
-    /// One <c>tabledata.list</c> page of a result's destination table (docs/bigquery.md, Block cache): free, and random access
+    /// One <c>tabledata.list</c> page of a result's destination table (docs/bigquery.md, Residence): free, and random access
     /// by <paramref name="startIndex"/>, then following <paramref name="pageToken"/>. Times are epoch microseconds, as
-    /// getQueryResults' are. Idempotent, so transport failures, 429 and 5xx are retried as other reads are.
+    /// getQueryResults' are. Idempotent, so transport failures and 5xx are retried as other reads are; a rate limit reaches
+    /// the caller at once (a block's fetch backs off on its own clock).
     /// </summary>
     internal Task<BigQueryPage> TableRowsAsync(BigQueryConnection connection, TableReference table, long? startIndex, int maxResults, string? pageToken, CancellationToken token) =>
         ReadAsync(t =>

@@ -556,7 +556,8 @@ export function searchCount(search: TabSearch, format: (n: number) => string): s
   if (!search.text) return ''
   if (search.mode === 'columns') return `${format(search.total)} of ${format(search.columns)} columns`
   if (search.status === 'failed') return 'Search failed'
-  if (search.total === 0) return search.status === 'searching' ? 'Searching…' : 'No matches'
+  // A windowed result left unsearched may hold matches: "No matches+" says the count is not the whole story.
+  if (search.total === 0) return search.status === 'searching' ? 'Searching…' : search.skipped ? 'No matches+' : 'No matches'
   const more = search.partial || search.skipped || search.status === 'searching' ? '+' : ''
   return `${search.current >= 0 ? format(search.current + 1) : '–'} of ${format(search.total)}${more}`
 }

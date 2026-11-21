@@ -84,7 +84,7 @@ export function nerdMetrics(detail: ResultMemoryDetail, name: (entry: ResultMemo
   const tiles: Tile[] = [
     { label: 'Compressed', ...logical > 0 ? { value: percent(packedLogical, logical), unit: '%' } : { value: dash }, note: 'of rows, by size' },
     { label: 'Ratio', ...isCompressed ? { value: ratio.toFixed(2), unit: '×' } : { value: dash }, note: codecNote },
-    { label: 'Saved', value: saved.value, unit: saved.unit, note: logical > 0 ? `${percent(givenBack, logical)}% of ${bytes(logical)}` : 'No rows held', ...givenBack > 0 ? { tone: 'saved' as const } : {} }
+    { label: 'Saved', value: saved.value, unit: saved.unit, note: logical > 0 ? `${percent(givenBack, logical)}% of ${bytes(logical)}` : window > 0 ? 'Only windowed results\' blocks held' : 'No rows held', ...givenBack > 0 ? { tone: 'saved' as const } : {} }
   ]
   // Both bars share one scale, so the lower one's shortfall is what compression gave back; the window cache adds to the
   // rows as read, so the lower bar (its parts plus what was given back) never overflows it.

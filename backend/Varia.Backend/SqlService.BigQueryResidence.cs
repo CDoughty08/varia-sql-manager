@@ -274,6 +274,9 @@ internal sealed partial class SqlService
     /// <summary>Checks only: called as a load is about to promote its set, after its checks.</summary>
     internal Action? LoadPromoting { get; set; }
 
+    /// <summary>Checks only: runs after a load finds its connection, before it registers.</summary>
+    internal Action? LoadRegistering { get; set; }
+
     private async Task<QueryResult> RemoteQueryAsync(RemoteQueryArgs args, RequestContext? context)
     {
         if (!Guid.TryParse(args.QueryId, out _) || args.ResultId == 0 || args.Kind != "load")
@@ -287,7 +290,14 @@ internal sealed partial class SqlService
         if (BudgetStopped(set.Budget) is { } stopped) throw stopped;
         using var cancellation = new CancellationTokenSource();
         var running = new RunningQuery(connection.Id, args.QueryId, cancellation);
+        LoadRegistering?.Invoke();
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        // A disconnect between finding the handle and registering cancelled nothing of this load's: refuse it, still windowed.
+        if (bigQuery.Find(connection.Id) != connection)
+        {
+            queries.TryRemove(new(args.QueryId, running));
+            throw new RequestException("NOT_CONNECTED", "The connection was closed.");
+        }
         // Promoted here, not inside the try below: a load that lost the race to another (two clicks, two windows) must not
         // switch the winner's set back to windowed on its way out.
         LoadPromoting?.Invoke();

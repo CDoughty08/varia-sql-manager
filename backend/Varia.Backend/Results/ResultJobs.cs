@@ -437,7 +437,7 @@ internal sealed class ResultJobs(ResultStore store)
     private ResultSetBuffer Lease(uint resultId)
     {
         var set = store.Find(resultId);
-        // A windowed result's Copy and Save stream from BigQuery (docs/bigquery.md, Windowed): not through the store's pages.
+        // A windowed result has no stored pages: Copy and Save wait until it is loaded into memory (docs/bigquery.md, Residence).
         if (set is { IsRemote: true }) throw SqlService.RemoteRefused();
         if (set is not null && set.TryLease())
         {

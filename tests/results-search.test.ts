@@ -311,6 +311,8 @@ describe('ResultsSearchService', () => {
     await answerAll()
     expect(search().skipped).toBeUndefined()
     expect(searchCount(search(), String)).toBe('1 of 1')
+    // With no match among the grids searched, the count still says one was not.
+    expect(searchCount({ ...search(), total: 0, current: -1, skipped: true }, String)).toBe('No matches+')
   })
 
   it('says a failure only when no grid could be searched, counts a loading grid as partial, and forgets a closed tab', async () => {

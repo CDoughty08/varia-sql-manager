@@ -77,7 +77,7 @@ internal sealed class RemoteExpiredException(Exception? inner = null) : Exceptio
 internal sealed class RemoteRetryException(Exception inner) : Exception("BigQuery's rate limit was reached.", inner);
 
 /// <summary>
-/// A windowed result (docs/bigquery.md, Windowed results): its rows stay in a remote table and are read in blocks sized by
+/// A windowed result (docs/bigquery.md, Residence): its rows stay in a remote table and are read in blocks sized by
 /// bytes (about <see cref="TargetBlockBytes"/> of display text, <see cref="MinBlockRows"/> to <see cref="MaxBlockRows"/>
 /// rows) into an LRU cache of whole pages, charged to the global budget up to its own limit
 /// (<see cref="ResultStore.TryReserveCache"/>) and released with the result. Fetches run on their own lane: at most two per

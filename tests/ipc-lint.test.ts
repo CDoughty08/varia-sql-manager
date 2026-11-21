@@ -61,6 +61,10 @@ await import(${JSON.stringify(core)})`
     expect([...thrown].filter(code => !(errorCodes as readonly string[]).includes(code))).toEqual([])
     const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
     expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
+    // ...and in the catalogue of codes by origin, not only somewhere in the text.
+    const table = docs.slice(docs.indexOf('| Origin | Codes |'), docs.indexOf('\n\n', docs.indexOf('| Origin | Codes |')))
+    expect(table.length).toBeGreaterThan(100)
+    expect(errorCodes.filter(code => !table.includes('`' + code + '`'))).toEqual([])
   })
   it('reads a backend answer\'s null member as absent: the backend leaves nulls out (Contracts.cs, WhenWritingNull)', () => {
     // A bare .nullable() member is required, so an answer that leaves it out is refused, and the feature reads it as a

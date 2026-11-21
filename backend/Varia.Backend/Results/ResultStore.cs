@@ -883,7 +883,7 @@ internal sealed partial class ResultStore
         return true;
     }
 
-    /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Block cache) to the global budget, as a live table
+    /// <summary>Charges a windowed result's block cache (docs/bigquery.md, Residence) to the global budget, as a live table
     /// is, not to a query's half: within the cache's own limit (<paramref name="limit"/>, what <paramref name="held"/> counts
     /// for that cache) and the global budget. The cache evicts its own blocks and asks again when this refuses.</summary>
     public bool TryReserveCache(ref long held, long limit, long bytes)

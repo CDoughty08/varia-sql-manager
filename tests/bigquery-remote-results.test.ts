@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
@@ -94,6 +94,10 @@ describe('BigQuery remote results', () => {
     // A backend without windowed results reports none, and nothing changes.
     const { windowCacheBytes: _, ...plain } = detail
     expect(nerdMetrics(plain, () => ({ result: 'Result 1' })).bars[1].segments.map(segment => segment.part)).toEqual(['raw'])
+    // Only windowed results open: no rows in pages, but the window cache holds blocks, and the Saved tile says so.
+    const windowedOnly = nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0 }, () => ({ result: 'Result 1' }))
+    expect(windowedOnly.tiles[2].note).toBe('Only windowed results\' blocks held')
+    expect(nerdMetrics({ ...detail, logicalBytes: 0, storedBytes: 0, windowCacheBytes: 0 }, () => ({ result: 'Result 1' })).tiles[2].note).toBe('No rows held')
   })
 })
 
@@ -130,5 +134,24 @@ describe('decoding a windowed result on several threads', () => {
     // Outside the query's own thread (deciding residence and seeding run on it) the window's plan is only ever forked.
     expect(residence).not.toMatch(/window\.Plan, first, set,/)
     expect(residence).toMatch(/window\.Plan\.Fork\(\), first, set,/)
+  })
+})
+
+describe('the backend comments that point into docs/bigquery.md', () => {
+  it('name its headings or bold bullets ("docs/bigquery.md, Residence: Deciding"), so a renamed section is caught', () => {
+    const docs = readFileSync(join(__dirname, '..', 'docs', 'bigquery.md'), 'utf8')
+    const named = new Set([...docs.matchAll(/^#+ (.+)$/gm), ...docs.matchAll(/\*\*([^*]+?)\.\*\*/g)].map(match => match[1].trim()))
+    const root = join(__dirname, '..', 'backend')
+    const files = (readdirSync(root, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
+    const missing = files.flatMap(name => [...readFileSync(join(root, name), 'utf8').matchAll(/docs\/bigquery\.md, ([^);\n]*)/g)]
+      .flatMap(match => match[1].split(/[,:]\s*/).map(part => part.trim()).filter(part => part && !/^decision \d+$/.test(part)).filter(part => !named.has(part))
+        .map(part => `${name.replaceAll('\\', '/')}: ${part}`)))
+    expect(named.has('Residence') && named.has('Deciding') && named.has('Throughput')).toBe(true)
+    expect(missing).toEqual([])
+  })
+  it('say tabledata.list leaves a rate limit to the block\'s own backoff', () => {
+    const jobs = readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'BigQuery', 'BigQueryService.Jobs.cs'), 'utf8')
+    expect(jobs).not.toMatch(/429 and 5xx are retried/)
+    expect(jobs).toMatch(/return PageAsync\(service, request\.CreateRequest\(\), t\);\n\s*\}, token, rateLimits: false\);/)
   })
 })

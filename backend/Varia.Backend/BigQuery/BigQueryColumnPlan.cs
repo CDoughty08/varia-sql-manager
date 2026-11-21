@@ -179,7 +179,7 @@ internal sealed class BigQueryField
 }
 
 /// <summary>
-/// The REST reader of a BigQuery result set (docs/bigquery.md, Types and display): the schema's columns, and each
+/// The REST reader of a BigQuery result set (docs/bigquery.md, Types): the schema's columns, and each
 /// <c>TableRow</c> (<c>{"f":[{"v":…}]}</c>) decoded by Varia's own converter straight into a <see cref="PageBuilder"/>, as
 /// <see cref="ColumnPlan"/> reads a SqlDataReader. Not BigQueryRow: the client throws on RANGE and INTERVAL, and would format
 /// values and take memory outside the budget's accounting. Values are read from the page's JSON without copying where

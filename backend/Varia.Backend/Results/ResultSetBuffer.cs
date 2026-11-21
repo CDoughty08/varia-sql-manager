@@ -121,7 +121,7 @@ internal sealed class ResultSetBuffer
     /// <summary>The column metadata's bytes, which a switch to windowed keeps (<see cref="Demote"/>).</summary>
     private readonly long metadataBytes;
     private readonly int sealBytes;
-    /// <summary>A windowed BigQuery result's rows in BigQuery and its block cache (docs/bigquery.md, Windowed results); null
+    /// <summary>A windowed BigQuery result's rows in BigQuery and its block cache (docs/bigquery.md, Residence); null
     /// while the rows are stored here.</summary>
     private RemoteResult? remote;
     /// <summary>A BigQuery result's residence ("memory" or "remote"), its row count in BigQuery and its revision; null, -1

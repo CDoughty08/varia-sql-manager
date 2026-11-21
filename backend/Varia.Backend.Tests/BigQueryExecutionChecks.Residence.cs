@@ -40,6 +40,8 @@ internal static partial class BigQueryExecutionChecks
         await RemoteRacesAsync(check);
         Trace("TwoLoads");
         await TwoLoadsAsync(check);
+        Trace("LoadAfterDisconnect");
+        await LoadAfterDisconnectAsync(check);
         Trace("LoadWhileRunning");
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
@@ -763,6 +765,22 @@ internal static partial class BigQueryExecutionChecks
         check(fired == 1 && loser == "INVALID_PARAMS" && loserResult is null && stillLoading && code == "ok" && result?.Status == "cancelled"
             && result.ResultSets.Single() is { Residence: "remote", Revision: 2 },
             $"a load that loses the race is refused and leaves the winner loading: {fired} {loser} {loserMessage} {stillLoading} {code} {result?.Status}");
+    }
+
+    /// <summary>A disconnect between a load finding its connection and registering: the load is refused (NOT_CONNECTED) and
+    /// the set stays windowed at its revision, with no residence event.</summary>
+    static async Task LoadAfterDisconnectAsync(Action<bool, string> check)
+    {
+        using var harness = new Harness(Lines(3000));
+        await harness.ConnectAsync();
+        var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+        var id = executed!.ResultSets.Single().ResultId;
+        harness.Service.LoadRegistering = () => harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = harness.ConnectionId }).GetAwaiter().GetResult();
+        var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
+        harness.Service.LoadRegistering = null;
+        var set = harness.Service.Results.Find(id);
+        check(code == "NOT_CONNECTED" && result is null && !OfType(events, "resultSet.residence").Any() && set is { IsRemote: true, Revision: 0 },
+            $"a load that a disconnect overtakes before it registers is refused, the set still windowed: {code} {message} {result?.Status} {set?.IsRemote} {set?.Revision}");
     }
 
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>
