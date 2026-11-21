@@ -148,8 +148,15 @@ internal static class ScriptingTemplateChecks
             == Lines("DECLARE @RC2 int", "DECLARE @rc int", "DECLARE @RC1 int", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC2 = [dbo].[p] ", "   @rc", "  ,@RC1 OUTPUT", "  ,@b")
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, "@RC")], false, true).StartsWith("DECLARE @RC1 int" + NL + "DECLARE @RC int" + NL, StringComparison.Ordinal),
             "EXECUTE To names the return code after any parameter called @RC, @RC1 and so on, compared case-insensitively, so the batch declares no variable twice");
-        check(DmlTemplates.Execute(obj, [P(1, "@\uFF32\uFF23"), P(2, "@RC\uFF11"), P(3, "@R\u00C72"), P(4, "@RC\u02193"), P(5, "@R\u3400C4")], false, true).StartsWith("DECLARE @RC5 int" + NL, StringComparison.Ordinal),
-            "a parameter that some collation could read as the return code counts too: a fullwidth @RC, a fullwidth digit in @RC1, an accented @RC2, and @RC3 and @RC4 with a character the default collation weighs zero move the return code to @RC5");
+        check(DmlTemplates.Execute(obj, [P(1, "@\uFF32\uFF23"), P(2, "@RC\uFF11"), P(3, "@R\u00C72"), P(4, "@RC\u02193"), P(5, "@R\u3400C4")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal),
+            "a parameter that some collation could read as the return code counts too: a fullwidth @RC, a fullwidth digit in @RC1 (which also stands for any one character, so @RC5 to @RC9), an accented @RC2, and @RC3 and @RC4 with a character a collation weighs zero move the return code to @RC10");
+        check(DmlTemplates.Execute(obj, [P(1, "@\u0280C")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@\u5BA2\u6237")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "a letter NFKD leaves alone may still equal R (U+0280 is R in the default collation), but an ideograph never equals R, C or a digit");
+        var blocking = "@RC" + new string('\u0219', 125);
+        check(DmlTemplates.Execute(obj, [P(1, blocking)], false, true) == Lines("DECLARE " + blocking + " int", "", "-- TODO: Set parameter values here.", "", "EXECUTE [dbo].[p] ", "   " + blocking)
+            && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, blocking)], false, true).EndsWith("EXECUTE [dbo].[f] " + NL + "   " + blocking, StringComparison.Ordinal),
+            "a name that could equal every return code within the bound leaves the return code out, still a valid call");
     }
 
     private static ResolvedTarget Target(string kind, string subtype = "", string? objectType = null, IReadOnlyList<ColumnRow>? columns = null, IReadOnlyList<ParameterRow>? parameters = null,
