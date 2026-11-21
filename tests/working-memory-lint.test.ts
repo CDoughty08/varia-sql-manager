@@ -119,6 +119,8 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
   // ...and that Create is the only one: no second cache with a delegate of its own.
   expect(uses(/\bRemoteResult\s*\.\s*Create\b/g)).toEqual(['SqlService.BigQueryResidence.cs'])
+  // (Nor through a using: a static import or an alias would call it by another spelling.)
+  expect(uses(/\busing\b[^;{}()]*\bRemoteResult\s*;/g)).toEqual([])
   // (Bare names throughout: a method group or a space before the parenthesis is a call all the same.)
   // A job's results are read where a query's own rows are (its first page, a script's statements, its pages under the
   // budget) and by Load into memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
@@ -161,6 +163,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(codeUses(/\bJobs\s*\.\s*Query\b/g)).toEqual([])
   // (The jobs resource is reached only for its other calls: held in a variable or used for another member, a jobs.query
   // would pass the ban above. A job list's own Jobs and SSIS's created.Jobs are not the resource.)
+  // ...nor by its resource or request classes built directly (a JobsResource of one's own, a QueryRequest however aliased):
+  // only Jobs.cs's GetRequest and Sessions.cs's ListRequest name them.
+  expect(codeUses(/\bJobsResource\b(?!\s*\.\s*(?:GetRequest|ListRequest)\b)|\bQueryRequest\b/g)).toEqual([])
+  expect(codeUses(/\bJobsResource\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Sessions.cs'])
   expect(codeUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs', 'Ssis/SsisActionService.cs', 'Ssis/SsisCreate.cs'])
   expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
   // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
