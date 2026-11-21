@@ -97,12 +97,19 @@ internal static class DesignerLiveChecks
         check(collisions.Count == 0, "the designer's preflight finds a repeated column name exactly as each catalog collation compares names: " + string.Join("; ", collisions));
         // It reads no catalog view, so another session's uncommitted DDL in the database never holds it up (a #table: tempdb).
         var holder = Guid.NewGuid().ToString();
-        var held = await Sql("BEGIN TRANSACTION;\nCREATE TABLE #varia_designer_hold (a int);", "tempdb", holder);
         var widest = Enumerable.Range(0, (int)Catalog.Limit("columns")).Select(index => "c" + index.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray();
-        var unheld = await Sql("SET LOCK_TIMEOUT 5000;\nEXEC sys.sp_executesql " + Literal(DesignerSql.DuplicateName) + ", N'@take int, @names nvarchar(max)', @take = "
-            + widest.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", @names = " + Literal(DesignerSql.PaddedNames(widest)) + ";", "tempdb");
-        await Sql("IF @@TRANCOUNT > 0 ROLLBACK;", "tempdb", holder);
-        await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json);
+        SqlRun held, unheld;
+        try
+        {
+            held = await Sql("BEGIN TRANSACTION;\nCREATE TABLE #varia_designer_hold (a int);", "tempdb", holder);
+            unheld = await Sql("SET LOCK_TIMEOUT 5000;\nEXEC sys.sp_executesql " + Literal(DesignerSql.DuplicateName) + ", N'@take int, @names nvarchar(max)', @take = "
+                + widest.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", @names = " + Literal(DesignerSql.PaddedNames(widest)) + ";", "tempdb");
+        }
+        finally
+        {
+            await Sql("IF @@TRANCOUNT > 0 ROLLBACK;", "tempdb", holder);
+            await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json);
+        }
         check(held.Status == "completed" && unheld is { Status: "completed", Sets: [{ Count: 0 }] },
             "the designer's duplicate check of " + widest.Length + " names answers while another session holds uncommitted DDL in the database (" + held.Error + unheld.Error + ")");
         var twin = await client.Script("master", design with { Columns = [Column("Name", "int"), Column("NAME", "int")], PrimaryKey = [] });
