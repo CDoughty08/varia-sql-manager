@@ -91,7 +91,10 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   characters and bytes, and a histogram, computed in the backend over the rows the grid shows. A re-sort of a loaded
   result keeps it; it is computed again when the filters change, the result finishes loading or the query runs again.
   A comparison's panel is titled Column profile with the comparison's name under it ("Differences: Result 1 →
-  Result 3"), and a Pivot's names the Pivot, never the number Varia gave it.
+  Result 3"), and a Pivot's names the Pivot, never the number Varia gave it. A comparison's cards show each column's
+  changes instead of its values: a bar and "N changed · N differ only by collation · N added · N removed · N same", with
+  ⚷ on key columns; **Show value statistics** shows the usual figures and histogram, of the new side's values (the old
+  side's for removed rows), as its caption says.
   The panel follows the grid's selection: the cards of the selected columns are tinted, the active cell's column's card
   is shaded and scrolled into view, and a click, Enter or Space on a card selects its column in the grid. The cards are
   one Tab stop (the active column's card), with the arrows, Home and End between them. **Selected Columns Only** (the
@@ -226,7 +229,8 @@ with " (exact text)" after them when Exact text is on.
   says so.
 - A column whose kind changed compares by the old result's kind. Numbers compare by value (2.0 is 2.00); text that is
   not a number, such as empty text, never equals one; trailing spaces are underlined, as in text.
-- Stored results are compared, ignoring the inputs' sorts and filters; the popover warns and the strip says so.
+- Stored results are compared, ignoring the inputs' sorts and filters; the popover warns, and the comparison's notices say
+  so when an input had any.
 
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed
 the popover or switched pair meanwhile; with the palette over it, it stays and offers Show It). **Cancel** shows while it
@@ -242,16 +246,17 @@ as its old value struck through, an arrow and the new value in bold, the rest of
 named "Price, changed from 5120.00 to 4980.00" for screen readers. **Two rows** is a unified, git-style diff: each changed
 row as its old row (−) and new row (+), the active cell named "Price, old value 5120.00" or "Price, new value 4980.00".
 A comparison with more than 2,046 compared columns cannot show one row per entry, so it shows two rows and says so. Both
-show added and removed rows, and one unchanged row of context around each change. Its columns
+show added and removed rows; unchanged rows stay unless **Rows** is Changes only ([Rows](#rows-of-a-comparison)). Its columns
 are only the compared data: each row's header is a gutter with a bar for its kind, its mark (− or +) and its number in its
 own result (the old one's on a − row), and names the kind and the row in both results for screen readers and in its
-tooltip ("Changed, old values; row 3 in Result 1, row 4 in Result 2"). The kind and row numbers are not columns, so
+tooltip ("Changed, old values; row 3 in Result 1, row 4 in Result 2"). A column with changes has its header underlined
+with a dot (screen readers hear "Has changes"); a key column starts with ⚷ ("Key column"). The kind and row numbers are not columns, so
 they cannot be sorted, filtered, searched or profiled; Copy writes only the data columns, while **Save Results As**
 writes `Change`, `Old row` and `New row` before them. A comparison stored one row per entry saves each column followed by `<name> (old)`, filled only where the value changed (an old NULL is written as `NULL` even when NULL text is empty, so in CSV and TSV an old value that is the text NULL reads the same). An added or removed row has a faint wash; on a changed row's old
 and new rows only the changed values are coloured, struck through on the old row and bold on the new, and unchanged rows
 are not coloured. Highlights, search matches and the selection are drawn over these colours as translucent layers rather
 than replacing them, so a changed value stays visible when it is highlighted, matched or selected; in Windows high
-contrast, changed values are outlined and keep their strikethrough or bold. A comparison is never transposed. Rows match by a key column unique in both, else by whole rows, and the strip says which ("rows matched by Id", "whole rows matched"). A key or row that repeats pairs its copies in order; when that happens a row's gutter shows ≈ ("repeated key"). A removed and an added row that look alike (most of their other values equal) are a possible match: the gutter shows ? and names the other row, without changing the counts or colours. A row with more changed values than its gutter can list names "More changes in this row are not listed". **Compare with Previous
+contrast, changed values are outlined and keep their strikethrough or bold. A comparison is never transposed. Rows match as the [match menu](#match-rows-by) says, Automatic by default (a key column unique in both, else whole rows), and the strip says which ("rows matched by Id", "whole rows matched"). A key or row that repeats pairs its copies in order; when that happens a row's gutter shows ≈ ("repeated key"). A removed and an added row that look alike (most of their other values equal) are a possible match: the gutter shows ? and names the other row, without changing the counts or colours. A row with more changed values than its gutter can list names "More changes in this row are not listed". **Compare with Previous
 Result (Exact Text)** in the palette compares every character. Comparisons share the four-per-window limit with Pivot builds, retrying a busy backend after 1, 4 and 16 seconds.
 A run keeps at most 1,000 results, comparisons and Pivots (including those building); past that it is refused.
 
@@ -261,10 +266,57 @@ docking, or another document showing. A picked result that closes leaves nothing
 
 A comparison's strip links its two inputs while open; a closed one reads "Result 1 (closed)".
 
+### Rows of a comparison
+
+**Rows** in the comparison toolbar is **All rows** (every row, unchanged ones uncoloured) or **Changes only** (changed,
+added and removed rows). New comparisons use **Options › Query Results › SQL Server › Results to Grid › Comparisons ›
+Rows of a comparison** (`queryResults.compare.rows`, All rows by default); the toolbar changes one comparison in place.
+With Changes only and no sort or filter on the comparison, a dashed rule above a row marks unchanged rows left out before
+it, and one under the last row those after it; the row's number names them ("312 unchanged rows hidden", "12 unchanged
+rows hidden after it") in its tooltip and for screen readers. The toolbar counts the unchanged rows, "(hidden)" with
+Changes only.
+
+When the result memory cannot hold every row, All rows is refused: in the Compare popover it says "Not enough result
+memory for all rows." with **Show changes only**; once the popover has closed, the results toolbar says it for that pair,
+with Show changes only and Dismiss, until you act, dismiss it, show that pair, close one of the pair or run again (a later
+copy or save notice leaves it). A change refused this way says so in the comparison's notices, with Show changes only, which asks that change again
+with Changes only.
+
+### Match rows by
+
+**Match** in the comparison toolbar (**Match Rows By…** in More results tools and the palette) opens a menu: **Automatic**
+(a column unique in both, else whole rows), **Row position** (1st with 1st), **Whole rows** (every compared column equal)
+or **Key columns**, a searchable list of the paired columns with their types where you tick up to 16 for a composite key
+(arrows move, Space ticks). NULL matches NULL. **Apply** changes the comparison in place; Escape or Cancel closes it.
+
+The match applied to a pair of results, and each swap's, is remembered in the tab for that pair of names, one way round
+(the last 64 pairs; closing the tab forgets them). Comparing that pair again from the popover or Compare with Previous
+Result matches the same way, and the popover says "Match rows by: ⚷ Id (remembered)". When a remembered key column no
+longer pairs, or holds values too long to compare, rows are matched automatically and a notice says so.
+
+### Chips and notices
+
+The chips **+ added**, **− removed** and **~ changed** show only the rows of the kinds pressed (one filter, "Kind: added,
+changed", combined with the grid's other filters); a chip with no rows is unavailable. A change keeps the pressed chips,
+releasing one whose kind has no rows left and saying so. Beside them the toolbar counts the unchanged rows and, when keys
+repeat, "≈ N repeated".
+
+Under the toolbar, one line each, the comparison's notices: a change refused or cancelled; a remembered match lost; too
+many columns for one row per entry; no rows matched ("No rows matched by Id, so every row shows as removed or added.");
+possible matches; too many unmatched rows to look for them; columns not compared; values compared by the part Varia
+keeps; values that differ only by collation; no differences; inputs that were sorted or filtered. No rows matched and
+possible matches offer **Choose key columns…** and, when both sides have as many rows, **Match by row position**. Each
+notice has Dismiss, and a dismissed notice stays hidden until its text changes. While an input is closed the notices'
+buttons are unavailable and say why.
+
 ### The comparison toolbar
 
 Above each comparison's grid: its title, its sides (each a link to that result, − old then + new) with **⇄ Swap sides**
-between them, **Layout** (One row, Two rows) and **Exact text**. Each changes that comparison in place: the same result
+between them, **Match**, **Rows**, **Layout** (One row, Two rows), **Exact text**, the chips, **Profile** (the Column
+Profile of the comparison) and **Save Results As**. In a narrow pane they fold away in that order from Exact text (the
+chips first shrink to their sign and count) into More results tools, which holds Match Rows By…, Changes Only, One Row
+per Entry, Exact Text, Swap Sides, Go to Old Result, Go to New Result and Save Results As while a comparison has the
+focus. Match, Rows, Layout, Exact text and Swap sides each change that comparison in place: the same result
 tab, number and place, renamed when its sides or Exact text change, keeping its column widths (by column name across a
 swap, as are the key columns it matched by) and its highlights, which follow their rows; its sort, filters and scroll
 reset. Swap onto a pair the run already has the other way round goes to that comparison instead. A change shows its
@@ -272,11 +324,11 @@ progress and Cancel in the results toolbar, and the comparison toolbar's control
 and builds on it (Swap sides then Exact text keeps both). While a comparison is swapped away from its pair, that pair
 reads as being compared (its Cancel stops the swap) until the swap lands. If a change fails or is cancelled the
 comparison stays as it was and its strip says so ("The comparison was not changed: …", "The change was cancelled.").
-While an input is closed, Swap sides, Layout and Exact text are unavailable and say which input is closed; closing an
+While an input is closed, Swap sides, Match, Rows, Layout and Exact text (and their commands) are unavailable and say which input is closed; closing an
 input while a change runs cancels it ("Result 1 was closed, so the change was cancelled."). The Layout setting applies to
 new comparisons; the toolbar's Layout changes one comparison. Screen readers hear "Comparison ready: …" when a comparison
 is shown and "Comparison updated: …" after a change, with what it matched by and how many rows changed, were added and
-were removed.
+were removed, then any notice it newly shows.
 
 ## Tabs
 

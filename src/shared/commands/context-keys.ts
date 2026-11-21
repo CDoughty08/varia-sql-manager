@@ -230,7 +230,10 @@ export const contextKeys = {
   searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' },
   resultsGridComparison: { type: 'boolean', scope: 'state', description: "The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is." },
   comparisonInputsOpen: { type: 'boolean', scope: 'state', description: "Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable." },
-  outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." }
+  outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." },
+  comparisonExactText: { type: 'boolean', scope: 'state', description: "That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle)." },
+  comparisonOneRow: { type: 'boolean', scope: 'state', description: "That comparison shows one row per entry (its Layout is One row)." },
+  comparisonChangesOnly: { type: 'boolean', scope: 'state', description: "That comparison shows only its changed, added and removed rows (its Rows choice is Changes only)." }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { ResultColumn } from '../src/shared/contracts'
 import { backendDescriptorSchema } from '../src/shared/ipc/descriptors'
 import { GridData } from '../src/renderer/src/grid/data'
-import { diffGutter, toneFlagsOf } from '../src/renderer/src/grid/diff-gutter'
+import { diffGutter, diffKeyFlags, gapText, toneFlagsOf } from '../src/renderer/src/grid/diff-gutter'
 import { diffSuffixOf, hiddenRoles, isHiddenColumn, visibleColumnCount } from '../src/renderer/src/grid/hidden-columns'
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
 import { diffSidesOf } from '../src/renderer/src/grid/ResultGrid'
@@ -83,17 +83,41 @@ describe('comparison gutter', () => {
     expect(diffGutter('+', null, '12', sides, 'added poss=5 gap=3')).toEqual({ mark: '+', number: '12', flag: '?', name: 'Added, possible match with row 5 in Sample Query; row 12 in Awesome Query' })
     // Both: ≈ is drawn and both are named.
     expect(diffGutter('+', null, '12', sides, 'added dup poss=5')).toMatchObject({ flag: '≈', name: 'Added, repeated key, possible match with row 5 in Sample Query; row 12 in Awesome Query' })
-    // A gap is not named here (it comes with the dashed rule), nor drawn.
+    // A gap is named and drawn only while the gaps are shown (Changes only, no sort or filter).
     expect(diffGutter(' ', '1', '1', sides, 'same gap=312')).toEqual({ mark: '', number: '1', flag: '', name: 'Unchanged; row 1 in Sample Query, row 1 in Awesome Query' })
     expect(diffGutter('+', '2', '9', sides, 'changedNew 0 2 4 …').name).toBe('Changed, new values; row 2 in Sample Query, row 9 in Awesome Query. More changes in this row are not listed')
   })
   it('reads a tone\'s flags, ignoring unknown ones and stopping at the cells', () => {
-    expect(toneFlagsOf('removed dup poss=7 gap=2')).toEqual({ repeated: true, partner: 7, cut: false })
+    expect(toneFlagsOf('removed dup poss=7 gap=2')).toEqual({ repeated: true, partner: 7, gap: 2, cut: false })
+    expect(toneFlagsOf('changedOld gap=312 2 4-6')).toEqual({ repeated: false, gap: 312, cut: false })
+    expect(toneFlagsOf('same gap=0')).toEqual({ repeated: false, cut: false })
+    expect(toneFlagsOf('same gap=-3')).toEqual({ repeated: false, cut: false })
+    expect(toneFlagsOf('same gap=1.5')).toEqual({ repeated: false, cut: false })
     expect(toneFlagsOf('changedOld future=3 dup 4 5')).toEqual({ repeated: true, cut: false })
     expect(toneFlagsOf('changedOld 4 dup')).toEqual({ repeated: false, cut: false })
     expect(toneFlagsOf('added poss=0')).toEqual({ repeated: false, cut: false })
     expect(toneFlagsOf('changedNew 1 3 …')).toEqual({ repeated: false, cut: true })
     expect(toneFlagsOf(null)).toEqual({ repeated: false, cut: false })
+  })
+  it('names the unchanged rows Changes only hides before a row and after the last, only while the gaps are shown', () => {
+    expect(gapText(312)).toBe('312 unchanged rows hidden')
+    expect(gapText(1)).toBe('1 unchanged row hidden')
+    expect(gapText(1204, true)).toBe('1,204 unchanged rows hidden after it')
+    expect(diffGutter(' ', '1', '1', sides, 'same gap=312', { shown: true })).toEqual({ mark: '', number: '1', flag: '', name: 'Unchanged; row 1 in Sample Query, row 1 in Awesome Query. 312 unchanged rows hidden', above: 312 })
+    expect(diffGutter('−', '5', null, sides, 'removed gap=1', { shown: true, trailing: 12 })).toEqual({ mark: '−', number: '5', flag: '', name: 'Removed; row 5 in Sample Query. 1 unchanged row hidden. 12 unchanged rows hidden after it', above: 1, below: 12 })
+    expect(diffGutter('+', null, '7', sides, 'added', { shown: true, trailing: 3 })).toMatchObject({ name: 'Added; row 7 in Awesome Query. 3 unchanged rows hidden after it', below: 3 })
+    // A sort or filter moves or drops the rows a run sits between: nothing is named or drawn.
+    expect(diffGutter(' ', '1', '1', sides, 'same gap=312', { shown: false, trailing: 4 })).toEqual({ mark: '', number: '1', flag: '', name: 'Unchanged; row 1 in Sample Query, row 1 in Awesome Query' })
+  })
+  it('marks the key columns rows were matched by, by name ignoring case, each name its first unused column', () => {
+    const names = ['Id', 'Status', 'id', 'Total']
+    expect(diffKeyFlags({ mode: 'columns', columns: ['ID', 'status'] }, names)).toEqual([true, true, false, false])
+    expect(diffKeyFlags({ mode: 'columns', columns: ['id', 'id'] }, names)).toEqual([true, false, true, false])
+    expect(diffKeyFlags({ mode: 'auto', columns: ['Total'] }, names)).toEqual([false, false, false, true])
+    expect(diffKeyFlags({ mode: 'auto', columns: [] }, names)).toEqual([false, false, false, false])
+    expect(diffKeyFlags({ mode: 'rows', columns: [] }, names)).toEqual([false, false, false, false])
+    expect(diffKeyFlags({ mode: 'position', columns: ['Id'] }, names)).toEqual([false, false, false, false])
+    expect(diffKeyFlags(undefined, names)).toEqual([false, false, false, false])
   })
   it('names a comparison\'s inputs as they were compared, and sizes the number for the larger', () => {
     // The handles' counts, not the descriptors' (an entry keeps the one it opened with, before any row was stored).

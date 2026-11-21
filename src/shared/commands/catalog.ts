@@ -1022,7 +1022,7 @@ export const commandCatalog = {
   // The grid the menu was opened for, else the focused grid, else the grid that last had focus (the only one, often).
   'output.saveResultsAs': {
     title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'], providers: both, methods: ['results.export'],
-    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
+    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }, { menu: 'output.tools', group: '5_compare', order: 9, mnemonic: 'v', when: 'resultsGridComparison' }]
   },
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
@@ -1230,6 +1230,37 @@ export const commandCatalog = {
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid'], providers: both, methods: ['results.diff']
+  },
+  // The focused comparison's toolbar controls, in More results tools (where they go when a narrow pane folds them away)
+  // and the palette. Each that runs the comparison again changes it in place (CompareService.replace), and while one of its
+  // inputs is closed it is unavailable and says which (D10). Match Rows By opens the match menu beside the More button.
+  'output.compareMatch': {
+    title: 'Match Rows By…', category: 'Query', icon: 'key', keywords: ['compare', 'diff', 'match', 'key', 'keys', 'columns', 'composite', 'position', 'pair', 'rows'], providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 1, mnemonic: 'm', when: 'resultsGridComparison' }]
+  },
+  'output.compareChangesOnly': {
+    title: 'Changes Only', category: 'Query', icon: 'filter', keywords: ['compare', 'diff', 'changes', 'only', 'rows', 'unchanged', 'hide', 'context', 'all'], toggled: 'comparisonChangesOnly', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 2, mnemonic: 'e', when: 'resultsGridComparison' }]
+  },
+  'output.compareOneRow': {
+    title: 'One Row per Entry', category: 'Query', icon: 'git-compare', keywords: ['compare', 'diff', 'one', 'row', 'entry', 'unified', 'two', 'rows'], toggled: 'comparisonOneRow', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 3, mnemonic: 'n', when: 'resultsGridComparison' }]
+  },
+  'output.compareExactText': {
+    title: 'Exact Text', category: 'Query', icon: 'case-sensitive', keywords: ['compare', 'diff', 'exact', 'case', 'collation', 'trailing', 'spaces', 'text'], toggled: 'comparisonExactText', providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 4, mnemonic: 'x', when: 'resultsGridComparison' }]
+  },
+  'output.compareSwapSides': {
+    title: 'Swap Sides', category: 'Query', icon: 'arrow-swap', keywords: ['compare', 'diff', 'swap', 'sides', 'old', 'new', 'reverse'], providers: both, methods: ['results.diff'],
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 5, mnemonic: 'a', when: 'resultsGridComparison' }]
+  },
+  'output.compareGoToOld': {
+    title: 'Go to Old Result', category: 'Query', icon: 'arrow-left', keywords: ['compare', 'diff', 'old', 'side', 'input', 'result', 'go'], providers: both,
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 6, mnemonic: 'd', when: 'resultsGridComparison' }]
+  },
+  'output.compareGoToNew': {
+    title: 'Go to New Result', category: 'Query', icon: 'arrow-right', keywords: ['compare', 'diff', 'new', 'side', 'input', 'result', 'go'], providers: both,
+    menus: [{ menu: 'output.tools', group: '5_compare', order: 7, mnemonic: 'u', when: 'resultsGridComparison' }]
   },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {

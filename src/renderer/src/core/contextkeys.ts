@@ -123,6 +123,7 @@ export interface ContextInputs {
   readonly resultsTurned?: Readonly<Record<string, unknown>>
   /** The tabs whose focused results grid is a comparison, and whether its inputs are open (`ResultsService.comparing`). */
   readonly resultsComparing?: Readonly<Record<string, { readonly inputsOpen: boolean }>>
+  readonly comparisonToggles?: Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean }>>
   readonly scriptingRunning?: boolean
   /** The editor types over text (OVR). */
   readonly overtype?: boolean
@@ -174,6 +175,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     resultsSortTextChars: inputs.resultsSortText === 'chars', resultsSortTextBytes: inputs.resultsSortText === 'bytes',
     resultsColumnProfile: !!inputs.resultsColumnProfile, resultsProfileSelectedOnly: !!inputs.resultsProfileSelectedOnly, resultsRowSize: !!inputs.resultsRowSize, resultsTabs: inputs.resultsLayout === 'tabs', resultsGridTransposed: !!active && !!inputs.resultsTurned?.[active.id],
     resultsGridComparison: !!active && !!inputs.resultsComparing?.[active.id], comparisonInputsOpen: !!active && !!inputs.resultsComparing?.[active.id]?.inputsOpen,
+    comparisonExactText: !!active && !!inputs.comparisonToggles?.[active.id]?.exact, comparisonOneRow: !!active && !!inputs.comparisonToggles?.[active.id]?.oneRow, comparisonChangesOnly: !!active && !!inputs.comparisonToggles?.[active.id]?.changesOnly,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     // A query's engine follows its connection; every other document is SQL Server's.
@@ -225,6 +227,8 @@ export interface ContextKeyOptions {
   readonly resultsTurned?: ExternalStore<Readonly<Record<string, unknown>>>
   /** The tabs whose focused results grid is a comparison (`resultsGridComparison`, `comparisonInputsOpen`). */
   readonly resultsComparing?: ExternalStore<Readonly<Record<string, { readonly inputsOpen: boolean }>>>
+  /** The state of each tab's focused comparison (`comparisonExactText`, `comparisonOneRow`, `comparisonChangesOnly`). */
+  readonly comparisonToggles?: ExternalStore<Readonly<Record<string, { readonly exact: boolean; readonly oneRow: boolean; readonly changesOnly: boolean }>>>
   /** Whether a Script As request is running (`scriptingRunning`). */
   readonly scripting?: ExternalStore<boolean>
   readonly bookmarks?: ExternalStore<BookmarkSnapshot>
@@ -266,14 +270,14 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.resultSets, options.resultsSteppable, options.resultsTurned, options.resultsComparing, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.tableProperties, options.newDatabase, options.restore, options.notifications, options.updates, options.activity, options.ssis, options.editorGroups, options.settings].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.resultSets, options.resultsSteppable, options.resultsTurned, options.resultsComparing, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.tableProperties, options.newDatabase, options.restore, options.notifications, options.updates, options.activity, options.ssis, options.editorGroups, options.settings, options.comparisonToggles].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
       platform: options.platform, agentEnabled: options.agentEnabled, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], resultsColumnProfile: options.settings?.getSnapshot().values['queryResults.grid.columnProfile'], resultsProfileSelectedOnly: options.settings?.getSnapshot().values['queryResults.grid.columnProfileSelectedOnly'], resultsRowSize: options.settings?.getSnapshot().values['queryResults.grid.rowSize'], resultsLayout: options.settings?.getSnapshot().values['queryResults.grid.layout'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
-      panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultSets: options.resultSets?.getSnapshot(), resultsSteppable: options.resultsSteppable?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), resultsComparing: options.resultsComparing?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
+      panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), resultSets: options.resultSets?.getSnapshot(), resultsSteppable: options.resultsSteppable?.getSnapshot(), resultsTurned: options.resultsTurned?.getSnapshot(), resultsComparing: options.resultsComparing?.getSnapshot(), comparisonToggles: options.comparisonToggles?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(), tableProperties: options.tableProperties?.getSnapshot(), newDatabase: options.newDatabase?.getSnapshot(), restore: options.restore?.getSnapshot(),
       notifications: !!options.notifications && options.notifications.getSnapshot().visible.length > 0, update: options.updates?.getSnapshot(), activity: options.activity?.getSnapshot(), ssis: options.ssis?.getSnapshot(), editorGroups: options.editorGroups?.getSnapshot()
@@ -282,7 +286,7 @@ export class ContextKeyService implements Disposable {
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.resultSets?.getSnapshot(), options.resultsSteppable?.getSnapshot(), options.resultsTurned?.getSnapshot(), options.resultsComparing?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.tableProperties?.getSnapshot(), options.newDatabase?.getSnapshot(), options.restore?.getSnapshot(), options.notifications?.getSnapshot(), options.updates?.getSnapshot(), options.activity?.getSnapshot(), options.ssis?.getSnapshot(), options.editorGroups?.getSnapshot(), options.settings?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.resultSets?.getSnapshot(), options.resultsSteppable?.getSnapshot(), options.resultsTurned?.getSnapshot(), options.resultsComparing?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.tableProperties?.getSnapshot(), options.newDatabase?.getSnapshot(), options.restore?.getSnapshot(), options.notifications?.getSnapshot(), options.updates?.getSnapshot(), options.activity?.getSnapshot(), options.ssis?.getSnapshot(), options.editorGroups?.getSnapshot(), options.settings?.getSnapshot(), options.comparisonToggles?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }

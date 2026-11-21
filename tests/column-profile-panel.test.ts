@@ -26,7 +26,7 @@ import { peekLimits } from '../src/shared/explorer/peek'
  * The panel's other services: settings (Selected Columns Only, which its button and Show all toggle), the grid's selection
  * as ResultsService keeps it (with Select Column), the peek and the gestures. They are added to `results`.
  */
-function panelServices(results: object) {
+function panelServices(results: object, compared?: object) {
   const timers = manualTimers()
   const listeners = { settings: new Set<() => void>(), selection: new Set<() => void>() }
   let settings = { values: { 'queryResults.grid.columnProfileSelectedOnly': false } }
@@ -40,8 +40,10 @@ function panelServices(results: object) {
   })
   const profilePeek = new ProfilePeekService({ gestures: gesturesFor('win32'), timers: timers.timers })
   const commands = { execute: vi.fn(async (id: string) => { if (id === 'output.toggleProfileSelectedColumns') setOnly(!settings.values['queryResults.grid.columnProfileSelectedOnly']); return true }) }
+  // A comparison's details (CompareService), by its result's key; the fixtures' descriptors have no generation or id.
+  const info = new Map(compared ? [['undefined:undefined', compared]] : [])
   const services = {
-    commands, profilePeek, gestures: gesturesFor('win32'),
+    commands, profilePeek, gestures: gesturesFor('win32'), compare: { subscribe: () => () => {}, getSnapshot: () => ({ info }) },
     settings: { subscribe: (listener: () => void) => { listeners.settings.add(listener); return () => listeners.settings.delete(listener) }, getSnapshot: () => settings }
   }
   return {
@@ -54,7 +56,7 @@ function panelServices(results: object) {
 
 interface Asked { columns: number[]; signal?: AbortSignal; progress?: OperationProgressListener; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
-function fixture(columns = 40, shown: string | null = 'e1', name?: string, derived?: { readonly kind: 'diff' | 'pivot'; readonly label: string; readonly number: number }) {
+function fixture(columns = 40, shown: string | null = 'e1', name?: string, derived?: { readonly kind: 'diff' | 'pivot'; readonly label: string; readonly number: number }, compared?: object) {
   const listeners = new Set<() => void>()
   let snapshot = { state: 'open', rowsAvailable: 1000 }
   const asked: Asked[] = []
@@ -70,7 +72,7 @@ function fixture(columns = 40, shown: string | null = 'e1', name?: string, deriv
   // The panel is told which grid took the focus; without one it asks the stack, which names the second.
   const timers = manualTimers()
   const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1], operations: new ResultOperations({ timers: timers.timers }) }
-  const panel = panelServices(results)
+  const panel = panelServices(results, compared)
   const workbench = { results, ...panel.services } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -343,6 +345,39 @@ describe('column profile panel', () => {
     expect(view.facts()).toBe('10 rows so far')
     expect(panel.textContent).not.toContain('Result 3')
     view.unmount()
+  })
+
+  it('shows a comparison\'s changes on each card, its key column marked, and its value statistics only when asked for', async () => {
+    // c0 is the key; c1 has 3 changed and 1 collation-only cell; 12 entries matched (10 same, 2 changed), 1 added, 0 removed.
+    const compared = { match: { mode: 'columns', columns: ['C0'] }, same: 10, changed: 2, added: 1, removed: 0, columnChanges: [{ changed: 0, soft: 0 }, { changed: 1, soft: 1 }] }
+    const view = fixture(2, 'e1', undefined, { kind: 'diff', label: 'Differences: Result 1 → Result 2', number: 3 }, compared)
+    await view.answer(0, 13, 0)
+    const key = view.card('c0, key column')!, other = view.card('c1')!
+    expect(key.querySelector('.profile-change-counts')?.textContent).toBe('0 changed · 1 added · 0 removed · 12 same')
+    expect(other.querySelector('.profile-change-counts')?.textContent).toBe('1 changed · 1 differs only by collation · 1 added · 0 removed · 10 same')
+    expect(key.querySelector('.profile-key')?.getAttribute('title')).toBe('Key column')
+    // The bar is drawn for the eye; the line says it.
+    const bar = other.querySelector('.profile-changes')!
+    expect(bar.getAttribute('aria-hidden')).toBe('true')
+    expect([...bar.children].map(part => part.className)).toEqual(['changed', 'soft', 'added', 'same'])
+    // The value statistics wait behind the toggle, which says whether it is on.
+    const toggle = [...view.container.querySelectorAll('button')].find(button => button.textContent === 'Show value statistics')!
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(view.nulls('c1')).toBeUndefined()
+    expect(view.container.textContent).not.toContain('Values shown')
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(view.nulls('c1')).toBe('0')
+    expect(view.container.querySelector('.profile-statistics')?.textContent).toContain('Values shown: new side, old side for removed rows')
+    act(() => { toggle.click() })
+    expect(view.nulls('c1')).toBeUndefined()
+    view.unmount()
+    // A result that is not a comparison has its figures and no toggle, bar or key.
+    const original = fixture(2, 'e1')
+    await original.answer(0, 10, 0)
+    expect(original.nulls('c1')).toBe('0')
+    expect(original.container.querySelector('.profile-changes, .profile-statistics, .profile-key')).toBeNull()
+    original.unmount()
   })
 
   it('names a Pivot by its own name, and an original result has no line under the title', async () => {
