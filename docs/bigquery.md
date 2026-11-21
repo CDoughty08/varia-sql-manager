@@ -1,10 +1,9 @@
 # BigQuery
 
 Varia connects to Google BigQuery beside SQL Server. This page describes how it works now: the Connect dialog, saved
-connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, errors, emulator mode and testing.
-Query execution and Object Explorer's datasets come in later lanes (docs/bigquery-plan.md); until then a BigQuery server
-shows in Object Explorer with nothing to expand (Search Objects and Object Explorer's status chips leave it out), and a
-query tab can pick its default dataset but not run.
+connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, errors,
+emulator mode and testing. Search Objects and Object Explorer's status chips leave BigQuery out until later lanes
+(docs/bigquery-plan.md).
 
 ## Connect dialog
 
@@ -382,6 +381,60 @@ Messages).
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
   job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
 
+## Object Explorer
+
+A BigQuery connection's tree loads through `explorer.children`, the method SQL Server's uses, from BigQuery's free REST
+listers; nothing in it runs a job.
+
+- **Shape.** The connection node lists the billing project (sublabel "billing project"), then the extra projects. A project
+  lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,
+  External Tables (`tables.list` filtered by type; a snapshot is a table with the snapshot icon, a clone is a table),
+  Routines (`routines.list`, icon by routine type, sublabel a non-SQL language) and Models (`models.list`, sublabel the model
+  type). A table-like object has Columns (`tables.get`'s schema, sublabel the type, `ARRAY<…>` for a repeated column and
+  ", required" for a required one); a STRUCT column expands to its fields, up to BigQuery's 15 levels.
+- **Paging and limits.** Lists page with BigQuery's own page tokens (carried in the cursor as base64url), Columns by offset;
+  each listing has a 30 s budget, and a failure is the row's error, as SQL Server's are. Names a kind's rule refuses are
+  dropped, so they never reach a menu or a script.
+- **Rate limiter.** Every metadata read (listers, Preview Rows, Properties, Script As' `tables.get` and `routines.get`) goes
+  through one limiter per principal: at most 16 calls in flight across all of the principal's connections, since BigQuery's
+  per-user API limits count the principal. A rate-limit refusal (429, or 403 `rateLimitExceeded`) retries with jittered
+  backoff until the call's deadline; other transient failures retry a few times; anything else answers at once.
+- **Names in SQL.** BigQuery has no `QUOTENAME` and takes no identifier as a parameter, so a name reaches SQL text only through
+  `BqNames` (C#): its kind's rule (the same as `src/shared/bigquery/names.ts`), then backticks with backslashes and backticks
+  escaped. A name the rule refuses throws `INVALID_PARAMS` before any text is built. Values are always query parameters.
+- **Copy and drag.** A node inserts its backtick-quoted path (`` `project.dataset.table` ``; a column each part quoted).
+
+### Preview Rows
+
+Preview Rows (Object Explorer's context menu on a table, snapshot or clone) opens a new query tab whose text is the
+`SELECT * … LIMIT 1000` it stands for, then fills its results from `tabledata.list`, which is free and runs no job, so no cost
+prompt appears. It rides on `query.execute` with a `preview` target: the tab's earlier results are released, and Stop, Close
+Results and tab close behave as for a query. It reads at most 1,000 rows through the query results' converter and budget; the
+rows past them are counted, not read. Views, materialized views and external tables have no stored rows to list, so the menu
+does not offer it (Script As › SELECT queries them, billed). A table with row access policies answers `ROW_ACCESS`, since
+`tabledata.list` cannot apply them. Execute on the tab runs its text as a normal, billed query.
+
+### Script As
+
+Script As serves BigQuery's tables, snapshots, views, materialized views, external tables and routines.
+
+- SELECT, INSERT, UPDATE, DELETE and DROP are local templates from `tables.get` (a routine's DROP from `routines.get`, which
+  picks PROCEDURE, TABLE FUNCTION, AGGREGATE FUNCTION or FUNCTION), free. SELECT lists the top-level columns, ends with
+  `LIMIT 1000` and says that LIMIT does not lower the bytes billed. INSERT, UPDATE and DELETE are offered for tables only (a
+  snapshot's rows cannot change) and use SSMS's `<name, type,>` placeholders.
+- CREATE reads the object's own DDL from `INFORMATION_SCHEMA.TABLES` or `ROUTINES` (the `ddl` column), a query BigQuery
+  bills. Varia first dry-runs it (`estimateOnly`, free), applies the same cost prompts as Execute (Cost, above), then runs it
+  in the dataset's location under the connection's maximum bytes billed, else the one the prompts set. The object's name is a
+  query parameter. No DDL ever runs.
+- A new query window opens on the object's dataset when it is in the billing project.
+
+### Properties
+
+Properties on a table-like object opens a read-only document tab from one `tables.get` (free, `bigquery.properties`): Table
+(full name, type, location, description, labels, base table of a snapshot or clone), Storage (rows, logical, long-term and
+physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
+expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters.
+
 ## Errors
 
 | Code | When | Text and recovery |
@@ -406,6 +459,7 @@ Messages).
 | `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
 | `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
 | `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
+| `ROW_ACCESS` | Preview Rows on a table with row access policies | Use Script As › SELECT to query it (billed) |
 
 ## Emulator mode
 
@@ -448,6 +502,11 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   checks in `BigQueryChecks` cover `bigquery.dryRun` (the body, each incomplete reason, a refused query's `[line:column]`,
   the limits); `tests/bigquery-dry-run.test.ts` the cost rules, the prompts, the chip and the diagnostics loop, and
   `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
+  `BigQueryExplorerChecks` covers Object Explorer: every name rule against hostile names, the Script As templates, the
+  listers, cursors and STRUCT fields against the REST fixtures, the rate limiter and its retry, Preview Rows (no job,
+  `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts;
+  `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/scripting-service.test.ts` CREATE's cost gate, and
+  `tests/queries.test.ts` Preview Rows' path.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
   `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).

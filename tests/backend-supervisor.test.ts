@@ -331,10 +331,12 @@ describe('BackendSupervisor providers', () => {
     // databases.list serves both engines (BigQuery's datasets); tables.columns is SQL Server's alone.
     await expect(value.request('databases.list', { connectionId: bigQuery.id })).resolves.toEqual({ method: 'databases.list' })
     expect(await failure(value.request('tables.columns', { connectionId: bigQuery.id, database: 'sales', schema: 'dbo', name: 'orders' }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
-    expect(await failure(value.request('explorer.children', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    // Object Explorer's tree serves both engines (BQ-5); Peek is SQL Server's.
+    expect(await failure(value.request('explorer.peek', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
     // Execute serves both engines, but main refuses each engine the other's options before sending.
     expect(await failure(value.request('query.execute', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', includeActualPlan: true } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
     expect(await failure(value.request('query.execute', { connectionId: connection.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', database: 'master', dataset: 'varia_fixture' } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
+    expect(await failure(value.request('query.execute', { connectionId: connection.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', preview: { project: 'varia-alpha', dataset: 'sales', table: 'orders' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
     // A method declared for both engines that names no connection is C#'s to check.
     await expect(value.request('results.close', { resultIds: [1] })).resolves.toEqual({ method: 'results.close' })
     expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect', 'databases.list', 'connections.connect', 'databases.list', 'results.close'])

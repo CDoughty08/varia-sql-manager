@@ -120,6 +120,8 @@ export const errorCodes = [
   // Backend: a BigQuery query's dataset in another location, a result over BigQuery's response limit, and a query over the
   // connection's maximum bytes billed.
   'LOCATION_MISMATCH', 'RESULT_TOO_LARGE', 'COST_CAP',
+  // Backend: Preview Rows of a BigQuery table with row access policies, which tabledata.list cannot apply (docs/bigquery.md).
+  'ROW_ACCESS',
   // Backend: a BigQuery commit or rollback close on a session whose job is still running (or, for a commit, a cancelled
   // job not yet DONE); the tab stays (decision 54).
   'JOB_RUNNING',

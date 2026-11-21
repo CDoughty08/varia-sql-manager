@@ -3,6 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { bigQueryDryRunRequestSchema, bigQueryDryRunResultSchema } from '../shared/bigquery/dry-run'
+import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
 import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
@@ -45,6 +46,7 @@ export const requestSchemas = {
   'bigquery.account': bigQueryCredentialParamsSchema,
   'bigquery.projects': bigQueryProjectsParamsSchema,
   'bigquery.dryRun': bigQueryDryRunRequestSchema,
+  'bigquery.properties': bigQueryPropertiesRequestSchema,
   'connections.identity': z.object({}).strict(),
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
@@ -53,7 +55,7 @@ export const requestSchemas = {
     startLine: z.number().int().min(1).max(1_000_000).optional(), startColumn: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
-    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(),
+    maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
     residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
@@ -101,6 +103,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'bigquery.account': bigQueryAccountSchema,
   'bigquery.projects': bigQueryProjectListSchema,
   'bigquery.dryRun': bigQueryDryRunResultSchema,
+  'bigquery.properties': bigQueryPropertiesSchema,
   'connections.databases': databaseListSchema,
   'databases.list': databaseListSchema,
   'language.status': languageStatusSchema,

@@ -5,6 +5,7 @@ import type { ConnectionAuthentication, ConnectionFailureReason } from './connec
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
+import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -201,6 +202,8 @@ export interface QueryOptions {
   residence?: ResidenceSetting
   /** BigQuery: each windowed result's block cache, 16 to 4,096 MiB (queryResults.bigQuery.windowCacheMiB). SQL Server refuses it. */
   windowCacheMiB?: number
+  /** BigQuery: Preview Rows of this table through tabledata.list (free, no job) instead of running `sql`, which is the SELECT the tab shows. SQL Server refuses it. */
+  preview?: BigQueryPreviewTarget
 }
 /** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
 export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
@@ -668,6 +671,7 @@ export interface RpcMethods {
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
+  'bigquery.properties': { params: BigQueryPropertiesRequest; result: BigQueryProperties }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
@@ -936,6 +940,7 @@ export interface VariaApi {
   /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
+  bigQueryProperties(params: BigQueryPropertiesRequest): Promise<ApiResult<BigQueryProperties>>
   /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
    *  resolves whether the entry holds it. */
   setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>

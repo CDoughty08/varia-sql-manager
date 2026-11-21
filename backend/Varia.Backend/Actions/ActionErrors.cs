@@ -61,7 +61,8 @@ internal static class ActionErrors
         ["FILE_ACCESS"] = [5120, 5123],
         // 2571: DBCC CHECKPRIMARYFILE (Attach's Add) outside sysadmin; 5011: ALTER DATABASE without ALTER on it (Take Offline and
         // Bring Online refused in SQL Server); 7983: sp_detach_db's DBCC DETACHDB without db_owner or sysadmin.
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983],
+        // 14392: sp_purge_jobhistory refusing a login below sysadmin and SQLAgentOperatorRole (SQL Server Agent Properties' purge, AG-8a).
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983, 14392],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         // Backup media a restore cannot use: a family misformed or missing (3241, 3242), a damaged or unreadable set (3183, 3189).
         // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system

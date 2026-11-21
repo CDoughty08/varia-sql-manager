@@ -44,7 +44,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -361,9 +361,10 @@ internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestI
     ExplorerFilterDto? Filter = null, bool? GroupBySchema = null);
 /// <summary>An object node (Type "object", Object) or a folder below its nearest object (Type "folder", Owner, Folder).</summary>
 internal sealed record NodeRefDto(string Type, ObjectRefDto? Object = null, ObjectRefDto? Owner = null, string? Folder = null);
-/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); null elsewhere.</summary>
+/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); Project, Dataset and
+/// Table a BigQuery object's project, dataset and (for a column) table (the bq* scopes); null elsewhere.</summary>
 internal sealed record ObjectRefDto(string Kind, string? Database = null, string? Schema = null, string? Name = null, ParentRefDto? Parent = null, string? SsisFolder = null,
-    string? SsisProject = null);
+    string? SsisProject = null, string? Project = null, string? Dataset = null, string? Table = null);
 internal sealed record ParentRefDto(string Kind, string Schema, string Name);
 internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
 internal sealed record TextFilterDto(string Op, string Value);
@@ -445,7 +446,9 @@ internal sealed record ObjectSearchResult(List<ObjectSearchHit> Hits, int Total,
 
 /// <summary>scripting.script: one object for Script As (the wizard will send many), a verb of the catalogue, and every
 /// scripting option (src/shared/scripting/schema.ts). Cancellation is a CANCEL frame for the request.</summary>
-internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options);
+/// <summary>EstimateOnly and MaximumBytesBilled: a BigQuery CREATE's free estimate, and the cap its billed query runs under; SQL Server refuses them.</summary>
+internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options, bool? EstimateOnly = null,
+    long? MaximumBytesBilled = null);
 /// <summary>The 36 options of src/shared/scripting/options.ts in its order; a missing member fails deserialization.</summary>
 internal sealed record ScriptingOptionsDto
 {
@@ -490,7 +493,9 @@ internal sealed record ScriptingOptionsDto
 internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// <summary>The whole script (at most 4,000,000 characters) or an error. Database is where a new query window should
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
-internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
+/// <para>Estimate: a BigQuery CREATE's estimate, answered instead of Text when EstimateOnly asked for it.</para>
+internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null,
+    BigQuery.BigQueryDryRunResult? Estimate = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
 /// what an inline action reads first (renameDatabase), what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),
@@ -583,7 +588,15 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
-    AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null);
+    AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null);
+/// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
+/// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
+internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
+/// <summary>SQL Server Agent Properties' "Delete old history now": every job's history older than Count (1 to agentLimits.purgeCount) days,
+/// weeks or months (Unit 1, 2 or 3) before the server's clock, which the batch computes.</summary>
+/// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
+internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
 /// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
@@ -680,7 +693,8 @@ internal sealed record LoginMappingChangeDto(string Database, string Change, str
 internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
-internal sealed record ActionError(string Code, string Message, bool Retryable);
+/// <summary>Column: the table designer's column (index in the design) a refusal is about, such as a name used twice.</summary>
+internal sealed record ActionError(string Code, string Message, bool Retryable, int? Column = null);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
 /// Service (at most loginLimits.serviceName characters) is the guarded service lookup of the loginFacts, Delete Object and Login
 /// Properties describes only. The owned
@@ -749,7 +763,15 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
-    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null);
+    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null);
+/// <summary>SQL Server Agent Properties' describe (AG-8a, src/shared/actions/agent-properties.ts AgentPropertiesModel).</summary>
+internal sealed record AgentPropertiesDto(AgentSettingsDto Settings, string ServerNow, int ServerOffsetMinutes, string? ReadOnly = null, AgentHistoryFactsDto? History = null, string? HistoryNote = null,
+    string? SettingsNote = null);
+internal sealed record AgentSettingsDto(bool SqlserverRestart, bool MonitorAutostart, int HistoryMaxRows, int HistoryMaxRowsPerJob, bool? AutoStart = null, string? StartupAccount = null,
+    string? ErrorLogFile = null, int? ErrorLoggingLevel = null);
+internal sealed record AgentHistoryFactsDto(long Total, long Recent, List<AgentRetentionJobDto> Jobs, bool JobsTruncated, List<AgentHistoryAgeDto> Ages);
+internal sealed record AgentRetentionJobDto(string Name, long Rows, long Recent);
+internal sealed record AgentHistoryAgeDto(int Days, long Rows);
 /// <summary>Start Job at Step's facts (AG-2): the job it read, whether it is enabled and running, and its steps (at most agentLimits.stepsPerJob).</summary>
 internal sealed record AgentJobFactsDto(string Name, AgentIdentityDto AgentIdentity, bool Enabled, bool Running, List<AgentJobStepDto> Steps, bool StepsTruncated);
 internal sealed record AgentJobStepDto(int Id, string Name);
@@ -824,7 +846,7 @@ internal sealed record DesignTypeDto(string System, int? Length = null, bool? Ma
 /// <summary>Whole numbers of at most 38 digits, as text (decimal(38, 0) does not fit a C# number).</summary>
 internal sealed record DesignIdentityDto(string Seed, string Increment);
 internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup,
-    bool CaseSensitiveNames, bool AccentSensitiveNames, bool? CanCreate = null);
+    bool? CanCreate = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
 /// <summary>One step of an action's reply (src/shared/actions/schema.ts ActionStep). Status: done, failed, skipped or cancelled;
 /// Title: what the step does (at most 64 characters, constant text); Message: SQL Server's text for a failed one; Detail: a name

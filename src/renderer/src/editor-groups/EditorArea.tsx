@@ -36,6 +36,7 @@ import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
+import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
 import PlanDocument from '../plans/PlanDocument'
 
 /**
@@ -140,6 +141,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'activityMonitor' && <ActivityMonitor documentId={id} />}
     {kind === 'objectSearch' && <ObjectSearch documentId={id} />}
     {kind === 'peek' && <PeekTab documentId={id} />}
+    {kind === 'bigQueryProperties' && <BigQueryPropertiesTab documentId={id} />}
     {kind === 'releaseNotes' && <ReleaseNotes documentId={id} />}
     {kind === 'help' && <HelpDocument documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}

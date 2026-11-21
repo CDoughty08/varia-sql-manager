@@ -1,0 +1,1 @@
+{"kind":"bigquery#tableDataList","etag":"example","totalRows":"3","rows":[{"f":[{"v":"1"},{"v":"ada"}]},{"f":[{"v":"2"},{"v":null}]},{"f":[{"v":"3"},{"v":"grace"}]}]}

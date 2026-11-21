@@ -119,9 +119,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
   // ...and that Create is the only one: no second cache with a delegate of its own.
   expect(uses(/\bRemoteResult\.Create\(/g)).toEqual(['SqlService.BigQueryResidence.cs'])
-  // A job's results are read where a query's own rows are (its first page, its pages under the budget) and by Load into
-  // memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
-  expect(uses(/\bQueryResultsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
+  // A job's results are read where a query's own rows are (its first page, a script's statements, its pages under the
+  // budget) and by Load into memory (RemoteQueryAsync): nowhere else reads a windowed result's rows around the cache.
+  expect(uses(/\bQueryResultsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Script.cs', ...Array(3).fill('SqlService.BigQueryExecution.cs'), 'SqlService.BigQueryResidence.cs'])
   const load = residence.indexOf('private async Task<QueryResult> RemoteQueryAsync(')
   expect(load).toBeGreaterThan(0)
   expect(residence.indexOf('bigQuery.QueryResultsAsync(')).toBeGreaterThan(load)
@@ -130,21 +130,27 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(count(remote, /\bEnsure\(/g)).toBe(4)
   expect(count(between('public long[] RowBytes(', '\n    }\n'), /\b(?:Ensure|BlockLocked|FetchAsync)\(/g)).toBe(0)
   expect(residence).toMatch(/private RemoteFetch BigQueryFetch\(BigQueryWindow context\) =>/)
-  // A table's rows are listed (tabledata.list) in TableRowsAsync alone, and that is called from the delegate alone (a query's
-  // own rows, Load into memory's included, come through its job's results under the budget).
-  expect(uses(/\bTabledata\b/g)).toEqual(['BigQuery/BigQueryService.Jobs.cs'])
+  // A table's rows are listed (tabledata.list) in TableRowsAsync, called from the delegate alone (a query's own rows, Load
+  // into memory's included, come through its job's results under the budget), and by Preview Rows, which reads a table's
+  // first rows into the tab's result store under the budget (a stored table the user chose, never a windowed result's).
+  expect(uses(/\bTabledata\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryPreview.cs'])
+  const preview = files.find(({ file }) => file === 'SqlService.BigQueryPreview.cs')!.code
+  expect(count(preview, /\bTabledata\.List\(args\.Project, args\.Dataset, args\.Table\)/g)).toBe(1)
+  expect(preview).not.toMatch(/\bRemoteResult\b|\bBigQueryWindow\b|\bTableRowsAsync\b/)
   // ...and no other client reads rows: the typed client's row listings and query results and the resource classes, however
   // spelled, appear only in Jobs.cs's two requests (a job's results page and tabledata.list).
-  expect(uses(/\b(?:[Tt]abledata\w*|TableDataList\w*|[Gg]etQueryResults\w*|ExecuteQuery\w*)\b|\bListRows\w*\s*\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Jobs.cs'])
+  // (Code only: a message naming tabledata.list reads nothing.)
+  const codeUses = (pattern: RegExp) => files.flatMap(({ file, code }) => Array.from(code.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').matchAll(pattern), () => file))
+  expect(codeUses(/\b(?:[Tt]abledata\w*|TableDataList\w*|[Gg]etQueryResults\w*|ExecuteQuery\w*)\b|\bListRows\w*\s*\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryPreview.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
   const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
   expect(tableRows.indexOf('\n\n    ')).toBeGreaterThan(0)
   expect(tableRows.slice(0, tableRows.indexOf('\n\n    ')).includes('service.Tabledata.List(')).toBe(true)
-  // Every page of rows is read by PageAsync, called only for a job's results and for TableRowsAsync: no request of another
-  // shape (a table's data endpoint by hand) reaches it.
-  expect(uses(/\bPageAsync\(/g)).toEqual(Array(3).fill('BigQuery/BigQueryService.Jobs.cs'))
-  expect(count(tableRows.slice(0, tableRows.indexOf('\n\n    ')), /\bPageAsync\(/g)).toBe(1)
-  expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bPageAsync\(service, request\.CreateRequest\(\), token\)/g)).toBe(1)
+  // Every page of rows is read by SendRawAsync, called only for a job's results, for TableRowsAsync and by Preview Rows (its
+  // table's metadata and its tabledata.list): no request of another shape (a table's data endpoint by hand) reaches it.
+  expect(uses(/\bSendRawAsync\(/g).sort()).toEqual([...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
+  expect(count(tableRows.slice(0, tableRows.indexOf('\n\n    ')), /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
+  expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
   expect(uses(/\bTableRowsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)

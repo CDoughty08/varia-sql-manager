@@ -31,6 +31,8 @@ internal sealed class BigQueryPage(JsonDocument document, long bytes) : IDisposa
     public int RowCount => Rows.ValueKind == JsonValueKind.Array ? Rows.GetArrayLength() : 0;
     public long? TotalRows => Count("totalRows");
     public long? NumDmlAffectedRows => Count("numDmlAffectedRows");
+    /// <summary>A top-level string property (tables.get's type), or null.</summary>
+    public string? Text(string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     /// <summary>The next page's token; null on the last page. One Varia cannot send back fails the read rather than ending it
     /// early with rows unread.</summary>
     public string? PageToken => !root.TryGetProperty("pageToken", out var value) || value.ValueKind == JsonValueKind.Null || value.ValueKind == JsonValueKind.String && value.GetString() is ""
@@ -208,7 +210,7 @@ internal sealed partial class BigQueryService
         request.MaxResults = maxResults;
         request.TimeoutMs = waitMs;
         request.FormatOptionsUseInt64Timestamp = true;
-        return await PageAsync(service, request.CreateRequest(), token);
+        return await SendRawAsync(service, request, token);
     }
 
     /// <summary>
@@ -226,15 +228,14 @@ internal sealed partial class BigQueryService
             request.PageToken = pageToken;
             request.MaxResults = maxResults;
             request.FormatOptionsUseInt64Timestamp = true;
-            return PageAsync(service, request.CreateRequest(), t);
+            return SendRawAsync(service, request, t);
         }, token, rateLimits: false);
 
-    /// <summary>A page answer's body read into a parsed document (at most <see cref="MaxPageBytes"/>); a refusal throws
-    /// Google's error.</summary>
-    async Task<BigQueryPage> PageAsync(Google.Apis.Bigquery.v2.BigqueryService service, HttpRequestMessage request, CancellationToken token)
+    /// <summary>A REST read whose JSON body Varia parses itself, under <see cref="MaxPageBytes"/>: sent through the service's
+    /// client (its credential and the library's own retries).</summary>
+    internal async Task<BigQueryPage> SendRawAsync(Google.Apis.Bigquery.v2.BigqueryService service, Google.Apis.Requests.IClientServiceRequest request, CancellationToken token)
     {
-        // Sent through the service's client (its credential and the library's own retries), its body read here.
-        using var message = request;
+        using var message = request.CreateRequest();
         using var response = await service.HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
         if (!response.IsSuccessStatusCode)
         {

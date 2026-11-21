@@ -61,7 +61,14 @@ const b3: readonly (readonly [NodeKind, readonly (NodeSubtype | '')[] | '*', rea
     ['planGuide', 'Plan Guide'], ['login', 'Login'], ['serverRole', 'Server Role'], ['credential', 'Credential'], ['linkedServer', 'Linked Server'], ['backupDevice', 'Backup Device'],
     ['audit', 'Audit'], ['serverAuditSpecification', 'Server Audit Specification'],
     ['agentJob', 'Job'], ['agentAlert', 'Alert'], ['agentOperator', 'Operator'], ['agentProxy', 'Proxy']
-  ] as const).map(([kind, title]) => [kind, '*', undefined, title, createDrop] as const)
+  ] as const).map(([kind, title]) => [kind, '*', undefined, title, createDrop] as const),
+  // BigQuery (BQ-5): CREATE from INFORMATION_SCHEMA, DROP and SELECT templates, and a table's DML; a snapshot's rows cannot change.
+  ['bqTable', [''], undefined, 'Table', '✓––✓–✓✓✓✓––'],
+  ['bqTable', ['snapshot'], undefined, 'Table Snapshot', '✓––✓–✓○○○––'],
+  ['bqView', '*', undefined, 'View', '✓––✓–✓–––––'],
+  ['bqMaterializedView', '*', undefined, 'Materialized View', '✓––✓–✓–––––'],
+  ['bqExternalTable', '*', undefined, 'External Table', '✓––✓–✓–––––'],
+  ['bqRoutine', '*', undefined, 'Routine', '✓––✓–––––––']
 ]
 const later = ['assembly', 'asymmetricKey', 'certificate', 'symmetricKey', 'columnMasterKey', 'columnEncryptionKey', 'cryptographicProvider', 'externalDataSource', 'externalFileFormat']
 const marks = (state: { verbs: Record<ScriptVerb, string>; modifiable: boolean }) =>
@@ -80,7 +87,8 @@ const urns: Readonly<Record<string, string>> = {
   partitionFunction: 'PartitionFunction', planGuide: 'PlanGuide',
   login: 'Login', serverRole: 'Role', credential: 'Credential', linkedServer: 'LinkedServer', backupDevice: 'BackupDevice', serverTrigger: 'DdlTrigger', audit: 'Audit',
   serverAuditSpecification: 'ServerAuditSpecification',
-  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'ProxyAccount'
+  agentJob: 'Job', agentAlert: 'Alert', agentOperator: 'Operator', agentProxy: 'ProxyAccount',
+  bqTable: 'BigQuery', bqView: 'BigQuery', bqMaterializedView: 'BigQuery', bqExternalTable: 'BigQuery', bqRoutine: 'BigQuery'
 }
 const preflights: Readonly<Record<string, readonly NodeKind[]>> = {
   module: ['view', 'procedure', 'function', 'rule', 'default'], table: ['table'], child: ['key', 'constraint', 'trigger', 'index', 'statistic'], type: ['type', 'tableType'],
@@ -88,7 +96,8 @@ const preflights: Readonly<Record<string, readonly NodeKind[]>> = {
   databaseObject: ['user', 'databaseRole', 'applicationRole', 'schema', 'databaseAuditSpecification', 'databaseTrigger', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme',
     'partitionFunction', 'searchPropertyList', 'planGuide'],
   database: ['database'], serverObject: ['login', 'serverRole', 'credential', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger'],
-  agentObject: ['agentJob', 'agentAlert', 'agentOperator', 'agentProxy']
+  agentObject: ['agentJob', 'agentAlert', 'agentOperator', 'agentProxy'],
+  bigquery: ['bqTable', 'bqView', 'bqMaterializedView', 'bqExternalTable', 'bqRoutine']
 }
 
 describe('scripting catalogue', () => {
@@ -108,7 +117,7 @@ describe('scripting catalogue', () => {
     }
     expect(unique(scriptVerbs.map(verb => scriptVerbSpecs[verb].mnemonic))).toBe(true)
     expect(unique(scriptDestinations.map(destination => scriptDestinationSpecs[destination].mnemonic))).toBe(true)
-    expect(scriptAsTitleKeys).toHaveLength(43)
+    expect(scriptAsTitleKeys).toHaveLength(47)
     expect(unique(scriptAsTitleKeys)).toBe(true)
     expect(unique(Object.values(scriptAsTitles))).toBe(true)
     expect(Object.keys(scriptObjectTitles)).toEqual([...scriptAsTitleKeys])
@@ -219,6 +228,7 @@ describe('scripting catalogue', () => {
     expect(entries['explorer.scriptCreateToNewQuery']).toEqual({
       title: 'Script as CREATE to New Query Editor Window', category: 'Object Explorer', icon: 'file-code', keywords: ['script'],
       precondition: "backendReady && explorerScriptCreate == 'enabled' && !documentBusy", unavailableHint: 'Select an object in Object Explorer that can be scripted.', palette: false,
+      providers: ['sqlserver', 'bigquery'],
       menus: [{ menu: 'explorer.scriptAs.create', group: '1_destination', order: 1, title: 'New Query Editor Window', mnemonic: 'n' }]
     })
     expect(entries['explorer.scriptCreateOrAlterToClipboard'].precondition).toBe("backendReady && explorerScriptCreateOrAlter == 'enabled'")
@@ -236,7 +246,7 @@ describe('scripting catalogue', () => {
     const entries = scriptSubmenuEntries()
     expect(Object.keys(entries)).toEqual([...scriptSubmenuIds])
     expect(entries['explorer.scriptAs']).toEqual({
-      title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs',
+      providers: ['sqlserver', 'bigquery'], title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs',
       placements: [
         { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" },
         // A Search Objects result's menu stands in the result's keys for the selection's.
@@ -244,7 +254,7 @@ describe('scripting catalogue', () => {
       ]
     })
     expect(entries['explorer.scriptAs.createOrAlter']).toEqual({
-      title: 'CREATE OR ALTER To', nativeId: 'explorer.scriptAs.createOrAlter', placements: [{ menu: 'explorer.scriptAs', group: '1_ddl', order: 3, mnemonic: 'r', when: "explorerScriptCreateOrAlter != ''" }]
+      providers: ['sqlserver', 'bigquery'], title: 'CREATE OR ALTER To', nativeId: 'explorer.scriptAs.createOrAlter', placements: [{ menu: 'explorer.scriptAs', group: '1_ddl', order: 3, mnemonic: 'r', when: "explorerScriptCreateOrAlter != ''" }]
     })
     for (const entry of Object.values(entries)) for (const placement of entry.placements) expect(() => parseWhen(placement.when)).not.toThrow()
   })
@@ -263,8 +273,8 @@ describe('scripting catalogue', () => {
     expect(scriptLimits.budgetMs).toBeLessThan(scriptLimits.requestMs)
     expect(scriptLimits.maxScriptChars * 3).toBeLessThan(16 * 1024 * 1024)
     expect(scriptErrorCodes).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'ENCRYPTED', 'NO_DEFINITION', 'PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'TOO_LARGE', 'EMPTY', 'BLOCKED',
-      'TIMEOUT', 'CONNECTION_LOST', 'UNREPRESENTABLE', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY'])
-    expect(scriptErrorCodes.filter(code => scriptErrorRetryable[code])).toEqual(['PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA'])
+      'TIMEOUT', 'CONNECTION_LOST', 'UNREPRESENTABLE', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'AUTH_IDENTITY', 'COST_CAP', 'QUOTA', 'AUTH_EXPIRED'])
+    expect(scriptErrorCodes.filter(code => scriptErrorRetryable[code])).toEqual(['PERMISSION_DENIED', 'DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SMO_ERROR', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'QUOTA'])
   })
   it('loads in plain Node 24, so scripts and test fixtures can share it', () => {
     const files = ['catalog.ts', 'options.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'scripting', name))
@@ -388,7 +398,7 @@ describe('generated scripting files', () => {
     expect(docs).toContain('`table` (`droppedLedger`)')
     expect(docs).toContain('`certificate`')
     expect(docs).toContain('| `login` | none, `sa`, `system`, `sql`, `windowsUser`, `windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | Script Login as |')
-    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`.')
+    expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`, `agent`, `agentJobActivity`, `agentProxySubsystem`, `agentErrorLog`, `bqProject`, `bqDataset`, `bqModel`, `bqColumn`.')
     expect(docs).toContain('| `maxScriptChars` | 4,000,000 |')
   })
 })
