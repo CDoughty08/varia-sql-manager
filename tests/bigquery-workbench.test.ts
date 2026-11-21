@@ -6,7 +6,7 @@ import { queryStatusModel } from '../src/renderer/src/results/query-status'
 import { queryContextModel } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { executePendingQuery } from '../src/renderer/src/services/connection-opening'
-import { deferred } from './fixtures/documents'
+import { deferred, TestEditor } from './fixtures/documents'
 import { readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
@@ -15,6 +15,21 @@ const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provide
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
 describe('BigQuery connections in the workbench (BQ-2)', () => {
+  it('keeps Toggle Brackets from rewriting the bound GoogleSQL model when a command targets a SQL Server object', async () => {
+    const value = workbenchFixture()
+    try {
+      const sql = 'SELECT [1] AS items', query = value.documents.restore('arrays.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+      const editor = new TestEditor()
+      value.documents.bindEditor(editor.asEditor())
+      expect(value.documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+      const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
+      const args = { target: { kind: 'explorer' as const, node } }
+      expect(value.commands.isEnabled('edit.toggleBrackets', args)).toBe(false)
+      expect(await value.commands.execute('edit.toggleBrackets', args, 'toolbar')).toBe(false)
+      expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+    } finally { value.dispose() }
+  })
+
   it('lists a restored BigQuery target by its project and dataset, and reconnects it at startup with its pinned account', async () => {
     const value = workbenchFixture(), ready = deferred<void>()
     try {
