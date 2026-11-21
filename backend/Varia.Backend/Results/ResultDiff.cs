@@ -888,7 +888,7 @@ internal static class ResultDiffer
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
             if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r))) continue;
-            var text = leftHasher.IsText(lc);
+            var text = leftHasher.IsText(lc) || leftHasher.AsText(lc, leftView.Span(lc, l), rightView.Span(rc, r));
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
             // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
             var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r);

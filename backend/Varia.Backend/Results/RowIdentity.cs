@@ -345,6 +345,11 @@ internal sealed class CellHasher
     /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
     public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;
 
+    /// <summary>Whether two non-NULL cells of an exact numeric column compare as text, as <see cref="Same"/> does when either
+    /// is not a number (a second result's text column compares by the first's kind), so that a diff treats them as text.</summary>
+    public bool AsText(int column, ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
+        kinds[column] == Kind.Exact && (!NumericParts(a, out _, out _, out _) || !NumericParts(b, out _, out _, out _));
+
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
         view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(Value(view.Span(column, row), column, Offset));
@@ -370,8 +375,9 @@ internal sealed class CellHasher
             case Kind.Trimmed: return ViewSorter.TrimEnd(a).SequenceEqual(ViewSorter.TrimEnd(b));
             case Kind.Exact:
             {
-                var negativeA = NumericParts(a, out var wholeA, out var fractionA);
-                var negativeB = NumericParts(b, out var wholeB, out var fractionB);
+                // Text that is not a number (a second result's empty or padded text) compares as text, as it would were it first.
+                if (!NumericParts(a, out var negativeA, out var wholeA, out var fractionA) | !NumericParts(b, out var negativeB, out var wholeB, out var fractionB))
+                    return ViewSorter.TrimEnd(a).SequenceEqual(ViewSorter.TrimEnd(b));
                 return negativeA == negativeB && wholeA.SequenceEqual(wholeB) && fractionA.SequenceEqual(fractionB);
             }
             case Kind.Guid:
@@ -447,26 +453,37 @@ internal sealed class CellHasher
     }
 
     /// <summary>An exact numeric's digits without a sign on zero, leading zeros or trailing fractional zeros, so 1.50, 01.5
-    /// and 1.5 hash alike.</summary>
+    /// and 1.5 hash alike. Trailing spaces never count, as in text; other text that is not a number hashes by its bytes
+    /// behind a mark, apart from every number, so cells <see cref="Same"/> calls equal hash alike.</summary>
     private static ulong Numeric(ulong hash, ReadOnlySpan<byte> text)
     {
-        var negative = NumericParts(text, out var whole, out var fraction);
+        text = ViewSorter.TrimEnd(text);
+        if (!NumericParts(text, out var negative, out var whole, out var fraction)) return Bytes(Step(hash, (byte)'!'), text);
         if (negative) hash = Step(hash, (byte)'-');
         hash = Bytes(hash, whole);
         if (!fraction.IsEmpty) { hash = Step(hash, (byte)'.'); hash = Bytes(hash, fraction); }
         return hash;
     }
 
-    /// <summary>Whether an exact numeric is negative (never zero), its whole digits without leading zeros and its fraction
-    /// without trailing ones.</summary>
-    private static bool NumericParts(ReadOnlySpan<byte> text, out ReadOnlySpan<byte> whole, out ReadOnlySpan<byte> fraction)
+    /// <summary>Whether the text is an exact numeric (an optional minus, digits and an optional point, at least one digit, no
+    /// spaces), and if so whether it is negative (never zero), its whole digits without leading zeros and its fraction
+    /// without trailing ones. A second result's text column compares by the first's kind, so its cells may be anything.</summary>
+    internal static bool NumericParts(ReadOnlySpan<byte> text, out bool negative, out ReadOnlySpan<byte> whole, out ReadOnlySpan<byte> fraction)
     {
-        var negative = text.Length > 0 && text[0] == (byte)'-';
+        negative = text.Length > 0 && text[0] == (byte)'-';
         if (negative) text = text[1..];
         var point = text.IndexOf((byte)'.');
-        whole = (point < 0 ? text : text[..point]).TrimStart((byte)'0');
-        fraction = (point < 0 ? [] : text[(point + 1)..]).TrimEnd((byte)'0');
-        return negative && !(whole.IsEmpty && fraction.IsEmpty);
+        whole = point < 0 ? text : text[..point];
+        fraction = point < 0 ? [] : text[(point + 1)..];
+        if (whole.IsEmpty && fraction.IsEmpty || whole.ContainsAnyExceptInRange((byte)'0', (byte)'9') || fraction.ContainsAnyExceptInRange((byte)'0', (byte)'9'))
+        {
+            negative = false;
+            return false;
+        }
+        whole = whole.TrimStart((byte)'0');
+        fraction = fraction.TrimEnd((byte)'0');
+        negative = negative && !(whole.IsEmpty && fraction.IsEmpty);
+        return true;
     }
 
     private ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8)

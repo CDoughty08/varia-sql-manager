@@ -165,6 +165,34 @@ internal static partial class DiffChecks
         var vb = PageView.Parse(PinnedPage.Body(b.SealedSnapshot()[0]), 2);
         check(left2.Same(va, 0, 0, right2, vb, 0, 0) && left2.Same(va, 1, 0, right2, vb, 1, 0) && !left2.Same(va, 0, 0, right2, vb, 0, 1) && !left2.Same(va, 1, 0, right2, vb, 1, 1)
             , "values compare by value (collation, trailing spaces, numeric form), so a hash collision cannot make different values equal");
+
+        // Text that is not a number never equals one, whichever result holds the number: the second result's text compares by
+        // the first's exact kind, which once read "" (and "-", ".") as 0.
+        ResultColumn[] keyedInts = [new("Id", "int", "text"), new("Qty", "int", "text")], keyedTexts = [new("Id", "int", "text"), new("Qty", "nvarchar", "text", Collation: CaseInsensitive)];
+        string Both(string text, bool exact)
+        {
+            var (intLeft, textRight) = Pair(store, [["1", "0"]], [["1", text]], keyedTexts, keyedInts);
+            var forward = ResultDiffer.Compare(intLeft, intLeft.SealedSnapshot(), textRight, textRight.SealedSnapshot(), exact, CancellationToken.None);
+            var (textLeft, intRight) = Pair(store, [["1", text]], [["1", "0"]], keyedInts, keyedTexts);
+            var backward = ResultDiffer.Compare(textLeft, textLeft.SealedSnapshot(), intRight, intRight.SealedSnapshot(), exact, CancellationToken.None);
+            return Entries(forward) + string.Join(",", forward.CellsOf(forward.Entries[0]).ToArray()) + " / " + Entries(backward) + string.Join(",", backward.CellsOf(backward.Entries[0]).ToArray());
+        }
+        foreach (var exact in new[] { false, true })
+        {
+            foreach (var text in new[] { "", " ", "  ", "-", ".", "-.", " 0 ", " 0", "+0", "0x0", "O", "abc", "1.2.3", "--1", "0-" })
+                check(Both(text, exact) == "~0:01 / ~0:01", "integer 0 and the text '" + text + "' differ in both directions" + (exact ? " (Exact)" : "") + ": " + Both(text, exact));
+            // Trailing spaces are text's soft difference whichever result holds the text, and a change under Exact.
+            check(Both("0 ", exact) == (exact ? "~0:01 / ~0:01" : "=0:0-2 / =0:0-2"), "integer 0 and the text '0 ' compare alike in both directions" + (exact ? " (Exact)" : "") + ": " + Both("0 ", exact));
+        }
+        var (zeroLeft, zerosRight) = Pair(store, [["1", "0"], ["2", "-1.50"]], [["1", "-0.00"], ["2", "-01.5"]], keyedTexts, keyedInts);
+        var numbers = ResultDiffer.Compare(zeroLeft, zeroLeft.SealedSnapshot(), zerosRight, zerosRight.SealedSnapshot(), true, CancellationToken.None);
+        check(Entries(numbers) == "=0:0 =1:1", "text that is a number still compares by value against the first's numbers (-0.00 is 0, -01.5 is -1.50): " + Entries(numbers));
+        // Whole rows: the empty text's row hashes apart from the 0 row, so neither matches the other.
+        var (wholeLeft, wholeRight) = Pair(store, [["0"]], [[""]], [new("Qty", "nvarchar", "text")], [new("Qty", "int", "text")]);
+        var whole = ResultDiffer.Compare(wholeLeft, wholeLeft.SealedSnapshot(), wholeRight, wholeRight.SealedSnapshot(), false, CancellationToken.None);
+        check(!whole.Entries.Any(entry => entry.Kind == DiffKind.Same), "an empty text row does not match an integer 0 row by whole rows: " + Entries(whole));
+        foreach (var (text, valid) in new[] { ("0", true), ("-0", true), ("5.", true), (".5", true), ("-.5", true), ("007", true), ("", false), ("-", false), (".", false), (" 1", false), ("1e3", false) })
+            check(CellHasher.NumericParts(System.Text.Encoding.UTF8.GetBytes(text), out _, out _, out _) == valid, "'" + text + "' is " + (valid ? "" : "not ") + "an exact numeric");
     }
 
     /// <summary>A row that differs in every one of many columns lists each of them in its tone.</summary>
