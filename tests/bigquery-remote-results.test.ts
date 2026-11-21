@@ -181,7 +181,11 @@ describe('the user-facing text about windowed results', () => {
     // No renderer command loads a windowed result yet: the docs must not tell the user to.
     const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
     const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
-    if (!sources.some(name => readFileSync(join(renderer, name), 'utf8').includes('remoteQuery('))) {
+    // A real call on a code line: a comment, or a wrapper's own declaration, does not turn the gate off.
+    const calls = (text: string) => text.split('\n').some(line => !/^\s*(\/\/|\*|\/\*)/.test(line) && /\.remoteQuery\s*\(/.test(line))
+    expect(calls('  // window.varia.results.remoteQuery(x)\n  remoteQuery(params: Args) {')).toBe(false)
+    expect(calls('    await window.varia.results.remoteQuery(args)')).toBe(true)
+    if (!sources.some(name => calls(readFileSync(join(renderer, name), 'utf8')))) {
       expect(bigquery).toMatch(/- \*\*Load into memory\.\*\* No command runs it yet/)
       expect(bigquery).not.toMatch(/\| `BUSY` \|[^\n]*\| Load it /)
     }
