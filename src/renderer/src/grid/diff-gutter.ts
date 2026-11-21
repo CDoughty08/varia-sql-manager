@@ -37,20 +37,20 @@ const fallbackSides: DiffSides = { old: 'the old result', new: 'the new result' 
 export const cutRowText = 'More changes in this row are not listed'
 
 /**
- * A comparison row's gutter from its hidden suffix cells (`null` for NULL): the marker (" " same, "−" removed or a changed
- * entry's old half, "+" added or its new half), its 1-based rows in the old and new inputs, and its tone (for its flags).
+ * A comparison row's gutter from its hidden suffix cells (`null` for NULL): the marker (" " same, "~" a changed entry in
+ * one row, "−" removed or a changed entry's old half, "+" added or its new half), its 1-based rows in the old and new inputs, and its tone (for its flags).
  * The number is the new input's row, except on a "−" row, which shows the old input's. Both halves of a changed entry carry
  * both rows; a row with one side is added or removed. A possible match's partner is in the other input: the new one for a
  * removed row, the old one for an added row.
  */
 export function diffGutter(mark: string | null, leftRow: string | null, rightRow: string | null, sides: DiffSides = fallbackSides, tone?: string | null): DiffGutter {
-  const removed = mark === '−', added = mark === '+'
-  const kind = removed ? (rightRow === null ? 'Removed' : 'Changed, old values') : added ? (leftRow === null ? 'Added' : 'Changed, new values') : 'Unchanged'
+  const removed = mark === '−', added = mark === '+', changed = mark === '~'
+  const kind = removed ? (rightRow === null ? 'Removed' : 'Changed, old values') : added ? (leftRow === null ? 'Added' : 'Changed, new values') : changed ? 'Changed' : 'Unchanged'
   const own = removed ? leftRow : rightRow
   const flags = toneFlagsOf(tone)
   const partner = flags.partner !== undefined && (removed || added) ? `possible match with row ${formatCount(flags.partner)} in ${removed ? sides.new : sides.old}` : ''
   const described = [kind, flags.repeated ? 'repeated key' : '', partner].filter(Boolean).join(', ')
   const rows = [leftRow === null ? '' : `row ${formatCount(Number(leftRow))} in ${sides.old}`, rightRow === null ? '' : `row ${formatCount(Number(rightRow))} in ${sides.new}`].filter(Boolean)
   const name = (rows.length > 0 ? `${described}; ${rows.join(', ')}` : described) + (flags.cut ? `. ${cutRowText}` : '')
-  return { mark: removed ? '−' : added ? '+' : '', number: own === null ? '' : own, flag: flags.repeated ? '≈' : partner ? '?' : '', name }
+  return { mark: removed ? '−' : added ? '+' : changed ? '~' : '', number: own === null ? '' : own, flag: flags.repeated ? '≈' : partner ? '?' : '', name }
 }

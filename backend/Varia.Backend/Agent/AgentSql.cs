@@ -70,7 +70,11 @@ internal static partial class AgentSql
     /// <summary>A job's steps, for Start Job at Step (AG-2; every Agent role may read them).</summary>
     public static readonly AgentStatement JobSteps = new("jobSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name"], [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps];
+    /// <summary>Every setting the SQL Server Agent Properties dialog shows (AG-8a), from sp_get_sqlagent_properties (every Agent role may run it; 15281 while Agent XPs is off).</summary>
+    public static readonly AgentStatement AgentProperties = new("agentProperties", "EXEC msdb.dbo.sp_get_sqlagent_properties;",
+        ["auto_start", "startup_account", "sqlserver_restart", "monitor_autostart", "jobhistory_max_rows", "jobhistory_max_rows_per_job", "errorlog_file", "errorlogging_level"], [], "listRows");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

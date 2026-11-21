@@ -241,6 +241,11 @@ describe('restore requests', () => {
       restore: { ...options, stopAt: '2026-10-29T21:05:43', relocate: [{ logical: "l'o]g", physical: '/var/opt/mssql/data/x\'y.ldf' }], recovery: 'standby', standbyFile: '\\\\files\\share\\u.bak',
         tailLog: { file: 'C:\\Backup\\t.bak', noRecovery: true }, closeConnections: true, replace: true, restrictedUser: true } }
     expect(validateRequest('actions.script', hostile)).toEqual(hostile)
+    // Each set may pin the BackupSetGUID it was reviewed against, a lower-case uuid as the backend writes it.
+    const pinned = { ...request, restore: { ...options, sets: options.sets.map((item, index) => ({ ...item, guid: `abcdef0${index}-0000-4000-8000-000000000000` })) } }
+    expect(validateRequest('actions.execute', pinned)).toEqual(pinned)
+    for (const guid of ['ABCDEF00-0000-4000-8000-000000000000', '1:1', 'abcdef00-0000-4000-8000-0000000000000', ''])
+      expect(() => validateRequest('actions.execute', { ...request, restore: { ...options, sets: [{ ...set, guid }] } }), guid).toThrow('Invalid request')
     // actions.execute takes the same restore (D1f), and refuses what actions.script refuses.
     expect(validateRequest('actions.execute', hostile)).toEqual(hostile)
     expect(() => validateRequest('actions.execute', { ...request, restore: { ...options, sets: [] } })).toThrow('Invalid request')

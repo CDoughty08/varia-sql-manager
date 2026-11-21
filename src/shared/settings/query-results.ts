@@ -85,5 +85,11 @@ export const queryResultsSettings = [
   { key: 'queryResults.plan.minimap', page: 'queryResults.sqlServer.grid', group: 'Execution plan', label: 'Show minimap', title: 'Show execution plan minimap', type: 'boolean', default: true, varia: true, description: 'Show a bounded overview of the plan and its viewport.' },
   { key: 'queryResults.plan.rowFlow', page: 'queryResults.sqlServer.grid', group: 'Execution plan', label: 'Show row flow', title: 'Show execution plan row flow', type: 'boolean', default: true, varia: true, description: 'Label edges with actual, estimated, unavailable or partial live rows.' },
   { key: 'queryResults.plan.outlineWidth', page: 'queryResults.sqlServer.grid', group: 'Execution plan', label: 'Outline width', title: 'Execution plan outline width', type: 'integer', min: 120, max: 600, default: 220, unit: 'px', varia: true, description: 'Preferred outline width in pixels. The pane shrinks to fit a small window.' },
-  { key: 'queryResults.plan.propertiesWidth', page: 'queryResults.sqlServer.grid', group: 'Execution plan', label: 'Properties width', title: 'Execution plan properties width', type: 'integer', min: 140, max: 600, default: 260, unit: 'px', varia: true, description: 'Preferred properties width in pixels. The pane shrinks to fit a small window.' }
+  { key: 'queryResults.plan.propertiesWidth', page: 'queryResults.sqlServer.grid', group: 'Execution plan', label: 'Properties width', title: 'Execution plan properties width', type: 'integer', min: 140, max: 600, default: 260, unit: 'px', varia: true, description: 'Preferred properties width in pixels. The pane shrinks to fit a small window.' },
+  {
+    key: 'queryResults.compare.layout', page: 'queryResults.sqlServer.grid', group: 'Comparisons', label: 'Show a comparison as', title: 'Comparison layout', type: 'enum', varia: true,
+    values: [{ value: 'entry', label: 'One row per entry' }, { value: 'unified', label: 'Two rows (−/+)' }], default: 'entry',
+    keywords: ['compare', 'comparison', 'diff', 'differences', 'layout', 'one row', 'two rows', 'unified', 'old', 'new'],
+    description: 'How a new comparison draws its rows. One row per entry, the default, shows a changed row once, each changed value as old → new. Two rows shows a changed row as its old row (−) and its new row (+), with the changed values coloured. A comparison too wide for one row per entry (more than 2,046 compared columns) shows two rows. The Layout button in a comparison toolbar changes that comparison only.'
+  }
 ] as const satisfies readonly SettingDef[]

@@ -92,5 +92,7 @@ internal static partial class AgentSql
         }
         yield return ("job by name", LintRead(JobByName, null));
         yield return ("service host", LintRead(ServiceHost, null));
+        // SQL Server Agent Properties' server-scope writes and reads (AG-8a, AgentSql.Properties.cs).
+        foreach (var item in LintServerWrites()) yield return item;
     }
 }

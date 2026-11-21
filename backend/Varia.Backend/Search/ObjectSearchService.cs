@@ -104,6 +104,8 @@ internal sealed class ObjectSearchService : IDisposable
     public long Builds => Interlocked.Read(ref builds);
     /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
     public long Forgets => Interlocked.Read(ref forgets);
+    /// <summary>The slots the walk's set keeps between walks (the checks read it).</summary>
+    internal int WalkSetCapacity { get { lock (walkSeen) return walkSeen.EnsureCapacity(0); } }
     /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
     internal int DetailWalks => Volatile.Read(ref detailWalks);
 
@@ -121,7 +123,14 @@ internal sealed class ObjectSearchService : IDisposable
     {
         Interlocked.Increment(ref detailWalks);
         var (build, search) = Times();
-        lock (walkSeen) return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used, walkSeen);
+        lock (walkSeen)
+        {
+            var detail = IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used, walkSeen);
+            // The set's arrays, which no budget charges, are kept only while builds walk every few seconds; with none running,
+            // walks are rare (a disconnect, a build's end), so it is given back.
+            if (!states.Values.Any(state => Volatile.Read(ref state.Building))) walkSeen.TrimExcess();
+            return detail;
+        }
     }
 
     /// <summary>A memory detail from an earlier walk brought up to <paramref name="used"/> without walking: the pool's counts and the
