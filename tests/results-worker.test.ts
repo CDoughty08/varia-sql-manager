@@ -280,6 +280,17 @@ describe('results worker core', () => {
     }
   })
 
+  it('reads a cell again when a new revision ends its read, rather than saying the row is not available', () => {
+    const { core, reads, serve, posted } = fixture()
+    core.handle({ type: 'cell', id: 70, key, wires, row: 10, col: 1 })
+    expect(reads()).toHaveLength(1)
+    core.handle({ type: 'revise', key })
+    expect(reads()).toHaveLength(2)
+    expect(posted.some(message => 'id' in message && message.id === 70)).toBe(false)
+    serve(reads()[1].rid)
+    expect(posted.find(message => 'id' in message && message.id === 70)).toEqual({ type: 'cell', id: 70, text: 'name 10', isNull: false, truncated: false, error: false, formatted: false })
+  })
+
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
     const { window, core, posted, serve, answer } = fixture()
     window(0, 64)

@@ -283,9 +283,12 @@ export class ResultsWorkerCore {
   }
 
   /** A whole stored value. Formatting runs here, off the UI thread; a value stored as a prefix is never formatted. */
-  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat): void {
+  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat, again = true): void {
     this.wait(id, key, wires, row, 1, () => {
       const page = this.pageAt(resultOf(key), row)
+      // Its read ended without the row: a new revision dropped the pages (resultSet.residence), or a windowed read answered
+      // short. The same rows read once more, before saying the row is not available.
+      if (!page && again && col >= 0 && col < wires.length) return this.cell(id, key, wires, row, col, format, false)
       if (!page || col < 0 || col >= wires.length) return this.error(id, 'RESULT_UNAVAILABLE', 'That row is not available.')
       this.touch(page)
       const flags = cellFlags(page.view, col, row - page.firstRow)
