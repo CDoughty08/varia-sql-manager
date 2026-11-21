@@ -774,7 +774,7 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null);
+    List<string>? Jobs = null, List<string>? JobIds = null);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
     string? LastRun = null, int? LastOutcome = null);

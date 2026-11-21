@@ -259,7 +259,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined, stale: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string): Promise<void> {
+  private async describe(id: string, notice?: string, followed = false): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
     const requestId = this.begin(id, 'describe')
@@ -267,7 +267,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!this.end(id, requestId)) return
     const failure = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error
     const model = result.ok ? result.value.agentJobDocument : undefined
-    const current = this.get(id)!
+    if (failure?.code === 'NOT_FOUND' && !followed && await this.followRename(id)) return this.describe(id, notice, true)
+    const current = this.get(id)
+    if (!current) return
     if (failure || !model) {
       const shown = failure ?? fallback('NOT_FOUND', jobDocumentText.readFailed)
       this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${jobDocumentText.savedUnread} ${shown.message}` } : shown })
@@ -281,6 +283,23 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.options.documents.setDirty(id, false)
     if (model.job) this.follow(id, model.job.jobId)
     this.schedulePreview(id, 0)
+  }
+
+  /** A job the document read is not found by its name: finds it by its id among the jobs msdb lists (New Job's describe) and, when another
+   *  name has it, points the document and its tab there. False when the job is gone, or the read failed or was overtaken. */
+  private async followRename(id: string): Promise<boolean> {
+    const state = this.get(id), connectionId = this.connectionOf(id), jobId = state?.model?.job?.jobId
+    if (!state || !connectionId || !jobId) return false
+    const requestId = this.begin(id, 'describe')
+    const result = await this.call(() => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentJob', target: { kind: 'agent' } }))
+    if (!this.end(id, requestId) || !result.ok || result.value.error) return false
+    const listed = result.value.agentJobDocument
+    const index = listed?.jobIds?.findIndex(item => item.toLowerCase() === jobId.toLowerCase()) ?? -1
+    const name = index >= 0 ? listed?.jobs?.[index] : undefined
+    if (name === undefined || (state.target.kind === 'agentJob' && state.target.name === name)) return false
+    this.patch(id, { target: { kind: 'agentJob', name } })
+    this.options.documents.update(id, { name: agentJobTabName(name) })
+    return true
   }
 
   // --- Save ----------------------------------------------------------------------------------------------------------
@@ -338,14 +357,17 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     return false
   }
   /** STALE: the job as it is now, and the compare of what each side changed since the document opened. */
-  private async compare(id: string, refusal: ActionError): Promise<void> {
+  private async compare(id: string, refusal: ActionError, followed = false): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.model || !state.draft || !connectionId) return
     const requestId = this.begin(id, 'describe')
     const result = await this.call(() => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentJob', target: state.target }))
     if (!this.end(id, requestId)) return
+    // Renamed elsewhere: the compare reads the job under its new name and lists Name as the server's change.
+    if (result.ok && result.value.error?.code === 'NOT_FOUND' && !followed && await this.followRename(id)) return this.compare(id, refusal, true)
     const current = result.ok && !result.value.error ? result.value.agentJobDocument : undefined
-    const latest = this.get(id)!
+    const latest = this.get(id)
+    if (!latest) return
     if (!current?.job || !latest.model || !latest.draft) {
       // The job is gone (or unreadable) since: the refusal says so; the draft stays for a Reload.
       this.patch(id, { phase: 'ready', error: result.ok && result.value.error ? result.value.error : refusal })

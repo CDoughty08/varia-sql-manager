@@ -174,11 +174,15 @@ internal sealed partial class ActionService
         }
         List<string>? owners = sysadmin && Read(AgentSql.OwnerLogins, out var ownerRows) ? [.. ownerRows.Rows.Select(item => TextOf(ownerRows.Value(item, "name")))] : null;
 
-        List<string>? jobs = row is null && Failed(AgentSql.Jobs) is null && results.TryGetValue(AgentSql.Jobs.Id, out var jobList)
-            ? [.. jobList.Rows.Select(item => TextOf(jobList.Value(item, "name"))).Where(name => name.Length > 0).Order(StringComparer.CurrentCultureIgnoreCase)] : null;
+        // By name, each with its job id (JobIds, same order), so a document whose job was renamed elsewhere can find it again.
+        var listed = row is null && Failed(AgentSql.Jobs) is null && results.TryGetValue(AgentSql.Jobs.Id, out var jobList)
+            ? jobList.Rows.Select(item => (Name: TextOf(jobList.Value(item, "name")), Id: jobList.Value(item, "job_id") is Guid id ? id.ToString("D") : ""))
+                .Where(entry => entry.Name.Length > 0 && entry.Id.Length > 0).OrderBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase).ToList() : null;
+        List<string>? jobs = listed?.Select(entry => entry.Name).ToList();
+        List<string>? jobIds = listed?.Select(entry => entry.Id).ToList();
         var readOnly = job is not null && !sysadmin && !string.Equals(job.Owner, login, StringComparison.OrdinalIgnoreCase) ? JobReadOnlyMessage : null;
         var mail = new AgentJobMailDto(mailChecked, sysadmin, mailXps is { } on ? on == 1 : null, profiles, useDatabaseMail, agentProfile);
-        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs));
+        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds));
     }
 
     // --- Plan --------------------------------------------------------------------------------------------------------------

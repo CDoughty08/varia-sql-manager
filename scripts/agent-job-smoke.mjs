@@ -27,7 +27,6 @@ let step = 'start'
 page.on('pageerror', error => failures.push(error.message))
 
 const jobCell = name => liveGrid(page, 'Jobs').locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^${name}$`) }) }).locator(gridPart.cell).nth(2)
-const monitor = () => documentFrame(page, 'Job Activity Monitor')
 const job = name => documentFrame(page, name)
 const verb = (name, label) => documentVerb(job(name), name, label)
 const calls = async method => parseCalls(await readFile(resolve(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
@@ -59,7 +58,7 @@ try {
   // Enter on another selected job opens a second tab; the first stays open.
   await documentTab(page, 'Job Activity Monitor - server-a').click()
   await jobCell('Backup').click()
-  await expect(monitor().getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Open', exact: true })).toHaveAttribute('title', 'Open Backup (Enter)')
+  // At once: Open Job reads the selection the click just made, not the one before it.
   await page.keyboard.press('Enter')
   await expect(documentTab(page, 'Job Properties - Backup')).toHaveAttribute('aria-selected', 'true')
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveCount(1)

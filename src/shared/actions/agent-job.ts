@@ -87,6 +87,8 @@ export interface AgentJobDocumentModel {
   readonly mail: AgentJobMail
   /** New Job only: the jobs msdb lets the login see, by name, which Copy an existing job picks from. */
   readonly jobs?: readonly string[]
+  /** New Job only: each listed job's id (sysjobs job_id), in `jobs`' order, so a document can find its job again after a rename elsewhere. */
+  readonly jobIds?: readonly string[]
 }
 
 /** The editable fields, as the document, the changes, the compare and the save's error mapping name them. */

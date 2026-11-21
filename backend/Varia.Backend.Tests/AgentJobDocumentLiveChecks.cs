@@ -29,14 +29,15 @@ internal static class AgentJobDocumentLiveChecks
             "the job document describes the scratch job: its id, description, version, modified date and its one step: " + JsonSerializer.Serialize(first?.Job));
         if (first?.Job is not { } before) return;
 
+        // sp_add_job's default event log level is 2, so the save sets 3 and the refused save 0: either landing shows.
         // A save carrying the version it read lands, and moves the version on; the same save again is refused STALE and changes nothing.
         var marked = ScratchDatabase.JobMarker;
-        var saved = await Save(job, before.Created, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 2));
+        var saved = await Save(job, before.Created, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 3));
         var after = await Describe(job);
-        check(saved.Error is null && after?.Job is { EventLogLevel: 2 } now && now.Version > before.Version && await Column("description") == marked,
+        check(saved.Error is null && after?.Job is { EventLogLevel: 3 } now && now.Version > before.Version && await Column("description") == marked,
             "a job document save under the version it read changes the job and its version: " + Said(saved) + " " + JsonSerializer.Serialize(after?.Job));
         var stale = await Save(job, before.Created, new AgentJobSaveDto(before.Version, before.Modified, EventLogLevel: 0));
-        check(stale.Error is { Code: "STALE", Retryable: false } && await Column("notify_level_eventlog") == "2",
+        check(stale.Error is { Code: "STALE", Retryable: false } && await Column("notify_level_eventlog") == "3",
             "a job document save under a version the job has moved past is refused STALE and changes nothing: " + Said(stale));
         if (after?.Job is not { } current) return;
 
@@ -101,12 +102,12 @@ internal static class AgentJobDocumentLiveChecks
             var blank = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", agent))).AgentJobDocument;
             // What New Job's Save sends: every field it sets, no version.
             Task<ActionExecuteResult> Create() => Call<ActionExecuteResult>("actions.execute", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), agent,
-                AgentJob: new AgentJobSaveDto(Name: job, Enabled: false, Description: ScratchDatabase.JobMarker, Category: "[Uncategorized (Local)]", EventLogLevel: 2, EmailLevel: 0, EmailOperator: "",
+                AgentJob: new AgentJobSaveDto(Name: job, Enabled: false, Description: ScratchDatabase.JobMarker, Category: "[Uncategorized (Local)]", EventLogLevel: 1, EmailLevel: 0, EmailOperator: "",
                     PageLevel: 0, PageOperator: "", NetSendLevel: 0, NetSendOperator: "", DeleteLevel: 0)));
             var created = await Create();
             var row = await sql("SELECT CONVERT(nvarchar(1), enabled), CONVERT(nvarchar(1), notify_level_eventlog), description FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ";", "msdb");
             var listed = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", agent))).AgentJobDocument;
-            check(blank is { Job: null } && created.Error is null && row.Sets is [[["0", "2", var description]]] && description == ScratchDatabase.JobMarker && listed?.Jobs?.Contains(job) == true,
+            check(blank is { Job: null } && created.Error is null && row.Sets is [[["0", "1", var description]]] && description == ScratchDatabase.JobMarker && listed?.Jobs?.Contains(job) == true,
                 "New Job's save creates the job disabled with its event log level and description, and New Job's describe then lists it: " + Said(created) + " " + row.Error);
             var again = await Create();
             check(again.Error is { Field: "name" } && (await sql("SELECT CONVERT(nvarchar(9), COUNT(*)) FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ";", "msdb")).Scalar == "1",

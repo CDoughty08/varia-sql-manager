@@ -110,14 +110,16 @@ function opened(first = model()) {
   cleanups.push(() => fixture.dispose())
   fixture.api.push(readyBackend())
   fixture.connect(connectionInfo('c1'))
-  let current = first
+  let current = first, byName = false
   const answers: ApiResult<ActionExecuteResult>[] = []
-  fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'agentJob'
-    ? { agentJobDocument: params.target.kind === 'agent' ? { ...current, job: undefined, steps: [], alerts: undefined, jobs: ['Nightly load', 'Backup'] } : current, elapsedMs: 1 }
-    : { elapsedMs: 1 }) as ActionDescribeResult }))
+  fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog !== 'agentJob' ? { elapsedMs: 1 }
+    : params.target.kind === 'agent' ? { agentJobDocument: { ...current, job: undefined, steps: [], alerts: undefined, jobs: [current.job?.name ?? 'Nightly load', 'Backup'], jobIds: [current.job?.jobId ?? '', '22222222-2222-2222-2222-222222222222'] }, elapsedMs: 1 }
+      // byName: a job is found only under its current name, as msdb finds it.
+      : byName && params.target.name !== current.job?.name ? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'gone', retryable: false } }
+        : { agentJobDocument: current, elapsedMs: 1 }) as ActionDescribeResult }))
   fixture.api.executeObjectAction.mockImplementation(async () => answers.shift() ?? { ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
   const executes = () => fixture.api.executeObjectAction.mock.calls.map(([sent]) => sent as ActionRequest)
-  return { ...fixture, executes, answers, setModel: (next: AgentJobDocumentModel) => { current = next } }
+  return { ...fixture, executes, answers, setModel: (next: AgentJobDocumentModel) => { current = next }, findByName: () => { byName = true } }
 }
 
 describe('the job document', () => {
@@ -162,6 +164,31 @@ describe('the job document', () => {
     await jobDocuments.save(id)
     jobDocuments.reloadDiscard(id)
     expect(jobDocuments.get(id)).toMatchObject({ changes: 0, draft: { description: 'Theirs' } })
+  })
+  it('follows a job renamed elsewhere by its id, into the compare and on Reload', async () => {
+    const { jobDocuments, documents, answers, setModel, findByName } = opened()
+    findByName()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateDraft(id, { description: 'Mine' })
+    setModel(model({ job: record({ name: 'Nightly renamed', version: 8 }) }))
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(jobDocuments.get(id)?.stale?.rows.map(row => [row.field, row.conflict])).toEqual([['name', false], ['description', false]])
+    expect(jobDocuments.get(id)?.stale?.rows[0].server).toBe('Nightly renamed')
+    expect(jobDocuments.get(id)).toMatchObject({ target: { kind: 'agentJob', name: 'Nightly renamed' }, draft: { description: 'Mine' } })
+    expect(documents.get(id)?.name).toBe('Job Properties - Nightly renamed')
+    jobDocuments.reloadKeep(id)
+    expect(jobDocuments.get(id)).toMatchObject({ draft: { name: 'Nightly renamed', description: 'Mine' }, changes: 1 })
+    // Renamed again while open: Reload finds it too; a job that is gone stays a read failure.
+    setModel(model({ job: record({ name: 'Nightly again', version: 9 }) }))
+    jobDocuments.reload(id)
+    await settled()
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', target: { name: 'Nightly again' }, model: { job: { version: 9 } } })
+    setModel(model({ job: record({ jobId: '33333333-3333-3333-3333-333333333333', name: 'Other' }) }))
+    jobDocuments.reload(id)
+    await settled()
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', target: { name: 'Nightly again' }, error: { code: 'NOT_FOUND' } })
   })
   it('lands a refusal on its field and marks its section, and a read-only job cannot be edited', async () => {
     const { jobDocuments, answers } = opened()

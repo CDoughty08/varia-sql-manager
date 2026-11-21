@@ -1,6 +1,7 @@
 import { agentBulkCommands, agentBulkVerbs } from '../../../shared/agent/jobs'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
+import { windows } from '../core/windows'
 import { explorerNodeOf } from '../menus/targets'
 import { serverItems } from './query'
 
@@ -70,11 +71,14 @@ export function agentContribution({ commands, jobActivity, documents, connection
     ,
     commands.register('agent.openJob', {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
-      run: args => {
+      run: async args => {
         // From Job Activity Monitor (its Open, a double-click or Enter): the one job selected there.
         const monitor = monitorOf(args)
         if (monitor) {
-          const state = jobActivity.get(monitor), job = state?.selected.length === 1 ? state.selected[0] : undefined
+          // Enter in the Last run grid below the list is about a history row, not the job.
+          if (typeof document !== 'undefined' && windows.activeElement()?.closest('[data-live-table]:not([data-live-table="0"])')) return
+          const selected = await jobActivity.settledSelection(monitor)
+          const state = jobActivity.get(monitor), job = selected.length === 1 ? selected[0] : undefined
           if (!state?.connectionId || !job) { commands.reportError('Select one job to open it.'); return }
           return openJob(state.connectionId, job.name)
         }
