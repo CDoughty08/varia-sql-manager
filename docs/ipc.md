@@ -1113,7 +1113,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   blocks, counting a block at the widest its rows have come out so far, a block too wide for the cache at least the cache's size); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more (the read
   was cancelled or answered short) becomes its viewer's read-ahead: the viewer's next read joins it, and a jump stops it.
   A block nothing was fetched into leaves the cache's lists once no read waits for it.
-  `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
+  `results.rowBytes` answers from the cache only. The cache is LRU per result (blocks on no grid's screen go first: a
+  read evicts another grid's rows on screen only when nothing else frees room), charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
   being built there). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block

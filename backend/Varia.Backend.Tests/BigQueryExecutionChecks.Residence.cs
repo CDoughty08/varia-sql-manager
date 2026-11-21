@@ -408,6 +408,49 @@ internal static partial class BigQueryExecutionChecks
                 $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
         }
 
+        // A read's own block evicts another grid's rows on screen only when nothing else frees room: plain LRU would give them
+        // up first (a grid's block on screen is older than its own read-ahead), and that grid's next scroll reads them again.
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks { Pad = 200 };
+            using var remote = Remote(store, blocks, rows: 16_384L * 100, rowBytes: CostPerRow(200), cache: 16L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, 10L * size + 5, 40, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 30L * size + 5, 40, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            await ReadRemote(remote, 60L * size + 5, 40, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var afterJump = remote.CachedBlocks();
+            var fetches = blocks.Calls.Count;
+            await ReadRemote(remote, 10L * size + 6, 40, viewer: 1);
+            var refetched = blocks.Calls.Skip(fetches).Any(call => call.First / size == 10);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(afterJump.Contains(10) && afterJump.Contains(60) && !refetched,
+                $"a read keeps another grid's rows on screen while blocks off screen can go: cached [{string.Join(",", afterJump)}] after the jump, block 10 refetched {refetched}");
+        }
+
+        // A block's overrun stops only read-ahead no read waits for: a block another read (or this one) waits for is waited on,
+        // never cancelled and fetched again.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.Holds = first => first == size;
+            var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            blocks.Before = first => { if (first == size) { secondStarted.TrySetResult(); return Task.CompletedTask; } return first == 0 ? secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(15)) : Task.CompletedTask; };
+            blocks.PadOf = row => row < size ? 48_000 : 32_000;
+            var waited = false;
+            remote.OverrunWaiting = index => { if (index == 0) { waited = true; blocks.Gate.TrySetResult(); } };
+            var (next, rows) = await ReadRemote(remote, size - 5, 10, viewer: 1);
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var second = blocks.Calls.Count(call => call.First == size);
+            check(waited && next >= size + 5 && Consecutive(rows, size - 5, 10) && blocks.Cancelled == 0 && second == 1,
+                $"an overrun waits for a block a read waits for rather than stop it: waited {waited}, next {next}, {blocks.Cancelled} cancelled, block 1 fetched {second} times");
+        }
+
         // A table shorter than BigQuery said (it changed under the result): its block is fetched once, the rest left loading,
         // not fetched again on every read.
         {

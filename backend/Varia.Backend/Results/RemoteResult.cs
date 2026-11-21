@@ -576,6 +576,7 @@ internal sealed class RemoteResult : IDisposable
                 throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
             }
             // Each settles (a stopped one gives its estimate back); how is theirs to tell their own readers.
+            OverrunWaiting?.Invoke(keep.Index);
             try { await Task.WhenAll(others).WaitAsync(token); }
             catch (Exception) when (!token.IsCancellationRequested) { }
         }
@@ -590,7 +591,7 @@ internal sealed class RemoteResult : IDisposable
     {
         while (Interlocked.Read(ref held) > CacheLimit)
         {
-            var victim = lru.FirstOrDefault(block => block.Waiters == 0 && block.Fetching is null && block.Bytes > 0);
+            var victim = VictimLocked(null, ahead: false);
             if (victim is null) return;
             EvictLocked(victim);
         }
@@ -622,8 +623,7 @@ internal sealed class RemoteResult : IDisposable
                 // Evicting gives back only what this cache holds: when the global budget refused, a block only read ahead
                 // stops there rather than flush the cache for a refusal anyway.
                 if (ahead && !full) return false;
-                // A block only read ahead never evicts one a viewer's last read covered: the rows on screen.
-                var victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !(ahead && OnScreenLocked(block)));
+                var victim = VictimLocked(keep, ahead);
                 if (victim is null) return full ? false : throw BudgetFull();
                 EvictLocked(victim);
             }
@@ -631,6 +631,21 @@ internal sealed class RemoteResult : IDisposable
         }
         NotePeak();
         return true;
+    }
+
+    /// <summary>The block to evict: the least recent no read waits for and no fetch is filling, off screen first. A grid's
+    /// block on screen is older than its own read-ahead, so plain LRU would give another grid's read those rows first; a read
+    /// evicts rows on screen only when nothing else is left, and a block only read ahead never does.</summary>
+    private Block? VictimLocked(Block? keep, bool ahead)
+    {
+        Block? onScreen = null;
+        foreach (var block in lru)
+        {
+            if (block == keep || block.Waiters > 0 || block.Fetching is not null || block.Bytes <= 0) continue;
+            if (!OnScreenLocked(block)) return block;
+            onScreen ??= block;
+        }
+        return ahead ? null : onScreen;
     }
 
     /// <summary>Checks only: whether a viewer's last read covered the block.</summary>
@@ -701,6 +716,9 @@ internal sealed class RemoteResult : IDisposable
 
     /// <summary>Checks only: called once a fetch has reserved its block's room, before it reads the block.</summary>
     internal Action<long>? Reserved { get; set; }
+
+    /// <summary>Checks only: called as a block's overrun, refused, waits for the other fetches holding room to settle.</summary>
+    internal Action<long>? OverrunWaiting { get; set; }
 
     /// <summary>Checks only: called as a fetch, holding its lanes, is about to reserve its block's room.</summary>
     internal Action<long>? Reserving { get; set; }

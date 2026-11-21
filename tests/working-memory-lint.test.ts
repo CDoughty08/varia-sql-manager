@@ -188,7 +188,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const reserveBody = between('private bool Reserve(', 'private void EvictLocked(')
   // Its limit is the cache's own, less (for a block only read ahead) the estimates of read blocks that have not reserved yet:
   // never more than CacheLimit.
-  expect(reserveBody).toMatch(/\{\n\s*lock \(gate\)\n\s*\{\n\s*var ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*var limit = CacheLimit;\n\s*if \(ahead\)\n\s*\{\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*var evictable = lru\.Where\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !OnScreenLocked\(block\)\)\.Sum\(block => block\.Bytes\);\n\s*if \(CachedBytes - evictable \+ bytes > limit\) return false;\n\s*\}\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)\n\s*\{\n\s*if \(ahead && !full\) return false;\n\s*var victim = lru\.FirstOrDefault\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !\(ahead && OnScreenLocked\(block\)\)\);\n\s*if \(victim is null\) return full \? false : throw BudgetFull\(\);\n\s*EvictLocked\(victim\);\n\s*\}\n\s*keep\.Holding = true;\n\s*\}\n\s*NotePeak\(\);\n\s*return true;/)
+  expect(reserveBody).toMatch(/\{\n\s*lock \(gate\)\n\s*\{\n\s*var ahead = keep\.Waiters == 0 && keep\.AheadOf != 0;\n\s*var limit = CacheLimit;\n\s*if \(ahead\)\n\s*\{\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*var evictable = lru\.Where\(block => block != keep && block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0 && !OnScreenLocked\(block\)\)\.Sum\(block => block\.Bytes\);\n\s*if \(CachedBytes - evictable \+ bytes > limit\) return false;\n\s*\}\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)\n\s*\{\n\s*if \(ahead && !full\) return false;\n\s*var victim = VictimLocked\(keep, ahead\);\n\s*if \(victim is null\) return full \? false : throw BudgetFull\(\);\n\s*EvictLocked\(victim\);\n\s*\}\n\s*keep\.Holding = true;\n\s*\}\n\s*NotePeak\(\);\n\s*return true;/)
   // A block's room and its Holding mark change together under the gate, on both reservations: no read-ahead counts it twice.
   expect(fetch).toMatch(/lock \(gate\)\n\s*\{\n\s*if \(!store\.TryReserveCache\(ref held, OverLimit, estimate, out var full\)\) throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);\n\s*block\.Holding = true;\n\s*\}/)
   expect(count(remote, /\.Holding = true/g)).toBe(2)
@@ -217,7 +217,11 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // A trim evicts only what Reserve may: blocks no read waits for and no fetch is filling.
   const trim = between('private void TrimLocked(', 'private bool Reserve(')
   expect(trim).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)
-  expect(trim).toMatch(/lru\.FirstOrDefault\(block => block\.Waiters == 0 && block\.Fetching is null && block\.Bytes > 0\)/)
+  expect(trim).toMatch(/var victim = VictimLocked\(null, ahead: false\);/)
+  // Victims are the least recent off screen first; rows on screen go only when nothing else is left, never for read-ahead.
+  expect(between('private Block? VictimLocked(', 'internal bool OnScreenForChecks(')).toMatch(/\{\n\s*Block\? onScreen = null;\n\s*foreach \(var block in lru\)\n\s*\{\n\s*if \(block == keep \|\| block\.Waiters > 0 \|\| block\.Fetching is not null \|\| block\.Bytes <= 0\) continue;\n\s*if \(!OnScreenLocked\(block\)\) return block;\n\s*onScreen \?\?= block;\n\s*\}\n\s*return ahead \? null : onScreen;\n\s*\}/)
+  expect(count(remote, /\bVictimLocked\(/g)).toBe(3)
+  expect(count(remote, /\bEvictLocked\(/g)).toBe(5)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
   // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
   const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')
