@@ -53,11 +53,13 @@ describe('result page access', () => {
     // Each call is counted, not each line (a guarded Find does not excuse another on its line), and a call split before
     // its .Find is joined to its receiver's line first.
     // Spaces around the dot (store .Find) are dropped first. The guard is SqlService's own Stored (not a namesake elsewhere).
-    const unguardedIn = (file: string, text: string) => text.replace(/\s*([?!]?)\s*\.\s*(?=Find\b)/g, '$1.').split('\n')
+    const unguardedIn = (file: string, text: string) => text.replace(/\s*([?!]?)\s*\.\s*(?=Find\b|Stored\s*\()/g, '$1.').replace(/\bStored\s+\(/g, 'Stored(').split('\n')
       .filter(line => !/^\s*\/\//.test(line) && !/public ResultSetBuffer\? Find\(/.test(line)
         && (line.match(finds(file)) ?? []).length > (line.match(/(?<![\w.])Stored\(store\.Find\(/g) ?? []).length)
       .map(line => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = store .Find(id);')).toHaveLength(1)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Shim. Stored(store.Find(id));')).toHaveLength(1)
+    expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Shim .Stored (store.Find(id));')).toHaveLength(1)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = Shim.Stored(store.Find(id));')).toHaveLength(1)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var left = Stored(store.Find(a) ?? throw U(a)); var right = store.Find(b)!;')).toHaveLength(1)
     expect(unguardedIn('backend/Varia.Backend/X.cs', 'var set = store\n    .Find(id);')).toEqual(['X.cs: var set = store.Find(id);'])
@@ -79,10 +81,13 @@ describe('result page access', () => {
     // Nor does a reader reach a set around Find: no listing of the store's sets, and no store under another name.
     // A store held under a name the Find scan does not know: an alias, or a parameter, field or property of type ResultStore.
     const otherName = (line: string) => [...line.matchAll(/\bResultStore\??\s+(\w+)\s*[,)=;{]/g)].some(match => !/^(?:\w*[sS]tore|Results)$/.test(match[1]))
-    const around = (text: string) => text.split('\n').filter(line => !/^\s*\/\//.test(line) && (/\.Sets\(\)/.test(line) || otherName(line) || /\b(?:var|ResultStore\??)\s+\w+\s*=\s*(?:this\.)?\w*(?:[sS]tore|[rR]esults)\s*;/.test(line))).map(line => line.trim())
+    const around = (text: string) => text.split('\n').filter(line => !/^\s*\/\//.test(line) && (/\.Sets\(\)/.test(line) || otherName(line) || /\b(?:var|ResultStore\??)\s+\w+\s*=\s*\(?\s*(?:this\.)?\w*(?:[sS]tore|[rR]esults)\b(?!\s*!?\s*\??\s*[.\[(])/.test(line))).map(line => line.trim())
     expect(around('var held = store; var x = held.Find(a);')).toHaveLength(1)
     expect(around('var held = Results; var x = held.Find(a);')).toHaveLength(1)
     expect(around('ResultStore? lookup = store; var set = lookup.Find(id);')).toHaveLength(1)
+    expect(around('var cache = store!; return cache.Find(id)!.SealedSnapshot().Length;')).toHaveLength(1)
+    expect(around('var cache = (store); var other = store ?? throw new X();')).toHaveLength(1)
+    expect(around('var set = store.Find(id); var again = store!.Find(id);')).toHaveLength(0)
     expect(around('internal sealed class PageTally(ResultStore owner) {')).toHaveLength(1)
     expect(around('private readonly ResultStore owner;')).toHaveLength(1)
     expect(around('public SqlService(ResultStore? store = null, bool hooks = false)')).toHaveLength(0)
@@ -114,6 +119,11 @@ describe('result page access', () => {
     }
     expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'store'])
     // SqlService's Stored is the only one that takes a set.
+    const storedDeclaration = /\bStored\s*(?:<[^>]*>)?\s*\(\s*(?:this\s+|in\s+|ref\s+)?[\w.<>?\[\]]+\s+\w+\s*(?:=[^)]*)?\)/g
+    expect(' private static ResultSetBuffer? Stored( ResultSetBuffer? set) => set;'.match(storedDeclaration)).toHaveLength(1)
+    expect('static T Stored<T>(T v) => v; R Stored(Results.ResultSetBuffer s) => s;'.match(storedDeclaration)).toHaveLength(2)
+    expect('var set = Stored(store.Find(id) ?? throw U(id));'.match(storedDeclaration)).toBeNull()
+    expect(service.flatMap(file => [...readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '').matchAll(storedDeclaration)].map(() => file))).toEqual(['backend/Varia.Backend/SqlService.BigQueryResidence.cs'])
     expect(service.flatMap(file => [...readFileSync(file, 'utf8').matchAll(/\bStored\(ResultSetBuffer\b/g)]).length).toBe(1)
     const service2 = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
     expect(service2).toMatch(/if \(set\.Remote is \{ \} remote\) return args\.ViewId is null \? await ReadRemoteAsync\(args, set, remote, context\) : throw RemoteRefused\(\);/)

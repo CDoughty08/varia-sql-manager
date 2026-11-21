@@ -121,6 +121,9 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // A table's rows are listed (tabledata.list) in TableRowsAsync alone, and that is called from the delegate alone (a query's
   // own rows, Load into memory's included, come through its job's results under the budget).
   expect(uses(/\bTabledata\b/g)).toEqual(['BigQuery/BigQueryService.Jobs.cs'])
+  // ...and no other client reads rows: the typed client's row listings and query results and the resource classes, however
+  // spelled, appear only in Jobs.cs's two requests (a job's results page and tabledata.list).
+  expect(uses(/\b(?:[Tt]abledata\w*|TableDataList\w*|[Gg]etQueryResults\w*|ExecuteQuery\w*)\b|\bListRows\w*\s*\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'BigQuery/BigQueryService.Jobs.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
   const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
   expect(tableRows.indexOf('\n\n    ')).toBeGreaterThan(0)
@@ -178,7 +181,13 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // Its limit is the cache's own, less (for a block only read ahead) the estimates of read blocks that have not reserved yet:
   // never more than CacheLimit.
   expect(reserveBody).toMatch(/var limit = CacheLimit;\n\s*lock \(gate\)\n\s*if \(keep\.Waiters == 0 && keep\.AheadOf != 0\)\n\s*limit -= blocks\.Values\.Where\([^\n]*\)\.Sum\(block => Math\.Min\(EstimateOf\([^\n]*\), CacheLimit \/ 2\)\);\n\s*while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)/)
-  expect(count(reserveBody, /\blimit\s*[-+*/]?=(?!=)/g)).toBe(2)
+  expect(count(reserveBody, /\blimit\s*(?:[-+*/%&|^]|<<|>>>?|\?\?)?=(?!=)|(?:\+\+|--)\s*limit\b|\blimit\s*(?:\+\+|--)|\b(?:ref|out|in)\s+limit\b/g)).toBe(2)
+  // What it subtracts is a sum of estimates (each at least the page overhead), never negative, so the limit only falls.
+  expect(reserveBody.includes('limit -= blocks.Values.Where(block => block != keep && block.Waiters > 0 && block.Fetching is not null && !block.Holding).Sum(block => Math.Min(EstimateOf((int)(block.End - block.Filled)), CacheLimit / 2));')).toBe(true)
+  // The store refuses past the limit it is given, and past the global budget, before it counts anything.
+  const storeCode = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'ResultStore.cs'), 'utf8'))
+  const tryCache = storeCode.slice(storeCode.indexOf('public bool TryReserveCache(ref long held, long limit, long bytes, out bool overLimit)'))
+  expect(tryCache.slice(0, tryCache.indexOf('\n    }\n'))).toMatch(/overLimit = false;\n\s*if \(bytes <= 0\) return true;\n\s*if \(Interlocked\.Add\(ref held, bytes\) > limit\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*overLimit = true;\n\s*return false;\n\s*\}\n\s*var global = Volatile\.Read\(ref figures\)\.Global;\n\s*for \(var current = Interlocked\.Read\(ref used\); ; current = Interlocked\.Read\(ref used\)\)\n\s*\{\n\s*if \(current \+ bytes > global\)\n\s*\{\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*return false;\n\s*\}\n\s*if \(Interlocked\.CompareExchange\(ref used, current \+ bytes, current\) == current\) break;\n\s*\}\n\s*Interlocked\.Add\(ref windowCacheUsed, bytes\);\n\s*return true;$/)
   expect(reserveBody).toMatch(/if \(victim is null\) return full \? false : throw BudgetFull\(\);/)
   // A block's estimate the cache's own limit refuses: read ahead only, it stops with nothing fetched; one a read waits for
   // passes the limit, up to twice it (OverLimit, through the global budget), else TOO_LARGE naming the cache.
@@ -202,6 +211,18 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
   const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')
   expect(heldUses).not.toMatch(/\bheld\b/)
+  // Every give-back is one of these, each of bytes the cache charged: none drifts the charge below what it holds.
+  expect(count(remote, /\bReturnCache\b/g)).toBe(6)
+  expect(Array.from(remote.matchAll(/store\.ReturnCache\(ref held, ([^;]*)\);/g), match => match[1])).toEqual(['estimate', 'estimate', 'estimate - cost', 'estimate', 'cost', 'bytes'])
+  expect(between('private void EvictLocked(', 'private void ReadAhead(')).toMatch(/var bytes = block\.Bytes;\n\s*block\.Bytes = 0;[\s\S]*store\.ReturnCache\(ref held, bytes\);/)
+  // Pages are kept in two places only: Seed's one reserved page, and a fetch's settled pages.
+  expect(count(remote, /\bPages\s*\.\s*(?:Add|AddRange|Insert|InsertRange)\b|\bPages\s*\[/g)).toBe(2)
+  expect(count(between('public void Seed(', 'public async Task<long> ReadAsync('), /block\.Pages\.Add\(page\);/g)).toBe(1)
+  expect(count(fetch, /block\.Pages\.AddRange\(pages\);\n\s*block\.Bytes \+= cost;/g)).toBe(1)
+  // The writer's byte count grows by every page it seals, and nowhere else, so its limit holds.
+  const writer = remote.slice(remote.indexOf('internal sealed class RemoteBlockWriter('), remote.indexOf('internal sealed class RemoteExpiredException'))
+  expect(writer).toMatch(/private void Seal\(\)\n\s*\{[^}]*\bbytes \+= page\.Cost;/)
+  expect(count(writer, /\bbytes\s*(?:[-+*/%&|^]|<<|>>>?|\?\?)?=(?!=)|(?:\+\+|--)\s*bytes\b|\bbytes\s*(?:\+\+|--)|\b(?:ref|out)\s+bytes\b/g)).toBe(1)
   // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
   expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
   expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)
