@@ -231,6 +231,55 @@ describe('results worker core', () => {
     expect(answer(across)?.type === 'window' && (answer(across) as { count: number }).count).toBe(20)
   })
 
+  it('keeps rows of overlapping pages of a windowed result: a partial overlap, a pending window, a page held by a longer one', () => {
+    const count = (message: ReturnType<ReturnType<typeof fixture>['answer']>) => message?.type === 'window' ? (message as { count: number }).count : message?.type
+    const end = (core: ResultsWorkerCore, rid: number, nextRow: number) => core.receive({ t: 'end', rid, ok: true, result: { nextRow, rowsAvailable: 10_000, complete: false, pages: 1, rows: 1 } })
+    // A partial overlap: [0,30) cached, then a block fetched again answers [20,40). Rows 0-19 stay readable.
+    {
+      const { window, reads, core, answer } = fixture()
+      window(0, 30)
+      core.receive({ t: 'page', rid: 1, seq: 1, body: page(0, 30) })
+      end(core, 1, 30)
+      const wider = window(0, 40)
+      const read = reads().at(-1)!
+      core.receive({ t: 'page', rid: read.rid, seq: 1, body: page(20, 20) })
+      end(core, read.rid, 40)
+      expect(count(answer(wider))).toBe(40)
+      const again = window(0, 40)
+      expect(reads()).toHaveLength(2)
+      expect(count(answer(again))).toBe(40)
+    }
+    // A pending window over a cached [20,40): its first read brings [0,30), and the rows 30-39 it relied on stay.
+    {
+      const { window, reads, core, answer } = fixture()
+      window(20, 20)
+      core.receive({ t: 'page', rid: 1, seq: 1, body: page(20, 20) })
+      end(core, 1, 40)
+      const pending = window(0, 60)
+      const [low, high] = reads().slice(1)
+      core.receive({ t: 'page', rid: low.rid, seq: 1, body: page(0, 30) })
+      end(core, low.rid, 30)
+      core.receive({ t: 'page', rid: high.rid, seq: 1, body: page(40, 20) })
+      end(core, high.rid, 60)
+      expect(count(answer(pending))).toBe(60)
+    }
+    // A page a cached longer one holds whole does not replace it.
+    {
+      const { window, reads, core, answer } = fixture()
+      const a = window(0, 10)
+      const b = window(100, 10)
+      const [first, second] = reads()
+      core.receive({ t: 'page', rid: first.rid, seq: 1, body: page(0, 200) })
+      end(core, first.rid, 200)
+      core.receive({ t: 'page', rid: second.rid, seq: 1, body: page(90, 50) })
+      end(core, second.rid, 140)
+      expect([count(answer(a)), count(answer(b))]).toEqual([10, 10])
+      const across = window(0, 150)
+      expect(reads()).toHaveLength(2)
+      expect(count(answer(across))).toBe(150)
+    }
+  })
+
   it('fails pending work when the backend generation changes, and refuses the old generation afterwards', () => {
     const { window, core, posted, serve, answer } = fixture()
     window(0, 64)

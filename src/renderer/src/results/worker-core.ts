@@ -818,19 +818,20 @@ export class ResultsWorkerCore {
   private store(read: Read, view: PageView, bytes: number): void {
     if (read.key.generation !== this.generation && this.generation !== 0) return
     const id = `${read.result}:${view.firstRow}`
-    const same = this.cache.get(id)
-    if (same && same.rowCount >= view.rowCount) return
-    // Pages never overlap in the index (its lookups assume it): cached pages this one overlaps go, as its rows replace theirs.
+    // A windowed result's block fetched again may break its pages elsewhere, so pages of a result can overlap (lookups allow
+    // it): a page whose rows a cached one already holds is not kept, and cached pages it holds whole go.
     const end = view.firstRow + view.rowCount
-    for (const other of [...this.indexes.get(read.result) ?? []]) if (other.firstRow < end && other.firstRow + other.rowCount > view.firstRow) this.remove(other)
+    const index = this.indexes.get(read.result) ?? []
+    if (index.some(other => other.firstRow <= view.firstRow && other.firstRow + other.rowCount >= end)) return
+    for (const other of [...index]) if (other.firstRow >= view.firstRow && other.firstRow + other.rowCount <= end) this.remove(other)
     const page: CachedPage = { id, result: read.result, firstRow: view.firstRow, rowCount: view.rowCount, view, bytes }
     this.cache.set(id, page)
     this.cacheBytes += bytes
-    const index = this.indexes.get(read.result) ?? []
-    let at = index.length
-    while (at > 0 && index[at - 1].firstRow > page.firstRow) at--
-    index.splice(at, 0, page)
-    this.indexes.set(read.result, index)
+    const pages = this.indexes.get(read.result) ?? []
+    let at = pages.length
+    while (at > 0 && pages[at - 1].firstRow > page.firstRow) at--
+    pages.splice(at, 0, page)
+    this.indexes.set(read.result, pages)
     this.evict()
   }
 
@@ -877,19 +878,23 @@ export class ResultsWorkerCore {
     this.cache.set(page.id, page)
   }
 
-  /** The cached page holding `row`. */
+  /** The cached page holding `row` that reaches furthest (a windowed result's pages may overlap). */
   private pageAt(result: string, row: number): CachedPage | undefined {
     const index = this.indexes.get(result)
     if (!index) return undefined
+    // The last page starting at or before the row, then back through earlier ones that may hold it too.
     let low = 0, high = index.length - 1
     while (low <= high) {
       const middle = (low + high) >>> 1
-      const page = index[middle]
-      if (row < page.firstRow) high = middle - 1
-      else if (row >= page.firstRow + page.rowCount) low = middle + 1
-      else return page
+      if (index[middle].firstRow <= row) low = middle + 1
+      else high = middle - 1
     }
-    return undefined
+    let best: CachedPage | undefined
+    for (let at = high; at >= 0; at--) {
+      const page = index[at]
+      if (page.firstRow + page.rowCount > row && (!best || page.firstRow + page.rowCount > best.firstRow + best.rowCount)) best = page
+    }
+    return best
   }
 
   /** Row ranges in [first, end) that no cached page holds. */
