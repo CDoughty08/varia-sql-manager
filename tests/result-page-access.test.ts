@@ -44,9 +44,11 @@ describe('result page access', () => {
   it('refuses a windowed BigQuery result in every reader of stored pages before it does any work (REMOTE_RESULT)', () => {
     // A windowed result has no stored pages: its rows stay in BigQuery (docs/architecture.md, Results). Each reader finds its
     // set through Stored(...), which answers REMOTE_RESULT; only these find a set another way, each for its own reason.
+    // Inside the store's own partial files a bare Find( is the store's; everywhere else any spelling of a store's Find(.
     const service = sources.filter(file => file.startsWith('backend/Varia.Backend/') && file !== 'backend/Varia.Backend/Results/ResultStore.cs')
+    const finds = (file: string) => /\/ResultStore\.[^/]+\.cs$/.test(file) ? /(?:^|[^\w.]|\bthis\.)Find\(|\b_?[sS]tore\??\.Find\(/ : /\b_?[sS]tore\??\.Find\(/
     const unguarded = service.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const))
-      .filter(([, , line]) => /\b_?[sS]tore\.Find\(/.test(line) && !/\bStored\(store\.Find\(/.test(line))
+      .filter(([file, , line]) => finds(file).test(line) && !/\bStored\(store\.Find\(/.test(line))
       .map(([file, , line]) => `${file.replace('backend/Varia.Backend/', '')}: ${line.trim()}`)
     expect(unguarded.sort()).toEqual([
       // Visibility only asks whether the result exists.

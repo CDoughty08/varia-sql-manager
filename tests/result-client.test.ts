@@ -283,10 +283,18 @@ describe('ResultClient', () => {
     expect(worker().received.filter(message => message.type === 'revise')).toEqual([{ type: 'revise', key: { generation: 1, resultId: 3 } }])
     expect(handle.peekWindow(0, 4)).toBeUndefined()
     expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, state: 'complete' })
-    // The event that follows changes nothing more.
+    // The event that follows changes nothing more, and nor does a progress tick sent before the switch.
     worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: windowed } })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 8, rowsStored: 8, rowsAvailable: 8, bytesStored: 900, truncated: 'queryBudget' }] } })
     await settle()
     expect(worker().received.filter(message => message.type === 'revise')).toHaveLength(1)
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 1, rowsStored: 0, bytesStored: 0 })
+    expect(handle.getSnapshot().truncated).toBeUndefined()
+    // A load (a newer revision) counts its progress again.
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 2, residence: 'memory', state: 'open' } } })
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 5, rowsStored: 5, rowsAvailable: 5, bytesStored: 500 }] } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 5 })
   })
 
   it('leaves memory to the backend\'s events after a close, and reports none once a new backend replaces the old one', async () => {

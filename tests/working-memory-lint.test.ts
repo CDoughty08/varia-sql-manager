@@ -102,17 +102,19 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeGreaterThan(0)
   expect(fetch.indexOf('Reserve(estimate, block);')).toBeLessThan(fetch.indexOf('await fetch(from, rows, writer, token);'))
   // The block is read in one place, however it is spelled, so nothing reads one before its reservation.
-  expect(count(remote, /\bfetch(?:\.Invoke)?\s*\(/g)).toBe(1)
-  expect(count(fetch, /\bfetch(?:\.Invoke)?\s*\(/g)).toBe(1)
-  // The delegate is kept only in its field, never copied where a read could call it unreserved.
-  expect(count(remote, /=\s*fetch\s*;/g)).toBe(1)
+  // The delegate appears only as its field, the constructor's parameter and assignment (two), and that one call: never
+  // passed on, copied or called another way where a read could reach it unreserved.
+  expect(remote.match(/\bfetch\b/g)).toHaveLength(5)
+  for (const spelling of ['private readonly RemoteFetch fetch;', 'RemoteFetch fetch)', 'this.fetch = fetch;', 'await fetch(from, rows, writer, token);']) expect(remote).toContain(spelling)
+  expect(count(fetch, /\bfetch\s*\(/g)).toBe(1)
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
   expect(count(fetch, /store\.ReturnCache\(ref held, estimate\);/g)).toBe(3)
   expect(fetch).toMatch(/if \(cost < estimate\) store\.ReturnCache\(ref held, estimate - cost\);\n\s*else if \(cost > estimate\)\n\s*\{\n\s*try \{ Reserve\(cost - estimate, block\); \}/)
   expect(remote).not.toMatch(/ForceCache|Interlocked\.Add\(ref held/)
-  // The cache's charge changes only through the store's accounting (ref held), never by hand.
-  expect(remote).not.toMatch(/\bheld\s*(?:[+\-]?=|\+\+|--)/)
+  // The cache's charge changes only through the store's accounting, never by hand: every use of it is one of these.
+  const heldUses = remote.replace(/private long held;|Interlocked\.Read\(ref held\)|store\.(?:TryReserveCache|ReturnCache)\(ref held, /g, '')
+  expect(heldUses).not.toMatch(/\bheld\b/)
   // A block is never built past the cache's limit (rows far wider than the first page's): the writer refuses it as it grows.
   expect(fetch).toMatch(/new RemoteBlockWriter\(resultId, wires, from, CacheLimit\)/)
   expect(remote).toMatch(/if \(builder\.IsFull\) Seal\(\);\n\s*if \(bytes > maxBytes\) throw BlockTooLarge\(\);/)

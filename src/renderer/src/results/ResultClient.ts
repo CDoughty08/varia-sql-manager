@@ -192,6 +192,9 @@ interface ResultState {
   readonly listeners: Set<() => void>
   handle: ResultHandle | undefined
   scheduled: boolean
+  /** Its summary was applied: progress ticks that arrive later (sent before it, or before a switch it carried) are stale. A
+   *  newer revision (a load) starts counting again. */
+  settled?: boolean
   /** For a view's state, its result's state id. */
   readonly base?: string
 }
@@ -999,7 +1002,7 @@ export class ResultClient implements Disposable {
     else if (event.type === 'progress') {
       for (const item of event.results) {
         const state = this.results.get(keyOf({ generation: this.generation, resultId: item.resultId }))
-        if (state) this.update(state, item, false)
+        if (state && !state.settled) this.update(state, item, false)
       }
     }
     for (const listener of [...this.queryListeners.get(queryId) ?? []]) listener(event)
@@ -1040,6 +1043,8 @@ export class ResultClient implements Disposable {
     const revised = values.revision !== undefined && values.revision > (current.revision ?? 0)
     // An older revision's descriptor (a progress tick sent before the switch) changes nothing.
     if (values.revision !== undefined && values.revision < (current.revision ?? 0)) return
+    if (final) state.settled = true
+    else if (revised) state.settled = false
     const previous: ResultSnapshot = revised ? { ...current, rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: current.state === 'complete' ? 'open' : current.state } : current
     const max = (key: 'rowsRead' | 'rowsStored' | 'rowsAvailable' | 'bytesStored' | 'truncatedCells') => Math.max(previous[key], values[key] ?? 0)
     const sticky = previous.state === 'released' || previous.state === 'lost'

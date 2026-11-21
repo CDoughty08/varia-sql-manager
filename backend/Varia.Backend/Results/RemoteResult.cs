@@ -179,7 +179,6 @@ internal sealed class RemoteResult : IDisposable
     public long Evictions => Interlocked.Read(ref evictions);
     public bool Expired { get { lock (gate) return expired; } }
 
-    /// <summary>The blocks cached, in order (checks).</summary>
     /// <summary>Checks only: the blocks the cache lists, fetched or not.</summary>
     internal int ListedBlocks()
     {
@@ -192,6 +191,7 @@ internal sealed class RemoteResult : IDisposable
         lock (gate) return blocks.Values.Count(block => block.Fetching is not null);
     }
 
+    /// <summary>The blocks cached, in order (checks).</summary>
     internal long[] CachedBlocks()
     {
         lock (gate) return [.. blocks.Values.Where(block => block.Filled > block.First).Select(block => block.Index).Order()];
@@ -495,6 +495,8 @@ internal sealed class RemoteResult : IDisposable
                 if (viewers.Count >= 256) viewers.Clear();
                 viewers[id] = viewer = new Viewer();
             }
+            // Nothing more can be fetched once the table is gone or the cache disposed: no blocks are listed for it.
+            if (expired || disposed.IsCancellationRequested) return;
             var jump = viewer.First >= 0 && (first > viewer.Last + 2 || last < viewer.First - 2);
             if (viewer.First >= 0) viewer.Direction = first > viewer.First ? 1 : first < viewer.First ? -1 : viewer.Direction;
             if (jump)

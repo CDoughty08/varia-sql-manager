@@ -232,6 +232,24 @@ internal static partial class BigQueryExecutionChecks
             check(jumped.ListedBlocks() == cached.Length, $"blocks a jump cancelled are not kept: {jumped.ListedBlocks()} listed, {cached.Length} cached");
         }
 
+        // Once the table has expired, a read of cached rows lists no read-ahead blocks it can never fetch.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            await ReadRemote(remote, 10 * 256, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && remote.CachedBlocks().Length >= 4, 15_000);
+            blocks.Expire = true;
+            string outcome;
+            try { await ReadRemote(remote, 30 * 256, 10, viewer: 2); outcome = "ok"; }
+            catch (RemoteExpiredException) { outcome = "REMOTE_EXPIRED"; }
+            catch (RequestException error) { outcome = error.Code; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var (next, _) = await ReadRemote(remote, 12 * 256, 10, viewer: 1);
+            check(outcome == "REMOTE_EXPIRED" && next > 12 * 256 && remote.ListedBlocks() == remote.CachedBlocks().Length,
+                $"after expiry a cached read lists no read-ahead it cannot fetch: {outcome} {next} {remote.ListedBlocks()} listed, {remote.CachedBlocks().Length} cached");
+        }
+
         // A cache that holds two blocks reads ahead one beside the read's own, and never evicts the block on screen for it.
         {
             var store = new ResultStore(1L << 30, 1L << 29);

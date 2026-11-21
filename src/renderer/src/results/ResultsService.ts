@@ -613,8 +613,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.subscription?.dispose()
     run.subscription = undefined
     const { summary } = end
+    // Switches the summary carried, said with the run's end (one announcement replaces another).
+    let switchNotes: string[] = []
     if (summary) {
+      // A summary that overtook a set's residence event (which now arrives after the run, and is ignored) switches it here.
+      const switched = summary.resultSets.filter(descriptor => {
+        const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
+        return entry !== undefined && (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
+      })
       this.client.applySummary(summary)
+      switchNotes = switched.map(descriptor => this.switched(tabId, run, descriptor, false))
       for (const descriptor of summary.resultSets) {
         this.opened(run, descriptor)
         this.settle(run, descriptor)
@@ -646,7 +654,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A screen reader hears why there are no sets, as the Results view's notice shows it; focus does not move there.
     const discarded = discardedSets(run)
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run))
-      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : ''))
+      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : '')
+      + switchNotes.map(note => ' ' + note).join(''))
     let retaining: Promise<void> | undefined
     if (end.planContext && this.retainedPlans) {
       const sources: SnapshotSource[] = []
@@ -1412,38 +1421,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
         break
-      case 'resultSet.residence': {
-        // The rows the grid showed are from an older revision: its selection goes (the grid keeps its scroll), and the
-        // status bar and live region say what changed.
-        const entry = run.sets.find(set => set.descriptor.resultId === event.descriptor.resultId)
-        const grid = entry ? this.views.get(tabId)?.grids.get(entry.key) : undefined
-        if (entry && grid?.selection) { grid.selection = undefined; this.controllers.get(entry.key)?.repaint(); this.selectionChanged() }
-        // Its sort and filters went with the old pages (the backend dropped their views): the grid shows the result again.
-        const sort = entry ? run.sorts.get(entry.key) : undefined
-        if (entry) {
-          run.sorting.get(entry.key)?.abort()
-          run.sorting.delete(entry.key)
-          run.held.delete(entry.key)
-        }
-        if (entry && sort) {
-          for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
-          const sorts = new Map(run.sorts)
-          sorts.delete(entry.key)
-          run.sorts = sorts
-        }
-        // The stack sized it by the older revision's rows: it settles again from this one (a load, once it completes).
-        const settledKey = setKey(event.descriptor)
-        if (run.settled.has(settledKey)) {
-          if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
-          run.settled.delete(settledKey)
-        }
-        this.settle(run, event.descriptor)
-        const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
-        this.announce(tabId, (event.descriptor.residence === 'remote'
-          ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
-          : 'The result is loading into memory.') + removed)
+      case 'resultSet.residence':
+        this.switched(tabId, run, event.descriptor)
         break
-      }
       case 'progress':
         run.completedBatches = event.completedBatches
         run.totalBatches = event.totalBatches
@@ -1629,6 +1609,41 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (keys.length) this.applySort(tabId, run, key, keys)
     if (sort?.filters.length) this.notify(tabId, `${distinctName(entry, run.sets)} was built again, so its filters were removed.`)
     return key
+  }
+
+  /** A BigQuery result switched residence under a new revision (its event, or a summary that overtook it): the rows the grid
+   *  showed are from an older revision, so its selection goes (the grid keeps its scroll), and the status bar and live
+   *  region say what changed. */
+  private switched(tabId: string, run: Run, descriptor: ResultDescriptor, announce = true): string {
+    const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
+    const grid = entry ? this.views.get(tabId)?.grids.get(entry.key) : undefined
+    if (entry && grid?.selection) { grid.selection = undefined; this.controllers.get(entry.key)?.repaint(); this.selectionChanged() }
+    // Its sort and filters went with the old pages (the backend dropped their views): the grid shows the result again.
+    const sort = entry ? run.sorts.get(entry.key) : undefined
+    if (entry) {
+      run.sorting.get(entry.key)?.abort()
+      run.sorting.delete(entry.key)
+      run.held.delete(entry.key)
+    }
+    if (entry && sort) {
+      for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+      const sorts = new Map(run.sorts)
+      sorts.delete(entry.key)
+      run.sorts = sorts
+    }
+    // The stack sized it by the older revision's rows: it settles again from this one (a load, once it completes).
+    const settledKey = setKey(descriptor)
+    if (run.settled.has(settledKey)) {
+      if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+      run.settled.delete(settledKey)
+    }
+    this.settle(run, descriptor)
+    const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
+    const text = (descriptor.residence === 'remote'
+      ? 'The result is now windowed in BigQuery: rows are read as you scroll.'
+      : 'The result is loading into memory.') + removed
+    if (announce) this.announce(tabId, text)
+    return text
   }
 
   /** A derived set has all its rows when it is added: the stack sizes it to them, and its grid always shows a strip (what
