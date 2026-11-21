@@ -27,6 +27,8 @@ import {
 } from './login-properties'
 import { initialNewLoginDraft, newLoginRequest, newLoginTarget, type NewLoginDraft, type SecretState } from './new-login'
 import { restartAgentDefinition, startAgentDefinition, startJobAtStepDefinition, stopAgentDefinition, type AgentServiceDraft, type StartJobDraft } from './agent-dialogs'
+import { agentPropertiesDefinition } from './agent-properties'
+import type { AgentPropertiesDraft, AgentPropertiesModel } from '../../../shared/actions/agent-properties.ts'
 
 /** A request without its ids. */
 export type BuiltRequest = Omit<ActionRequest, 'connectionId' | 'requestId'>
@@ -127,6 +129,9 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
   /** Whether the dialog reads its model again after steps completed before a failure or Stop (ObjectDialogService.reload). */
   readonly reloadsAfterPartial?: (target: ObjectRef) => boolean
+  /** Why nothing in the dialog may change (SQL Server Agent Properties on Managed Instance), or undefined: every field is disabled, the reason
+   *  is in the message bar, and Close (primary, focused) replaces OK and Cancel; the pages stay navigable and Script has nothing to script. */
+  readonly readOnly?: (model: Model) => string | undefined
 }
 /** A folder kind and the databases whose folder of that kind changed. */
 export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
@@ -450,12 +455,14 @@ export interface DialogModels {
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel
   readonly loginProperties: LoginPropertiesModel
   readonly startJobAtStep: AgentJobFacts; readonly startAgent: AgentServiceFacts; readonly stopAgent: AgentServiceFacts; readonly restartAgent: AgentServiceFacts
+  readonly agentProperties: AgentPropertiesModel
 }
 export interface DialogDrafts {
   readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
   readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft; readonly unlockLogin: UnlockDraft
   readonly loginProperties: LoginPropertiesDraft
   readonly startJobAtStep: StartJobDraft; readonly startAgent: AgentServiceDraft; readonly stopAgent: AgentServiceDraft; readonly restartAgent: AgentServiceDraft
+  readonly agentProperties: AgentPropertiesDraft
 }
 export type DialogModel = DialogModels[DefinedDialogId]
 export type DialogDraft = DialogDrafts[DefinedDialogId]
@@ -472,7 +479,8 @@ export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogD
   startJobAtStep: startJobAtStepDefinition,
   startAgent: startAgentDefinition,
   stopAgent: stopAgentDefinition,
-  restartAgent: restartAgentDefinition
+  restartAgent: restartAgentDefinition,
+  agentProperties: agentPropertiesDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

@@ -4,10 +4,10 @@ import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServ
 import type { RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
-import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
+import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
-import { coverage, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
+import { coverage, followPoint, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
 import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -18,7 +18,7 @@ const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
 const conn = '00000000-0000-4000-8000-0000000000c1'
 const row = (id: string, name: string, type: BackupSetRow['type'], position: number, first: string, last: string, checkpoint: string, base: string, finish: string, devices: string[]): BackupSetRow => ({
   id, name, type, server: 'SQLHOST', database: 'Sales', position, firstLsn: first, lastLsn: last, checkpointLsn: checkpoint, databaseBackupLsn: base,
-  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices
+  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices, backupSetGuid: id
 })
 const history = [
   row(uuid(5), 'log3', 'log', 3, '56800001', '68800001', '68800001', '43200001', '21:05:46', ['B:\\Backup\\Sales_log.trn']),
@@ -101,7 +101,7 @@ describe('Restore Database as a document', () => {
     const [request] = scripts()
     expect(validateRequest('actions.script', request)).toEqual(request)
     expect(request).toMatchObject({ action: 'restore', target: { kind: 'database', name: 'Sales' }, identity: { id: 7, created: '2026-01-01T00:00:00.000' },
-      restore: { sets: [{ id: uuid(1), devices: ['B:\\Backup\\Sales_full1.bak', 'B:\\Backup\\Sales_full2.bak'], file: 1, type: 'full' }, { id: uuid(4), type: 'differential' }, { id: uuid(5), file: 3, type: 'log' }],
+      restore: { sets: [{ id: uuid(1), devices: ['B:\\Backup\\Sales_full1.bak', 'B:\\Backup\\Sales_full2.bak'], file: 1, type: 'full', guid: uuid(1) }, { id: uuid(4), type: 'differential', guid: uuid(4) }, { id: uuid(5), file: 3, type: 'log', guid: uuid(5) }],
         relocate: [], replace: false, recovery: 'recovery', tailLog: { file: 'B:\\Backup\\Sales_LogBackup_2026-10-30_12-00-00.bak', noRecovery: true }, closeConnections: false } })
     expect(state().script).toEqual({ state: 'ready', text: 'USE [master]\nRESTORE DATABASE [Sales]\n\nGO\n' })
     // A copy: no tail-log backup (the destination is not the source), and the files go to the default folders under its name.
@@ -142,6 +142,11 @@ describe('Restore Database as a document', () => {
     const pointed = restoreRequest(state().draft!, state().facts, ids) as RestoreRequest
     expect(pointed.restore.sets.map(set => set.id)).toEqual([uuid(1), uuid(2), uuid(3)])
     expect(pointed.restore.stopAt).toBe('2026-10-29T21:05:43')
+    expect(pointed.restore.sets.map(set => set.guid)).toEqual([uuid(1), uuid(2), uuid(3)])
+    // A header without a BackupSetGUID sends no guid (not an undefined one), so the backend expects none at the position either.
+    const unpinned = restoreRequest(state().draft!, { ...state().facts, sets: state().facts.sets.map(({ backupSetGuid: _, ...set }) => set) }, ids) as RestoreRequest
+    expect(unpinned.restore.sets.every(set => !('guid' in set))).toBe(true)
+    expect(validateRequest('actions.execute', unpinned)).toEqual(unpinned)
     restore.updateDraft(id, { stopAt: undefined })
     expect(state().draft!.stopAt).toBeUndefined()
     // The grid's checkboxes wait for Manual Selection, which starts from the plan the grid shows.
@@ -181,6 +186,33 @@ describe('Restore Database as a document', () => {
     // A point at the full's own finish needs no log.
     restore.updateDraft(id, { manual: [uuid(1)], stopAt: '2026-10-29T21:05:40' })
     expect(draftPlan(state().draft!, state().facts)).toEqual({ ids: [uuid(1)], manual: true })
+  })
+  it('gives the Backup Timeline the points the document will accept, and the last backup taken whatever point is set', async () => {
+    const { restore, id, state } = opened()
+    await settled()
+    const at = (second: number) => `2026-10-29T21:05:${String(second).padStart(2, '0')}`
+    // A point already set no longer makes Last backup taken that point's plan's last log: the planner's last is log3 at :46.
+    restore.updateDraft(id, { stopAt: at(43) })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(46))
+    restore.updateDraft(id, { manual: [uuid(1), uuid(2), uuid(3)] })
+    expect(lastBackupOf(state().draft!, state().facts)).toBe(at(44))
+    // Under Manual Selection the band is the stretch the checked sets' last log stops in, and only it (or a last base's finish) is allowed.
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([{ from: at(41), to: at(44) }])
+    expect([40, 41, 43, 44, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, true, true, false, false])
+    restore.updateDraft(id, { manual: [uuid(1), uuid(4)] })
+    expect(timelineCoverage(state().draft!, state().facts)).toEqual([])
+    expect([40, 45, 46].map(second => timelinePointAllowed(state().draft!, state().facts, at(second)))).toEqual([false, true, false])
+    // OK is allowed exactly where draftPlan then has no problem, for every valid selection and the planner alike.
+    for (const manual of [undefined, [], [1], [1, 2], [1, 2, 3], [1, 2, 3, 5], [1, 4], [1, 4, 5]]) {
+      restore.updateDraft(id, { manual: manual?.map(uuid), stopAt: undefined })
+      const draft = state().draft!, facts = state().facts, covered = timelineCoverage(draft, facts)
+      for (let second = 35; second <= 50; second++) {
+        const plan = draftPlan({ ...draft, stopAt: at(second) }, facts), label = `${manual?.join() ?? 'planner'} @${second}`
+        const accepted = plan.ids.length > 0 && !plan.problem
+        expect(timelinePointAllowed(draft, facts, at(second), covered), label).toBe(accepted)
+        if (covered.some(stretch => stretch.from <= at(second) && at(second) <= stretch.to)) expect(accepted, label).toBe(true)
+      }
+    }
   })
   it('disables the checkboxes of sets the planner never uses, with the reason', () => {
     const draft = { manual: [] } as unknown as RestoreDraft
@@ -297,6 +329,15 @@ describe('the Backup Timeline', () => {
     expect(stepPoint('a', false, at, span)).toBeUndefined()
     // A point after the last backup moves the window's end with it.
     expect(timeText(timelineWindow(history, 'day', timeMs('2026-10-30T09:00:00')).to)).toBe('2026-10-30T09:00:00')
+    // A point before the interval (a Manual Selection's older sets) ends the window there, so it still shows; one inside keeps the last backup's end.
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T19:00:00')).to)).toBe('2026-10-29T19:00:00')
+    expect(timeText(timelineWindow(history, 'hour', timeMs('2026-10-29T20:30:00')).to)).toBe('2026-10-29T21:05:46')
+    // Once open, the window stays while the point moves inside it, and slides only as far as the point leaves it, either way.
+    const open = { from: timeMs('2026-10-29T20:00:00')!, to: timeMs('2026-10-29T21:00:00')! }, text = (window: { from: number, to: number }) => [timeText(window.from), timeText(window.to)]
+    expect(followPoint(open, timeMs('2026-10-29T20:30:00')!)).toEqual(open)
+    expect(followPoint(open, open.from)).toEqual(open)
+    expect(text(followPoint(open, timeMs('2026-10-29T19:59:00')!))).toEqual(['2026-10-29T19:59:00', '2026-10-29T20:59:00'])
+    expect(text(followPoint(open, timeMs('2026-10-29T21:01:00')!))).toEqual(['2026-10-29T20:01:00', '2026-10-29T21:01:00'])
     // The logs cover from the full backup's finish to the last log's, as one stretch at the end of an hour's window.
     const stretches = coverage(history, span)
     expect(stretches).toHaveLength(1)

@@ -103,8 +103,10 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const name = active ? distinctName(active, tab.sets) : ''
   const targets = active ? compare.targetsOf(tabId, active.key) : []
   const sides = compare.sidesOf(tabId)
-  const running = !!sides && !!picker && compare.isRunning(tabId, sides.old.key, sides.neu.key, picker.exact)
-  const shown = sides && picker ? compare.existing(tabId, sides.old.key, sides.neu.key, picker.exact) : undefined
+  const running = !!sides && !!picker && compare.isRunning(tabId, sides.old.key, sides.neu.key)
+  const shown = sides && picker ? compare.existing(tabId, sides.old.key, sides.neu.key) : undefined
+  // Show It on the run's comparison of the pair applies Exact text (D13): Update when that would change it.
+  const update = !!shown && !!picker && compare.stateOf(tabId, shown)?.exact !== picker.exact
 
   // Placed under its anchor when it fits, else above it; clamped to the window, scrolling inside when short. Measured
   // after every render (any of its content can change its height; an unchanged place is not set again) and on resize and
@@ -238,7 +240,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     <span className={old ? 'compare-sign removed' : 'compare-sign added'} aria-hidden="true">{old ? '−' : '+'}</span>
     <b {...entrySecondary(entry) ? { title: numberedName(entry) } : {}}>{numberedName(entry)}</b>{!list && <small>{rows(entry)}</small>}
   </div>
-  const title = sides ? comparisonName(...comparedNames(sides.old, sides.neu, tab.sets)) : ''
+  const title = sides ? comparisonName(...comparedNames(sides.old, sides.neu, tab.sets), picker.exact) : ''
 
   return <>
     <span ref={home} hidden />
@@ -286,12 +288,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
         <label className="compare-exact" title="Case and trailing spaces count"><input type="checkbox" checked={picker.exact} onChange={event => compare.setExact(tabId, event.target.checked)} /> Exact text</label>
         <span className="compare-gap" />
         {running && sides
-          ? <button type="button" onClick={() => compare.cancel(tabId, sides.old.key, sides.neu.key, picker.exact)}>Cancel</button>
+          ? <button type="button" onClick={() => compare.cancel(tabId, sides.old.key, sides.neu.key)}>Cancel</button>
           : <button type="button" onClick={dismiss}>Close</button>}
         {/* Only aria-disabled while its comparison runs, so the keyboard focus stays on it and a failure is met there. */}
         <button ref={button} type="submit" className="primary" disabled={!sides} aria-disabled={running || undefined}
-          title={sides ? `${shown ? 'Shows' : 'Opens'} “${title}”, a copy that stays when its inputs close` : undefined}>
-          {running ? <><Icon name="loading" spin /> Comparing…</> : shown ? 'Show It' : 'Compare'}
+          title={sides ? update ? `Updates “${shown ? entryName(shown) : title}” to compare text ${picker.exact ? 'exactly' : 'by collation'}` : `${shown ? 'Shows' : 'Opens'} “${title}”, a copy that stays when its inputs close` : undefined}>
+          {running ? <><Icon name="loading" spin /> Comparing…</> : update ? 'Update' : shown ? 'Show It' : 'Compare'}
         </button>
       </div>
     </form>, host)}

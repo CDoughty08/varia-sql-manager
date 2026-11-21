@@ -59,7 +59,8 @@ export type CreateAction = typeof createActions[number]
  */
 export const kindDialogActions = [
   'loginProperties',
-  'tableProperties'
+  'tableProperties',
+  'agentProperties'
 ] as const
 export type KindDialogAction = typeof kindDialogActions[number]
 export interface KindDialogActionSpec {
@@ -96,7 +97,8 @@ export const dialogIds = [
   'startJobAtStep',
   'startAgent',
   'stopAgent',
-  'restartAgent'
+  'restartAgent',
+  'agentProperties'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -191,7 +193,7 @@ const actionSpecData = {
     systemObjects: true, engines: onServers, long: true, cleanupMs: agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs
   },
   stopAgent: {
-    title: 'Stop SQL Server Agent', menuTitle: 'Stop', mnemonic: 'p', group: '2_service', order: 2, class: 'dialog', dialog: 'stopAgent', command: 'explorer.stopAgent',
+    title: 'Stop SQL Server Agent', menuTitle: 'Stop', mnemonic: 't', group: '2_service', order: 2, class: 'dialog', dialog: 'stopAgent', command: 'explorer.stopAgent',
     systemObjects: true, engines: onServers, long: true, cleanupMs: agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs
   },
   restartAgent: {
@@ -336,7 +338,8 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
     titles: { enable: 'Enable Job', disable: 'Disable Job', rename: 'Rename Job', delete: 'Delete Job' }
   },
   // The SQL Server Agent node: Start, Stop and Restart of its service, narrowed by agentServiceRules.
-  agent: { row: { startAgent: 'enabled', stopAgent: 'enabled', restartAgent: 'enabled' } }
+  // Its Properties (AG-8a) opens SQL Server Agent Properties for every login msdb lets read them; the describe says when it is read-only.
+  agent: { row: { startAgent: 'enabled', stopAgent: 'enabled', restartAgent: 'enabled', properties: 'enabled' }, dialogs: { properties: 'agentProperties' } }
 }
 /** A verb's title on a kind: the kind's own (`titles`), else the action's. */
 export const actionTitle = (kind: NodeKind | 'folder', action: ObjectAction): string => (kind !== 'folder' && actionKindSpecs[kind]?.titles?.[action]) || objectActionSpecs[action].title
@@ -824,7 +827,8 @@ export const pageIds = [
   'changeTracking',
   'storage',
   'securityPredicates',
-  'extendedProperties'
+  'extendedProperties',
+  'history'
 ] as const
 export type PageId = typeof pageIds[number]
 export interface DialogPageSpec {
@@ -910,7 +914,10 @@ const dialogSpecData = {
   // The Agent service's confirmation, then its steps in place (AG-2).
   startAgent: { title: 'Start SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'startAgent', pages: [page('general', 'General')], steps: true },
   stopAgent: { title: 'Stop SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'stopAgent', pages: [page('general', 'General')], steps: true },
-  restartAgent: { title: 'Restart SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'restartAgent', pages: [page('general', 'General')], steps: true }
+  restartAgent: { title: 'Restart SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'restartAgent', pages: [page('general', 'General')], steps: true },
+  // SSMS's "SQL Server Agent Properties - server" (AG-8a): it stays a dialog (docs/agent-ui-rethink.md); General and History only, the
+  // other pages are later. OK saves the changed settings; History's Delete old history now runs apart from OK, after its own confirmation.
+  agentProperties: { title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties', pages: [page('general', 'General'), page('history', 'History', { icon: 'history' })] }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -1056,7 +1063,9 @@ export const isCreateAction = (action: string): action is CreateAction => (creat
 export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDialogActionSpec } = {
   loginProperties: { title: 'Login Properties', dialog: 'loginProperties', kind: 'login', verb: 'properties', engines: onServers },
   // Table Properties runs where Properties does; its statements are SQL Server's on Managed Instance too.
-  tableProperties: { title: 'Table Properties', dialog: 'tableProperties', kind: 'table', verb: 'properties', engines: onServers }
+  tableProperties: { title: 'Table Properties', dialog: 'tableProperties', kind: 'table', verb: 'properties', engines: onServers },
+  // SQL Server Agent Properties opens on Managed Instance too, read-only there (agentPlatformGates.agentPropertiesWrite).
+  agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers }
 }
 export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
 /** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */

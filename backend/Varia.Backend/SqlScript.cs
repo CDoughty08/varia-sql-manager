@@ -87,8 +87,9 @@ internal static class SqlScript
             // A line that starts with "::" continues T-SQL (FROM ::fn_helpcollations(), geography ::Point); no SQLCMD command does.
             if (trimmed.StartsWith(":", StringComparison.Ordinal) && !trimmed.StartsWith("::", StringComparison.Ordinal) || trimmed.StartsWith("!!", StringComparison.Ordinal))
                 throw Invalid(lineNumber, "SQLCMD directives are not supported. No file includes, variable expansion, or shell commands are performed.");
+            // "GO:" is a T-SQL label, as sqlcmd and SSMS read it; "GO :" stays an invalid delimiter, as in sqlcmd.
             var isGo = trimmed.Length >= 2 && trimmed[..2].Equals("GO", StringComparison.OrdinalIgnoreCase)
-                && (trimmed.Length == 2 || !IsIdentifierPart(trimmed[2]));
+                && (trimmed.Length == 2 || !IsIdentifierPart(trimmed[2]) && trimmed[2] != ':');
             if (isGo)
             {
                 var countText = trimmed[2..].Trim();

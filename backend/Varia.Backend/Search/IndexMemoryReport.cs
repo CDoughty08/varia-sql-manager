@@ -33,7 +33,8 @@ internal static class IndexMemoryReport
             foreach (var part in held)
             {
                 tables.Add(part.Table);
-                recordBytes += part.Bytes;
+                // Lookup arrays are part of the records: an entry's slot in them.
+                recordBytes += part.Bytes + part.LookupBytes;
                 cut += part.Cut;
                 if (part.ChildrenLeftOut) childrenLeftOut++;
             }

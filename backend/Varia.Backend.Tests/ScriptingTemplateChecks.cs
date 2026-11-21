@@ -144,6 +144,29 @@ internal static class ScriptingTemplateChecks
             == Lines("DECLARE @RC decimal(10,2)", "DECLARE @a decimal(10,2)", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC = [dbo].[f] ", "   @a", "  ,@b")
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true)], true, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
             "a scalar function's return code has its return type, CLR or not");
+        check(DmlTemplates.Execute(obj, [P(1, "@rc"), P(2, "@RC1", output: true), P(3, "@b")], false, true)
+            == Lines("DECLARE @RC2 int", "DECLARE @rc int", "DECLARE @RC1 int", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC2 = [dbo].[p] ", "   @rc", "  ,@RC1 OUTPUT", "  ,@b")
+            && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, "@RC")], false, true).StartsWith("DECLARE @RC1 int" + NL + "DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "EXECUTE To names the return code after any parameter called @RC, @RC1 and so on, compared case-insensitively, so the batch declares no variable twice");
+        check(DmlTemplates.Execute(obj, [P(1, "@\uFF32\uFF23")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@RC\uFF11")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@R\u00C7")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@R\u3400C")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal),
+            "a parameter that some collation could read as the return code counts too: a fullwidth @RC (through its NFKD fold), @RC with a fullwidth digit (nothing, or any one digit, so @RC1 to @RC9 too), an accented @RC, and @RC with a character a collation weighs zero");
+        check(DmlTemplates.Execute(obj, [P(1, "@\u0280C")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@\u5BA2\u6237")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@\u043E\u043F\u0438\u0441\u0430\u043D\u0438\u0435"), P(2, "@\u039A\u03C9\u03B4\u03B9\u03BA\u03CC\u03C2")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "a letter NFKD leaves alone may still equal R (U+0280 is R in the default collation), but an ideograph, a Cyrillic or a Greek letter never equals R, C or a digit, so ordinary names keep @RC");
+        check(DmlTemplates.Execute(obj, [P(1, "@\u0633\u0646\u0629\u0662\u0660\u0662\u0664"), P(2, "@\u0661\u0662\u0663\u0664\u0665\u0666\u0667")], false, true).StartsWith("DECLARE @RC int" + NL, StringComparison.Ordinal),
+            "a non-ASCII digit stands only for a digit, never R or C, so names with Arabic-Indic digits keep @RC");
+        check(DmlTemplates.Execute(obj, [P(1, "@rc\u0219")], false, true).StartsWith("DECLARE @RC10 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@RC"), P(2, "@RC1\u0219")], false, true).StartsWith("DECLARE @RC2 int" + NL, StringComparison.Ordinal)
+            && DmlTemplates.Execute(obj, [P(1, "@\uFF52\uFF43")], false, true).StartsWith("DECLARE @RC1 int" + NL, StringComparison.Ordinal),
+            "lowercase ASCII letters beside non-ASCII ones match case-insensitively, ASCII digits there are not skipped, and a lowercase fullwidth name folds to uppercase");
+        var blocking = "@RC" + new string('\u0219', 125);
+        check(DmlTemplates.Execute(obj, [P(1, blocking)], false, true) == Lines("DECLARE " + blocking + " int", "", "-- TODO: Set parameter values here.", "", "EXECUTE [dbo].[p] ", "   " + blocking)
+            && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, blocking)], false, true).EndsWith("EXECUTE [dbo].[f] " + NL + "   " + blocking, StringComparison.Ordinal),
+            "a name that could equal every return code within the bound leaves the return code out, still a valid call");
     }
 
     private static ResolvedTarget Target(string kind, string subtype = "", string? objectType = null, IReadOnlyList<ColumnRow>? columns = null, IReadOnlyList<ParameterRow>? parameters = null,

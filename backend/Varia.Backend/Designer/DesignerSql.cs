@@ -209,24 +209,42 @@ internal static class DesignerSql
         + "(SELECT m.compatibility_level FROM sys.databases AS m WHERE m.database_id = 1) AS master_level "
         + "FROM sys.databases AS d WHERE d.name = @db;";
 
+    /// <summary>The designer's catalog statements' parameters: ActionSql's, and @names, the design's column names each padded
+    /// with spaces to 128 UTF-16 units (<see cref="PaddedNames"/>).</summary>
+    public const string Declarations = ActionSql.Declarations + ", @names nvarchar(max)";
+    /// <summary>Runs a catalog statement in the database (ActionSql.ModuleCall with @names).</summary>
+    public const string ModuleCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
+        + "EXEC @module @stmt, @decl, @schema = @schema, @name = @name, @new = @new, @take = @take, @names = @names;";
+    /// <summary>@names: each name padded to 128 units, which never changes how the catalog compares it (SQL Server pads).</summary>
+    public static string PaddedNames(IEnumerable<string> names) => string.Concat(names.Select(name => name.PadRight(128)));
+
     /// <summary>In the database (ModuleCall): at most @take schemas but sys and INFORMATION_SCHEMA, by name, dbo (schema 1)
-    /// always among them when it exists, as it is the default; then the default rows filegroup; then whether the catalog
-    /// collation, which keeps column names unique, tells case and accents apart.</summary>
+    /// always among them when it exists, as it is the default; then the default rows filegroup.</summary>
     public const string Describe = "SELECT x.schema_name FROM (SELECT TOP (@take) s.name AS schema_name FROM sys.schemas AS s WHERE s.schema_id NOT IN (3, 4) "
         + "ORDER BY CASE WHEN s.schema_id = 1 THEN 0 ELSE 1 END, s.name) AS x ORDER BY x.schema_name;\n"
-        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';\n"
-        + "SELECT CONVERT(bit, CASE WHEN N'a' = N'A' COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS case_sensitive, "
-        + "CONVERT(bit, CASE WHEN N'e' = NCHAR(233) COLLATE CATALOG_DEFAULT THEN 0 ELSE 1 END) AS accent_sensitive;";
+        + "SELECT fg.name AS filegroup_name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG';";
 
     /// <summary>In the database (ModuleCall, @schema, @name the table and @new the key's name): whether the schema exists,
     /// advisory ALTER on it, whether the table's or the key's name is taken in it, and the default rows filegroup. A check
     /// that cannot answer (NULL) does not refuse: HAS_PERMS_BY_NAME parses its securable, so it takes the schema bracketed,
-    /// and only when the bracketed name fits its sysname (it answers 0, not NULL, for a name it misreads).</summary>
+    /// and only when the bracketed name fits its sysname (it answers 0, not NULL, for a name it misreads). Then
+    /// <see cref="DuplicateName"/>.</summary>
     public const string Preflight = "SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.schemas AS s WHERE s.name = @schema) THEN 1 ELSE 0 END) AS schema_exists, "
         + "CONVERT(bit, ISNULL(CASE WHEN DATALENGTH(QUOTENAME(@schema)) <= 256 THEN HAS_PERMS_BY_NAME(QUOTENAME(@schema), N'SCHEMA', N'ALTER') END, 1)) AS can_alter, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE s.name = @schema AND o.name = @name) THEN 1 ELSE 0 END) AS name_in_use, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE s.name = @schema AND o.name = @new) THEN 1 ELSE 0 END) AS key_in_use, "
-        + "(SELECT fg.name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG') AS filegroup_name;";
+        + "(SELECT fg.name FROM sys.filegroups AS fg WHERE fg.is_default = 1 AND fg.type = 'FG') AS filegroup_name;\n" + DuplicateName;
+
+    /// <summary>The first of the @take names in @names (0-based) that the catalog collation, which keeps a table's column
+    /// names unique, finds equal to an earlier one; no row when they all differ. Only SQL Server knows every collation's
+    /// rules (Turkish I and ı, Swedish å apart from a even ignoring accents, Czech ch apart from cH even ignoring case),
+    /// so this is the only check of them, before any DDL; the renderer checks only trailing spaces. SUBSTRING counts UTF-16 units under a binary collation that
+    /// is not _SC. The slot numbers come from constants (10,000 rows): a catalog view would wait on any other session's
+    /// uncommitted DDL in the database, and show a login only what it may see.</summary>
+    public const string DuplicateName = "WITH digits AS (SELECT d FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)) AS t(d)), "
+        + "numbers AS (SELECT TOP (@take) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM digits AS a CROSS JOIN digits AS b CROSS JOIN digits AS c CROSS JOIN digits AS e), "
+        + "names AS (SELECT n, CONVERT(nvarchar(128), SUBSTRING(@names COLLATE Latin1_General_100_BIN2, (n - 1) * 128 + 1, 128)) COLLATE CATALOG_DEFAULT AS column_name FROM numbers) "
+        + "SELECT TOP (1) r.n - 1 AS duplicate_column FROM (SELECT n, ROW_NUMBER() OVER (PARTITION BY column_name ORDER BY n) AS k FROM names) AS r WHERE r.k = 2 ORDER BY r.n;";
 
     // --- Lint ------------------------------------------------------------------------------------------------------------
 
@@ -243,5 +261,6 @@ internal static class DesignerSql
             yield return ("designer preflight band " + band, ActionSql.LintCatalog(Preflight, band, database: true));
         }
         yield return ("designer master facts", ActionSql.LintCatalog(MasterFacts, ExplorerCatalog.MaxBand, database: false));
+        yield return ("designer module call", ActionSql.LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
     }
 }

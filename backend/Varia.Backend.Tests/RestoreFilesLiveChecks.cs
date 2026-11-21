@@ -55,7 +55,7 @@ internal static class RestoreFilesLiveChecks
         await Step("INSERT dbo.t DEFAULT VALUES;", db);
         var history = await Describe(new("history", db));
         RestorePlanSetDto Planned(string name) => history.Restore?.Sets?.FirstOrDefault(set => set.Name == name) is { } set
-            ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name);
+            ? new(set.Id, [.. set.Devices], set.Position, set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name);
         var (full, log1) = (Planned("full"), Planned("log1"));
         var listed = (await Describe(new("historyFiles", SetId: full.Id))).Restore?.Files ?? [];
         check(listed.Any(item => item.Logical == file && item.Filegroup == group && item.Type == "data" && item.Absent is null) && listed.Any(item => item.Logical == "f3" && item.Filegroup == "FG3"),
@@ -143,6 +143,27 @@ internal static class RestoreFilesLiveChecks
             && duringState == "1" && await FileState(file) == "0" && await Rows() == "4",
             "a log backup taken during a file restore stops it at Back up the log, naming that backup, with the file left restoring until it and a later log backup are restored: "
             + Show(during) + " (file state " + duringState + ")");
+
+        // A planned backup's file overwritten after the run started, right before its step (here the file backup's, by a copy-only full
+        // while every file is online, which leaves the log chain as it is): the step reads its header again and fails, nothing restores
+        // from the newer set, and the file stays online.
+        var (fileBackup, chainLog) = (scratch.RestoreFile("gf.bak", db), scratch.RestoreFile("gl.trn", db));
+        await Step("BACKUP DATABASE " + B(db) + " FILE = " + Q(file) + " TO DISK = " + Q(fileBackup) + " WITH FORMAT, INIT, NAME = N'gf';");
+        await Step("BACKUP LOG " + B(db) + " TO DISK = " + Q(chainLog) + " WITH FORMAT, INIT, NAME = N'gl';");
+        history = await Describe(new("history", db));
+        var (gf, gl) = (Planned("gf"), Planned("gl"));
+        service.Actions.Options.BeforeStep = async (title, _) =>
+        {
+            if (title == restore.Step("files")) await Step("BACKUP DATABASE " + B(db) + " TO DISK = " + Q(fileBackup) + " WITH COPY_ONLY, FORMAT, INIT, NAME = N'gx';");
+        };
+        ActionExecuteResult swapped;
+        try { swapped = await Wire(Options([gf, gl], [file], [], backup: new(scratch.RestoreFile("lb5.bak", db)))); }
+        finally { service.Actions.Options.BeforeStep = null; }
+        check(gf is { Type: "file", Guid: not null } && swapped is { Error.Code: "MEDIA" } && swapped.Error.Message.StartsWith(restore.Message("changedSet"), StringComparison.Ordinal)
+            && swapped.Steps.Select(step => (step.Status, step.Title)).SequenceEqual([("failed", restore.Step("files")), ("skipped", restore.Step("log")), ("skipped", restore.Step("logBackup")),
+                ("skipped", restore.Step("logBackupRestore"))])
+            && await FileState(file) == "0" && await State() == "0/0" && await Rows() == "4",
+            "a file restore whose backup file was overwritten after the run started fails that set's step with the reviewed GUID's error, and the file stays online: " + Show(swapped));
 
         // Script: SMO's Restore { Action = Files } and { Action = Log }, and its copy-only Backup, script the statements actions.script writes,
         // for a hostile database, file, filegroup and paths, a move, REPLACE, RESTRICTED_USER and each recovery state.

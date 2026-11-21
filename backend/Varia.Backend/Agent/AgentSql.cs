@@ -46,6 +46,10 @@ internal static partial class AgentSql
         ["instance_id", "job_id", "step_id", "step_name", "sql_message_id", "sql_severity", "message", "run_status", "run_date", "run_time", "run_duration", "retries_attempted"],
         [new("@job_id", SqlDbType.UniqueIdentifier)], "historyRows");
 
+    /// <summary>The newest history rows of a job, for Job Activity Monitor's last run (AG-3): the same read as <see cref="History"/>,
+    /// cancelled after lastRunRows rows (newest first), so a long history is not read every sample.</summary>
+    public static readonly AgentStatement LastRunHistory = History with { Id = "lastRunHistory", Cap = "lastRunRows" };
+
     /// <summary>The step types this server's Agent has.</summary>
     public static readonly AgentStatement Subsystems = new("subsystems", "EXEC msdb.dbo.sp_enum_sqlagent_subsystems;", ["subsystem", "subsystem_id"], [], "listRows");
 
@@ -70,7 +74,27 @@ internal static partial class AgentSql
     /// <summary>A job's steps, for Start Job at Step (AG-2; every Agent role may read them).</summary>
     public static readonly AgentStatement JobSteps = new("jobSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name"], [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps];
+    private static readonly string[] ActivityColumns = [.. JobColumns, "has_step", "has_schedule", "current_retry_attempt"];
+
+    /// <summary>Job Activity Monitor's list (AG-3): every job the login may see with the columns its grid and tiles need.</summary>
+    public static readonly AgentStatement JobActivity = new("jobActivity", "EXEC msdb.dbo.sp_help_job;", ActivityColumns, [], "listRows");
+
+    /// <summary>One watched job's row for the status bar (AG-3), with its step count.</summary>
+    public static readonly AgentStatement WatchedJob = new("watchedJob", "EXEC msdb.dbo.sp_help_job @job_id = @job_id, @job_aspect = N'JOB';", ActivityColumns,
+        [new("@job_id", SqlDbType.UniqueIdentifier)], "listRows");
+
+    /// <summary>Every job's activity row in the Agent's current session (sp_help_jobactivity defaults to the newest syssessions row),
+    /// which carries a running job's start for every Agent role.</summary>
+    public static readonly AgentStatement Activities = new("activities", "EXEC msdb.dbo.sp_help_jobactivity;", ["job_id", "start_execution_date", "stop_execution_date"], [], "listRows");
+
+    /// <summary>The server's clock in its local time, which msdb's dates use, for a running job's elapsed time.</summary>
+    public static readonly AgentStatement ServerClock = new("clock", "SELECT CONVERT(datetime, SYSDATETIME()) AS server_now;", ["server_now"], [], "listRows");
+
+    /// <summary>Every setting the SQL Server Agent Properties dialog shows (AG-8a), from sp_get_sqlagent_properties (every Agent role may run it; 15281 while Agent XPs is off).</summary>
+    public static readonly AgentStatement AgentProperties = new("agentProperties", "EXEC msdb.dbo.sp_get_sqlagent_properties;",
+        ["auto_start", "startup_account", "sqlserver_restart", "monitor_autostart", "jobhistory_max_rows", "jobhistory_max_rows_per_job", "errorlog_file", "errorlogging_level"], [], "listRows");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

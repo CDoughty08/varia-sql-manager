@@ -36,6 +36,8 @@ export const gridLimits = {
   /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing
    *  stacked sets to their rows. */
   captionHeight: 26, stripHeight: 25,
+  /** A comparison's toolbar above its grid (.rg-compare-bar: 24 px controls, 2 px padding each side, 1 px border). */
+  comparisonBarHeight: 29,
   /** Tabs layout: the row of result and comparison tabs (.rt-results) and the row of a result's view tabs (.rt-views), for
    *  the Messages strip's room; and the most result tabs drawn at once, a window around the selected one (the overflow
    *  picker, ResultsPicker, lists them all). */

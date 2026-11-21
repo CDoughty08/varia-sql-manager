@@ -205,6 +205,10 @@ internal static class AgentLiveChecks
                     + JsonSerializer.Serialize(open.Hits) + " " + JsonSerializer.Serialize(shut.Hits) + " " + JsonSerializer.Serialize(open.Index.Skipped));
             }
             finally { service.Search.AgentEnabled = Varia.Backend.Agent.AgentGate.Enabled; }
+            // Job Activity Monitor's live source (AG-3) lists it, reads its last run and watches it through live.subscribe.
+            await AgentJobsChecks.LiveAsync(check, service, info, json, job, id);
+            // SQL Server Agent Properties (AG-8a) purges only rows it plants on this job, so it runs while the job exists.
+            await AgentPropertiesLiveChecks.RunAsync(check, service, info, json, scratch, id, connection, sql);
             // AG-2's job verbs end with Delete, so the finally below finds nothing left to drop.
             await AgentActionLiveChecks.JobVerbsAsync(check, service, info, json, job, id, sql);
         }

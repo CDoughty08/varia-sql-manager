@@ -76,7 +76,7 @@ internal static class RestoreRunLiveChecks
         var target = scratch.RestoreTarget;
         static string Q(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
         RestorePlanSetDto Planned(string name, string? type = null) => sets.FirstOrDefault(set => set.Name == name) is { } set
-            ? new(set.Id, [.. set.Devices], set.Position, type ?? set.Type, set.Name) : throw new InvalidOperationException("No set " + name);
+            ? new(set.Id, [.. set.Devices], set.Position, type ?? set.Type, set.Name, set.BackupSetGuid) : throw new InvalidOperationException("No set " + name);
         var last = new List<RestorePlanSetDto> { Planned("full"), Planned("diff"), Planned("log3") };
         RestoreOptionsDto Options(List<RestorePlanSetDto> chain, IReadOnlyList<RestoreMoveDto>? moves = null, bool replace = false, bool close = false, RestoreTailLogDto? tail = null, string recovery = "recovery") =>
             new(chain, [.. moves ?? []], replace, false, false, recovery, close, TailLog: tail);
@@ -90,6 +90,13 @@ internal static class RestoreRunLiveChecks
             new("restore", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: name), Identity: identity, Restore: options);
         async Task<ActionExecuteResult> Wire(string name, RestoreOptionsDto options, DatabaseIdentityDto? identity) =>
             (ActionExecuteResult)await service.DispatchAsync("actions.execute", JsonSerializer.SerializeToElement(Args(name, options, identity), json), json);
+        // The one backup set a file holds, as the describe reads it from the media (with its BackupSetGUID).
+        async Task<BackupSetDto> DeviceSet(string file)
+        {
+            var read = (ActionDescribeResult)await service.DispatchAsync("actions.describe", JsonSerializer.SerializeToElement(
+                new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "restoreDatabase", new ObjectRefDto("server"), null, new RestoreSourceDto("devices", Devices: [file])), json), json);
+            return read.Restore?.Sets?.SingleOrDefault() ?? throw new InvalidOperationException("Restore setup failed: no backup set read from " + file + ".");
+        }
         async Task<string?> State(string name) => (await sql("SELECT CONVERT(nvarchar(20), state) + N'/' + CONVERT(nvarchar(20), user_access) FROM sys.databases WHERE name = " + Q(name) + ";", "master")).Scalar;
         async Task<string?> Rows(string name) => (await sql("SELECT CONVERT(nvarchar(20), COUNT(*)) FROM dbo.t;", name)).Scalar;
         static string Show(ActionExecuteResult result) => (result.Error is { } error ? error.Code + " " + error.Message + " | " : "")
@@ -123,10 +130,36 @@ internal static class RestoreRunLiveChecks
         var stale = await Wire(target, Options(last, relocated, replace: true), targetIdentity! with { Id = targetIdentity.Id + 100_000 });
         var notKind = await Wire(target, Options([Planned("full"), Planned("log1", "differential")], relocated, replace: true), targetIdentity);
         var gap = await Wire(target, Options([Planned("full"), Planned("log3")], relocated, replace: true), targetIdentity);
+        // A backup file overwritten after the plan was reviewed: the set at the position has another BackupSetGUID than the plan's.
+        var overwritten = await Wire(target, Options([Planned("full") with { Guid = "00000000-0000-0000-0000-000000000001" }, Planned("diff"), Planned("log3")], relocated, replace: true), targetIdentity);
         check(sinceRead is { Error.Code: "NAME_IN_USE", Steps: [] } && mismatch is { Error.Code: "BACKUP_MISMATCH", Steps: [] } && stale is { Error.Code: "NOT_FOUND", Steps: [] }
-            && notKind is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && gap is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && await State(target) == "0/0" && await Rows(target) == "5",
+            && notKind is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && gap is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && overwritten is { Error.Code: "MEDIA", Steps: [] }
+            && overwritten.Error.Message.StartsWith(restore.Message("changedSet"), StringComparison.Ordinal) && await State(target) == "0/0" && await Rows(target) == "5",
             "the run refuses before any statement a database created since the read, another database's backup without WITH REPLACE, a database that is not the one read, "
-            + "and sets the media say are of another kind or do not chain: " + string.Join(" | ", new[] { sinceRead, mismatch, stale, notKind, gap }.Select(Show)));
+            + "sets the media say are of another kind or do not chain, and a set whose BackupSetGUID is not the reviewed one: "
+            + string.Join(" | ", new[] { sinceRead, mismatch, stale, notKind, gap, overwritten }.Select(Show)));
+
+        // A set overwritten while the run is under way: a new differential WITH INIT over the planned one's file, based on the same full,
+        // which SQL Server would restore without a word. Each set's step reads its header again, so the differential's step fails.
+        var gdiff = scratch.RestoreFile("gdiff.bak");
+        async Task Differential(string name)
+        {
+            var ran = await sql("BACKUP DATABASE [" + db + "] TO DISK = " + Q(gdiff) + " WITH DIFFERENTIAL, FORMAT, INIT, NAME = N'" + name + "';", "master");
+            if (ran.Status != "completed") throw new InvalidOperationException("Restore differential setup failed: " + ran.Error);
+        }
+        await Differential("gdiff");
+        var gdiffSet = await DeviceSet(gdiff);
+        var gdiffPlanned = new RestorePlanSetDto(gdiffSet.Id, [.. gdiffSet.Devices], gdiffSet.Position, gdiffSet.Type, gdiffSet.Name, gdiffSet.BackupSetGuid);
+        service.Actions.Options.AfterStep = async (title, _) => { if (title == restore.Step("full")) await Differential("gdiff2"); };
+        ActionExecuteResult changedDuring;
+        try { changedDuring = await Wire(target, Options([Planned("full"), gdiffPlanned], relocated, replace: true), await Identity(target)); }
+        finally { service.Actions.Options.AfterStep = null; }
+        var restoredBack = await Wire(target, Options(last, relocated, replace: true), await Identity(target));
+        check(gdiffSet.BackupSetGuid is not null && changedDuring is { Error.Code: "MEDIA" } && changedDuring.Error.Message.StartsWith(restore.Message("changedSet"), StringComparison.Ordinal)
+            && changedDuring.Steps.Take(2).Select(step => (step.Status, step.Title)).SequenceEqual([("done", restore.Step("full")), ("failed", restore.Step("differential"))])
+            && restoredBack.Error is null && await State(target) == "0/0" && await Rows(target) == "5",
+            "a backup file overwritten after the run started fails its set's step with the reviewed GUID's error, not a RESTORE of the newer set: "
+            + Show(changedDuring) + " | then " + Show(restoredBack));
 
         // The cleanup's DROP checks the database itself: an online database (here one this check just restored) is never dropped.
         var id = (await sql("SELECT CONVERT(nvarchar(20), DB_ID(" + Q(target) + "));", "master")).Scalar;
@@ -272,14 +305,17 @@ internal static class RestoreRunLiveChecks
         var big = scratch.RestoreFile("big.bak");
         var fill = await sql("CREATE TABLE dbo.fill (v char(8000) NOT NULL);", db);
         if (fill.Status != "completed") throw new InvalidOperationException("Restore fill setup failed: " + fill.Error);
+        string? bigGuid = null;
         async Task Fill(int megabytes)
         {
             var ran = await sql("INSERT dbo.fill SELECT TOP (" + (megabytes * 128).ToString(System.Globalization.CultureInfo.InvariantCulture) + ") REPLICATE('x', 8000) FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b;", db);
             if (ran.Status != "completed") throw new InvalidOperationException("Restore fill failed: " + ran.Error);
             ran = await sql("BACKUP DATABASE [" + db + "] TO DISK = " + Q(big) + " WITH COPY_ONLY, FORMAT, INIT, NO_COMPRESSION, NAME = N'big';", "master");
             if (ran.Status != "completed") throw new InvalidOperationException("Restore fill backup failed: " + ran.Error);
+            // The run takes only the set the plan names, by its BackupSetGUID: each new copy-only full has its own.
+            bigGuid = (await DeviceSet(big)).BackupSetGuid ?? throw new InvalidOperationException("Restore fill backup failed: no BackupSetGUID read.");
         }
-        RestorePlanSetDto Big() => new("1:1", [big], 1, "full", "big");
+        RestorePlanSetDto Big() => new("1:1", [big], 1, "full", "big", bigGuid);
         // What the run's EVENTs said, for the messages: each percent with its time, and when the Stop's canceller returned.
         var stopSeen = new List<string>();
         // The Stop goes out from another thread, as main's CANCEL frame does. The first percent of the RESTORE that SQL Server sent
@@ -335,6 +371,8 @@ internal static class RestoreRunLiveChecks
                 (fresh, freshDuring, freshAfter) = await Stop(target, null, replace: false);
                 Landed(fresh, freshAfter, Finished(fresh));
             }
+            // Inconclusive only when the RESTORE ran: a plan the preflight refused has no step, and must fail here rather than pass unseen.
+            check(fresh.Steps.Count > 0, "the Stop checks' plan passes the run's preflight: " + Show(fresh));
             if (Finished(fresh) || !freshDuring)
             {
                 Console.WriteLine("Restore Database's Stop checks inconclusive: the 256 MB restore finished before Stop reached it (" + (freshDuring ? "stopped as it finished" : "no STATS message before it ended") + "): " + Show(fresh) + " | progress: " + string.Join(", ", stopSeen));

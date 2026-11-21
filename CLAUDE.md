@@ -71,8 +71,8 @@ Results and live data:
   timers. Views open live data only through `LiveService`; charts draw only through `ChartView`.
 
 SQL the backend runs:
-- Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
-  its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
+- Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME` (for BigQuery,
+  `BqNames`), checked by its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
   Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`, `LivePlanSql`), object actions and
   Table Designer (`ActionService`, the only object DDL path besides `SsisActionService`), the actual-plan collector
   (`ActualPlanSql`, its own observer connection, no prologue, event-session DDL only), session actions, SSIS. Read the area's

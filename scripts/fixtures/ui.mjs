@@ -664,6 +664,8 @@ export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
 /** The tools above a run's grids (White space, and the result tools that follow). */
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
+/** A comparison's toolbar, above its grid in the grid's frame (sides, ⇄, Layout, Exact text and its live region). */
+export const comparisonTools = (page, name) => resultGrid(page, name).locator('xpath=..').getByRole('toolbar', { name: 'Comparison tools', exact: true })
 /** The results search box's visible count, and its live region, which says only the settled count. */
 export const resultsSearchCount = page => resultsToolbar(page).locator(part.resultsSearchCount)
 /** The results toolbar's ⋯ (More results tools) and the menu it opens, which holds every tool of the toolbar. */

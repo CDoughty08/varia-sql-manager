@@ -83,6 +83,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The free estimate and dry-run diagnostics on a connected handle (docs/bigquery.md, Cost).
   // Metadata, as language.diagnostics: automatic edit-time requests must not take the pending slots kept for Cancel and closes.
   'bigquery.dryRun': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
+  // A table-like object's Properties facts: one tables.get, free (docs/bigquery.md, Properties).
+  'bigquery.properties': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
   // GSSAPI reads the credential cache without contacting the KDC; one lookup at a time (SqlService.IdentityAsync).
   'connections.identity': { ...control, lane: 'metadata' },
   // A BigQuery handle lists its billing project's datasets (a query tab's Dataset box).
@@ -133,7 +135,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Reads a comparison's change index and one row's tone; finding a partner under a view is one pass over its order.
   'results.diffSeek': { kind: 'unary', lane: 'results', deadlineMs: 10_000, ...both },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
-  'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
+  'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000, ...both },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
   // disconnect ends it; a search answers its own 5 s budget as a partial value.
   'explorer.index': { kind: 'unary', lane: 'explorer', deadlineMs: 0 },
@@ -147,7 +149,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000, ...both },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0, ...both },
   // The backend answers its own 55 s budget as a TIMEOUT value, inside this deadline; main cancels it from the renderer (varia:scripting-cancel).
-  'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
+  'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000, ...both },
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
   // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it. Database Properties uses the same three
   // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes. The
@@ -221,7 +223,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute' || provider === undefined || typeof params !== 'object' || params === null) return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined
+  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

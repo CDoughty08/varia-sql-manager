@@ -93,10 +93,11 @@ internal static class ExplorerChecks
     private static void Catalog(Action<bool, string> check)
     {
         var catalog = ExplorerCatalog.Current;
-        check(catalog.FolderIds.Count == 82 && catalog.Kinds.Count() == 64 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
-        var lists = Listings(catalog).Select(listing => listing.Query).ToHashSet();
-        var queries = ExplorerQueries.All.Keys.Append("historyTable").Concat(AgentListings.ReaderLists).ToHashSet();
-        check(queries.SetEquals(catalog.Queries) && lists.All(list => ExplorerQueries.All.ContainsKey(list) || AgentListings.ReaderLists.Contains(list)) && ExplorerQueries.All.Keys.All(lists.Contains),
+        check(catalog.FolderIds.Count == 89 && catalog.Kinds.Count() == 73 && catalog.Kinds.Count(kind => kind.BigQuery) == 9 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
+        var lists = SqlListings(catalog).Select(listing => listing.Query).ToHashSet();
+        var queries = ExplorerQueries.All.Keys.Append("historyTable").Concat(AgentListings.ReaderLists).Concat(Varia.Backend.BigQuery.BigQueryService.Lists).ToHashSet();
+        check(queries.SetEquals(catalog.Queries) && lists.All(list => ExplorerQueries.All.ContainsKey(list) || AgentListings.ReaderLists.Contains(list) || Varia.Backend.BigQuery.BigQueryService.Lists.Contains(list))
+            && ExplorerQueries.All.Keys.Concat(Varia.Backend.BigQuery.BigQueryService.Lists).All(lists.Contains),
             "every catalogue query is implemented and every implemented query is listed by a folder or a kind");
         check(catalog.Kinds.Any(kind => kind.HistoryLookup.Count > 0), "the history row's query is referenced through historyLookup");
         foreach (var cloud in new[] { false, true })
@@ -183,8 +184,12 @@ internal static class ExplorerChecks
     }
 
     /// <summary>Every node that lists rows: a folder with a query (its filters, gate and owner kinds), or a kind that lists rows
-    /// after its static folders (no filters, its own kind as the owner).</summary>
-    private static IEnumerable<(string Node, string Query, IReadOnlyList<string> Filter, int? Since, IReadOnlyList<string> Owners)> Listings(ExplorerCatalog catalog) =>
+    /// after its static folders (no filters, its own kind as the owner). SQL Server's only: BigQuery's lists are REST listers
+    /// (BigQueryExplorerChecks).</summary>
+    private static IEnumerable<(string Node, string Query, IReadOnlyList<string> Filter, int? Since, IReadOnlyList<string> Owners)> Listings(ExplorerCatalog catalog) => SqlListings(catalog)
+        .Where(listing => !Varia.Backend.BigQuery.BigQueryService.Lists.Contains(listing.Query));
+
+    private static IEnumerable<(string Node, string Query, IReadOnlyList<string> Filter, int? Since, IReadOnlyList<string> Owners)> SqlListings(ExplorerCatalog catalog) =>
         catalog.FolderIds.Select(id => catalog.Folder(id)!).Where(folder => folder.List is not null)
             .Select(folder => (folder.Id, folder.List!, folder.Filter, folder.Since, catalog.FolderOwnerKinds(folder.Id)))
             .Concat(catalog.Kinds.Where(kind => kind.List is not null).Select(kind => (kind.Kind, kind.List!, (IReadOnlyList<string>)[], (int?)null, (IReadOnlyList<string>)[kind.Kind])))
@@ -570,11 +575,12 @@ internal static class ExplorerChecks
             return new(kind.Kind, required.Contains("database") ? "db" : null, required.Contains("schema") ? "s" : null, required.Contains("name") ? "n" : null,
                 required.Contains("parent") ? new ParentRefDto(kind.Parents[0], "s", "p") : null, required.Contains("ssisFolder") ? "f" : null, required.Contains("ssisProject") ? "p" : null);
         }
-        var kinds = catalog.Kinds.ToList();
+        // SQL Server's kinds; BigQuery's keep to BqNames' rules (BigQueryExplorerChecks).
+        var kinds = catalog.Kinds.Where(kind => !kind.BigQuery).ToList();
         // Only an SSIS package's name may pass sysname (nvarchar(260)), and only the SSIS catalog and an Agent proxy subsystem row
         // list rows directly below themselves.
         check(kinds.All(kind => kind.MaxName == (kind.Kind == "ssisPackage" ? 260 : 128) && (kind.List is null) == (kind.Kind is not ("ssisCatalog" or "agentProxySubsystem")) && kind.Rows.Count == (kind.List is null ? 0 : 1))
-            && catalog.KindOf("ssisCatalog") is { List: "ssisFolders", Rows: ["ssisFolder"], Folders.Count: 0 } && catalog.Scopes.Count == 11
+            && catalog.KindOf("ssisCatalog") is { List: "ssisFolders", Rows: ["ssisFolder"], Folders.Count: 0 } && catalog.Scopes.Count == 15
             && catalog.Scopes["ssisProjectObject"].Required.SequenceEqual(["ssisFolder", "ssisProject", "name"]),
             "the embedded catalogue has the SSIS scopes; every kind keeps sysname's bound but packages (260), and only the SSIS catalog and proxy subsystem rows list rows of their own");
         var wrong = kinds.Where(kind => !Valid(catalog, Minimal(catalog, kind))
@@ -605,7 +611,8 @@ internal static class ExplorerChecks
             ObjectRefDto With(string field) => field switch
             {
                 "database" => exact with { Database = "db" }, "schema" => exact with { Schema = "s" }, "parent" => exact with { Parent = new("table", "s", "p") },
-                "ssisFolder" => exact with { SsisFolder = "f" }, "ssisProject" => exact with { SsisProject = "p" }, _ => exact with { Name = "n" }
+                "ssisFolder" => exact with { SsisFolder = "f" }, "ssisProject" => exact with { SsisProject = "p" },
+                "project" => exact with { Project = "varia-alpha" }, "dataset" => exact with { Dataset = "sales" }, "table" => exact with { Table = "orders" }, _ => exact with { Name = "n" }
             };
             problems.AddRange(scope.Required.Where(field => Valid(ssis, Without(field))).Select(field => kind.Scope + " without " + field));
             problems.AddRange(scope.Forbidden.Where(field => Valid(ssis, With(field))).Select(field => kind.Scope + " with " + field));
@@ -624,6 +631,8 @@ internal static class ExplorerChecks
         }
         check(Refused("synonym", ("maxName", 127)) && Refused("synonym", ("maxName", 261)) && !Refused("synonym", ("maxName", 260)) && !Refused("table", ("maxName", 128)),
             "a catalogue whose kind declares a name bound outside 128-260 does not load");
+        check(!Refused("bqColumn", ("maxName", ExplorerRefs.MaxName)) && Refused("bqColumn", ("maxName", ExplorerRefs.MaxName + 1)) && Refused("synonym", ("maxName", 1024)),
+            "a BigQuery kind may declare a name bound up to a field path's; a SQL Server kind may not");
         // Folders, history rows and listings bind their owner's name as a sysname, which would cut a longer one.
         check(Refused("table", ("maxName", 129)) && Refused("synonym", ("maxName", 260), ("folders", new JsonArray("columns")))
             && Refused("synonym", ("maxName", 260), ("list", "logins"), ("rows", new JsonArray("login")))
