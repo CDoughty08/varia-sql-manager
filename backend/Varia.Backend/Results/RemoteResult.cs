@@ -188,6 +188,13 @@ internal sealed class RemoteResult : IDisposable
     /// <summary>A whole block's expected cost, as its fetch reserves it.</summary>
     private long BlockEstimate => Math.Max(1, Math.Min(EstimateOf(BlockRows), CacheLimit / 2));
 
+    /// <summary>The widest a fetched block's rows have come out, per row (under the gate): rows wider than measured.</summary>
+    private double widestRowBytes;
+
+    /// <summary>What a whole block is taken to cost when choosing read-ahead: its estimate, or what the widest rows read so far
+    /// would make it, so read-ahead never asks for blocks the cache cannot hold beside the read's own.</summary>
+    private long AheadBlockCost => Math.Max(BlockEstimate, (long)Math.Ceiling(widestRowBytes * BlockRows));
+
     public long Rows { get; }
     /// <summary>BigQuery holds more rows than <see cref="Rows"/> (the 32-bit cap or a row limit).</summary>
     public bool Capped { get; }
@@ -196,6 +203,11 @@ internal sealed class RemoteResult : IDisposable
     /// <summary>What the engine reads the rows from (its job and table), for Load into memory and later remote queries.</summary>
     public object? Source { get; init; }
     public long CachedBytes => Interlocked.Read(ref held);
+
+    /// <summary>Checks only: the most the cache has held at once.</summary>
+    internal long PeakBytes => Interlocked.Read(ref peak);
+    private long peak;
+    private void NotePeak() { for (long now = Interlocked.Read(ref held), seen = Interlocked.Read(ref peak); now > seen && Interlocked.CompareExchange(ref peak, now, seen) != seen; seen = Interlocked.Read(ref peak)) { } }
     public long Fetches => Interlocked.Read(ref fetches);
     public long Evictions => Interlocked.Read(ref evictions);
     public bool Expired { get { lock (gate) return expired; } }
@@ -470,6 +482,7 @@ internal sealed class RemoteResult : IDisposable
                     lock (gate) waited = block.Waiters > 0;
                     if (!waited) throw new RemoteRetryException(RemoteBlockWriter.CacheTooSmall());
                     if (!store.TryReserveCache(ref held, OverLimit, estimate, out var full)) throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
+                    NotePeak();
                 }
                 lock (gate) block.Holding = true;
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
@@ -493,6 +506,7 @@ internal sealed class RemoteResult : IDisposable
                     throw;
                 }
                 var cost = pages.Sum(page => page.Cost);
+                if (writer.Rows > 0) lock (gate) widestRowBytes = Math.Max(widestRowBytes, (double)cost / writer.Rows);
                 if (cost < estimate) store.ReturnCache(ref held, estimate - cost);
                 else if (cost > estimate)
                 {
@@ -541,7 +555,11 @@ internal sealed class RemoteResult : IDisposable
             }
             if (others.Length == 0 || round > 0)
             {
-                if (store.TryReserveCache(ref held, OverLimit, bytes, out var full)) return;
+                // A block only read ahead stops where the cache is full: only blocks reads wait for pass its limit.
+                bool ahead;
+                lock (gate) ahead = keep.Waiters == 0 && keep.AheadOf != 0;
+                if (ahead) throw new RemoteRetryException(RemoteBlockWriter.CacheTooSmall());
+                if (store.TryReserveCache(ref held, OverLimit, bytes, out var full)) { NotePeak(); return; }
                 // Past even that, the cache (not the global budget) is what refuses: say so, and how to raise it.
                 throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
             }
@@ -575,13 +593,18 @@ internal sealed class RemoteResult : IDisposable
             Block? victim;
             lock (gate)
             {
-                victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0);
+                // A block only read ahead never evicts one a viewer's last read covered: the rows on screen.
+                var ahead = keep.Waiters == 0 && keep.AheadOf != 0;
+                victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !(ahead && OnScreenLocked(block)));
                 if (victim is not null) EvictLocked(victim);
             }
             if (victim is null) return full ? false : throw BudgetFull();
         }
+        NotePeak();
         return true;
     }
+
+    private bool OnScreenLocked(Block block) => viewers.Values.Any(viewer => viewer.First >= 0 && block.Index >= viewer.First && block.Index <= viewer.Last);
 
     private static RequestException BudgetFull() =>
         new("TOO_LARGE", "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
@@ -622,7 +645,7 @@ internal sealed class RemoteResult : IDisposable
             viewer.Last = last;
             var maxBlock = (Rows - 1) / BlockRows;
             // Only as many blocks as the cache holds beside the read's own: more would evict the rows on screen.
-            var room = CacheLimit / BlockEstimate - (last - first + 1);
+            var room = CacheLimit / AheadBlockCost - (last - first + 1);
             var chosen = new List<long>();
             // The block ahead in the direction of travel comes first: with room for one, the one behind is usually cached already.
             var order = viewer.Direction < 0 ? new[] { first - 1, last + 1, first - 2 } : new[] { last + 1, first - 1, last + 2 };

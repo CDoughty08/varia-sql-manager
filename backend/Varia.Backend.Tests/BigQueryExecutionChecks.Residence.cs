@@ -95,6 +95,21 @@ internal static partial class BigQueryExecutionChecks
         var unlimited = SqlService.CapNoteFor(new QueryArgs("c", "s", null, "q", "id", 0, 0), 3_000_000_000L);
         check(limited is null && unlimited is not null && unlimited.Contains("of 3,000,000,000 rows", StringComparison.Ordinal),
             "the cap note names the rows the grid would show, and only when its own cap keeps some back: " + limited + " / " + unlimited);
+        // A read waiting for its block when the result is closed answers RESULT_RELEASED, not an empty success.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, executed, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = executed!.ResultSets.Single().ResultId;
+            harness.Jobs.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Jobs.HangTable = true;
+            var reading = ReadRows(harness, id, 2_000, 10);
+            await harness.Jobs.Polling.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            harness.Service.Results.Release([id]);
+            var (code, _, rows, message) = await reading.WaitAsync(TimeSpan.FromSeconds(15));
+            harness.Jobs.HangTable = false;
+            check(code == "RESULT_RELEASED" && rows.Count == 0, $"a read waiting when its windowed result is closed answers RESULT_RELEASED: {code} {rows.Count} {message}");
+        }
         // The refusal offers nothing a windowed result cannot do yet (filtering it, or loading it, has no command so far).
         var refusal = SqlService.RemoteRefused().Message;
         check(!refusal.Contains("Filter", StringComparison.Ordinal) && !refusal.Contains("load it", StringComparison.Ordinal), "a windowed result's refusal suggests nothing it cannot do yet: " + refusal);
@@ -146,6 +161,10 @@ internal static partial class BigQueryExecutionChecks
         /// <summary>Fetches from this row on start this much later (another block settling first).</summary>
         public long DelayFrom = long.MaxValue;
         public int DelayMs;
+        /// <summary>Which fetches (by first row) wait on <see cref="Gate"/>: all when null.</summary>
+        public Func<long, bool>? Holds;
+        /// <summary>The table ends here, whatever BigQuery said: rows from it on are not written.</summary>
+        public long ShortAt = long.MaxValue;
 
         public RemoteFetch Fetch => async (first, rows, writer, token) =>
         {
@@ -155,13 +174,13 @@ internal static partial class BigQueryExecutionChecks
             lock (Calls) MaxRunning = Math.Max(MaxRunning, now);
             try
             {
-                if (Gate is { } gate)
+                if (Gate is { } gate && (Holds?.Invoke(first) ?? true))
                 {
                     try { await gate.Task.WaitAsync(token); }
                     catch (OperationCanceledException) { Interlocked.Increment(ref Cancelled); throw; }
                 }
                 if (Expire) throw new RemoteExpiredException();
-                for (var row = first; row < first + rows; row++)
+                for (var row = first; row < Math.Min(first + rows, ShortAt); row++)
                 {
                     Write(writer, row, PadOf?.Invoke(row) ?? Pad);
                     Interlocked.Increment(ref Written);
@@ -178,6 +197,14 @@ internal static partial class BigQueryExecutionChecks
             builder.Measure(text.Length, text.Length);
             writer.CommitRow();
         }
+    }
+
+    /// <summary>What a row written with <paramref name="pad"/> costs in pages.</summary>
+    static double CostPerRow(int pad, int rows = 64)
+    {
+        var writer = new RemoteBlockWriter(1, OneText, 0);
+        for (var row = 0; row < rows; row++) Blocks.Write(writer, row, pad);
+        return (double)writer.Finish().Sum(page => page.Cost) / rows;
     }
 
     static RemoteResult Remote(ResultStore store, Blocks blocks, long rows = 100_000, double rowBytes = 16_384, long cache = 256L << 20, SemaphoreSlim? lane = null) =>
@@ -372,6 +399,84 @@ internal static partial class BigQueryExecutionChecks
             var starts = blocks.Calls.Select(call => call.First / remote.BlockRows).ToArray();
             check(starts.Contains(7) && remote.CachedBlocks().Contains(7),
                 $"a two-block cache scrolling down reads ahead the block below, not the one behind: fetched {string.Join(",", starts)}, cached {string.Join(",", remote.CachedBlocks())}");
+        }
+
+        // A table shorter than BigQuery said (it changed under the result): its block is fetched once, the rest left loading,
+        // not fetched again on every read.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { ShortAt = 100 };
+            using var remote = Remote(store, blocks, rows: 5000);
+            for (var i = 0; i < 3; i++)
+            {
+                await ReadRemote(remote, 0, 200, viewer: 1);
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            }
+            var within = blocks.Calls.Count(call => call.First < remote.BlockRows);
+            check(within == 1, $"a table shorter than BigQuery said is read once: block 0 fetched {within} times");
+        }
+
+        // A read's own block overrunning while read-ahead holds the cache's room stops that read-ahead rather than waiting on it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000, DelayFrom = 0, DelayMs = 200, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            var size = remote.BlockRows;
+            blocks.Holds = first => first >= size;
+            blocks.PadOf = row => row < size ? 48_000 : 32_000;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var (next, rows) = await ReadRemote(remote, 0, 10, viewer: 1, waitMs: 10_000);
+            var took = clock.ElapsedMilliseconds;
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(next >= 10 && Consecutive(rows, 0, 10) && blocks.Cancelled >= 1 && took < 8_000,
+                $"an overrun stops read-ahead holding the room instead of waiting on it: next {next}, {blocks.Cancelled} cancelled, {took} ms");
+        }
+
+        // The cache keeps the most recently used blocks: a block read again outlives one read ahead after it, when another
+        // grid's read needs room.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 32_000 };
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks();
+            await ReadRemote(remote, 0, 10, viewer: 1);
+            await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var after = remote.CachedBlocks();
+            check(before.SequenceEqual(new long[] { 0, 1 }) && after.Contains(0) && after.Contains(20) && !after.Contains(1),
+                $"the least recently used block goes first: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
+        // Read-ahead whose rows come out wider than measured stops where the cache is full: it never evicts the block on screen
+        // nor passes the cache's limit, and reading the same rows again fetches neither block again.
+        foreach (var (cacheMiB, pad, factor) in new[] { (16L, 50_000, 1.9), (16L, 50_000, 1.6), (64L, 200_000, 1.6) })
+        {
+            var store = new ResultStore(4L << 30, 2L << 30);
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, rows: 5000, rowBytes: CostPerRow(pad), cache: cacheMiB << 20);
+            var size = remote.BlockRows;
+            blocks.PadOf = row => row < size ? pad : (int)(pad * factor);
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reading = remote.ReadAsync(0, 10, 1, async _ => { sending.TrySetResult(); await hold.Task; }, TimeSpan.FromSeconds(15), CancellationToken.None);
+            await sending.Task;
+            SpinWait.SpinUntil(() => blocks.Calls.Any(call => call.First == size) && remote.FetchingBlocks() == 0, 15_000);
+            var heldWhile = remote.CachedBytes;
+            hold.TrySetResult();
+            await reading;
+            for (var i = 0; i < 5; i++)
+            {
+                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                await ReadRemote(remote, 0, 10, viewer: 1);
+            }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var zero = blocks.Calls.Count(call => call.First == 0);
+            var one = blocks.Calls.Count(call => call.First == size);
+            check(heldWhile <= remote.CacheLimit && remote.PeakBytes <= remote.CacheLimit && zero == 1 && one == 1 && remote.CachedBlocks().Contains(0) && store.WindowCacheBytes == remote.CachedBytes,
+                $"read-ahead {factor}x wider than measured ({cacheMiB} MiB cache) keeps the block on screen and stops: held {heldWhile} (peak {remote.PeakBytes}) of {remote.CacheLimit}, block 0 fetched {zero}, block 1 {one}, cached {string.Join(",", remote.CachedBlocks())}");
         }
 
         // Scrolling up, the read-ahead takes the block above first, then the one below, then one more above.

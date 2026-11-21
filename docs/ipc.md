@@ -1110,14 +1110,15 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   most 2 fetches per result and 4 per connection; a 429 backs off with jitter. It waits up to 20 s (inside its deadline)
   and then answers with the rows it has; the grid draws the rest as loading and reads again. Each `viewer` reads ahead
   one block either side and one more in its direction of travel (only as many as the cache holds beside the read's own
-  blocks); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more (the read
+  blocks, counting a block at the widest its rows have come out so far); a jump cancels that viewer's stale read-ahead. A fetch a read started that no read waits for any more (the read
   was cancelled or answered short) becomes its viewer's read-ahead: the viewer's next read joins it, and a jump stops it.
   A block nothing was fetched into leaves the cache's lists once no read waits for it.
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
   being built there). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block
-  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
+  only read ahead, with nothing fetched; one a read waits for may pass the limit, up to twice it, as an overrun may. A
+  block only read ahead never evicts one a viewer's last read covered, and its own overrun stops it there too. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit, up to twice it (the global budget still refusing it; past that, `TOO_LARGE` names the window cache
   and its setting), and the cache trims back once no read holds them. A read that already sent rows answers short with them instead of failing, whatever stops a later

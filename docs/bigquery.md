@@ -315,7 +315,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   shows as Window cache in the Memory panel. Each grid on the result reads one block ahead either side, and one more the
   way it is scrolling (fewer when the cache holds few blocks, the one ahead first); a jump drops reads the grid no longer needs. A read waits up to 20 s for its blocks (less near its
   deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
-  after a few tries show Retry; a block only read ahead stops where the cache is full.
+  after a few tries show Retry; a block only read ahead stops where the cache is full, never evicting the rows on screen,
+  and read-ahead counts blocks at the widest their rows have come out.
 - **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, with an empty cache that reads its rows from BigQuery again; a load after BigQuery's temporary

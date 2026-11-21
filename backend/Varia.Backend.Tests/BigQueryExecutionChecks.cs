@@ -49,6 +49,8 @@ internal static partial class BigQueryExecutionChecks
         public bool Hang;
         /// <summary>Holds only the later pages (a finished job's rows still loading).</summary>
         public bool HangPages;
+        /// <summary>Holds tabledata.list (a windowed result's block reads) until the request is cancelled.</summary>
+        public volatile bool HangTable;
         /// <summary>Refuses the later pages (403 accessDenied): a read that fails part way.</summary>
         public bool DenyPages;
         /// <summary>Replaces the next page's token (one Varia cannot send back).</summary>
@@ -71,6 +73,7 @@ internal static partial class BigQueryExecutionChecks
             var fake = new BigQueryFake();
             fake.Hang = request =>
             {
+                if (HangTable && request.Url.EndsWith("/data", StringComparison.Ordinal)) { Polling.TrySetResult(); return true; }
                 if (!request.Url.Contains("/queries/", StringComparison.Ordinal) || !(Hang || HangPages && request.Uri.Query.Contains("pageToken=", StringComparison.Ordinal))) return false;
                 Polling.TrySetResult();
                 return true;
