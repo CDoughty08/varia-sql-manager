@@ -429,3 +429,40 @@ describe('the cap\'s sentences', () => {
     expect(results.getSnapshot()[tab.id].jobNotice).toBe(beyondCapText(4999))
   })
 })
+
+describe('the comparison keys', () => {
+  it('follow the focused grid of the active query: resultsGridComparison while it is a comparison, comparisonInputsOpen while both inputs are', async () => {
+    const { context, documents, results, tab } = await ran()
+    const byKind = (kind: string, resultId?: number) => results.getSnapshot()[tab.id].sets.find(set => set.descriptor.kind === kind && (resultId === undefined || set.descriptor.resultId === resultId))!.key
+    const comparison = byKind('diff')
+    const state = () => [context.getState().resultsGridComparison, context.getState().comparisonInputsOpen]
+    expect(state()).toEqual([false, false])
+    results.focusEntry(tab.id, comparison)
+    expect(state()).toEqual([true, true])
+    expect(results.comparing.getSnapshot()).toEqual({ [tab.id]: { entry: comparison, inputsOpen: true } })
+    // Another query is active: its grids are not this one's.
+    documents.create('SQLQuery2.sql', 'SELECT 2', 'master')
+    expect(state()).toEqual([false, false])
+    documents.activate(tab.id)
+    expect(state()).toEqual([true, true])
+    // An input closes: the comparison stays, and its changes are unavailable.
+    results.removeEntry(tab.id, byKind('rows', 2))
+    results.focusEntry(tab.id, comparison)
+    expect(state()).toEqual([true, false])
+    // A grid that is not a comparison takes the focus.
+    results.focusEntry(tab.id, byKind('rows', 1))
+    expect(state()).toEqual([false, false])
+    expect(results.comparing.getSnapshot()).toEqual({})
+  })
+
+  it('are off for a comparison lost with the backend, which can no longer be changed', async () => {
+    const { context, resultClient, results, tab } = await ran()
+    const comparison = results.getSnapshot()[tab.id].sets.find(set => set.descriptor.kind === 'diff')!.key
+    results.focusEntry(tab.id, comparison)
+    expect(context.getState().resultsGridComparison).toBe(true)
+    resultClient.lose()
+    await settle()
+    expect(results.comparing.getSnapshot()).toEqual({})
+    expect([context.getState().resultsGridComparison, context.getState().comparisonInputsOpen]).toEqual([false, false])
+  })
+})
