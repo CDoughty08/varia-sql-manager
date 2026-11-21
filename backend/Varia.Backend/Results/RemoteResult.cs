@@ -623,6 +623,8 @@ internal sealed class RemoteResult : IDisposable
                 // Evicting gives back only what this cache holds: when the global budget refused, a block only read ahead
                 // stops there rather than flush the cache for a refusal anyway.
                 if (ahead && !full) return false;
+                // Under high memory load no eviction makes room: refuse without flushing the cache.
+                if (!full && store.IsSystemMemoryLow()) throw BudgetFull();
                 var victim = VictimLocked(keep, ahead);
                 if (victim is null) return full ? false : throw BudgetFull();
                 EvictLocked(victim);
@@ -653,8 +655,8 @@ internal sealed class RemoteResult : IDisposable
 
     private bool OnScreenLocked(Block block) => viewers.Values.Any(viewer => viewer.First >= 0 && block.Index >= viewer.First && block.Index <= viewer.Last);
 
-    private static RequestException BudgetFull() =>
-        new("TOO_LARGE", "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
+    private RequestException BudgetFull() => new("TOO_LARGE", store.IsSystemMemoryLow() ? SqlService.LowMemory
+        : "There is not enough result memory to read these rows from BigQuery. Close other results and try again.");
 
     private void EvictLocked(Block block)
     {

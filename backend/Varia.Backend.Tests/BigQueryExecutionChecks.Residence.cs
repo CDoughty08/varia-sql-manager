@@ -237,6 +237,36 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task RemoteBlocksAsync(Action<bool, string> check)
     {
+        // A read refused for low memory keeps the blocks already cached: no eviction would make room, so none is flushed.
+        {
+            var low = false;
+            var store = new ResultStore(1L << 30, 1L << 29, () => (Volatile.Read(ref low) ? 100 : 10, 50));
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks, cache: 64L << 20);
+            await ReadRemote(remote, 0, 10);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var before = remote.CachedBlocks().ToList();
+            Volatile.Write(ref low, true);
+            string refused;
+            try { await ReadRemote(remote, 50_000, 10); refused = "read"; }
+            catch (RequestException error) { refused = error.Code == "TOO_LARGE" && error.Message == SqlService.LowMemory ? "low" : error.Message; }
+            var after = remote.CachedBlocks().ToList();
+            check(refused == "low" && before.Count > 0 && before.All(after.Contains),
+                $"a read refused for low memory flushes none of the cached blocks: {refused} before=[{string.Join(",", before)}] after=[{string.Join(",", after)}]");
+        }
+        // Nothing more is held while the OS reports high memory load (docs/ipc.md), the block cache included: a read is
+        // refused with the low-memory sentence rather than fill it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29, () => (100, 50));
+            var blocks = new Blocks();
+            using var remote = Remote(store, blocks);
+            string refused;
+            try { await ReadRemote(remote, 0, 100); refused = "read"; }
+            catch (RequestException error) { refused = error.Code == "TOO_LARGE" && error.Message == SqlService.LowMemory ? "low" : error.Message; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(store.IsSystemMemoryLow() && store.WindowCacheBytes == 0 && refused == "low",
+                $"no block is cached while the system is low on memory, and the read says so: {refused} cache={store.WindowCacheBytes} blocks=[{string.Join(",", remote.CachedBlocks())}]");
+        }
         check(RemoteResult.BlockRowsFor(16_384) == 256 && RemoteResult.BlockRowsFor(1) == RemoteResult.MaxBlockRows && RemoteResult.BlockRowsFor(1 << 20, 4096L << 20) == RemoteResult.MinBlockRows
             && RemoteResult.BlockRowsFor(1024) == 4096, "a block is about 4 MiB of measured rows, clamped to 256..16,384 rows");
         check(RemoteResult.BlockRowsFor(1 << 20) == 25 && RemoteResult.BlockRowsFor(1 << 20, 16L << 20) == 6 && RemoteResult.BlockRowsFor(64L << 20, 16L << 20) == 1,
@@ -1191,6 +1221,93 @@ internal static partial class BigQueryExecutionChecks
 
     static async Task MisestimateAsync(Action<bool, string> check)
     {
+        // Memory that runs low partway through a read (here at its first seal) stops it there too, rather than switch it.
+        {
+            var asked = 0;
+            using var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => Interlocked.Increment(ref asked) >= 2 ? (100, 50) : (10, 50)));
+            await harness.ConnectAsync();
+            var (code, result, _, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: not "remote", Revision: 0 } && set.RowsStored < 3000 && harness.Service.Results.WindowCacheBytes == 0 && !Says(result, "larger than estimated"),
+                $"memory running low partway through an Automatic read stops it rather than switch it to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.RowsStored} {set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // So does a Storage Read whose stream the budget refuses for low memory.
+        {
+            var jobs = Lines(3000);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(i => "r" + i))], chunk.Length)).ToList();
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, new ResultStore(1L << 30, 1L << 29, () => (100, 50)));
+            await harness.ConnectAsync();
+            var (code, result, _, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: not "remote", Revision: 0 } && !Says(result, "larger than estimated"),
+                $"a Storage Read refused for low memory stops rather than switch to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.RowsStored} {set?.Truncated} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // An Automatic query run while the system is low on memory stops storing, as any query does: low memory is no misestimate.
+        using (var harness = new Harness(Lines(3000), new ResultStore(1L << 30, 1L << 29, () => (100, 50))))
+        {
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            var (readCode, _, rows, _) = await ReadRows(harness, set!.ResultId, 2900, 10);
+            SpinWait.SpinUntil(() => harness.Service.Results.Find(set.ResultId)?.Remote?.FetchingBlocks() is null or 0, 15_000);
+            check(code == "ok" && set is { Residence: not "remote" } && harness.Service.Results.WindowCacheBytes == 0 && !Says(result, "larger than estimated"),
+                $"low system memory does not turn a result windowed and keep caching blocks: {code} {set?.Residence} {set?.Truncated} read={readCode} {rows.Count} cache={harness.Service.Results.WindowCacheBytes} msgs={Texts(result?.Messages ?? [])}");
+        }
+        // A compressed Storage Read batch whose decoded buffers the budget refuses switches an Automatic read to
+        // windowed, as every other refusal does (docs/bigquery.md, Misestimate), rather than truncating it.
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var jobs = Lines(3000, Wide);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var store = new ResultStore(8L << 20, 400 * 1024);
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches), store);
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 1, Truncated: null } && Says(result, "larger than estimated"),
+                $"a compressed batch the budget cannot decode switches an Automatic read to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} {set?.RowsStored}");
+        }
+        // A Storage Read batch whose message the budget refuses (the stream's own charge) switches an Automatic
+        // read to windowed too, rather than truncating it.
+        {
+            static string Wide(int i) => i < 500 ? "r" : new string('w', 1000);
+            var jobs = Lines(3000, Wide);
+            var schema = new Schema([new("n", Int64Type.Default, true), new("s", StringType.Default, true)], null);
+            var batches = Enumerable.Range(0, 3000).Chunk(500)
+                .Select(chunk => new RecordBatch(schema, [Primitive(Int64Type.Default, [.. chunk.Select(i => (long?)i)]), Strings(chunk.Select(Wide))], chunk.Length)).ToList();
+            var store = new ResultStore(8L << 20, 512 * 1024);
+            using var harness = StorageHarness(jobs, new BigQueryStorageFake(schema, batches) { IgnoreCompression = true }, store);
+            await harness.ConnectAsync();
+            var (code, result, events, message) = await Run(harness, "query.execute", harness.Query("SELECT n, s FROM t"));
+            var set = result?.ResultSets.Single();
+            check(code == "ok" && set is { Residence: "remote", Revision: 1, Truncated: null } && Says(result, "larger than estimated"),
+                $"a batch the budget refuses switches an Automatic read to windowed: {code} {message} {set?.Residence} {set?.Revision} {set?.Truncated} {set?.RowsStored}");
+        }
+        // A windowed read near its deadline waits only until 5 s before it (ReadWait), then answers short: it
+        // never runs into its own deadline waiting the full read wait.
+        using (var harness = new Harness(Lines(3000)))
+        {
+            await harness.ConnectAsync();
+            var (_, result, _) = await harness.Execute("SELECT n, s FROM t", Windowed);
+            var id = result!.ResultSets.Single().ResultId;
+            harness.Jobs.TableDataGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Service.RemoteReadWait = TimeSpan.FromSeconds(20);
+            using var context = new RequestContext(9, "results.read", RequestLane.Results, 6_000, 64L << 20, sendData: (owner, _, body) => owner.Grant((uint)body.Length));
+            using var document = JsonDocument.Parse(new JsonObject { ["resultId"] = id, ["firstRow"] = 2500, ["maxRows"] = 100 }.ToJsonString());
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string code;
+            ResultsReadResult? read = null;
+            try { read = (ResultsReadResult)await harness.Service.DispatchAsync("results.read", document.RootElement.Clone(), Wire, context); code = "ok"; }
+            catch (Exception error) { code = error is RequestException own ? own.Code : error.GetType().Name; }
+            var took = watch.ElapsedMilliseconds;
+            harness.Jobs.TableDataGate.TrySetResult();
+            check(code == "ok" && read is { Rows: 0, NextRow: 2500 } && took < 4_000,
+                $"a read 6 s from its deadline answers short about 1 s in: {code} {read?.Rows} {took} ms");
+        }
         // The first page's rows are short and the rest long: Automatic keeps it in memory, then the budget refuses it.
         static string Text(int i) => i < 500 ? "r" : new string('w', 1000);
         using (var harness = new Harness(Lines(3000, Text), new ResultStore(8L << 20, 512 * 1024)))

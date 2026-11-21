@@ -900,6 +900,8 @@ internal sealed partial class ResultStore
     {
         overLimit = false;
         if (bytes <= 0) return true;
+        // Nothing more is held under high memory load, as for a query's pages (TryReserve's system check).
+        if (IsSystemMemoryLow()) return false;
         if (Interlocked.Add(ref held, bytes) > limit)
         {
             Interlocked.Add(ref held, -bytes);

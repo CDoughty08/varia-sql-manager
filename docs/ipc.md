@@ -1105,7 +1105,9 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 - **A misestimate.** An `automatic` result kept in memory that the budget refuses part way switches to windowed instead
   of truncating: its pages are freed, `revision` goes up, and `resultSet.residence` carries the new descriptor. The
   renderer drops every cached page and window of the result, ends its reads in flight without an error, keeps the grid's
-  scroll and clears its selection.
+  scroll and clears its selection. A refusal for high system memory load does not switch (the read stops storing as any
+  query does), and no block cache reserves under that load (`ResultStore.TryReserveCache`): a read that needs a block answers
+  `TOO_LARGE` with the low-memory sentence and evicts nothing.
 - **Reading.** `results.read` sends the cached pages covering the window (whole pages, so it may send rows either side)
   and fetches the blocks it lacks with `tabledata.list` (free): about 4 MiB of measured rows each, 256 – 16,384 rows (fewer
   when half the cache, allowing the estimate's 25% margin, holds fewer, one at least); at
