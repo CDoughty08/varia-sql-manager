@@ -1,4 +1,4 @@
-import type { ResultMemoryDetail, ResultMemoryEntry } from '../../../shared/contracts'
+import type { IndexMemoryDetail, ResultMemoryDetail, ResultMemoryEntry } from '../../../shared/contracts'
 import { formatCount } from './status'
 import { numberedName } from './ResultsService'
 
@@ -35,7 +35,7 @@ function duration(microseconds: number): string {
 }
 
 export interface Tile { readonly label: string; readonly value: string; readonly unit?: string; readonly note: string; readonly tone?: 'saved' }
-export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'returned'; readonly label: string; readonly bytes: number; readonly share: number }
+export interface Segment { readonly part: 'raw' | 'packed' | 'cache' | 'returned' | 'records' | 'names' | 'definitions' | 'reading'; readonly label: string; readonly bytes: number; readonly share: number }
 export interface Bar { readonly label: string; readonly total: number; readonly segments: readonly Segment[] }
 /** A result's name in Biggest results in its two parts: its query tab's, which gives way first, and the Results part. */
 export interface ResultLabel { readonly tab?: string; readonly result: string }
@@ -60,7 +60,7 @@ export interface NerdMetricsModel {
 }
 
 const stateLabels: Readonly<Record<ResultMemoryEntry['state'], string>> = { raw: 'Raw', partial: 'Partly packed', packed: 'Packed', unpacking: 'Unpacking' }
-const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', returned: 'Given back' }
+const partLabels: Readonly<Record<Segment['part'], string>> = { raw: 'Raw pages', packed: 'Packed pages', cache: 'Unpacked cache', returned: 'Given back', records: 'Records', names: 'Names', definitions: 'Definitions', reading: 'Being read' }
 
 /** Whether any page is compressed: what the ring's second tone, the packed chip, the ratio and the trend wait for. */
 export const anyCompressed = (detail: ResultMemoryDetail | undefined): boolean => !!detail && detail.compressedBytes > 0 && detail.packedLogicalBytes > 0
@@ -128,4 +128,49 @@ export function resultNames(tabs: Readonly<Record<string, { readonly sets: reado
     for (const set of tab.sets) if (set.descriptor.generation === generation) names.set(set.descriptor.resultId, { ...document ? { tab: document } : {}, result: numberedName(set) })
   }
   return entry => names.get(entry.resultId) ?? { result: entry.live ? 'Live view table' : 'Unlisted result' }
+}
+
+/** The Search Indexer part of Nerd metrics, from an explorer.index.memory event's detail. */
+export interface IndexNerdModel {
+  /** "2 connections · 48,210 objects". */
+  readonly aside: string
+  readonly tiles: readonly Tile[]
+  /** The budget's use by what holds it: records, names, definitions and reads still running. */
+  readonly bar: Bar
+  readonly counters: readonly Counter[]
+  readonly bytes: BytesFormat
+}
+
+const plural = (count: number, one: string, many: string) => `${formatCount(count)} ${count === 1 ? one : many}`
+
+/** What the index holds: how much of its definitions is packed and what that saved, where its budget goes, and how much the
+ *  shared pool shares. As with results, nothing is invented: a figure with nothing behind it yet shows a dash. */
+export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
+  const { packedBytes, packedTextBytes, definitionTexts, packedTexts, texts, references } = detail
+  const saved = Math.max(0, packedTextBytes - packedBytes)
+  const parts = [['records', detail.recordBytes], ['names', detail.nameBytes], ['definitions', detail.definitionBytes], ['reading', detail.readingBytes]] as const
+  const total = parts.reduce((sum, [, bytes]) => sum + bytes, 0)
+  const bytes = panelBytes(Math.max(total, packedTextBytes))
+  const shown = split(bytes(saved))
+  const tiles: Tile[] = [
+    { label: 'Packed', ...definitionTexts > 0 ? { value: percent(packedTexts, definitionTexts), unit: '%' } : { value: dash }, note: definitionTexts > 0 ? 'of definitions' : 'None held' },
+    { label: 'Ratio', ...packedBytes > 0 ? { value: (packedTextBytes / packedBytes).toFixed(2), unit: '×' } : { value: dash }, note: 'zstd frames' },
+    { label: 'Saved', value: shown.value, unit: shown.unit, note: packedTextBytes > 0 ? `${percent(saved, packedTextBytes)}% of ${bytes(packedTextBytes)}` : 'None packed', ...saved > 0 ? { tone: 'saved' as const } : {} }
+  ]
+  const scale = Math.max(total, 1)
+  // Reads still running show only while there are some; the three parts that hold the index always do.
+  const segments = parts.filter(([part, value]) => value > 0 || part !== 'reading').map(([part, value]): Segment => ({ part, label: partLabels[part], bytes: value, share: value / scale }))
+  // Times come in whole milliseconds: 0 is a search under one, not one that never ran.
+  const ms = (value: number | undefined) => value === undefined ? dash : value < 1 ? '<1 ms' : duration(value * 1000)
+  const counters: Counter[] = [
+    { label: 'Pooled texts', value: formatCount(texts) },
+    { label: 'Refs per text', value: texts > 0 ? (references / texts).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : dash },
+    { label: 'Defined objects', value: formatCount(detail.definitions) },
+    { label: 'Cut or left out', value: formatCount(detail.cut) },
+    { label: 'Without children', value: plural(detail.childrenLeftOut, 'database', 'databases') },
+    { label: 'Being read', value: detail.readingBytes > 0 ? bytes(detail.readingBytes) : dash },
+    { label: 'Last build', value: ms(detail.lastBuildMs) },
+    { label: 'Last search', value: ms(detail.lastSearchMs) }
+  ]
+  return { aside: `${plural(detail.connections, 'connection', 'connections')} · ${plural(detail.objects, 'object', 'objects')}`, tiles, bar: { label: 'Budget used', total, segments }, counters, bytes }
 }

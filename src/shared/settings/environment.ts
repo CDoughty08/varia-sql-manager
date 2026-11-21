@@ -29,6 +29,6 @@ export const environmentSettings = [
   {
     key: 'environment.statusBar.memoryNerdMetrics', page: 'environment.general', label: 'Show nerd metrics in the Memory panel', type: 'boolean', default: false, varia: true, hidden: true,
     keywords: ['memory', 'status bar', 'compression', 'heap', 'nerd'],
-    description: 'Whether the status bar\'s Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec\'s counters and the managed heap. The section\'s heading opens and closes it, and Varia remembers the choice.'
+    description: 'Whether the status bar\'s Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec\'s counters, the managed heap and what the Search Objects index holds. The section\'s heading opens and closes it, and Varia remembers the choice.'
   }
 ] as const satisfies readonly SettingDef[]
