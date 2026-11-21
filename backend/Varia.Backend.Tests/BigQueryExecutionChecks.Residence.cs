@@ -97,6 +97,14 @@ internal static partial class BigQueryExecutionChecks
             var (code, result, _, message) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
             check(finished && code == "BUSY" && result is null && set.IsRemote && set.Revision == 0,
                 $"a load while its query still runs is refused and leaves the result windowed: {finished} {code} {message} {set.IsRemote} {set.Revision}");
+            set.Budget.Executing = false;
+            // Another result of the same query loading (its sets share one budget, so both would be refused part way): BUSY.
+            var began = set.Budget.TryBeginLoad();
+            var (sibling, siblingResult, _, siblingMessage) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            set.Budget.EndLoad();
+            var (after, afterResult, _, _) = await Run(harness, "results.remoteQuery", Load(set.ResultId));
+            check(began && sibling == "BUSY" && siblingResult is null && after == "ok" && afterResult?.Status == "completed" && !set.Budget.Loading,
+                $"a load while another result of its query loads is refused, and goes once that one ends: {began} {sibling} {siblingMessage} {after} {afterResult?.Status} {set.Budget.Loading}");
         }
         foreach (var (name, change) in new (string, Action<JsonObject>?)[] { ("windowed", Windowed), ("in memory", null) })
         {
@@ -728,7 +736,7 @@ internal static partial class BigQueryExecutionChecks
             var (code, result, events, message) = await Run(harness, "results.remoteQuery", Load(id));
             var set = result?.ResultSets.Single();
             check(code == "ok" && set is { Residence: "remote", Revision: 2, RowsAvailable: 3000 } && OfType(events, "resultSet.residence").Count() == 2 && Says(result, "stays windowed")
-                && Pages(harness) < 4096,
+                && !Says(result, "larger than estimated") && Pages(harness) < 4096,
                 $"a load that does not fit goes back to windowed under another revision: {code} {message} {set?.Residence} {set?.Revision} {Texts(result?.Messages ?? [])}");
         }
         // Stop part way: back to windowed, the load reported cancelled.

@@ -318,7 +318,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
   Storage Read when it qualifies), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
   result windowed, whole, with an empty cache that reads its rows from BigQuery again; a load after BigQuery's temporary
-  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused. Closing the result stops the load,
+  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while another result of the same query loads (they share its budget). Closing the result stops the load,
   which then says the result was closed. Reads under way when it starts
   answer with the rows they have, and the grid reads again from memory.
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save

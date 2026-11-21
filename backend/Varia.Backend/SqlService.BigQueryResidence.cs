@@ -134,7 +134,8 @@ internal sealed partial class SqlService
         var remote = Window(context, set);
         if (!store.Demote(set, remote, context.TotalRows)) return false;
         events.Residence(set);
-        messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.");
+        // A load says itself that the result stays windowed; this is the query's own estimate being wrong.
+        if (!set.Budget.Loading) messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.");
         if (CapNoteFor(context.Args, context.TotalRows) is { } capped) messages.Add(capped);
         return true;
     }
@@ -301,8 +302,17 @@ internal sealed partial class SqlService
         // Promoted here, not inside the try below: a load that lost the race to another (two clicks, two windows) must not
         // switch the winner's set back to windowed on its way out.
         LoadPromoting?.Invoke();
+        // One load per query at a time: its sets share the query's budget.
+        if (!set.Budget.TryBeginLoad())
+        {
+            queries.TryRemove(new(args.QueryId, running));
+            // This very set already loading (promoted, so no longer windowed) is refused as before.
+            throw !set.IsRemote ? new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.")
+                : new RequestException("BUSY", "Another result of this query is loading into memory. Load this one once it has finished.");
+        }
         if (!set.Promote(window.TotalRows))
         {
+            set.Budget.EndLoad();
             queries.TryRemove(new(args.QueryId, running));
             throw set.IsReleased ? Unavailable(args.ResultId) : new RequestException("INVALID_PARAMS", "Only a windowed BigQuery result can be loaded into memory.");
         }
@@ -374,6 +384,7 @@ internal sealed partial class SqlService
         finally
         {
             watch.Stop();
+            set.Budget.EndLoad();
             queries.TryRemove(new(args.QueryId, running));
             events.Closed(set);
         }

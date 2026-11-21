@@ -26,6 +26,12 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
     /// <summary>The query that owns this budget is still executing (BigQuery): its sets may still change, so Load into
     /// memory waits for it to end.</summary>
     public bool Executing { get => executing; set => executing = value; }
+    private int loading;
+    /// <summary>A Load into memory of one of this query's sets is running. Sets of one query share its budget, so two loads
+    /// at once would each be refused part way where one alone fits: a second waits for the first (BUSY).</summary>
+    public bool Loading => Volatile.Read(ref loading) != 0;
+    public bool TryBeginLoad() => Interlocked.CompareExchange(ref loading, 1, 0) == 0;
+    public void EndLoad() => Volatile.Write(ref loading, 0);
     /// <summary>The live subscription this budget belongs to, or null for a query's.</summary>
     public LiveBudget? Live { get; } = live;
     public long MaxBytes { get; } = maxBytes;

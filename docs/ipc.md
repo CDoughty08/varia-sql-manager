@@ -1132,7 +1132,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 - **`results.remoteQuery { queryId: uuid, resultId, generation, kind: 'load' }`** runs a query over a windowed result
   like `query.execute`: unary with EVENTs, the same summary, stopped by `query.cancel(queryId)`. Main sends it only for a
   result its renderer owns in that generation (else `RESULT_UNAVAILABLE`) and pins the request to it; while the query
-  that made the result still runs the backend answers `BUSY`. `load` (Load into
+  that made the result still runs, or another result of that query is loading (its sets share one budget), the backend
+  answers `BUSY`. `load` (Load into
   memory) empties the set and reads the whole table into it under a new revision (`resultSet.residence`), then
   `resultSet.closed`; a refusal part way, a failure or Stop switches it back to windowed, whole, under another revision.
   Closing the result (Close Results, the tab closed or run again) stops the load, whose summary fails with

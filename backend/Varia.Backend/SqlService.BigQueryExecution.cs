@@ -165,11 +165,13 @@ internal sealed partial class SqlService
                 currentSet = set;
                 BigQueryWindow? window = null;
                 RemoteResult? windowed;
-                // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it.
+                // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
+                // the set is still announced, so the run's end closes a set the grid heard open.
                 try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, childPlan, first, set, budget!, messages, value => window = value, token); }
                 catch
                 {
                     first.Dispose();
+                    events.Opened(set);
                     throw;
                 }
                 events.Opened(set);
@@ -371,7 +373,14 @@ internal sealed partial class SqlService
                             sets.Add(currentSet);
                             // In memory or windowed, decided from the first page before the set is announced.
                             BigQueryWindow? window = null;
-                            var windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, plan, page, currentSet, budget, messages, value => window = value, token);
+                            RemoteResult? windowed;
+                            // Announced even when deciding fails or is stopped, so the run's end closes a set the grid heard open.
+                            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, plan, page, currentSet, budget, messages, value => window = value, token); }
+                            catch
+                            {
+                                events.Opened(currentSet);
+                                throw;
+                            }
                             events.Opened(currentSet);
                             if (windowed is null)
                             {
