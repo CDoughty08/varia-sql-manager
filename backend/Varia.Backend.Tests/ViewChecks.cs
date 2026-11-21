@@ -90,7 +90,9 @@ internal static class ViewChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         (int[] Order, ColumnProfile Profile) Through(string type, params string[] cells)
         {
-            var set = store.Open(store.BeginQuery("instants" + Guid.NewGuid()), 0, 1, 1, "rows", [new("at", type, "text")], [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+            var column = new ResultColumn("at", type, "text");
+            if (type == "TIMESTAMP") column = column with { SortKind = ColumnTypes.Timestamp };
+            var set = store.Open(store.BeginQuery("instants" + Guid.NewGuid()), 0, 1, 1, "rows", [column], [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
             foreach (var cell in cells)
             {
                 set.CountRow();
@@ -108,6 +110,8 @@ internal static class ViewChecks
         var expectedOrder = Enumerable.Range(0, zonedCells.Length).ToArray();
         Array.Sort(expectedOrder, (a, b) => Utc(zonedCells[a]) != Utc(zonedCells[b]) ? Utc(zonedCells[a]).CompareTo(Utc(zonedCells[b])) : a.CompareTo(b));
         var zonedColumn = Through("datetimeoffset", zonedCells);
+        var bigQuery = Through("TIMESTAMP", "1970-01-01 00:00:00.000002 UTC", "1970-01-01 00:00:00.000001 UTC", "1970-01-01 00:00:00.000003 UTC");
+        check(bigQuery.Order.SequenceEqual([1, 0, 2]) && bigQuery.Profile.Distinct == 3, "BigQuery timestamps sort and group by their UTC instant, including adjacent microseconds");
         var parsed = zonedCells.Where(cell => Utc(cell) != long.MinValue).Select(cell => (double)Utc(cell)).ToArray();
         if (!zonedColumn.Order.SequenceEqual(expectedOrder) || zonedColumn.Profile.Histogram is not { } zonedBars || zonedBars.Low != parsed.Min() || zonedBars.High != parsed.Max() || zonedColumn.Profile.Distinct != 5)
             wrong.Add("a datetimeoffset column with cells without an offset: " + string.Join(",", zonedColumn.Order));
