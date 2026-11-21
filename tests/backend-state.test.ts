@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BackendState } from '../src/shared/contracts'
 import { BackendStateService, liveGeneration } from '../src/renderer/src/services/backend'
@@ -61,6 +63,11 @@ describe('BackendStateService', () => {
     expect(noticeText({ unexpected: true, connections: 2, queries: 1 })).toBe('The SQL backend stopped unexpectedly and was restarted. 2 connections were lost and 1 running query was stopped; nothing was re-run.')
     expect(noticeText({ unexpected: true, connections: 1, queries: 0 })).toBe('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 0 running queries were stopped; nothing was re-run.')
     expect(noticeText({ unexpected: false, connections: 3, queries: 0 })).toBe('The SQL backend was restarted. 3 connections were closed.')
+    // docs/ipc.md quotes the banner as shown: its quoted sentence, counts filled in, is the banner's.
+    const row = readFileSync(join(__dirname, '..', 'docs', 'ipc.md'), 'utf8').split('\n').find(line => line.startsWith('| Banner: unexpected restart |'))
+    const quoted = row?.match(/"([^"]+)"/)?.[1]
+    expect(quoted?.replace('{n} connection(s) were', '2 connections were').replace('{m} running query(ies) were', '1 running query was'))
+      .toBe(noticeText({ unexpected: true, connections: 2, queries: 1 }))
   })
 })
 

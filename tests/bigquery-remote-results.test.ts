@@ -182,13 +182,16 @@ describe('the user-facing text about windowed results', () => {
     const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
     const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
     // A real call on a code line: a comment, or a wrapper's own declaration, does not turn the gate off.
-    const calls = (text: string) => text.split('\n').some(line => !/^\s*(\/\/|\*|\/\*)/.test(line) && /\.remoteQuery\s*\(/.test(line))
+    const calls = (text: string) => text.split('\n').some(line => !/^\s*(\/\/|\*|\/\*)/.test(line) && /\bremoteQuery\s*\(/.test(line) && !/\bremoteQuery\s*\([^)]*:/.test(line))
     expect(calls('  // window.varia.results.remoteQuery(x)\n  remoteQuery(params: Args) {')).toBe(false)
     expect(calls('    await window.varia.results.remoteQuery(args)')).toBe(true)
+    expect(calls('    const { remoteQuery } = window.varia.results; await remoteQuery(args)')).toBe(true)
     if (!sources.some(name => calls(readFileSync(join(renderer, name), 'utf8')))) {
       expect(bigquery).toMatch(/- \*\*Load into memory\.\*\* No command runs it yet/)
       expect(bigquery).not.toMatch(/\| `BUSY` \|[^\n]*\| Load it /)
     }
+    // ...and once a command does, they must stop saying none does.
+    else expect(bigquery).not.toMatch(/No command runs it yet/)
     // CHANGELOG names every feature a windowed result waits for, as the guide does.
     const changelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8')
     const entry = changelog.slice(changelog.indexOf('- **BigQuery results larger than memory:**'), changelog.indexOf('\n', changelog.indexOf('- **BigQuery results larger than memory:**')))

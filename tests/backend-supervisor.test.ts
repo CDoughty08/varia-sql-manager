@@ -130,7 +130,7 @@ describe('BackendSupervisor over the fake backend process', () => {
 })
 
 describe('BackendSupervisor restarts', () => {
-  it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running scripts', async () => {
+  it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running queries', async () => {
     const { value, advance, statuses, states, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
     const connection = await value.request('connections.connect', options)
     expect(connection).toMatchObject({ id: 'connection-1-1', generation: 1 })

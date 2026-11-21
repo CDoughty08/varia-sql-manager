@@ -64,7 +64,7 @@ export interface ConnectionDeps {
 /** Why a generation ended. `closed` means main closed it; every other reason is unexpected. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'incompatible' | 'spawn' | 'closed'
 /** `detail` is fixed-format (codes, offsets, versions, method names), never anything else the backend sent.
- *  `queries` counts the scripts that were running when the generation ended. */
+ *  `queries` counts the queries (scripts and loads into memory) that were running when the generation ended. */
 export interface Loss { readonly reason: LossReason; readonly detail: string; readonly exitCode?: number | null; readonly signal?: string | null; readonly queries?: number }
 
 /** Each DATA body of a stream, an exact-size ArrayBuffer, in sequence order; the stream's RESPONSE settles `done`. */
@@ -218,7 +218,7 @@ export class BackendConnection {
   get isReady(): boolean { return !!this.hello && !this.loss }
   get lost(): Loss | undefined { return this.loss }
   get pendingCount(): number { return this.pending.size }
-  /** Scripts written to (or queued for) this generation that have not finished. */
+  /** Queries (scripts and loads) written to (or queued for) this generation that have not finished. */
   get runningQueries(): number { let count = 0; for (const request of this.pending.values()) if (runsQuery(request.method)) count++; return count }
   get info(): BackendHello | undefined { return this.hello }
   /** Settles once the process has exited and its pipes have closed, so `stderr` then holds everything it wrote. */
