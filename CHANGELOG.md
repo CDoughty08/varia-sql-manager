@@ -56,6 +56,7 @@
 
 ### Fixes
 
+- **AppImage updates keep the working version:** If the updated AppImage cannot start \(for example on a system without a library the new release needs\) or stops within 30 seconds, before it has started, Restart to Update now puts the previous AppImage back instead of leaving only the new one\.
 - **Reloading a changed file keeps what you type meanwhile:** Text typed into a query while Varia reads its file again, after the file changed outside Varia, is no longer replaced without asking: File changed asks first, as it does for any query with unsaved changes\.
 - **Find in Results keeps the active match highlighted:** Stepping back to a match already shown while the next page of matches was still loading \(for example Next right after Previous wrapped from the first match to the last\) no longer leaves the count on a match with no cell highlighted, or says the search failed when it had not; with many grids of matches, each step is also quicker, as it moves only the active match instead of rebuilding every grid's matches.
 - **A GO: label runs:** A line that starts with the label `GO:` is now run as part of its batch, as SSMS and sqlcmd do, instead of being rejected as an invalid GO; `GO :`, with a space, is still rejected.
