@@ -391,6 +391,10 @@ internal static partial class BigQueryExecutionChecks
             var store = new ResultStore(1L << 30, 1L << 29);
             var blocks = new Blocks { Pad = 32_000 };
             using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 16L << 20);
+            // The read-ahead tries for room just after the read's own block reserved its own: it counts that block once.
+            int ownReserved = 0, aheadTried = 0;
+            remote.Reserving = index => { if (index == 6) { SpinWait.SpinUntil(() => Volatile.Read(ref ownReserved) == 1, 15_000); Interlocked.Exchange(ref aheadTried, 1); } };
+            remote.Reserved = index => { if (index == 5) Interlocked.Exchange(ref ownReserved, 1); if (index == 5) SpinWait.SpinUntil(() => Volatile.Read(ref aheadTried) == 1 && (remote.CachedBlocks().Contains(6) || remote.FetchingBlocks() == 1), 15_000); };
             var (next, _) = await ReadRemote(remote, 5 * remote.BlockRows, 10, viewer: 1);
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var cached = remote.CachedBlocks();

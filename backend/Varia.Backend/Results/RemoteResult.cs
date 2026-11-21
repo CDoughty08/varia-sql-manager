@@ -485,10 +485,14 @@ internal sealed class RemoteResult : IDisposable
                     bool waited;
                     lock (gate) waited = block.Waiters > 0;
                     if (!waited) throw new RemoteRetryException(RemoteBlockWriter.CacheTooSmall());
-                    if (!store.TryReserveCache(ref held, OverLimit, estimate, out var full)) throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
+                    lock (gate)
+                    {
+                        if (!store.TryReserveCache(ref held, OverLimit, estimate, out var full)) throw full ? RemoteBlockWriter.CacheTooSmall() : BudgetFull();
+                        block.Holding = true;
+                    }
                     NotePeak();
                 }
-                lock (gate) block.Holding = true;
+                Reserved?.Invoke(block.Index);
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);
                 List<RemotePage> pages;
@@ -596,30 +600,31 @@ internal sealed class RemoteResult : IDisposable
     /// own limit refuses with nothing left to evict (reads hold the rest); TOO_LARGE when the global budget is full.</summary>
     private bool Reserve(long bytes, Block keep)
     {
-        // A block only read ahead leaves the room of the blocks reads wait for that have not reserved theirs yet: taken first,
-        // that room would make the read evict another grid's rows on screen.
-        var limit = CacheLimit;
+        // Under the gate throughout, so a block's room and its Holding mark change together: a read-ahead deciding beside it
+        // never counts a read's block both as reserved and as still to reserve.
         lock (gate)
-            if (keep.Waiters == 0 && keep.AheadOf != 0)
+        {
+            // A block only read ahead leaves the room of the blocks reads wait for that have not reserved theirs yet: taken
+            // first, that room would make the read evict another grid's rows on screen.
+            var ahead = keep.Waiters == 0 && keep.AheadOf != 0;
+            var limit = CacheLimit;
+            if (ahead)
             {
                 limit -= blocks.Values.Where(block => block != keep && block.Waiters > 0 && block.Fetching is not null && !block.Holding).Sum(block => Math.Min(EstimateOf((int)(block.End - block.Filled)), CacheLimit / 2));
                 // Nor does it evict for room it cannot reach: with every block it may evict gone it would still not fit, so
-                // it stops before evicting any. (A figure gone stale meanwhile costs one read-ahead skipped or one eviction
-                // wasted; the reservation below still decides.)
+                // it stops before evicting any. (Another result's fetch may change the figure meanwhile: that costs one
+                // read-ahead skipped or one eviction wasted; the reservation below still decides.)
                 var evictable = lru.Where(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !OnScreenLocked(block)).Sum(block => block.Bytes);
                 if (CachedBytes - evictable + bytes > limit) return false;
             }
-        while (!store.TryReserveCache(ref held, limit, bytes, out var full))
-        {
-            Block? victim;
-            lock (gate)
+            while (!store.TryReserveCache(ref held, limit, bytes, out var full))
             {
                 // A block only read ahead never evicts one a viewer's last read covered: the rows on screen.
-                var ahead = keep.Waiters == 0 && keep.AheadOf != 0;
-                victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !(ahead && OnScreenLocked(block)));
-                if (victim is not null) EvictLocked(victim);
+                var victim = lru.FirstOrDefault(block => block != keep && block.Waiters == 0 && block.Fetching is null && block.Bytes > 0 && !(ahead && OnScreenLocked(block)));
+                if (victim is null) return full ? false : throw BudgetFull();
+                EvictLocked(victim);
             }
-            if (victim is null) return full ? false : throw BudgetFull();
+            keep.Holding = true;
         }
         NotePeak();
         return true;
@@ -690,6 +695,9 @@ internal sealed class RemoteResult : IDisposable
 
     /// <summary>Checks only: how many viewers' read-ahead state is remembered.</summary>
     internal int ViewerCount { get { lock (gate) return viewers.Count; } }
+
+    /// <summary>Checks only: called once a fetch has reserved its block's room, before it reads the block.</summary>
+    internal Action<long>? Reserved { get; set; }
 
     /// <summary>Checks only: called as a fetch, holding its lanes, is about to reserve its block's room.</summary>
     internal Action<long>? Reserving { get; set; }
