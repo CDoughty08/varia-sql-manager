@@ -88,6 +88,9 @@ import { searchContribution } from '../../src/renderer/src/contributions/search'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
+import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
+import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
@@ -436,6 +439,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const agentJobs = new AgentJobStatusService({ api, live, connections })
+  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -445,6 +450,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
+    agentEnabled: api.agentPreview,
     settings,
     documents,
     queries,
@@ -460,6 +466,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSets: results.resultSets,
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
+    resultsComparing: results.comparing,
     scripting: scripting.running,
     bookmarks,
     recentFiles,
@@ -564,6 +571,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     gestures,
     activity,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch
   }
   const contributions = [
@@ -594,6 +603,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    agentContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -645,6 +655,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    jobActivity.dispose()
+    agentJobs.dispose()
     objectSearch.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -704,6 +716,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     liveViews,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch,
     live,
     focusEditor,

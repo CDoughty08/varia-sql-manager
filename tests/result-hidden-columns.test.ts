@@ -48,8 +48,12 @@ describe('hidden result columns', () => {
     expect(visibleColumnCount({ columns: [column('t', 'tone')] })).toBe(1)
   })
   it('finds a comparison\'s suffix by role, and none on another kind', () => {
-    expect(diffSuffixOf({ kind: 'diff', columns: diffColumns })).toEqual({ mark: 2, leftRow: 3, rightRow: 4, tone: 5 })
+    expect(diffSuffixOf({ kind: 'diff', columns: diffColumns })).toEqual({ old: -1, mark: 2, leftRow: 3, rightRow: 4, tone: 5 })
     expect(diffSuffixOf({ kind: 'rows', columns: diffColumns })).toBeUndefined()
+    // One row per entry: each pair's previous value comes after the data, before the mark; `old` is the first of them.
+    const entryColumns = [column('Id'), column('Name'), column('Id', 'old'), column('Name', 'old'), ...diffColumns.slice(2)]
+    expect(diffSuffixOf({ kind: 'diff', columns: entryColumns })).toEqual({ old: 2, mark: 4, leftRow: 5, rightRow: 6, tone: 7 })
+    expect(visibleColumnCount({ columns: entryColumns })).toBe(2)
     expect(diffSuffixOf({ kind: 'diff', columns: [column('a'), column('', 'tone')] })).toBeUndefined()
   })
   it('accepts the hidden roles and a previous value\'s pair in the strict descriptor schema', () => {
@@ -64,6 +68,8 @@ describe('comparison gutter', () => {
   const sides = { old: 'Sample Query', new: 'Awesome Query' }
   it('draws each row\'s mark and its number in its own input, and names both rows', () => {
     expect(diffGutter(' ', '3', '4', sides)).toEqual({ mark: '', number: '4', flag: '', name: 'Unchanged; row 3 in Sample Query, row 4 in Awesome Query' })
+    // One row per entry: a changed entry is marked "~", numbered in the new input and named changed.
+    expect(diffGutter('~', '3', '4', sides, 'changed 2')).toEqual({ mark: '~', number: '4', flag: '', name: 'Changed; row 3 in Sample Query, row 4 in Awesome Query' })
     expect(diffGutter('+', null, '7', sides)).toEqual({ mark: '+', number: '7', flag: '', name: 'Added; row 7 in Awesome Query' })
     expect(diffGutter('−', '5', null, sides)).toEqual({ mark: '−', number: '5', flag: '', name: 'Removed; row 5 in Sample Query' })
     // Both halves of a changed entry carry both rows; each draws its own side's.

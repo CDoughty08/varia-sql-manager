@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Varia.Backend.Results;
 
 /// <summary>The store's rooms for view reads, kept between reads (docs/page-compression-findings.md, Room pool). A sorted
@@ -6,10 +8,11 @@ namespace Varia.Backend.Results;
 /// 256 KiB arrays on the large object heap that only a full collection frees, so a grid scrolling a sorted view of a packed
 /// result allocated 33 MB a tile and collected every other tile. A reader rents a room at least a page's length, uses
 /// its first page-length bytes, and gives it back when it stops reading it; the pool then keeps it while the rooms it holds
-/// stay under <see cref="IdleBytes"/> (the rest are dropped), and lets them all go once none has been rented for
-/// <see cref="IdleMs"/> (<see cref="Trim"/>). A room kept here is not charged to the budget: it holds no rows, and the
-/// cap bounds it, as a sort's or a filter's pooled scratch is bounded. A rented room is charged by its reader as before.
-/// Rooms longer than <see cref="LargestRoom"/> (a page of very wide rows) are made for the read and never kept.</summary>
+/// stay under <see cref="IdleBytes"/>, those given back longest ago making way for one given back now, and lets them all
+/// go once none has been rented for <see cref="IdleMs"/> (<see cref="Trim"/>). A room kept here is not charged to the
+/// budget: it holds no rows, and the cap bounds it, as a sort's or a filter's pooled scratch is bounded. A rented room is
+/// charged by its reader as before. Rooms longer than <see cref="LargestRoom"/> (a page of very wide rows) are made for
+/// the read and never kept.</summary>
 internal sealed class RoomPool
 {
     /// <summary>The most the idle rooms hold together: one tile's rooms and one room a worker.</summary>
@@ -21,7 +24,13 @@ internal sealed class RoomPool
     // Rooms are made a multiple of this, so pages of nearly one length (most end within a row of the seal) share rooms.
     private const int RoundTo = 16 * 1024;
 
+    // Oldest given back first.
     private readonly List<byte[]> idle = [];
+    // Rooms out now that were rented for a shorter page than they were made for (rounded), with that page's room length;
+    // one is marked for each room made for a page no longer than the one it was lent to: what the current reads need less
+    // of. Weak, so a room its reader never gave back is still collected.
+    private readonly ConditionalWeakTable<byte[], Misfit> misfits = [];
+    private sealed class Misfit(int rented) { public readonly int Rented = rented; public bool Lacked; }
     private long idleBytes;
     private long rentedAt = Environment.TickCount64;
 
@@ -47,17 +56,29 @@ internal sealed class RoomPool
             if (best >= 0)
             {
                 var room = idle[best];
-                idle[best] = idle[^1];
-                idle.RemoveAt(idle.Count - 1);
+                // In order, so the list stays in the order rooms were given back.
+                idle.RemoveAt(best);
                 idleBytes -= room.Length;
+                if (room.Length > Rounded(length)) misfits.AddOrUpdate(room, new Misfit(Rounded(length)));
                 Interlocked.Increment(ref reused);
                 return room;
             }
+            // Made when no idle room was long enough (rare, and itself the cost the pool saves): one room the reads lack, so one
+            // room lent to a page no shorter than this one (it took the room this page could have had) is marked, the longest,
+            // to make way for it. One lent to a shorter page still serves pages of its own length and is not.
+            var making = Rounded(length);
+            Misfit? longest = null;
+            byte[]? longestRoom = null;
+            foreach (var (lent, mark) in misfits)
+                if (!mark.Lacked && making <= mark.Rented && (longestRoom is null || lent.Length > longestRoom.Length)) (longest, longestRoom) = (mark, lent);
+            longest?.Lacked = true;
         }
         Interlocked.Increment(ref made);
-        var rounded = length <= LargestRoom ? (int)Math.Min(LargestRoom, ((long)length + RoundTo - 1) / RoundTo * RoundTo) : length;
-        return GC.AllocateUninitializedArray<byte>(Math.Max(rounded, length));
+        return GC.AllocateUninitializedArray<byte>(Rounded(length));
     }
+
+    // A new room's length: rounded up, so pages of nearly one length share rooms.
+    private static int Rounded(int length) => length <= LargestRoom ? (int)Math.Min(LargestRoom, ((long)length + RoundTo - 1) / RoundTo * RoundTo) : length;
 
     /// <summary>Gives a room back once its reader has stopped reading it: nothing may read or write it after.</summary>
     public void Return(byte[] room)
@@ -66,7 +87,24 @@ internal sealed class RoomPool
         lock (idle)
         {
             // A room given back twice would be rented to two readers at once.
-            if (idleBytes + room.Length > IdleBytes || idle.Exists(kept => ReferenceEquals(kept, room))) return;
+            if (idle.Exists(kept => ReferenceEquals(kept, room))) return;
+            // A room lent to a shorter page than its own is dropped if it was marked to make way for a room made while it was
+            // out (the reads lacked rooms that short, which it would keep out of the pool) and otherwise kept only while the pool
+            // has space, the first to make way.
+            if (misfits.TryGetValue(room, out var misfit))
+            {
+                misfits.Remove(room);
+                if (misfit.Lacked || idleBytes + room.Length > IdleBytes) return;
+                idle.Insert(0, room);
+                idleBytes += room.Length;
+                return;
+            }
+            // Full: the rooms given back longest ago make way, whatever their length, so the rooms the current reads use stay
+            // and those an earlier read left, narrower or wider, age out within a tile or two.
+            var oldest = 0;
+            for (var freed = 0L; idleBytes - freed + room.Length > IdleBytes; oldest++) freed += idle[oldest].Length;
+            for (var i = 0; i < oldest; i++) idleBytes -= idle[i].Length;
+            idle.RemoveRange(0, oldest);
             idle.Add(room);
             idleBytes += room.Length;
         }
@@ -80,6 +118,7 @@ internal sealed class RoomPool
         lock (idle)
         {
             idle.Clear();
+            misfits.Clear();
             idleBytes = 0;
         }
     }

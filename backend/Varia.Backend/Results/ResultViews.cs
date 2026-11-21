@@ -2044,6 +2044,21 @@ internal static class ViewPages
                         var group = new List<int> { index };
                         var seen = new HashSet<int> { index };
                         var horizon = Math.Min(end, position + 1 + (long)UnpackTogether * PageBuilder.MaxRows);
+                        // A read lets its group go with each output page, so it looks no further than the rows this output
+                        // page can still take, by count and by its rows' bytes (each base page's average): a page of wide
+                        // rows holds a row or two, and a group of 64 ahead unpacked about 48 pages a row that it then dropped.
+                        // Copy and Save keep the group across output pages.
+                        if (endOnRelease)
+                        {
+                            var limit = Math.Min(horizon, position + PageBuilder.MaxRows - builder.RowCount);
+                            var room = PageBuilder.SealBytes - builder.ByteCount - page.Length / Math.Max(1, page.Rows);
+                            // The row that fills the page is its last, so it is taken too.
+                            for (horizon = position + 1; horizon < limit && room > 0; horizon++)
+                            {
+                                var next = pages[IndexOf(view.Order[horizon])];
+                                room -= next.Length / Math.Max(1, next.Rows);
+                            }
+                        }
                         for (var ahead = position + 1; ahead < horizon && group.Count < UnpackTogether; ahead++)
                             if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
                         if (group.Count > 1)

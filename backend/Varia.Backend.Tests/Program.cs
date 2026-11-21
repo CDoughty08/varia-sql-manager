@@ -119,6 +119,7 @@ if (args is ["--bigquery-checks"])
     await BigQueryChecks.RunAsync(Collect);
     await BigQueryExecutionChecks.RunAsync(Collect);
     await BigQuerySessionChecks.RunAsync(Collect);
+    await BigQueryExplorerChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -364,7 +365,11 @@ if (liveGroup is null)
     Check(SqlScript.Parse("SELECT 1;\nGO /* count */ 2 /* trailing */\nSELECT 2;")[0].RepeatCount == 2, "comments between delimiter tokens");
     Check(SqlScript.Parse("SELECT 'GO'; SELECT [GO]; -- GO\nGO\nSELECT 2;").Count == 2, "inline identifiers and strings");
     Check(SqlScript.Parse("SELECT 1;\nGOTO label;\nGO2;\nlabel: SELECT 2;").Count == 1, "GO prefixes are not delimiters");
-    foreach (var go in new[] { "GO;", "GO 0", "GO -1", "GO +2", "GO 2.5", "GO 1001", "GO 999999999999999", "GO 2 SELECT 2", "GO '2'" }) Invalid("SELECT 1;\n" + go, go);
+    batches = SqlScript.Parse("SELECT 1;\nGO:\n  go: SELECT 2;\nGOTO GO;\nGO\nSELECT 3;");
+    Check(batches.Count == 2 && batches[0].Sql == "SELECT 1;\nGO:\n  go: SELECT 2;\nGOTO GO;\n" && batches[0].RepeatCount == 1,
+        "GO: at the start of a line is a label in the batch, as sqlcmd reads it, not a delimiter");
+    Check(SqlScript.Parse("SELECT 1;\nGO::\nGO\nSELECT 2;").Count == 2, "GO:: is T-SQL for the server to judge, as sqlcmd sends it, not a delimiter");
+    foreach (var go in new[] { "GO :", "GO/* c */:", "GO;", "GO 0", "GO -1", "GO +2", "GO 2.5", "GO 1001", "GO 999999999999999", "GO 2 SELECT 2", "GO '2'" }) Invalid("SELECT 1;\n" + go, go);
     Invalid(string.Concat(Enumerable.Repeat("SELECT 1;\nGO 1000\n", 2)), "total repetition budget");
     Invalid("SELECT 1;\nGO\n:r file.sql", "SQLCMD include rejected before executing anything");
     Invalid("!! echo command", "shell escape rejected");
@@ -481,6 +486,7 @@ if (liveGroup is null)
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
         ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
         ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
+        ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("FloatExact", Sync(() => FloatExactChecks.Run(Check))),
@@ -529,6 +535,8 @@ if (liveGroup is null)
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
         ("Agent", () => AgentChecks.RunAsync(Check)),
         ("AgentActions", () => AgentActionChecks.RunAsync(Check)),
+        ("AgentJobs", () => AgentJobsChecks.RunAsync(Check)),
+        ("AgentProperties", () => AgentPropertiesChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();

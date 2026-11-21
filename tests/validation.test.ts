@@ -66,7 +66,8 @@ describe('IPC validation', () => {
       { sql: 'SELECT 1' }, { node: { type: 'object', object: { kind: 'server' } }, subtype: 'history' }
     ]) expect(() => validateRequest('explorer.children', { ...valid, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     // Loads run on the explorer lane under the backend's own gates; main keeps the default 45 s deadline.
-    expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000 })
+    // BigQuery's tree loads through the same method (BQ-5).
+    expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000, providers: ['sqlserver', 'bigquery'] })
     // Cancellation is main's own channel (varia:explorer-cancel), not a backend method.
     expect(() => validateRequest('explorer.cancel', { requestIds: [requestId] })).toThrow('Unsupported backend method')
     expect(explorerCancelParamsSchema.parse({ requestIds: [requestId] })).toEqual({ requestIds: [requestId] })
@@ -86,7 +87,7 @@ describe('IPC validation', () => {
       { requestId: 'r1' }, { extra: 1 }
     ]) expect(() => validateRequest('scripting.script', { ...valid, ...patch }), JSON.stringify(patch).slice(0, 80)).toThrow('Invalid request')
     // SMO can run for a while: a 60 s deadline around the backend's own 55 s budget, on the metadata lane.
-    expect(methodPolicies['scripting.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 60_000 })
+    expect(methodPolicies['scripting.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 60_000, providers: ['sqlserver', 'bigquery'] })
     // Cancellation is main's own channel (varia:scripting-cancel), not a backend method.
     expect(() => validateRequest('scripting.cancel', { requestIds: [valid.requestId] })).toThrow('Unsupported backend method')
     expect(scriptCancelSchema.parse({ requestIds: [valid.requestId] })).toEqual({ requestIds: [valid.requestId] })

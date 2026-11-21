@@ -46,6 +46,9 @@ internal sealed class AgentCatalog
         RunStatuses = json.RunStatuses.ToDictionary(row => row.Code, row => row.Label);
         ExecutionStatuses = json.ExecutionStatuses.ToDictionary(row => row.Code, row => row.Label);
         LastRunOutcomes = json.LastRunOutcomes.ToDictionary(row => row.Code, row => row.Label);
+        // A live table's tones (src/shared/live/catalog.ts liveTones): accent reads as running, success has none.
+        RunStatusTones = json.RunStatuses.Where(row => row.Tone is "error" or "warning" or "muted" or "accent")
+            .ToDictionary(row => row.Code, row => row.Tone == "accent" ? "running" : row.Tone!);
         SubsystemLabels = (json.Subsystems ?? []).ToDictionary(row => row.Id, row => row.Label, StringComparer.Ordinal);
         if (ReadProcedures.Keys.Any(WriteProcedures.ContainsKey)) throw new InvalidOperationException("An Agent procedure is both a read and a write.");
     }
@@ -70,6 +73,8 @@ internal sealed class AgentCatalog
     public IReadOnlyDictionary<int, string> RunStatuses { get; }
     public IReadOnlyDictionary<int, string> ExecutionStatuses { get; }
     public IReadOnlyDictionary<int, string> LastRunOutcomes { get; }
+    /// <summary>A history row's live tone by run status (Job Activity Monitor's last run): error, warning, running or muted.</summary>
+    public IReadOnlyDictionary<int, string> RunStatusTones { get; }
     /// <summary>SSMS's step-type names by syssubsystems.subsystem (Object Explorer labels the Proxies folder's rows with them).</summary>
     public IReadOnlyDictionary<string, string> SubsystemLabels { get; }
 

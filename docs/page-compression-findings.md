@@ -175,6 +175,8 @@ value shape is kept as values instead of lengths and text (`PageCodec.Typed.cs`)
 - **Two frames:** the typed values go in a Zstandard frame of their own, ahead of the form's frame. In one frame their
   bytes spoil Zstandard's literal tables for the text digits beside them: `numeric` packed 2 % larger typed in one frame,
   and 7 % smaller in two. Unpacking reads the values' frame into a pooled room, then expands the form in place as before.
+  Packing rents the values' room only once a column's every cell parsed, and the frames' room at the bounds of what it
+  compresses, so a page with no typed column takes from the shared pool what it took before the typed form.
 
 Measured with `--typed` (both forms timed page by page in turn), counting the lengths sidecar:
 
@@ -236,7 +238,10 @@ every complete result packed.
 - **Plain `results.read`:** the pages it needs, through a per-result cache of six unpacked pages charged as working
   memory, freed with the result. About 0.2 ms a 1,000-row read while scrolling `orders`, 0.8 ms on `log`, 0.4 to 1 ms
   for a jump: well inside a frame. A plain read never unpacks a result whole, so reading does not undo packing.
-- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers.
+- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers,
+  up to 64 at a time and no more than the output page being built can take (by row count and its rows' bytes): a read
+  lets them go with each output page, so through a sort of rows so wide a page holds one, a 128-row tile unpacks
+  128 pages.
 
 ### Fused per-page reads
 
@@ -275,8 +280,14 @@ collection, so scrolling a sorted view of a packed result collected every other 
   it); Copy and Save keep them across pages. `PageRooms` gives back, when disposed, the rooms their readers gave back; a
   room still out is dropped.
 - **Kept:** idle rooms up to `RoomPool.IdleBytes` (a tile's 64 rooms and one a worker: about 21 MiB on 16 workers),
-  none longer than four sealed pages, none twice. They are not charged to the budget, as a sort's or a filter's pooled
-  scratch is not, and are let go after 30 s without a rental.
+  none longer than four sealed pages, none twice. When they are full, the rooms given back longest ago make way for one given
+  back now, whatever their lengths, so once a read makes rooms of its own they replace those an earlier, narrower or
+  wider, result left. A room lent to a shorter page than its own goes first; each room made while
+  rooms are lent drops one of them, the longest lent to a page no shorter than the one the room was made for, so lent
+  rooms do not keep out the rooms a read lacks. A read that leaves a wider one makes its own rooms over a few tiles, and
+  results whose pages spread over many room lengths (wide rows) can make somewhat more rooms than keeping the first
+  rooms given back did. They are not charged to the budget, as a sort's or a filter's pooled scratch is not, and
+  are let go after 30 s without a rental.
 
 Measured on 1,000,000 W1 rows packed (830 pages) through a scattered view, without the pool → with it. Times are the
 best of three interleaved runs on a busy 16-worker machine; allocations, collections and pauses held across all three.

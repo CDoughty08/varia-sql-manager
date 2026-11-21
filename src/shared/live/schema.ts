@@ -10,6 +10,7 @@ import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
 import { activityLiveArgsSchema } from '../activity/schema'
 import { ssisOperationsArgsSchema } from '../ssis/schema'
+import { agentJobsArgsSchema } from '../agent/jobs'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -51,7 +52,10 @@ export const liveArgsSchemas = {
   'ssis.catalog': z.never(),
   // The Operations document's filters. Each args replaces the last whole (an absent member is no filter), and new args read
   // the window again.
-  'ssis.operations': ssisOperationsArgsSchema
+  'ssis.operations': ssisOperationsArgsSchema,
+  // SQL Server Agent's jobs (AG-3): the job whose last run Job Activity Monitor shows, the jobs the status bar watches, and the
+  // list's column value filters. Each args replaces the last whole.
+  'agent.jobs': agentJobsArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

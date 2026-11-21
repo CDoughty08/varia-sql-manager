@@ -76,6 +76,7 @@ export const contextKeys = {
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
   activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
   activeDocumentIsSsisOperations: { type: 'boolean', scope: 'state', description: 'The active document is Integration Services Operations.' },
+  activeDocumentIsJobActivity: { type: 'boolean', scope: 'state', description: "The active document is SQL Server Agent's Job Activity Monitor." },
   ssisOperationStoppable: { type: 'boolean', scope: 'state', description: 'The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way.' },
   ssisOperationsPaused: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document is paused (Pause): it reads nothing until resumed.' },
   ssisOperationsRefreshable: { type: 'boolean', scope: 'state', description: 'The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog).' },
@@ -226,7 +227,10 @@ export const contextKeys = {
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
   documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
-  searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' }
+  searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' },
+  resultsGridComparison: { type: 'boolean', scope: 'state', description: "The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is." },
+  comparisonInputsOpen: { type: 'boolean', scope: 'state', description: "Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable." },
+  outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

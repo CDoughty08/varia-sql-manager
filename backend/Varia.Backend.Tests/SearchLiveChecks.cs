@@ -114,6 +114,31 @@ internal static class SearchLiveChecks
         check(resource is not null && At(resource, "parameter", "@loginame", "sp_who") is var login and >= 0 && resource.Typed(login)?.TypeText == "sysname",
             "the resource database's parameters carry their types");
 
+        // The editor's lookup on a real build: the scratch database is Latin1_General_100_CS_AS_SC, so its names tell case apart; a
+        // table's columns, keys and indexes and a foreign key in both directions by name; a system view from the resource set.
+        var lookup = service.Search.Lookup(connectionId);
+        var found = lookup?.Objects(database, "srch", "Priced");
+        check(found is { Database: { State: LookupState.Ready, CaseSensitive: true, ReadAt: not null }, Value: [{ Kind: "table" }] } && lookup!.Objects(database, "srch", "priced").Value.Count == 0
+            && lookup.Objects(database, "SRCH", "Priced").Value.Count == 0,
+            "a lookup in a case-sensitive database finds the exact name only: " + found?.Database);
+        var master = lookup?.Database("master");
+        check(master is { CaseSensitive: { } cased } && lookup!.Objects("master", "DBO", "SPT_FALLBACK_DB").Value.Count == (cased ? 0 : 1) && lookup.Objects("master", "dbo", "spt_fallback_db").Value.Count == 1,
+            "master's lookups follow its own collation's case rule: " + master);
+        if (found?.Value is [var pricedTable] && lookup is not null)
+        {
+            check(lookup.Columns(pricedTable).Select(column => column.Name).SequenceEqual(["id", "price", "srch_total", "note"]) && lookup.Columns(pricedTable)[3].Type?.TypeText == "nvarchar(40)",
+                "a real table's columns come by column_id with their types: " + string.Join(", ", lookup.Columns(pricedTable).Select(column => column.Name)));
+            var indexes = lookup.Indexes(pricedTable);
+            check(indexes.Any(value => value is { Kind: "key", Subtype: "primary", Entry.Name: "pk_srch_priced", Columns: [{ Name: "id" }] })
+                && indexes.Any(value => value is { Kind: "index", Entry.Name: "ix_srch_price", Columns: [{ Name: "price", Descending: false, Included: false }] }),
+                "a real table's primary key and index come with their columns by name: " + string.Join(", ", indexes.Select(value => value.Kind + " " + value.Entry.Name)));
+            check(lookup.ReferencedBy(pricedTable) is [{ Entry.Name: "fk_srch_line_priced", Table.Name: "Line", Pairs: [("priced_id", "id")] }]
+                && lookup.Objects(database, "srch", "Line").Value is [var line] && lookup.ForeignKeys(line) is [{ Referenced: { Name: "Priced" }, Pairs: [("priced_id", "id")] }],
+                "a real foreign key is found from both its tables, with its columns by name");
+            check(lookup.Objects(database, "sys", "objects").Value is [{ Kind: "view", Source: null } objects] && lookup.Columns(objects).Any(column => column is { Name: "object_id", Type.TypeText: "int" }),
+                "a system view is found from the resource set in the scratch database, with its typed columns");
+        }
+
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
             "a search finds a table with a hostile name, by the name SQL Server stores");
@@ -195,9 +220,28 @@ internal static class SearchLiveChecks
         // after this one, against the same server.
         using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
         {
-            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            // The editor's lookup follows the service's builds: building once listed, skipped with the build's reason after.
+            LookupDatabase? during = null;
+            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, _ => during ??= tight.Lookup(connectionId)?.Database(database));
             check(small.Status.State == "ready" && small.Status.Skipped.Any(skip => skip.Database == database && skip.Code == "TOO_LARGE"),
                 "a database past the memory budget stops its read, is skipped as TOO_LARGE, and the build ends ready (" + small.ElapsedMs + " ms)");
+            check(during is { State: LookupState.Building, Held: null } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a lookup during a real build sees a listed database as building, and after it as skipped with its reason: " + during + " then " + tight.Lookup(connectionId)?.Database(database));
+            // A build stopped once it has listed the databases leaves each one it did not reach as its last read left it.
+            using var stop = new CancellationTokenSource();
+            LookupDatabase? stopping = null;
+            var stopped = false;
+            try
+            {
+                await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token, _ =>
+                {
+                    stopping ??= tight.Lookup(connectionId)?.Database(database);
+                    stop.Cancel();
+                });
+            }
+            catch (RequestException error) when (error.Code == "CANCELLED") { stopped = true; }
+            check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
         }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing

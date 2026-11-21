@@ -336,6 +336,7 @@ internal sealed partial class ActionService
             var text = RestoreText(Restore, options, index);
             steps.Add(new(title, async context =>
             {
+                if (await RestoreChain.RecheckAsync(connection, catalog, set, context.Token) is { } changed) throw new StepRefusedException(changed);
                 await Free(context.Token);
                 var before = touched;
                 touched = true;
