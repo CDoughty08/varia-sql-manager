@@ -37,6 +37,9 @@ internal sealed class RemoteBlockWriter(uint resultId, IReadOnlyList<WireKind> w
         if (bytes > maxBytes) throw BlockTooLarge();
     }
 
+    /// <summary>The rows written outgrew the byte limit (<see cref="BlockTooLarge"/> was thrown).</summary>
+    public bool Overflowed => bytes > maxBytes;
+
     internal static RequestException CacheTooSmall() =>
         new("TOO_LARGE", "The window cache is too small for these rows while other reads of this result hold it. Raise Block cache per windowed result in Tools › Options › Query Results › BigQuery › Results, or select fewer columns.");
 
@@ -469,6 +472,7 @@ internal sealed class RemoteResult : IDisposable
                 lock (gate) from = block.Filled;
                 var rows = (int)(block.End - from);
                 if (rows <= 0) return;
+                Reserving?.Invoke(block.Index);
                 // The block's estimated cost is reserved before it is read, evicting this result's least recent blocks for
                 // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
@@ -503,6 +507,9 @@ internal sealed class RemoteResult : IDisposable
                 catch
                 {
                     store.ReturnCache(ref held, estimate);
+                    // Rows too wide for the cache are at least that wide: the next read-ahead counts them so, rather than
+                    // building the same block to the limit again on every read.
+                    if (writer.Overflowed && writer.Rows > 0) lock (gate) widestRowBytes = Math.Max(widestRowBytes, (double)CacheLimit / writer.Rows);
                     throw;
                 }
                 var cost = pages.Sum(page => page.Cost);
@@ -589,7 +596,13 @@ internal sealed class RemoteResult : IDisposable
     /// own limit refuses with nothing left to evict (reads hold the rest); TOO_LARGE when the global budget is full.</summary>
     private bool Reserve(long bytes, Block keep)
     {
-        while (!store.TryReserveCache(ref held, CacheLimit, bytes, out var full))
+        // A block only read ahead leaves the room of the blocks reads wait for that have not reserved theirs yet: taken first,
+        // that room would make the read evict another grid's rows on screen.
+        var limit = CacheLimit;
+        lock (gate)
+            if (keep.Waiters == 0 && keep.AheadOf != 0)
+                limit -= blocks.Values.Where(block => block != keep && block.Waiters > 0 && block.Fetching is not null && !block.Holding).Sum(block => Math.Min(EstimateOf((int)(block.End - block.Filled)), CacheLimit / 2));
+        while (!store.TryReserveCache(ref held, limit, bytes, out var full))
         {
             Block? victim;
             lock (gate)
@@ -664,6 +677,12 @@ internal sealed class RemoteResult : IDisposable
             _ = Ensure(block, key, block.End);
         }
     }
+
+    /// <summary>Checks only: how many viewers' read-ahead state is remembered.</summary>
+    internal int ViewerCount { get { lock (gate) return viewers.Count; } }
+
+    /// <summary>Checks only: called as a fetch, holding its lanes, is about to reserve its block's room.</summary>
+    internal Action<long>? Reserving { get; set; }
 
     /// <summary>Checks only: called once the read-ahead's blocks are chosen, outside the lock, before each one's fetch starts.</summary>
     internal Action<long>? AheadChosen { get; set; }

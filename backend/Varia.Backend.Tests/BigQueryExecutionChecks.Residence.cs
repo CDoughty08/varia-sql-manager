@@ -449,19 +449,38 @@ internal static partial class BigQueryExecutionChecks
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var before = remote.CachedBlocks();
             await ReadRemote(remote, 0, 10, viewer: 1);
-            // The second grid's read-ahead of block 21 starts once its own block 20 is cached, so the read takes its room
-            // first rather than racing it.
-            remote.AheadChosen = index => { if (index == 21) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(20), 15_000); };
+            // The second grid's read-ahead of block 21 tries for room before its own block 20 does: it waits behind the read
+            // rather than taking the room the read needs, which would make the read evict the first grid's block on screen.
+            var aheadTried = 0;
+            remote.Reserving = index =>
+            {
+                if (index == 21) Interlocked.Exchange(ref aheadTried, 1);
+                if (index == 20) SpinWait.SpinUntil(() => remote.CachedBlocks().Contains(21) || (Volatile.Read(ref aheadTried) == 1 && remote.FetchingBlocks() == 1), 15_000);
+            };
             await ReadRemote(remote, 20 * remote.BlockRows, 10, viewer: 2);
             SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             var after = remote.CachedBlocks();
             check(before.SequenceEqual(new long[] { 0, 1 }) && after.Contains(0) && after.Contains(20) && !after.Contains(1),
-                $"the least recently used block goes first: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+                $"the least recently used block goes first, and a read-ahead never takes the room of the read it follows: before [{string.Join(",", before)}], after [{string.Join(",", after)}]");
+        }
+
+        // Viewer ids come from the untrusted renderer: the read-ahead state of a few hundred at most is remembered.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            using var remote = Remote(store, new Blocks());
+            var most = 0;
+            for (uint viewer = 1; viewer <= 600; viewer++)
+            {
+                await ReadRemote(remote, 0, 1, viewer: viewer);
+                most = Math.Max(most, remote.ViewerCount);
+            }
+            check(most == 256, $"the read-ahead remembers 256 viewers at most: {most}");
         }
 
         // Read-ahead whose rows come out wider than measured stops where the cache is full: it never evicts the block on screen
-        // nor passes the cache's limit, and reading the same rows again fetches neither block again.
-        foreach (var (cacheMiB, pad, factor) in new[] { (16L, 50_000, 1.9), (16L, 50_000, 1.6), (64L, 200_000, 1.6) })
+        // nor passes the cache's limit, and reading the same rows again fetches neither block again; rows so wide the block
+        // outgrows the whole cache (3x) count as that wide too.
+        foreach (var (cacheMiB, pad, factor) in new[] { (16L, 50_000, 1.9), (16L, 50_000, 1.6), (64L, 200_000, 1.6), (16L, 50_000, 3.0) })
         {
             var store = new ResultStore(4L << 30, 2L << 30);
             var blocks = new Blocks();
