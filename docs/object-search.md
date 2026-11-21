@@ -280,7 +280,7 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   cache, so an unchanged table starts no SMO job). Other kinds Script As can write (a trigger, an index, a login…) show
   their CREATE script; others say they have no definition.
 - A definition hit's matched line is marked and scrolled a third of the way into view: the index's line for a module's
-  text, else the script line holding the match's preview nearest that line.
+  text, else the script line holding the match's preview nearest that line. Tabs in the SQL match the spaces shown in the preview.
 - Tables and views also show Columns: Peek's Columns list, which comes with the properties (no read of its own), as a card
   grid with Peek's columns (Name, Type, Nullable, Key, Identity, Computed, Default, Definition) that selects, sorts and
   copies as a results grid does. Up to 1,024 columns are listed; a note says when there are more.
