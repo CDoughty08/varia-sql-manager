@@ -573,7 +573,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
 - **Peek lists** (`peekLists` in `src/shared/explorer/peek.ts`) come with the facts in `explorer.peek`'s batch, each
   `TOP (@take)` in a fixed order, and show through `PeekListGrid` (card or page preset). Columns' and Parameters'
   Definition is composed in C# (`PeekSql.ColumnRow`, `ParameterRow`) from names the batch quotes with `QUOTENAME`, since
-  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`).
+  catalogue SQL holds no literals; a T-SQL parameter's default comes from its module's header (`ModuleHeader`), matched by its declared catalog spelling.
 - **View Dependencies** (`src/shared/explorer/dependencies.ts`, `DependenciesService`, `dependency-tree.ts`) has no SQL
   of its own: a level is `explorer.dependencies`, Peek's lookup and one of the Dependencies tab's two listings
   (`PeekSql.Level`, joined by `PeekSql.Dependencies`), on Peek's slot and budget. A level is read only on expand, at most
