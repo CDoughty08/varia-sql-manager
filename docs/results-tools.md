@@ -262,7 +262,9 @@ between them, **Layout** (One row, Two rows) and **Exact text**. Each changes th
 tab, number and place, renamed when its sides or Exact text change, keeping its column widths (by column name across a
 swap, as are the key columns it matched by) and its highlights, which follow their rows; its sort, filters and scroll
 reset. Swap onto a pair the run already has the other way round goes to that comparison instead. A change shows its
-progress and Cancel in the toolbar; a newer change replaces one still running. If a change fails or is cancelled the
+progress and Cancel in the toolbar, and its controls show what it asks for; a newer change replaces one still running
+and builds on it (Swap sides then Exact text keeps both). While a comparison is swapped away from its pair, that pair
+reads as being compared (its Cancel stops the swap) until the swap lands. If a change fails or is cancelled the
 comparison stays as it was and its strip says so ("The comparison was not changed: …", "The change was cancelled.").
 While an input is closed, Swap sides, Layout and Exact text are unavailable and say which input is closed; closing an
 input while a change runs cancels it ("Result 1 was closed, so the change was cancelled."). The Layout setting applies to
