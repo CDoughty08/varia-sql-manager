@@ -5,7 +5,7 @@ import type { AgentJobFacts, AgentServiceFacts, AgentServiceStateName } from '..
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { BuiltRequest, ObjectDialogDefinition } from './definitions'
 
-/** Start Job at Step's choice: the step it starts at, by id (the first step unless chosen), and the job's creation time as the tree listed
+/** Start Job at Step's choice: the step it starts at, by id (the first step unless chosen), and the job's ID as the tree listed
  *  it, when it did. */
 export interface StartJobDraft { readonly step: number; readonly listed?: string }
 /** The service dialogs have nothing to choose. */
@@ -35,7 +35,7 @@ export const agentDialogText = {
 /** Why Start Job at Step cannot run: a job created since the tree listed the row (so not the one chosen), one with no steps, or one
  *  already running. */
 export function startJobBlocked(model: AgentJobFacts, draft?: StartJobDraft): string | undefined {
-  if (draft?.listed && draft.listed !== model.agentIdentity.created) return agentDialogText.replaced
+  if (draft?.listed && draft.listed !== model.agentIdentity.jobId) return agentDialogText.replaced
   if (!model.steps.length) return agentDialogText.noSteps
   if (model.running) return agentDialogText.running
   return undefined

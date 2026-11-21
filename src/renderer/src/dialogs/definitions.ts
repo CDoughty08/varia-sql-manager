@@ -139,7 +139,7 @@ export interface ChangedFolders { readonly folder: FolderId; readonly databases:
 /** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
 export interface DeleteDraft {
   readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean
-  /** A SQL Server Agent job's creation time as the tree listed it, so a job created since under the name is refused. */
+  /** A SQL Server Agent job's ID as the tree listed it, so a job created since under the name is refused. */
   readonly listed?: string
 }
 /** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
@@ -196,8 +196,8 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
     // A SQL Server Agent job (AG-2): sp_delete_job deletes its history and the schedules only it used, as SSMS's Delete does.
     // The identity is the row's the user chose (the dialog's read takes the name only), so a job created since is refused NOT_FOUND.
     if (target.kind === 'agentJob') {
-      const created = draft.listed ?? model.agentIdentity?.created
-      return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(created ? { agentIdentity: { created } } : {}) }
+      const jobId = draft.listed ?? model.agentIdentity?.jobId
+      return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(jobId ? { agentIdentity: { jobId } } : {}) }
     }
     // The login or database the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
     if (target.kind === 'login' && model.login)

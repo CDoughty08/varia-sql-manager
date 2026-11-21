@@ -35,9 +35,8 @@ documents arrive in later lanes, behind the same gate until 0.11.0.
   Disable (Enable on a disabled job), Rename and Delete. Start Job at Step… reads the job and its steps (`sp_help_jobstep`):
   a job with one step starts as the dialog opens, as SSMS's does, and one with more lists its steps, the first chosen.
   Stop Job, Disable, Enable and Rename run as status-bar jobs with Stop; Delete is Delete Object, which also deletes the
-  job's history and the schedules no other job uses. Each verb sends the job's creation time from the tree
-  (`agentIdentity`, sysjobs `date_created` to the second), and its one batch resolves the job by name and that time first,
-  so a job created since under the name is refused `NOT_FOUND` before msdb runs anything. The batches call only the msdb
+  job's history and the schedules no other job uses. Each verb sends the listed job's immutable msdb `job_id` and name. If another job has
+  taken the name, the batch returns `NOT_FOUND` before calling the procedure. The batches call only the msdb
   procedures listed below, with named arguments, and are checked by `AgentSql.LintExecutable`, an exact-shape allow list.
   msdb's procedures report failures by return code, so each batch raises its own error on a nonzero code. SQL Server
   Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),

@@ -93,8 +93,8 @@ try {
   await expect(results.getByRole('listitem')).toHaveCount(2)
   await expect(results.getByRole('listitem').filter({ hasText: 'Start requested' })).toHaveCount(2)
   const starts = (await calls('actions.execute')).filter(call => call.action === 'startJob')
-  expect(starts.map(call => ({ name: call.target.name, kind: call.target.kind, created: call.agentIdentity.created }))).toEqual([
-    { name: 'Nightly', kind: 'agentJob', created: '2026-01-02T03:04:05' }, { name: 'Backup', kind: 'agentJob', created: '2026-01-03T03:04:05' }
+  expect(starts.map(call => ({ name: call.target.name, kind: call.target.kind, jobId: call.agentIdentity.jobId }))).toEqual([
+    { name: 'Nightly', kind: 'agentJob', jobId: 'a1b2c3d4-0000-4000-8000-000000000001' }, { name: 'Backup', kind: 'agentJob', jobId: 'a1b2c3d4-0000-4000-8000-000000000002' }
   ])
   // The status bar follows the newest started job (one more behind it) until it ends; the list shows both running meanwhile or after.
   const item = statusBar(page).getByRole('status').filter({ has: page.getByRole('button', { name: 'Dismiss Backup', exact: true }) })

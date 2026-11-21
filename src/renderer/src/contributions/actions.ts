@@ -2,6 +2,7 @@ import { actionServes } from '../../../shared/actions/catalog.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, objectNodeOf, type ExplorerMenuNode, type ObjectMenuNode } from '../menus/targets'
+import { jobActionMessages } from '../actions/ObjectActionService'
 import { newLoginTarget } from '../dialogs/new-login'
 import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
 
@@ -36,6 +37,11 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // An action that needs no tree row also takes a Search Objects result's object (`searchResults` in the catalogue).
   const isJob = (node: ExplorerMenuNode) => node.ref.type === 'object' && node.ref.object.kind === 'agentJob'
+  const listedJob = (node: ExplorerMenuNode) => {
+    if (!isJob(node)) return undefined
+    if (!node.jobId) throw new Error(jobActionMessages.unidentified)
+    return { listed: node.jobId }
+  }
   const objectOf = (args?: CommandArgs): ObjectMenuNode | undefined => args?.target ? objectNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // Integration Services Catalogs on a live server; the dialog itself says when the server cannot have a catalog.
   const catalogs = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && node.folder === 'integrationServicesCatalogs'
@@ -75,13 +81,13 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       run: async args => { const node = nodeOf(args); if (node) await (isJob(node) ? actions.changeJobState(node, 'enable') : actions.changeLoginState(node, 'enable')) }
     }),
     // SQL Server Agent (AG-2), registered only behind the release gate so the palette offers none of them without it: Start Job at
-    // Step... is a modal (with the creation time the tree listed, so a job replaced since is refused); Stop Job is a status-bar job; the
+    // Step... is a modal (with the job ID the tree listed, so a job replaced since is refused); Stop Job is a status-bar job; the
     // Agent node's Start, Stop and Restart are modals that stay open on their steps.
     ...options.agentEnabled ? [
       commands.register('explorer.startJob', {
         when: args => actions.canRun('startJob', nodeOf(args)) && !dialogs.current,
         unavailable: args => actions.unavailable('startJob', nodeOf(args)),
-        run: args => { const node = nodeOf(args); if (node) dialogs.open('startJobAtStep', node, node.created ? { listed: node.created } : undefined) }
+        run: args => { const node = nodeOf(args); if (node) dialogs.open('startJobAtStep', node, listedJob(node)) }
       }),
       commands.register('explorer.stopJob', {
         when: args => actions.canRun('stopJob', nodeOf(args)),
@@ -106,7 +112,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     }),
     commands.register('explorer.delete', {
       when: args => actions.canRun('delete', nodeOf(args)) && !dialogs.current,
-      run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node, isJob(node) && node.created ? { listed: node.created } : undefined) }
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node, listedJob(node)) }
     }),
     commands.register('explorer.properties', {
       when: args => actions.canRun('properties', nodeOf(args)) && !dialogs.current,

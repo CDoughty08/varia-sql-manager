@@ -24,7 +24,6 @@ export interface WatchedEntry {
   readonly server: string
   readonly id: string
   readonly name: string
-  readonly created: string
   readonly job: WatchedJob
   readonly phase: WatchedPhase
   /** When the Start was sent (performance.now(), a monotonic clock): with a sample's server clock, the Start's time in server time. */
@@ -76,14 +75,14 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
   }
 
   /** A job Job Activity Monitor started: followed from its last run before the start (a run counts only above it). */
-  watch(connectionId: string, job: { readonly id: string; readonly name: string; readonly created: string; readonly lastRun: string }, sentAt?: number): void {
+  watch(connectionId: string, job: { readonly id: string; readonly name: string; readonly lastRun: string }, sentAt?: number): void {
     if (this.disposed) return
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId)
     if (!connection) return
     const id = job.id.toLowerCase()
     const others = this.getSnapshot().jobs.filter(entry => !(entry.connectionId === connectionId && entry.id === id))
     const entry: WatchedEntry = {
-      key: this.newId(), connectionId, server: connection.displayName || connection.server, id, name: job.name, created: job.created,
+      key: this.newId(), connectionId, server: connection.displayName || connection.server, id, name: job.name,
       job: { before: stampOf(job.lastRun), idleSamples: 0, seenRunning: false }, phase: { phase: 'starting' }, watchedAt: sentAt ?? this.now()
     }
     // At most agentLimits.watchedJobs followed per connection: the oldest still followed gives its slot up.
@@ -112,7 +111,7 @@ export class AgentJobStatusService extends SnapshotStore<AgentJobStatusSnapshot>
     this.update(key, { stopping: true, error: undefined })
     let result: ApiResult<ActionExecuteResult> | undefined, failure: string | undefined
     try {
-      result = await this.options.api.executeObjectAction({ action: 'stopJob', connectionId: entry.connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: entry.name }, agentIdentity: { created: entry.created } })
+      result = await this.options.api.executeObjectAction({ action: 'stopJob', connectionId: entry.connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: entry.name }, agentIdentity: { jobId: entry.id } })
     } catch (thrown) { failure = thrown instanceof Error ? thrown.message : String(thrown) }
     if (!failure && result && !result.ok) failure = result.error
     if (!failure && result?.ok && result.value.error) failure = result.value.error.message

@@ -131,7 +131,7 @@ export const tablePropertiesScript = (name, token) => `USE [AppData]\r\nGO\r\nSE
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
     // SQL Server Agent (AG-2): one job with two steps, and the service's state as the Service Control Manager reports it.
-    jobs: [{ name: 'Nightly', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
+    jobs: [{ name: 'Nightly', jobId: 'a1b2c3d4-0000-4000-8000-000000000001', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
     // SQL Server Agent Properties (AG-8a): msdb's settings and two jobs' history.
     agentSettings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'C:\\Logs\\SQLAGENT.OUT', errorLoggingLevel: 3 },
     agentHistory: 900,
@@ -212,7 +212,7 @@ GO
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
     integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
-    agentJobs: () => stub.jobs.map(job => object({ kind: 'agentJob', name: job.name }, job.name, 'agent-job', { hasChildren: false, created: job.created, ...job.enabled ? {} : { status: 'disabled' } })),
+    agentJobs: () => stub.jobs.map(job => object({ kind: 'agentJob', name: job.name }, job.name, 'agent-job', { hasChildren: false, jobId: job.jobId, created: job.created, ...job.enabled ? {} : { status: 'disabled' } })),
     logins: () => stub.logins.map(login => object({ kind: 'login', name: login.name }, login.name, 'login',
       { hasChildren: false, subtype: login.subtype, ...login.disabled ? { status: 'disabled' } : login.connectDenied ? { status: 'noAccess' } : {} }))
   }
@@ -589,7 +589,7 @@ GO
   function describeJob({ target }) {
     const job = jobOf(target)
     if (!job) return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
-    return ok({ elapsedMs: 1, agentJob: { name: job.name, agentIdentity: { created: job.created }, enabled: job.enabled, running: false, steps: job.steps.map((name, index) => ({ id: index + 1, name })), stepsTruncated: false } })
+    return ok({ elapsedMs: 1, agentJob: { name: job.name, agentIdentity: { jobId: job.jobId }, enabled: job.enabled, running: false, steps: job.steps.map((name, index) => ({ id: index + 1, name })), stepsTruncated: false } })
   }
   /** A job's verbs: Start and Stop answer one step; Disable, Enable and Rename change the listing. */
   function jobVerb({ action, target, newName }) {
