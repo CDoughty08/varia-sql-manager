@@ -206,7 +206,7 @@ the reads held when it is made:
   found but not together, then within edits, then by sound, each by fewest edits), then definition-only matches. A dotted
   search counts the schema-qualified name (`dbo.Orders` matches `dbo.Orders` exactly, `dbo.Orders.id` by prefix). Within
   a group, by database then name.
-- **Definition hits** show the line, a preview with the match marked, and how many more matches the definition has.
+- **Definition hits** show the line, a preview with the visible portion of the match marked, and how many more matches the definition has.
 - **During a build** a search answers from what the index holds so far and runs again when the build ends, keeping the
   selected hit (so Enter in Object Explorer's box continues from it) and the scroll position.
 
