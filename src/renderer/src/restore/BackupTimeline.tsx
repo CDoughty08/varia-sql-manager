@@ -55,7 +55,8 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
   const lastBackup = lastBackupOf(draft, facts)
   const lastFinish = Math.max(...sets.map(set => timeMs(set.finish) ?? 0))
   const [specific, setSpecific] = useState(draft.stopAt !== undefined)
-  const [point, setPoint] = useState(timeMs(draft.stopAt ?? '') ?? lastFinish)
+  // Without a point, start at the last backup taken (the checked sets' under Manual Selection), where OK is allowed.
+  const [point, setPoint] = useState(timeMs(draft.stopAt ?? lastBackup ?? '') ?? lastFinish)
   const [interval, chooseInterval] = useState<TimelineInterval>('day')
   const [width, setWidth] = useState<number>(track.fallbackWidth)
   const box = useRef<HTMLDivElement>(null)
