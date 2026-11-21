@@ -88,7 +88,8 @@ describe('Agent catalogue', () => {
     const reads = readProcedures.map(procedure => procedure.name), writes = writeProcedures.map(procedure => procedure.name)
     expect(unique(reads)).toBe(true)
     expect(unique(writes)).toBe(true)
-    for (const name of [...reads, ...writes]) expect(name).toMatch(/^(sp|xp)_[a-z_]+$/)
+    // Database Mail's own procedures end in _sp (sysmail_help_profile_sp).
+    for (const name of [...reads, ...writes]) expect(name).toMatch(/^(?:(?:sp|xp)_[a-z_]+|sysmail_[a-z_]+_sp)$/)
     // A read never writes: no msdb procedure is in both lists.
     expect(reads.filter(name => writes.includes(name))).toEqual([])
     for (const procedure of readProcedures) {
@@ -106,8 +107,13 @@ describe('Agent catalogue', () => {
     expect(writeProcedures.every(procedure => procedure.database === 'msdb' && procedure.name !== 'xp_servicecontrol')).toBe(true)
     // AG-2's writes name every argument their template passes; later lanes add theirs.
     expect(writeProcedures.filter(procedure => procedure.lane === 'AG-2').map(procedure => [procedure.name, procedure.arguments])).toEqual([
-      ['sp_start_job', ['@job_id', '@step_name']], ['sp_stop_job', ['@job_id']], ['sp_update_job', ['@job_id', '@enabled', '@new_name']], ['sp_delete_job', ['@job_id', '@delete_history', '@delete_unused_schedule']]
+      ['sp_start_job', ['@job_id', '@step_name']], ['sp_stop_job', ['@job_id']],
+      ['sp_update_job', ['@job_id', '@enabled', '@new_name', '@description', '@category_name', '@owner_login_name', '@notify_level_eventlog', '@notify_level_email', '@notify_level_netsend', '@notify_level_page',
+        '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level']],
+      ['sp_delete_job', ['@job_id', '@delete_history', '@delete_unused_schedule']]
     ])
+    // The job document (AG-6a): New Job's sp_add_job (the id its OUTPUT) and sp_add_jobserver, and the Alerts section's sp_update_alert detach.
+    expect(writeProcedures.filter(procedure => procedure.lane === 'AG-6a').map(procedure => [procedure.name, procedure.arguments?.length])).toEqual([['sp_add_job', 14], ['sp_add_jobserver', 1], ['sp_update_alert', 2]])
     for (const shape of masterReadShapes) {
       expect(shape.shape, shape.name).toMatch(new RegExp(`^EXEC (@rc = )?master\\.dbo\\.${shape.name} `))
       expect(shape.shape.endsWith(';'), shape.name).toBe(true)

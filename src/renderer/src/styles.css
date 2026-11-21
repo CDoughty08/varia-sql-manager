@@ -2517,6 +2517,23 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-job-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
 .agent-job-status-text { max-width: 48ch; overflow: hidden; text-overflow: ellipsis; }
 .agent-stopped-status button { display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; border-color: transparent; background: transparent; cursor: pointer; }
+.agent-job-start { display: flex; flex-direction: column; gap: var(--varia-space-2); max-width: 560px; padding: var(--varia-space-4); }
+.agent-job-start-choice { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-3); text-align: left; white-space: normal; border-color: var(--varia-widget-border); }
+.agent-job-start-choice > span { display: flex; flex-direction: column; gap: var(--varia-space-0); }
+.agent-job-start-choice:hover:not(:disabled) { background: var(--varia-list-hoverBackground); }
+.agent-job-start-split { display: inline-flex; align-items: center; }
+.agent-job-start-split > button + button { padding-left: var(--varia-space-1); padding-right: var(--varia-space-1); }
+.agent-job-stale { display: flex; flex-direction: column; gap: var(--varia-space-2); font-size: var(--varia-size-sm); padding: var(--varia-space-2) var(--varia-space-4); border-left: 2px solid var(--varia-warningForeground); }
+.agent-job-stale p { margin: 0; display: flex; align-items: center; gap: var(--varia-space-1); }
+.agent-job-stale .agent-job-stale-actions { gap: var(--varia-space-2); }
+.agent-job-conflict { color: var(--varia-warningForeground); }
+.agent-job-stale table { width: auto; max-width: 100%; border-collapse: collapse; font-size: var(--varia-size-sm); }
+.agent-job-stale th, .agent-job-stale td { padding: var(--varia-space-1) var(--varia-space-4) var(--varia-space-1) 0; text-align: left; font-weight: normal; }
+.agent-job-stale thead th { color: var(--varia-descriptionForeground); }
+.agent-job-stale label { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-job-description { resize: vertical; min-height: 64px; font: inherit; }
+.agent-job-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--varia-space-1) var(--varia-space-3); margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.agent-job-facts dd { margin: 0; }
 @media (forced-colors: active) {
   .agent-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }

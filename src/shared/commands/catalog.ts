@@ -6,6 +6,7 @@ import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
+import { agentJobCommandEntries } from '../actions/agent-job.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 import { bothProviders, providerAllows, providersOf, type ProviderContext, type ProviderId } from '../providers.ts'
@@ -486,6 +487,8 @@ export const commandCatalog = {
   ...operationsCommandEntries(),
   // SQL Server Agent's Job Activity Monitor (AG-3): the monitor and its verbs, generated from src/shared/agent/jobs.ts.
   ...jobActivityCommandEntries(),
+  // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
+  ...agentJobCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

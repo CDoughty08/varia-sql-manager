@@ -62,7 +62,8 @@ internal static class ActionErrors
         // 2571: DBCC CHECKPRIMARYFILE (Attach's Add) outside sysadmin; 5011: ALTER DATABASE without ALTER on it (Take Offline and
         // Bring Online refused in SQL Server); 7983: sp_detach_db's DBCC DETACHDB without db_owner or sysadmin.
         // 14392: sp_purge_jobhistory refusing a login below sysadmin and SQLAgentOperatorRole (SQL Server Agent Properties' purge, AG-8a).
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983, 14392],
+        // 14525: msdb refusing a change to a job another login owns below sysadmin (the job document's Save, AG-6a).
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983, 14392, 14525],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         // Backup media a restore cannot use: a family misformed or missing (3241, 3242), a damaged or unreadable set (3183, 3189).
         // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system
@@ -76,7 +77,9 @@ internal static class ActionErrors
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060],
         // SQL Server Agent (AG-2; src/shared/agent/catalog.ts agentErrorNumbers): 14261 a job's name in use, 14262 a job or step that does not
         // exist, 14372 a schedule still in use, 15281 Agent XPs off. 22022 is decided by a re-read (ActionService.AgentRefusalAsync).
-        ["AGENT_STOPPED"] = [15281]
+        ["AGENT_STOPPED"] = [15281],
+        // The job document's STALE guard (AG-6a): the job, or a removed alert, changed since the document read it.
+        ["STALE"] = [50011]
     };
     public static ActionError Create(ActionsCatalog catalog, string code, string message) =>
         new(code, ScriptingErrors.Clip(message, MaxMessage), catalog.Retryable(code));

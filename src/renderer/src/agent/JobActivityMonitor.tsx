@@ -158,10 +158,12 @@ export default function JobActivityMonitor({ documentId }: { readonly documentId
           <span className="agent-bulk-count">{state.overCap ? `More than ${formatCount(selected.length)} jobs selected: select at most ${formatCount(selected.length)}` : selected.length ? `${formatCount(selected.length)} ${plural(selected.length, 'job')} selected` : 'No job selected'}</span>
           {agentBulkVerbs.map(verb => <button key={verb} type="button" disabled={!!bulkWhy} title={bulkWhy ?? agentBulkTitles[verb].dialog}
             onClick={() => void workbench.commands.execute(agentBulkCommands[verb], { tabId: documentId }, 'toolbar')}>{agentBulkTitles[verb].button}</button>)}
+          <button type="button" disabled={!one} title={one ? `Open ${one.name} (Enter)` : 'Select one job to open it'}
+            onClick={() => void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar')}>Open</button>
           <button type="button" className="agent-chevron" aria-expanded={expandedHere} disabled={!one} title={one ? 'Show the last run of the selected job below the list' : 'Select one job to see its last run'}
             onClick={() => service.toggleExpanded(documentId, one)}><Icon name={expandedHere ? 'chevron-down' : 'chevron-right'} />Last run</button>
         </div>
-        <div className="agent-jobs-grid">
+        <div className="agent-jobs-grid" onDoubleClick={event => { if (one && !(event.target as Element).closest('[role="columnheader"], [role="separator"], button, input')) void workbench.commands.execute('agent.openJob', { tabId: documentId }, 'toolbar') }}>
           {unavailable ? <EmptyState icon="agent-activity" title="Job Activity Monitor is not available" detail={unavailable} />
             : <>
               <LiveGridPane live={handle} probe={agentJobsProbe} label="Jobs" toneLabel={toneLabel} filters={filters} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
