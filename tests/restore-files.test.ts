@@ -27,7 +27,7 @@ const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
 const conn = '00000000-0000-4000-8000-0000000000c1'
 const row = (id: string, name: string, type: BackupSetRow['type'], first: string, last: string, finish: string, devices: string[], patch: Partial<BackupSetRow> = {}): BackupSetRow => ({
   id, name, type, server: 'SQLHOST', database: 'Sales', position: 1, firstLsn: first, lastLsn: last, checkpointLsn: first, databaseBackupLsn: '0',
-  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices, ...patch
+  start: `2026-10-29T${finish}`, finish: `2026-10-29T${finish}`, sizeBytes: 2 * 1024 * 1024, userName: 'CONTOSO\\dba', copyOnly: false, damaged: false, devices, backupSetGuid: id, ...patch
 })
 // A full backup, a log, a file backup of FG2, a log after both, and a copy-only log, which never chains.
 const history = [
@@ -177,7 +177,7 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(validateRequest('actions.execute', first)).toEqual(first)
     expect(first).toMatchObject({
       action: 'restoreFiles', target: { kind: 'database', name: 'Sales' }, identity: { id: 7, created: '2026-01-01T00:00:00.000' },
-      restoreFiles: { sets: [{ id: uuid(2), type: 'file', devices: ['B:\\Backup\\Sales_FG2.bak'], file: 1, name: 'fg2' }, { id: uuid(4), type: 'log', file: 2 }], files: ['Sales_2'], filegroups: [], relocate: [], recovery: 'recovery', logBackup: { file: draft().files!.logBackupFile } }
+      restoreFiles: { sets: [{ id: uuid(2), type: 'file', devices: ['B:\\Backup\\Sales_FG2.bak'], file: 1, name: 'fg2', guid: uuid(2) }, { id: uuid(4), type: 'log', file: 2, guid: uuid(4) }], files: ['Sales_2'], filegroups: [], relocate: [], recovery: 'recovery', logBackup: { file: draft().files!.logBackupFile } }
     })
     // The PRIMARY file is never checked while Sales is online. A row of the full backup: one restore restores from one backup set,
     // so only it stays checked, with the logs after the full.

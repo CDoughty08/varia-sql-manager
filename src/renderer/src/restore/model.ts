@@ -237,7 +237,7 @@ export function restoreRequest(draft: RestoreDraft, facts: RestoreFacts, ids: { 
   const byId = new Map(sourceSets(draft, facts).map(set => [set.id, set]))
   const sets: RestorePlanSet[] = plan.ids.map(id => {
     const set = byId.get(id)!
-    return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {} }
+    return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {}, ...set.backupSetGuid ? { guid: set.backupSetGuid } : {} }
   })
   const relocate: RestoreMove[] = fileRows(draft, facts).filter(row => !sameServerPath(row.restoreAs, row.file.physical, facts.server?.separator ?? '\\')).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
   const destination = destinationOf(facts, draft.destination)

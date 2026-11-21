@@ -28,7 +28,7 @@ export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Parti
     // Past the cap a transposed grid shows a strip saying which rows it draws: the rows of the view it shows, so a
     // filter that leaves fewer (Transpose Selected Rows always does) leaves no strip.
     const capped = isTurned && (tab.sorts?.get(entry.key)?.view?.rows ?? set.rows) > wire.transpose.maxRows
-    return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || capped)
+    return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || capped, entry.descriptor.kind === 'diff')
   })
 }
 /** The entries drawn transposed, by the one rule the grid, Copy and Save follow (`transposedView`) over each grid's state. */
