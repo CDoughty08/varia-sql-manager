@@ -59,7 +59,8 @@ replace it with a fake.
   Google's libraries are Apache-2.0 and BSD-3-Clause.
 - **Size.** The win-x64 self-contained ReadyToRun backend grows by 4.6 MB (1.9 MB compressed) with the REST client.
   Adding the Storage Read API and Arrow (`Google.Cloud.BigQuery.Storage.V1` 3.20.0 with gRPC, `Apache.Arrow` 23.0.0, for
-  windowed results) adds 5.4 MB more (2.2 MB compressed).
+  Storage Read) adds 5.4 MB more (2.2 MB compressed); `Apache.Arrow.Compression` 23.0.0 (Zstandard through
+  `ZstdSharp.Port`, which brings K4os's LZ4) adds about 0.6 MB of assemblies.
 
 ## Authentication
 
@@ -179,15 +180,110 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   are counted from its `totalRows`. More than 4,096 columns keeps the first 4,096 with a note. A value that cannot be read
   is NULL with the read-error flag and one message for its column. Discard results reads no rows.
 - **Types.** INT64, FLOAT64 (shortest round-trip), NUMERIC and BIGNUMERIC (canonical decimal text), BOOL, STRING, BYTES
-  (binary), DATE, TIME, DATETIME and INTERVAL as BigQuery writes them, TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
+  (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
+  INTERVAL in canonical form (`1-2 3 4:05:06.5`), TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
   (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
-  a DDL statement's completion, that a script returns its last statement's rows only, and the job's statistics: bytes
-  processed and billed with their price, slot time and cache hit. The summary's `job` carries the same figures, and the
-  Results status shows the bytes processed beside the row count ("1.24 GiB processed · < $0.01").
-- **Stop and the timeout.** Stop ends the request with status `cancelled` and, when the job had not finished, says it keeps
-  running in BigQuery (Stop's `jobs.cancel` comes with scripts and sessions). A tab runs one query at a time (`SESSION_BUSY`).
+  a DDL statement's completion, and the job's statistics: bytes processed and billed with their price, slot time and
+  cache hit. The summary's `job` carries the same figures, and the Results status shows the bytes processed beside the
+  row count ("1.24 GiB processed · < $0.01"). Each job's start and end also go to the renderer as a `query.job` event
+  (docs/ipc.md, Query events).
+- **Error positions.** BigQuery's `[line:column]` positions are the submitted text's; the backend maps them to the
+  editor's, adding a selection's first line and, on that line, its first column (`startColumn`).
+- **Stop and the timeout.** Stop ends the request with status `cancelled` and sends `jobs.cancel` (best-effort: BigQuery
+  may still bill work done before the job stopped); the execution timeout does the same. A tab runs one query at a time
+  (`SESSION_BUSY`).
+
+### Scripts
+
+A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend
+lists the parent's new children (`jobs.list` with `parentJobId`, newest first, so paging stops at the first child it has
+read) and reads each finished one in statement order: a SELECT's rows become the next result set, a DML statement's
+affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
+it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
+needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
+rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
+
+### Sessions
+
+Each query tab has its own BigQuery session, so temp tables, variables and transactions carry from one Execute to the
+next. The tab's first job creates it (`createSession`); later jobs carry its id (`session_id`), which never leaves the
+backend. Emulator mode has no sessions. A session runs one job at a time: a job Varia stopped, or lost track of after a
+network failure, must reach DONE before the next one runs, and Messages says the tab is waiting for it. A job BigQuery
+refused, or whose request never left the machine, holds nothing; nor does one cut off in flight that jobs.get never finds.
+
+- **Location.** A session lives in one location. A tab's first job runs in its dataset's location when the connection's
+  location is Automatic (`datasets.get`, cached), else the connection's, where every session then stays. On an Automatic
+  connection, choosing a dataset in another location (or the same one again) asks "Switch this tab to EU?": Switch ends the session (asking first about a running query and an open transaction, as a
+  close does) and the next Execute starts one in the new location; Don't Switch keeps the dataset and session. A query
+  sent with such a dataset anyway is refused with `LOCATION_MISMATCH`. Temp tables in a session are billed as storage
+  until the session ends.
+- **Transactions.** The backend tracks the session's transaction from the statement types of its jobs, top-level and
+  child: `BEGIN TRANSACTION` opens it, a successful `COMMIT` or `ROLLBACK` closes it, and a statement failing inside it
+  makes it unknown (BigQuery names no reason, so message text is never read for this), as does a script whose children
+  could not all be listed or a finished job's statements could not all be read. `query.session.state` answers from this, with no request to BigQuery: open is
+  `{ transactionCount: 1, checked: true }`, unknown or a stopped job not yet DONE is `checked: false`, and a running query
+  answers `SESSION_BUSY`.
+- **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
+  transaction as they do for SQL Server, with BigQuery's own "not checked" note. Commit runs `COMMIT TRANSACTION` in the
+  session; every close then ends the session with `CALL BQ.ABORT_SESSION(@session_id)` outside it, which rolls back
+  what is still open. A close never aborts a session while one of its jobs runs: a commit or rollback answers
+  `JOB_RUNNING` and the tab stays (a plain close stops the query first, as SQL Server's does). A job Varia stopped is
+  waited for (20 s, 25 s for a commit) so the abort never races it.
+- **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
+  session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
+  quit, where the window stays open. A refusal BigQuery may lift (`backendError`, `rateLimitExceeded`) keeps the tab, and
+  so does a commit whose request never left the machine (`CONNECTION_LOST`); closing again retries. A COMMIT job BigQuery
+  stopped for its timeout is a refusal (`SQL_ERROR`); `TIMEOUT` is only main's deadline, whose outcome is unknown. A commit whose
+  outcome is unknown (no answer within 25 s, or main's 60 s deadline) closes with `outcomeUnknown` and its job id: the
+  session is aborted only once that COMMIT is DONE, or not found after 2 minutes, within 10 minutes and even after
+  Disconnect; past that it is left to expire.
+- **Notes.** A close answers a note when something needs saying: `commitNotApplied`, `committedBeforeCancel` (a stopped
+  script had already committed), `outcomeUnknown`, `abortFailed` (the session could not be ended, so its transaction stays
+  open until it expires and its temp tables are billed meanwhile; it outranks, and states, the note it would have carried)
+  or `sessionExpired`. A note whose tab stays open, because it was edited during the close or a later tab stopped a quit,
+  still shows in its Messages. It shows in the tab's Messages
+  when the tab stays, else as a notification; quit stops for `outcomeUnknown`, `committedBeforeCancel` and
+  `abortFailed` so they are read, and quitting again proceeds.
+- **Expiry.** BigQuery ends a session after 24 hours idle or 7 days. A refusal counts as expiry only when its message names
+  the session or opens with one, never an error about a column or table called session. A query refused for an expired session runs once more
+  in a new one (the refused job ran nothing), and Messages says its temp tables, variables and any open transaction are
+  gone. Closing an expired session succeeds at once, with `sessionExpired` when a transaction was tracked; a commit
+  answers `SESSION_LOST`, saying nothing was committed.
+
+### Storage Read
+
+A large result is read through the BigQuery Storage Read API (Arrow over gRPC) into the same result set, budget and
+limits as REST's (`SqlService.BigQueryStorageRead.cs`, `ArrowColumnPlan`). REST and Arrow write identical text for every
+type.
+
+- **When.** After the first page: the rest of the rows remain, the job is a single SELECT (a script's rows come through
+  REST) and the rows the row limit keeps are estimated at 20 MB or more (the destination table's bytes per row, else the
+  first page's). The first page is then dropped and every row read from the job's temporary destination table. Reads
+  of temporary tables are free (Google's pricing page), so there is no setting for it.
+- **Streams.** The backend's own GoogleSQL scanner (`GoogleSqlScanner`, which skips comments, strings and nested
+  queries) decides the order: a top-level `ORDER BY` (or pipe syntax's `GROUP BY k DESC`) reads one stream in order;
+  anything else asks for up to four, appended as their batches come. When unsure it reads one stream, which is only
+  slower. Each stream is read on its own task; each batch is charged to the query's budget (twice its size) before it
+  is queued, and a compressed batch's decoded buffers are charged too while its rows are stored (a refusal stops the
+  read at the budget), at most two batches are charged but not yet stored (so the budget holds as much as REST's; each other stream
+  holds at most the one batch it received while it waits), and one reader
+  appends rows, so the store keeps one writer. A stream that fails transiently is read again from its offset; one that
+  fails for good fails the query at once, with REST's error (an expired sign-in is `AUTH_EXPIRED`).
+- **Compression.** The session asks for Zstandard buffer compression: in the offline benchmark it sends a fifth to two
+  fifths of the uncompressed bytes for 10 to 40% more decoding time, against LZ4's 55% for up to 20%
+  (Throughput below). The reader also reads LZ4 and uncompressed batches, which an endpoint that ignores the option
+  sends.
+- **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
+  connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
+  be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
+  REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
+  (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
+  fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
+- **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
+  settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
 ### Cost
 
@@ -275,6 +371,11 @@ in one page whatever `maxResults` asks, finishes jobs synchronously, and reports
 It also refuses `jobTimeoutMs` sent as a JSON number, answers a repeated job id with 400 rather than 409, reports query
 errors (syntax errors included) as `jobInternalError`, and reports no bytes statistics.
 
+Storage Read against the emulator needs its gRPC port: `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (a loopback http address,
+honoured only with `VARIA_TEST_BIGQUERY_ENDPOINT`; main does not forward it, so the app reads the emulator through REST).
+The emulator serves one stream per session, sends each batch as a whole Arrow stream (schema first), fails on DATETIME
+and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; the offline golden check covers those.
+
 ## Testing
 
 - **Offline.** `BigQueryChecks` and `BigQueryCredentialChecks` (in the offline .NET run; alone with
@@ -284,7 +385,11 @@ errors (syntax errors included) as `jobInternalError`, and reports no bytes stat
   request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
   credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
   scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
-  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text.
+  errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text. Its Storage
+  Read part runs `BigQueryStorageFake` (Arrow batches through an in-process `IBigQueryStorageRead`): a golden of every
+  type read through REST and Arrow to identical cells, the scanner, the session's request and thresholds, each fallback,
+  the row limit and budget, resume from an offset, failures, Stop, and a local proxy that must receive the channel's
+  CONNECT.
   `tests/bigquery-credentials.test.ts`, `tests/bigquery-connection-store.test.ts` and
   `tests/bigquery-connection-open.test.ts` cover main's side; `tests/bigquery-connect-form.test.ts`,
   `tests/bigquery-connect-dialog.test.ts` and `tests/bigquery-workbench.test.ts` the dialog and the workbench;
@@ -294,15 +399,30 @@ errors (syntax errors included) as `jobInternalError`, and reports no bytes stat
   `tests/queries.test.ts` Execute's cost gate. The emulator does not dry-run, so no live check covers it.
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
-  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure). CI
-  runs it in live group 1 (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
+  `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).
+  With `VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT` (the emulator's port 9060) it also reads results through Storage Read and
+  compares them with REST's. CI runs it in live group 1 with both ports (docs/ci.md). `scripts/connections-smoke.mjs` drives the Connect dialog's BigQuery path
   against it when the variable is set (CI's Linux smoke shards set it; elsewhere that phase skips). Locally, start the emulator with Docker or Podman:
 
   ```bash
   docker run -d --name varia-bigquery -p 9050:9050 ghcr.io/goccy/bigquery-emulator@sha256:f4e428d265a93dc5ce36c294e1c584c7c9b384117d47ab8ddbb63d8d50b7f393 --project=varia-emulator --dataset=varia_fixture
   ```
 
-  On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+  Add `-p 9060:9060` for Storage Read. On Windows use `http://127.0.0.1:9050` (`localhost` may resolve to IPv6 first).
+- **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
+  REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
+  it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the
+  forced collection one case's release schedules runs before the next case is timed), and prints the Arrow bytes each sent. It is run by hand, prints
+  medians and has no floors. On a 2026 desktop, 500,000 rows:
+
+  | Table | REST | Arrow | Arrow, LZ4 | Arrow, Zstandard |
+  | --- | --- | --- | --- | --- |
+  | numbers (INT64 counter, short strings) | 2.9 M rows/s | 9.2 M rows/s, 11.0 MB | 7.7 M, 6.1 MB | 6.6 M, 2.2 MB |
+  | mixed (ids, amounts, countries, emails, text, flags) | 1.0 M rows/s | 2.5 M rows/s, 45.7 MB | 2.5 M, 26.1 MB | 2.3 M, 17.5 MB |
+
+  Downloading and decoding overlap, so a read takes about the longer of the two: at 100 Mbit/s the mixed table takes
+  about 3.7 s uncompressed and 1.4 s with Zstandard; at 1 Gbit/s about 0.4 s uncompressed and 0.2 s with Zstandard, where
+  decoding bounds it.
 - **Never a real project.** No check contacts Google Cloud. What only a real project can prove (tokeninfo and STS
   answers, Google's exact error bodies, bytes billed and slot statistics, a 409 on a repeated job id, whether a script's
   cap applies per statement) stays on the hand-written fixtures until the owner runs a check against one.

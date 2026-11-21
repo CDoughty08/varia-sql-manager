@@ -134,7 +134,9 @@ const api: VariaApi = {
   },
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),
-  closeQuerySession: (sessionId, transaction) => request('query.session.close', transaction ? { sessionId, transaction } : { sessionId }),
+  closeQuerySession: (sessionId, options) => request('query.session.close', {
+    sessionId, ...options?.transaction ? { transaction: options.transaction } : {}, ...options?.abortOnRefusedCommit !== undefined ? { abortOnRefusedCommit: options.abortOnRefusedCommit } : {}
+  }),
   querySessionState: sessionId => request('query.session.state', { sessionId }),
   setResultVisibility: params => request('results.visibility', params),
   getBackendState: () => ipcRenderer.invoke('varia:backend-state-get'),

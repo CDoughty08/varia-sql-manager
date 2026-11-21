@@ -160,7 +160,7 @@ internal sealed class ObjectSearchService : IDisposable
         var profile = host.Profile(args.ConnectionId);
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
-        var render = new SqlRender(explorer.Band);
+        var render = IndexRender(profile);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
@@ -246,6 +246,12 @@ internal sealed class ObjectSearchService : IDisposable
 
     /// <summary>A connection's index, made if it has none (the checks hold reads in it).</summary>
     internal ConnectionIndex Held(string connectionId) => states.GetOrAdd(connectionId, _ => new State(pool, resources)).Index;
+
+    /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
+    internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
+
+    /// <summary>The index a connection holds, or null (the checks read it).</summary>
+    internal ConnectionIndex? IndexOf(string connectionId) => states.TryGetValue(connectionId, out var state) ? state.Index : null;
 
     /// <summary>Stops a disconnected connection's build and drops its index.</summary>
     public void Forget(string connectionId)
@@ -753,10 +759,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             }
             if (children)
             {
-                await Children(reader, byId, "column", "columns", definitions, token);
-                await Children(reader, byId, "index", "indexes", false, token);
+                await reader.NextResultAsync(token);
+                var types = await ReadTypes(reader, objects, Intern, Charge, token);
+                await Columns(reader, byId, types, definitions, token);
+                var indexes = await Indexes(reader, byId, token);
                 await Children(reader, byId, "statistic", "statistics", false, token);
-                await Children(reader, byId, "parameter", "parameters", false, token);
+                await Parameters(reader, byId, types, token);
+                await Keys(reader, byId, indexes, token);
             }
             await Definitions(reader, byId, definitions, token);
             return Partial();
@@ -803,6 +812,209 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             if (!byId.TryGetValue(reader.GetInt32(0), out var at) || objects.Removed(at)) continue;
             var (text, longer) = Text(reader, 1);
             if (text is not null) objects.SetDefinition(at, text, longer);
+        }
+    }
+
+    /// <summary>Charges <paramref name="bytes"/> of details; a read past the budget stops (and is read again without children).</summary>
+    private void Charge(long bytes)
+    {
+        if (!TryCharge(bytes, 0)) throw new TooLarge();
+    }
+
+    /// <summary>A catalog int that the details hold in 16 bits (column_id, parameter_id), clamped.</summary>
+    private static short Short(int value) => (short)Math.Clamp(value, short.MinValue, short.MaxValue);
+
+    /// <summary>The types result set (<see cref="ObjectSearchSql.Types"/>, the reader on it): each type's index in the table's
+    /// details by user_type_id. Names go through <paramref name="intern"/>, each type is charged through <paramref name="charge"/>.</summary>
+    internal static async Task<Dictionary<int, ushort>> ReadTypes(DbDataReader reader, ObjectTable.Builder objects, Func<string, string> intern, Action<long> charge, CancellationToken token)
+    {
+        var types = new Dictionary<int, ushort>();
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var schema = reader.GetString(1);
+            var name = reader.GetString(2);
+            var system = reader.GetByte(3);
+            var userDefined = reader.GetBoolean(4);
+            var table = reader.GetBoolean(5);
+            if (objects.Details.TypeCount > ushort.MaxValue) continue;
+            charge(IndexMemory.TypeBytes);
+            var held = intern(name);
+            var heldSchema = userDefined ? intern(schema) : null;
+            types[id] = objects.Details.AddType(objects.Id(held), heldSchema is null ? -1 : objects.Id(heldSchema), id, system, userDefined, table);
+        }
+        return types;
+    }
+
+    /// <summary>A typed row's type and flags from <paramref name="from"/> on (<see cref="ObjectSearchSql.TypedColumns"/>, or with
+    /// <paramref name="parameter"/> <see cref="ObjectSearchSql.TypedParameters"/>), in column order as sequential access reads them.</summary>
+    internal static (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) ReadTyped(DbDataReader reader, bool parameter)
+    {
+        if (parameter)
+        {
+            var output = reader.GetBoolean(2);
+            var ordinal = Short(reader.GetInt32(3));
+            var type = reader.GetInt32(4);
+            var (length, precision, scale) = (reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
+            var readOnly = !reader.IsDBNull(8) && reader.GetBoolean(8);
+            var parameterFlags = (output ? TypedFlags.Output : 0) | (readOnly ? TypedFlags.ReadOnly : 0);
+            if (!reader.IsDBNull(9)) (length, parameterFlags) = (Short(reader.GetInt32(9)), parameterFlags | TypedFlags.Dimensions);
+            return (type, length, precision, scale, ordinal, parameterFlags);
+        }
+        var column = Short(reader.GetInt32(2));
+        var columnType = reader.GetInt32(3);
+        var (columnLength, columnPrecision, columnScale) = (reader.GetInt16(4), reader.GetByte(5), reader.GetByte(6));
+        var flags = (!reader.IsDBNull(7) && reader.GetBoolean(7) ? TypedFlags.Nullable : 0) | (reader.GetBoolean(8) ? TypedFlags.Identity : 0)
+            | (reader.GetBoolean(9) ? TypedFlags.Computed : 0) | (reader.GetBoolean(10) ? TypedFlags.Default : 0);
+        // A vector column's length is its dimensions (TypedDetail.MaxLength): its bytes depend on its base type.
+        if (!reader.IsDBNull(11)) (columnLength, flags) = (Short(reader.GetInt32(11)), flags | TypedFlags.Dimensions);
+        return (columnType, columnLength, columnPrecision, columnScale, column, flags);
+    }
+
+    /// <summary>Gives the entry at <paramref name="at"/> its type, when the types result set listed it.</summary>
+    private void SetTyped(int at, Dictionary<int, ushort> types, (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) typed)
+    {
+        if (!types.TryGetValue(typed.Type, out var type)) return;
+        Charge(IndexMemory.TypedBytes);
+        objects.Details.SetTyped(at, type, typed.Length, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+    }
+
+    /// <summary>The columns result set: each column Object Explorer lists kept under its parent with its type (and a computed
+    /// column's expression).</summary>
+    private async Task Columns(DbDataReader reader, Dictionary<int, int> byId, Dictionary<int, ushort> types, bool definition, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var typed = ReadTyped(reader, parameter: false);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0 || name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("column", parent)) continue;
+            var (text, longer) = definition && !reader.IsDBNull(12) ? Text(reader, 12) : (None, false);
+            var child = Add(new("column", "columns", null, held));
+            objects.Attach(child, parent, objects.System(parent));
+            if (text is not null) objects.SetDefinition(child, text, longer);
+            SetTyped(child, types, typed);
+        }
+    }
+
+    /// <summary>The indexes result set: each index kept under its parent, by (object id, index_id) for its columns.</summary>
+    private async Task<Dictionary<(int, int), int>> Indexes(DbDataReader reader, Dictionary<int, int> byId, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var indexes = new Dictionary<(int, int), int>();
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var subtype = ExplorerLabels.IndexSubtype(reader.GetByte(2));
+            var indexId = reader.GetInt32(3);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0 || name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("index", parent)) continue;
+            var child = Add(new("index", "indexes", null, held, Subtype: subtype));
+            objects.Attach(child, parent, objects.System(parent));
+            indexes[(id, indexId)] = child;
+        }
+        return indexes;
+    }
+
+    /// <summary>The parameters result set: each parameter kept under its procedure or function with its type; a scalar function's
+    /// return (parameter 0) types the function itself.</summary>
+    private async Task Parameters(DbDataReader reader, Dictionary<int, int> byId, Dictionary<int, ushort> types, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var typed = ReadTyped(reader, parameter: true);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0) continue;
+            if (typed.Ordinal == 0)
+            {
+                if (objects.Kind(parent) == "function" && Lists("parameter", parent)) SetTyped(parent, types, typed);
+                continue;
+            }
+            if (name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("parameter", parent)) continue;
+            var child = Add(new("parameter", "parameters", null, held, Subtype: (typed.Flags & TypedFlags.Output) != 0 ? "output" : "input"));
+            objects.Attach(child, parent, objects.System(parent));
+            SetTyped(child, types, typed);
+        }
+    }
+
+    /// <summary>The key metadata result sets: each kept index's columns in key order (included ones last), each primary or unique
+    /// key's index (whose columns it shares), and each foreign key's column pairs with the table it references.</summary>
+    private async Task Keys(DbDataReader reader, Dictionary<int, int> byId, Dictionary<(int, int), int> indexes, CancellationToken token)
+    {
+        int Kept(int id) => byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1;
+        await reader.NextResultAsync(token);
+        var items = new Dictionary<int, int>();
+        var last = (int.MinValue, int.MinValue);
+        var open = false;
+        while (await reader.ReadAsync(token))
+        {
+            var index = (reader.GetInt32(0), reader.GetInt32(1));
+            var column = Short(reader.GetInt32(2));
+            var flags = (!reader.IsDBNull(3) && reader.GetBoolean(3) ? KeyColumnFlags.Descending : 0) | (!reader.IsDBNull(4) && reader.GetBoolean(4) ? KeyColumnFlags.Included : 0);
+            if (index != last)
+            {
+                last = index;
+                open = indexes.TryGetValue(index, out var at) && !objects.Removed(at);
+                if (open)
+                {
+                    Charge(IndexMemory.KeyBytes);
+                    items[at] = objects.Details.StartKey(at, -1);
+                }
+            }
+            if (!open) continue;
+            Charge(IndexMemory.KeyColumnBytes);
+            objects.Details.AddKeyColumn(column, 0, flags);
+        }
+        await reader.NextResultAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            var key = Kept(reader.GetInt32(0));
+            var index = (reader.GetInt32(1), reader.IsDBNull(2) ? -1 : reader.GetInt32(2));
+            if (key < 0 || !indexes.TryGetValue(index, out var at) || !items.TryGetValue(at, out var item)) continue;
+            Charge(IndexMemory.KeyBytes);
+            objects.Details.ShareKey(key, item);
+        }
+        await reader.NextResultAsync(token);
+        var lastKey = int.MinValue;
+        open = false;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var column = Short(reader.GetInt32(1));
+            var referenced = reader.GetInt32(2);
+            var other = Short(reader.GetInt32(3));
+            if (id != lastKey)
+            {
+                lastKey = id;
+                var key = Kept(id);
+                open = key >= 0 && objects.Kind(key) == "key";
+                if (open)
+                {
+                    Charge(IndexMemory.KeyBytes);
+                    objects.Details.StartKey(key, Kept(referenced));
+                }
+            }
+            if (!open) continue;
+            Charge(IndexMemory.KeyColumnBytes);
+            objects.Details.AddKeyColumn(column, other, KeyColumnFlags.None);
         }
     }
 
@@ -942,6 +1154,12 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             objects.Text(name);
             byId[id] = objects.Add(item);
         }
+        await reader.NextResultAsync(token);
+        var types = await ReadTypes(reader, objects, value => { objects.Text(value); return value; }, _ => { }, token);
+        void Typed(int at, (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) typed)
+        {
+            if (types.TryGetValue(typed.Type, out var type)) objects.Details.SetTyped(at, type, typed.Length, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+        }
         foreach (var (kind, folder) in new[] { ("column", "columns"), ("parameter", "parameters") })
         {
             await reader.NextResultAsync(token);
@@ -949,12 +1167,18 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 var id = reader.GetInt32(0);
                 var name = reader.GetString(1);
-                var subtype = kind == "parameter" ? reader.GetBoolean(2) ? "output" : "input" : null;
-                if (name.Length == 0 || !byId.TryGetValue(id, out var at)
-                    || !(objects.HasSchema(at) && objects.Folder(at) != "functions" && Lists(kind, objects.Kind(at), objects.Subtype(at)))) continue;
+                var typed = ReadTyped(reader, parameter: kind == "parameter");
+                if (!byId.TryGetValue(id, out var at) || !(objects.HasSchema(at) && objects.Folder(at) != "functions" && Lists(kind, objects.Kind(at), objects.Subtype(at)))) continue;
+                if (kind == "parameter" && typed.Ordinal == 0)
+                {
+                    if (objects.Kind(at) == "function") Typed(at, typed);
+                    continue;
+                }
+                if (name.Length == 0) continue;
                 objects.Text(name);
-                var child = objects.Add(kind, folder, subtype, null, name, null, true);
+                var child = objects.Add(kind, folder, kind == "parameter" ? (typed.Flags & TypedFlags.Output) != 0 ? "output" : "input" : null, null, name, null, true);
                 objects.Attach(child, at, objects.System(at));
+                Typed(child, typed);
             }
         }
         if (definitions && await reader.NextResultAsync(token))

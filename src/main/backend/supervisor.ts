@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor, methodAllows, optionsAllow, requestProvider } from '../../shared/ipc/methods'
 import type { ProviderId } from '../../shared/providers'
-import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
+import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, sessionCloseResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
 import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
 import { liveEndSchema, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent, type LiveSubscribeParams } from '../../shared/live/schema'
@@ -325,7 +325,13 @@ export class BackendSupervisor {
       return parsed.data
     }
     if (method === 'connections.disconnect') { const id = idOf(params, 'connectionId'); if (id !== undefined) { this.live.delete(id); this.providers.delete(id) } }
-    if (method === 'query.session.close') { const id = idOf(params, 'sessionId'); if (id !== undefined) this.sessions.delete(id) }
+    if (method === 'query.session.close') {
+      const id = idOf(params, 'sessionId')
+      if (id !== undefined) this.sessions.delete(id)
+      const parsed = sessionCloseResultSchema.safeParse(result)
+      if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
+      return parsed.data
+    }
     return result
   }
 

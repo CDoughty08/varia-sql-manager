@@ -80,7 +80,7 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   z.object({ t: z.literal('rowIds'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.identity.maxRows), viewId: u32.optional() }).strict(),
   z.object({ t: z.literal('findRows'), rid: u31, generation, resultId: u32, ids: z.array(identityId).min(1).max(limits.identity.maxFind), viewId: u32.optional() }).strict(),
   // A unified diff of two results of one query (results.diff), stored as a new result the port then owns.
-  z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext), match: diffMatchSchema.optional() }).strict()
+  z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext), match: diffMatchSchema.optional(), layout: z.enum(['unified', 'entry']).optional(), replaces: u32.optional() }).strict()
     .refine(request => request.resultId !== request.right, 'A result is not compared with itself.'),
   // A comparison's next or previous change unit from a position, or a look-alike row's partner (results.diffSeek).
   z.object({
@@ -164,7 +164,7 @@ export const diffResultSchema = z.object({
   same: count, changed: count, added: count, removed: count, soft: count, approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames,
   repeated: count, possible: count, possibleSkipped: z.boolean(), nothingPaired: z.boolean(),
   columnChanges: z.array(z.object({ changed: count, soft: count }).strict()).max(limits.page.maxColumns), trailingHidden: count,
-  overview: z.array(z.number().int().min(0).max(7)).max(limits.diff.overviewBuckets), units: count
+  overview: z.array(z.number().int().min(0).max(7)).max(limits.diff.overviewBuckets), units: count, layout: z.enum(['unified', 'entry'])
 }).strict()
 /** A results.diffSeek answer as the backend sends it (its unit within the total, its row below the rows shown); main also
  *  checks that only a partner request is answered `hidden`, and that a partner lands on the first column. */
@@ -222,8 +222,22 @@ export const queryEventSchema = z.discriminatedUnion('type', [
     type: z.literal('progress'), completedBatches: count, totalBatches: count, batchNumber: count, iteration: count,
     results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncated: truncationSchema.optional() }).strict()).max(64)
   }).strict(),
-  z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict()
+  z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict(),
+  // A BigQuery request's top-level job (QueryJobEvent): the job reference's bounds are the connection model's.
+  z.object({
+    type: z.literal('query.job'), jobId: z.string().min(1).max(1024), project: z.string().min(1).max(128), location: z.string().min(1).max(64).optional(),
+    state: z.enum(['running', 'done']), auxiliary: z.boolean(), transaction: z.enum(['none', 'open', 'unknown'])
+  }).strict()
 ])
+/** query.session.close's answer (SessionCloseResult in C#): a BigQuery close's note carries BigQuery's message (cut at 2,000
+ *  characters) or the job it names. */
+export const sessionCloseResultSchema = z.object({
+  closed: z.boolean(),
+  note: z.object({
+    code: z.enum(['commitNotApplied', 'committedBeforeCancel', 'outcomeUnknown', 'abortFailed', 'sessionExpired']),
+    message: z.string().max(2001).optional(), jobId: z.string().min(1).max(1024).optional()
+  }).strict().optional()
+}).strict()
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
   clientStatistics: clientStatisticsSchema.optional(),

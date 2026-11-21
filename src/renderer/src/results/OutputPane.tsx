@@ -340,7 +340,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
-        : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
+        : leader && tab && !tab.messagesOnly ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
       {/* Visual progress only: the output's live region announces how a copy or save ended. */}
       {leader && jobs.map(job => { const text = jobText(job); return <div key={job.jobId} className="job-strip"><span>{text.what}</span>{' '}<span className="job-done">{text.done}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div> })}
       {/* The live region announces it; this is the visible copy. */}

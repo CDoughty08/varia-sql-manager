@@ -106,6 +106,8 @@ export interface ObjectDialogServiceOptions {
   readonly newId?: () => string
   /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
   readonly notify?: (message: string) => void
+  /** Object Explorer's status samples the connection at once (ExplorerStatusService.refresh). */
+  readonly refreshStatus?: (connectionId: string) => void
   /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
   readonly databaseGone?: (gone: DatabaseGone) => void
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
@@ -376,6 +378,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const open = this.current
     if (!open || !open.model || !open.draft || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
     const definition = definitionOf(open.dialog)
+    // A dialog that runs no T-SQL has nothing to script (SQL Server Agent's service).
+    if (definition.noScript) return
     const built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     // As SSMS says when nothing changed in a properties dialog.
     if (!built) { this.update(open, { error: undefined, notice: noScriptNotice }); return }
@@ -561,7 +565,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.patch = undefined
     this.update(open, { phase: 'ready', model, draft: open.draft ?? { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
-    if (definition.runOnOpen && !open.model) await this.ok()
+    if ((definition.runOnOpen === true || (typeof definition.runOnOpen === 'function' && definition.runOnOpen(model))) && !open.model) await this.ok()
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
       const labels = this.context(open).loginConnections
       if (labels) this.update(open, { loginConnections: labels })
@@ -669,7 +673,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       reveal: (folder, object) => this.reveal(open, folder, object),
       reload: (owner, folder) => this.reloadFolder(open, owner, folder),
       databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) },
-      notify: message => this.options.notify?.(message)
+      notify: message => this.options.notify?.(message),
+      refreshStatus: () => this.options.refreshStatus?.(open.connectionId)
     }
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */

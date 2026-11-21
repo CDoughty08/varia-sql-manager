@@ -304,6 +304,8 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
 
   /** A connection's status, or undefined while it has none. */
   server(connectionId: string): ServerStatus | undefined { return this.getSnapshot().servers.get(connectionId) }
+  /** The Agent service's last fresh sample, for the Agent node's Start, Stop and Restart (AG-2). */
+  agentServiceOf(connectionId: string): AgentServiceState | undefined { return this.server(connectionId)?.agentService }
   /**
    * A database's runtime state as its connection's view sampled it last (a peek: badges and menus never subscribe for it).
    * Object Explorer narrows a database's actions by it when it is newer than the listing (`currentDatabaseRuntime`).

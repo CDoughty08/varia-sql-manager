@@ -144,7 +144,7 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     /// budget holds, and a definition the budget refuses is left out and counted as cut.</summary>
     private ResourceSet Share(ResourceKey key, ObjectTable table)
     {
-        var bytes = table.Count * IndexMemory.RecordBytes;
+        var bytes = table.Count * IndexMemory.RecordBytes + (table.Details?.Bytes ?? 0);
         pool.Budget.Force(bytes);
         var names = table.NameTexts();
         var texts = table.Texts;

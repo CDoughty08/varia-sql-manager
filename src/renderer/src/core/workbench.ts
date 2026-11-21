@@ -321,7 +321,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -374,6 +374,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
+  // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
+  queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  documents.sessionHooks = {
+    message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
+    note: (id, note) => { queries.sessionNote(id, note) },
+    bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
+  }
   const costPrompts = new CostPromptService()
   // The saved choice is read after the service exists, so it re-renders the chips once a choice is known.
   let costChoiceChanged = () => {}
@@ -404,7 +411,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
   })
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)
@@ -435,7 +442,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids),
-    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
+    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }),
+    refreshStatus: connectionId => explorerStatus.refresh(connectionId)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -796,7 +804,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),

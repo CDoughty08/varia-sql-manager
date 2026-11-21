@@ -130,6 +130,8 @@ export const tablePropertiesScript = (name, token) => `USE [AppData]\r\nGO\r\nSE
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
+    // SQL Server Agent (AG-2): one job with two steps, and the service's state as the Service Control Manager reports it.
+    jobs: [{ name: 'Nightly', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
     logins: [
       { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true },
@@ -207,6 +209,7 @@ GO
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
     integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
+    agentJobs: () => stub.jobs.map(job => object({ kind: 'agentJob', name: job.name }, job.name, 'agent-job', { hasChildren: false, created: job.created, ...job.enabled ? {} : { status: 'disabled' } })),
     logins: () => stub.logins.map(login => object({ kind: 'login', name: login.name }, login.name, 'login',
       { hasChildren: false, subtype: login.subtype, ...login.disabled ? { status: 'disabled' } : login.connectDenied ? { status: 'noAccess' } : {} }))
   }
@@ -351,7 +354,9 @@ GO
   function children({ node }) {
     if (node.type === 'object') {
       const ids = statics.objects[node.object.kind] ?? []
-      return ok({ nodes: folders(node.object, ids), total: ids.length, elapsedMs: 1 })
+      // The server lists its SQL Server Agent node after its folders, as the backend does behind the release gate.
+      const agent = node.object.kind === 'server' ? [object({ kind: 'agent' }, 'SQL Server Agent', 'agent')] : []
+      return ok({ nodes: [...folders(node.object, ids), ...agent], total: ids.length + agent.length, elapsedMs: 1 })
     }
     const nodes = [...folders(node.owner, statics.folders[node.folder] ?? []), ...lists[node.folder]?.(node.owner) ?? []]
     return ok({ nodes, total: nodes.length, elapsedMs: 1 })
@@ -576,8 +581,33 @@ GO
       ...options.logBackup ? ['Back up the log', 'Restore the log backup'] : []]
     return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
   }
+  const jobOf = target => stub.jobs.find(job => job.name === target.name)
+  /** Start Job at Step's facts (AgentJobs.DescribeStartJobAsync): the job, its identity and its steps. */
+  function describeJob({ target }) {
+    const job = jobOf(target)
+    if (!job) return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
+    return ok({ elapsedMs: 1, agentJob: { name: job.name, agentIdentity: { created: job.created }, enabled: job.enabled, running: false, steps: job.steps.map((name, index) => ({ id: index + 1, name })), stepsTruncated: false } })
+  }
+  /** A job's verbs: Start and Stop answer one step; Disable, Enable and Rename change the listing. */
+  function jobVerb({ action, target, newName }) {
+    const job = jobOf(target), title = { startJob: 'Start the job', stopJob: 'Stop the job', disable: 'Disable the job', enable: 'Enable the job', rename: 'Rename the job', delete: 'Delete the job' }[action]
+    if (!job) return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
+    if (action === 'disable' || action === 'enable') job.enabled = action === 'enable'
+    if (action === 'rename') job.name = newName
+    if (action === 'delete') stub.jobs = stub.jobs.filter(item => item !== job)
+    return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
+  }
+  /** The Agent node's Start, Stop and Restart: the Service Control Manager's steps, ending in the state asked for. */
+  function agentService({ action }) {
+    const stop = [{ status: 'done', title: 'Stop SQL Server Agent' }, { status: 'done', title: 'Wait for it to stop' }]
+    const start = [{ status: 'done', title: 'Start SQL Server Agent' }, { status: 'done', title: 'Wait for it to run' }]
+    stub.agentState = action === 'stopAgent' ? 'stopped' : 'running'
+    return ok({ steps: action === 'startAgent' ? start : action === 'stopAgent' ? stop : [...stop, ...start], messages: [], elapsedMs: 1, agentService: stub.agentState })
+  }
   function execute(params, sender) {
     const { target } = params
+    if (target.kind === 'agentJob') return jobVerb(params)
+    if (target.kind === 'agent') return agentService(params)
     if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'restoreFiles') return restoreFilesRun(params)
     if (params.action === 'createTable') return createTable(params)
@@ -687,6 +717,8 @@ GO
           case 'attachDatabase': return attachDescribe(params)
           case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           case 'renameDatabase': return renameFacts(params)
+          case 'startJobAtStep': return describeJob(params)
+          case 'startAgent': case 'stopAgent': case 'restartAgent': return ok({ elapsedMs: 1, agentService: { machine: 'DB01', service: 'SQLSERVERAGENT', state: stub.agentState } })
           default: return params.target.kind === 'login' ? describeLogin(params) : describe(params)
         }
       case 'actions.script':

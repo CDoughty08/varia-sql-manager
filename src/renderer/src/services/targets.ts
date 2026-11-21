@@ -15,10 +15,12 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionEnded'>>,
+    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionEnded' | 'sessionNote' | 'sessionLocation' | 'confirmLocationSwitch'>>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
-    private readonly registry?: Pick<ConnectionTargetService, 'get' | 'getSnapshot' | 'subscribe'>
+    private readonly registry?: Pick<ConnectionTargetService, 'get' | 'getSnapshot' | 'subscribe'>,
+    /** A BigQuery dataset's location, as the dataset list read it (absent when BigQuery named none). */
+    private readonly datasetLocation?: (connectionId: string, dataset: string) => string | undefined
   ) {}
   getSnapshot = (): readonly ConnectionTarget[] => this.registry?.getSnapshot() ?? noTargets
   subscribe = (listener: () => void): (() => void) => this.registry?.subscribe(listener) ?? (() => {})
@@ -64,7 +66,8 @@ export class TargetService {
     await this.runDocumentTask(async () => {
       const plan = await this.queries.confirmSessions(next ? 'changeConnection' : 'disconnectQuery', [tabId])
       if (!plan) return
-      await this.documents.endSession(tabId, plan.get(tabId))
+      const note = await this.documents.endSession(tabId, plan.get(tabId))
+      if (note) this.queries.sessionNote?.(tabId, note)
       if (next) {
         const current = this.connections.get(next.id)
         if (!isLiveConnection(current) || current.generation !== next.generation || targetId && this.targetForConnection(next.id) !== targetId)
@@ -73,7 +76,31 @@ export class TargetService {
       this.update(tabId, { connectionId: next?.id, database, targetId, attachWanted: !!next })
     })
   }
-  changeDatabase(tabId: string, database: string): void { this.update(tabId, { database }) }
+  /** Moves a query to another database, or a BigQuery query to another dataset. A dataset in another location than the
+   *  query's session ends the session (decision 18): `switchLocation` asks first, and Don't Switch keeps the dataset. */
+  changeDatabase(tabId: string, database: string): void {
+    const document = this.documents.get(tabId), connectionId = document?.connectionId
+    // A connection with a fixed location runs every session there (TabLocationAsync), so only Automatic ones switch.
+    const options = connectionId ? this.connections.get(connectionId)?.options : undefined, fixed = options?.provider === 'bigquery' && !!options.location
+    const from = this.queries.sessionLocation?.(tabId), to = connectionId && !fixed ? this.datasetLocation?.(connectionId, database) : undefined
+    // Choosing the same dataset again still switches, as LOCATION_MISMATCH's advice says.
+    if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
+    // The switch is a document task, so it cannot start beside another one; say so rather than drop the choice.
+    if (this.documents.getSnapshot().busy) { this.files.reportError(`The dataset was not changed: wait for the current task to finish, then choose ${database} again.`); return }
+    void this.switchLocation(tabId, connectionId, database, from, to)
+  }
+  private async switchLocation(tabId: string, connectionId: string, dataset: string, from: string, to: string): Promise<void> {
+    await this.runDocumentTask(async () => {
+      if (!/^\w{1,1024}$/.test(dataset) || !await this.queries.confirmLocationSwitch?.(tabId, { dataset, from, to })) return
+      // A running query is asked about first (Cancel Query and Switch), then an open transaction, as on close.
+      const plan = await this.queries.confirmSessions('switchLocation', [tabId])
+      if (!plan || this.documents.get(tabId)?.connectionId !== connectionId) return
+      const note = await this.documents.endSession(tabId, plan.get(tabId))
+      this.queries.sessionEnded?.(tabId)
+      if (note) this.queries.sessionNote?.(tabId, note)
+      this.update(tabId, { database: dataset })
+    })
+  }
   /** Bind existing documents only by the exact handle that created them; useful at the connect orchestration seam. */
   rememberConnection(connectionId: string, targetId: string): void {
     if (this.targetForConnection(connectionId) !== targetId) return
@@ -144,7 +171,8 @@ export class TargetService {
         if (connectionId === undefined || !isQueryDocument(document)) continue
         if (this.queries.isRunning(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
-        await this.documents.endSession(id, plan.get(id))
+        const note = await this.documents.endSession(id, plan.get(id))
+        if (note) this.queries.sessionNote?.(id, note)
         this.update(id, { connectionId: undefined, attachWanted: false })
       }
       const kept = [running ? (running === 1 ? '1 query is still running and stayed connected.' : `${running} queries are still running and stayed connected.`) : '', unfinished(unasked, 'connected')]

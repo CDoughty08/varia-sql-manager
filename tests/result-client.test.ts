@@ -332,11 +332,20 @@ describe('ResultClient', () => {
     await expect(handle.diff(handle)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.diff(other, { context: 101 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.diff(client.open(descriptor({ generation: 2, resultId: 4 })))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A layout is unified or entry; a replaced comparison is another result of the same generation than either input.
+    await expect(handle.diff(other, { layout: 'rows' as never })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: other })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: client.open(descriptor({ generation: 2, resultId: 8, kind: 'diff' })) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(before)
     const comparing = view.diff(other, { exact: true, context: -1 })
-    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), match: { mode: 'rows', columns: [] }, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0 }
+    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), match: { mode: 'rows', columns: [] }, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }
     expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
     expect(await comparing).toEqual(diffAnswer)
+    // The layout and the replaced comparison reach the port by result id.
+    const replacing = handle.diff(other, { layout: 'entry', replaces: client.open(descriptor({ resultId: 8, kind: 'diff' })) })
+    expect(await answer('diff', { ...diffAnswer, layout: 'entry' })).toMatchObject({ t: 'diff', resultId: 3, right: 4, layout: 'entry', replaces: 8 })
+    expect(await replacing).toMatchObject({ layout: 'entry' })
     // A diff given up whose answer comes anyway is closed, and the page stops waiting for it once the worker says so.
     const abort = new AbortController()
     const dropped = handle.diff(other, { signal: abort.signal })

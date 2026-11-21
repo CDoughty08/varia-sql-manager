@@ -36,6 +36,14 @@ internal static class SearchLiveChecks
         created = await sql("CREATE TABLE [srch].[Rates] (id int PRIMARY KEY, rate money, valid_from datetime2 GENERATED ALWAYS AS ROW START, valid_to datetime2 GENERATED ALWAYS AS ROW END,"
             + " PERIOD FOR SYSTEM_TIME (valid_from, valid_to)) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [srch].[Rates_Archive])); CREATE TABLE [srch].[Person] (person_name nvarchar(40)) AS NODE;", database);
         check(created.Error is null, "the search checks create a temporal table and a graph node table: " + created.Error);
+        created = await sql("CREATE TABLE [srch].[Line] (id int, priced_id int CONSTRAINT [fk_srch_line_priced] FOREIGN KEY REFERENCES [srch].[Priced] (id));", database);
+        check(created.Error is null, "the search checks create a table with a foreign key: " + created.Error);
+        created = await sql("CREATE PARTITION FUNCTION [srch_pf] (int) AS RANGE LEFT FOR VALUES (10); CREATE PARTITION SCHEME [srch_ps] AS PARTITION [srch_pf] ALL TO ([PRIMARY]);"
+            + " CREATE TABLE [srch].[Parted] (a int, c int) ON [srch_ps] (c); CREATE INDEX [ix_srch_parted] ON [srch].[Parted] (a);", database);
+        check(created.Error is null, "the search checks create a partitioned table with an aligned index: " + created.Error);
+        // SQL Server 2025 and Azure SQL have vector columns; older servers refuse the table and the check after the build is skipped.
+        var vectors = (await sql("CREATE TABLE [srch].[Vectors] (v vector(3));", database)).Error is null
+            && (await sql("CREATE PROCEDURE [srch].[usp_Vector] @v vector(3) AS SELECT 1;", database)).Error is null;
 
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
@@ -68,6 +76,43 @@ internal static class SearchLiveChecks
             && memoryDetail.DefinitionTexts >= memoryDetail.PackedTexts && memoryDetail.PackedTextBytes > memoryDetail.PackedBytes,
             "the index detail carries the last build's and search's times and the server's packed definitions: " + memoryDetail);
         var memoryBefore = service.Search.MemoryUsed;
+
+        // The editor metadata a build keeps beside the children, as a real server reports it: types with their lengths and flags,
+        // a key's and an index's columns, a foreign key's column pairs and referenced table, a parameter's type, and the resource
+        // database's typed parameters (sys.sp_who's @loginame is a sysname).
+        static int At(ObjectTable table, string kind, string name, string? parent)
+        {
+            for (var at = 0; at < table.Count; at++)
+                if (table.Kind(at) == kind && table.Name(at) == name && table.ParentName(at) == parent) return at;
+            return -1;
+        }
+        var held = service.Search.IndexOf(connectionId);
+        var mine = held?.Databases.SingleOrDefault(value => value.Database == database)?.Table;
+        check(mine?.Details is not null, "a build keeps the scratch database's editor metadata");
+        if (mine is not null)
+        {
+            TypedDetail? Typed(string name, string parent, string kind = "column") => At(mine, kind, name, parent) is var at and >= 0 ? mine.Typed(at) : null;
+            check(Typed("id", "Priced") is { TypeText: "int", Ordinal: 1 } id && (id.Flags & TypedFlags.Nullable) == 0
+                && Typed("price", "Priced") is { TypeText: "money" } price && (price.Flags & TypedFlags.Nullable) != 0
+                && Typed("srch_total", "Priced") is { } total && (total.Flags & TypedFlags.Computed) != 0
+                && Typed("note", "Priced") is { TypeText: "nvarchar(40)" } note && (note.Flags & TypedFlags.Default) != 0
+                && Typed("valid_from", "Rates")?.TypeText == "datetime2(7)",
+                "a real server's columns carry their types, lengths, ordinals and flags: " + string.Join(", ", new[] { "id", "price", "srch_total", "note" }.Select(name => name + " " + Typed(name, "Priced")?.TypeText)));
+            check(!vectors || Typed("v", "Vectors")?.TypeText == "vector(3)" && Typed("@v", "usp_Vector", "parameter")?.TypeText == "vector(3)",
+                "a real server's vector column and parameter read with their dimensions, not their bytes: " + Typed("v", "Vectors")?.TypeText + ", " + Typed("@v", "usp_Vector", "parameter")?.TypeText);
+            check(Typed("@srch_param", "usp_Param", "parameter") is { TypeText: "int", Ordinal: 1 }, "a real server's parameter carries its type and ordinal");
+            var priced = At(mine, "table", "Priced", null);
+            var foreign = At(mine, "key", "fk_srch_line_priced", "Line");
+            check(mine.KeyColumns(At(mine, "key", "pk_srch_priced", "Priced")) is [{ Column: 1 }] && mine.KeyColumns(At(mine, "index", "ix_srch_price", "Priced")) is [{ Column: 2, Flags: 0 }]
+                && mine.KeyColumns(foreign) is [{ Column: 2, Referenced: 1 }] && priced >= 0 && mine.Referenced(foreign) == priced,
+                "a real server's primary key, index and foreign key carry their columns, and the foreign key its referenced table");
+            check(mine.KeyColumns(At(mine, "index", "ix_srch_parted", "Parted")) is [{ Column: 1, Flags: 0 }],
+                "an aligned index on a partitioned table keeps only its own key, not the partitioning column SQL Server adds: "
+                + string.Join(", ", mine.KeyColumns(At(mine, "index", "ix_srch_parted", "Parted")).Select(column => column.Column + ":" + column.Flags)));
+        }
+        var resource = held?.Resource?.Table;
+        check(resource is not null && At(resource, "parameter", "@loginame", "sp_who") is var login and >= 0 && resource.Typed(login)?.TypeText == "sysname",
+            "the resource database's parameters carry their types");
 
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
@@ -159,9 +204,9 @@ internal static class SearchLiveChecks
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.
         check(!await RanToEnd(service, connectionId, cancel: true), "a stopped index read cancels its batch on a real server, so the rest of it is never sent");
         check(await RanToEnd(service, connectionId, cancel: false), "a reader closed short of its end without a cancel drains the batch on a real server");
-        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
+        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Line]; DROP TABLE [srch].[Priced]; DROP TABLE [srch].[Parted]; DROP TABLE IF EXISTS [srch].[Vectors]; DROP PROCEDURE IF EXISTS [srch].[usp_Vector]; DROP PROCEDURE [srch].[usp_Param];"
             + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
-            + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
+            + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch]; DROP PARTITION SCHEME [srch_ps]; DROP PARTITION FUNCTION [srch_pf];", database);
     }
 
     /// <summary>Reads the first of many large rows on the index's pool and stops, cancelling the batch (as an index read does) or

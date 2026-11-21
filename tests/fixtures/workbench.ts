@@ -265,7 +265,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; agentPreview?: boolean } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
     provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
@@ -275,6 +275,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const bindingListeners = new Set<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>()
   const api = {
     ...doc.api,
+    // SQL Server Agent's release gate (VARIA_AGENT_PREVIEW=1): off, as in a release, unless a test asks for it.
+    agentPreview: options.agentPreview ?? false,
     onConnectionBindingsChanged: vi.fn<VariaApi['onConnectionBindingsChanged']>(listener => { bindingListeners.add(listener); return () => { bindingListeners.delete(listener) } }),
     pushConnectionBindings: (update: Parameters<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>[0]) => { for (const listener of bindingListeners) listener(update) },
     connect: vi.fn<VariaApi['connect']>(async () => ({ ok: false, error: 'No connection response configured in this fixture.' })),
@@ -588,7 +590,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),

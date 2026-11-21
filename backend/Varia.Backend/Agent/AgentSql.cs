@@ -18,7 +18,7 @@ internal sealed record AgentStatement(string Id, string Text, IReadOnlyList<stri
 /// rules, plus two exemptions. A statement may be exactly <c>EXEC msdb.dbo.&lt;procedure&gt; @arg = @param, …;</c> for a
 /// procedure the catalogue lists, with named arguments each a parameter or one of its listed constants, or one of the
 /// catalogue's master shapes; and the prologue it must start with is its caller's (null for describes, whose prologue runs as
-/// its own command). Names never enter the text, so nothing needs QUOTENAME. Nothing here is wired to a method yet (AG-0b).</summary>
+/// its own command). Names never enter the text, so nothing needs QUOTENAME. The job verbs' writes and their lint are in AgentSql.Writes.cs (AG-2).</summary>
 internal static partial class AgentSql
 {
     private static readonly string[] JobColumns = ["job_id", "name", "enabled", "category", "owner", "date_created", "date_modified", "version_number", "last_run_date", "last_run_time",
@@ -67,7 +67,10 @@ internal static partial class AgentSql
     /// <summary>The search texts' bound, from the catalogue (agentLimits.searchChars), so zod and the reader agree.</summary>
     private static int SearchChars => (int)AgentCatalog.Current.Limit("searchChars");
 
-    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState];
+    /// <summary>A job's steps, for Start Job at Step (AG-2; every Agent role may read them).</summary>
+    public static readonly AgentStatement JobSteps = new("jobSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name"], [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
+
+    public static IReadOnlyList<AgentStatement> All { get; } = [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

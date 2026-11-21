@@ -92,7 +92,9 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
-  'query.session.close': { ...control, ...both, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 10_000 },
+  // A commit covers a queued COMMIT and the session's end inside the backend's budgets; every other close (decision 54)
+  // allows one BigQuery ABORT_SESSION job and its poll. The deadline cannot see the provider.
+  'query.session.close': { ...control, ...both, deadlineMs: params => params.transaction === 'commit' ? 60_000 : 30_000 },
   // One SELECT @@TRANCOUNT in an idle session (a busy one answers at once); a prompt waits on it, so it is short.
   'query.session.state': { ...control, ...both, deadlineMs: 5000 },
   // Bookkeeping only (ResultVisibility): answered at once, so it never queues behind reads.

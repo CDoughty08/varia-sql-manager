@@ -350,10 +350,10 @@ function longActionDocs(): string[] {
   return [
     '### Long actions and progress',
     '',
-    'An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:',
+    "An action marked long in the catalogue (a restore, a verify, a backup, or the SQL Server Agent service's Start, Stop or Restart) takes the long gate instead of the execute gate:",
     `${actionLimits.longPerConnection} per Varia connection and ${actionLimits.longTotal} in all. Another waits up to \`gateWaitMs\`, then answers \`BUSY\``,
-    '("Another restore or backup is running on this connection.", or "Restores or backups are already running on other',
-    'connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.',
+    '("Another restore, backup or SQL Server Agent start or stop is running on this connection.", or "Restores, backups or',
+    'SQL Server Agent starts and stops are already running on other connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.',
     'Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they',
     'arrive only for a reader: SQL Server\'s message 3211 ("n percent processed.", from `STATS`) becomes a droppable',
     `\`action.progress\` EVENT \`{step, percent}\` at most every ${actionLimits.progressEventMs} ms, and is never one of the ${actionLimits.infoMessages} messages the reply keeps.`,

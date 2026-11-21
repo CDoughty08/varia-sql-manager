@@ -34,6 +34,22 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
 }
 
 describe('results service', () => {
+  it('shows a line written outside any execution at once, in a messages-only view, and after a run own messages', () => {
+    const { service, tab, client } = fixture()
+    service.addMessage('t1', 'q.sql: the commit was not applied.', 'error')
+    expect(tab()).toMatchObject({ status: 'completed', view: 'messages', messagesOnly: true, messages: [{ text: 'q.sql: the commit was not applied.', kind: 'error' }] })
+    // No execution follows it: the view is closed by its own run, and no result run was opened at the backend.
+    expect(client.open).not.toHaveBeenCalled()
+    service.addMessage('t1', 'x'.repeat(2_000_000))
+    expect(tab()!.messages.at(-1)!.text.length).toBeLessThan(2_000_000)
+    // A run that has its own messages keeps them first and is not messages-only.
+    service.begin('t2', 'q2')
+    service.finish('t2', 'q2', { summary: { status: 'completed', resultSets: [], discardedResultSets: 0, messages: [{ text: '(1 row affected)', kind: 'info' }], recordsAffected: 1, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'd', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-11-19T00:00:00Z' } })
+    service.addMessage('t2', 'Waiting for BigQuery job job_1 to finish.')
+    expect(tab('t2')!.messagesOnly).toBeUndefined()
+    expect(tab('t2')!.messages.map(message => message.text)).toEqual(['(1 row affected)', 'Waiting for BigQuery job job_1 to finish.'])
+    service.dispose()
+  })
   it('reports an output choice even before the tab has an ordinary result run', () => {
     const { service, events, client } = fixture()
     const choices: unknown[] = []
