@@ -434,3 +434,40 @@ describe('grid data', () => {
     expect(data.ensure(range(0, 10), 10_000, 0, 30)).toBe(false)
   })
 })
+
+describe('grid data stalls', () => {
+  it('starts a tile\'s stall backoff again after a read that brought rows, rather than carrying the old count on', async () => {
+    const cache = new Map<string, RowWindow>(), reads: { first: number; count: number; resolve: (rows: number) => void }[] = []
+    const keyOf = (first: number, count: number, o: WindowShape) => `${first}:${count}:${o.colStart}:${o.colEnd}:${o.maxCellChars}:${o.display}`
+    const handle = {
+      getWindow: (first: number, count: number, o: WindowOptions = {}) => new Promise<RowWindow>(resolve => {
+        reads.push({ first, count, resolve: rows => {
+          const width = (o.colEnd ?? 8) - (o.colStart ?? 0)
+          const window = { first, count: rows, colStart: o.colStart ?? 0, colEnd: o.colEnd ?? 8, text: Array.from({ length: rows * width }, () => 'x'), flags: new Uint8Array(rows * width) }
+          cache.set(keyOf(first, count, o), window); resolve(window)
+        } })
+      }),
+      peekWindow: (first: number, count: number, o: WindowShape = {}) => cache.get(keyOf(first, count, o)),
+      prefetch: vi.fn()
+    }
+    const timers = manualTimers()
+    let now = 0
+    const data = new GridData({ handle, columns: 8, clientInflight: () => data.reading, changed: () => {}, timers: timers.timers, now: () => now })
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+    const advance = (ms: number) => { now += ms; timers.advance(ms) }
+    const frame = () => data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 60, 0, 30)
+    data.ensure({ firstRow: 0, lastRow: 40, firstColumn: 0, lastColumn: 7 }, 50, 0, 30)
+    reads[0].resolve(50); await settle()
+    // Rows 50-59 arrive; the read on from 50 brings none: stalled once (250 ms).
+    frame(); expect(reads).toHaveLength(2)
+    reads[1].resolve(0); await settle()
+    advance(1_000); frame(); expect(reads).toHaveLength(3)
+    // The read after the wait brings rows (50-54): the tile is no longer stalled.
+    reads[2].resolve(5); await settle()
+    advance(1_000); frame(); expect(reads).toHaveLength(4)
+    // It stalls once more: a first stall again, read after the base wait (250 ms), not a second one's 500 ms.
+    reads[3].resolve(0); await settle()
+    advance(300); frame()
+    expect(reads).toHaveLength(5)
+  })
+})
