@@ -768,6 +768,33 @@ internal static class StoreChecks
         lock (reports)
             check(service.Search.DetailWalks == raced + 1 && reports[^1].Used == 0 && details[^1] == (0, 0L, 0L),
                 "a build ending between the counters and the budget is walked at the next check, with nothing left as reading");
+        // A read charges its records and texts as it runs, so holding it changes no byte: once the interval has passed, a last walk
+        // that still shows reading is walked again, and a walk that finds nothing new sends nothing.
+        var lateName = pool.TryAcquire("dbo.Late")!;
+        var builder = new ObjectTable.Builder();
+        builder.Text(lateName);
+        builder.Add("procedure", "storedProcedures", null, null, lateName, null, false);
+        var lateBytes = IndexMemory.RecordBytes + IndexMemory.SlotBytes;
+        service.Search.Budget.Force(lateBytes);
+        service.ReportIndexMemory();
+        var beforeHeld = service.Search.DetailWalks;
+        var reportsHeld = reports.Count;
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        service.ReportIndexMemory();
+        var stillReading = (Walks: service.Search.DetailWalks, Reports: reports.Count);
+        var lateConnection = Guid.NewGuid().ToString();
+        service.Search.Held(lateConnection).Put(new DatabaseIndex("Late", builder.Build(), lateBytes, 0, 0, pooled: true));
+        service.ReportIndexMemory();
+        lock (reports)
+            check(stillReading == (beforeHeld + 1, reportsHeld) && reports.Count == reportsHeld && service.Search.DetailWalks == beforeHeld + 1 && details[^1].ReadingBytes > 0,
+                "a read still running is walked again after the interval, and a walk that finds nothing new sends nothing: " + stillReading);
+        Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        service.ReportIndexMemory();
+        lock (reports)
+            check(service.Search.DetailWalks == beforeHeld + 2 && details[^1] == (1, 0L, StringPool.Cost("dbo.Late")) && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
+                "a database held without changing the budget stops showing as reading at the first check after the interval");
+        service.Search.Forget(lateConnection);
+        service.ReportIndexMemory();
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

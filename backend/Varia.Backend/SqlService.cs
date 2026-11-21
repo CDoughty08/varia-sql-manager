@@ -2849,16 +2849,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var forgets = search.Forgets;
             IndexCountersRead?.Invoke();
             var used = search.MemoryUsed;
-            if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished) return;
+            var now = IndexDetailClock();
+            // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
+            // reading is walked again once the interval has passed, though nothing else moved.
+            var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
+            if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished && !due) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
             // above the last walk's is brought up to date without walking (the parts still add up, the change showing as reading);
             // one below it waits for the next walk. A build's end or a disconnect walks at once.
             var (build, searched) = search.Times();
-            var now = IndexDetailClock();
             IndexMemoryDetail detail;
             var (walkedAt, walkedUsed) = (now, used);
-            if (walkedIndexDetail is { } kept && kept.Builds == builds && kept.Forgets == forgets && (kept.Used == used || now - kept.WalkedAt < IndexDetailWalkMs))
+            if (!due && walkedIndexDetail is { } kept && kept.Builds == builds && kept.Forgets == forgets && (kept.Used == used || now - kept.WalkedAt < IndexDetailWalkMs))
             {
                 if (kept.Used == used)
                     detail = kept.Detail.LastBuildMs == build && kept.Detail.LastSearchMs == searched ? kept.Detail : kept.Detail with { LastBuildMs = build, LastSearchMs = searched };
@@ -2867,7 +2870,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 (walkedAt, walkedUsed) = (kept.WalkedAt, kept.WalkedUsed);
             }
             else detail = search.MemoryDetail(used);
+            var unchanged = due && used == reportedIndexBytes && finished == reportedIndexFinished && walkedIndexDetail?.Detail == detail;
             walkedIndexDetail = (used, builds, forgets, detail, walkedAt, walkedUsed);
+            // A read still running with nothing new held sends nothing; the walk's time moves on.
+            if (unchanged) return;
             if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;

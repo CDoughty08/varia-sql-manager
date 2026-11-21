@@ -1772,6 +1772,8 @@ try {
   const indexMetrics = memoryDetails.getByRole('region', { name: 'Search Indexer metrics', exact: true })
   await expect(indexMetrics.getByRole('img', { name: /^Budget used: [1-9]\d* MB\. Records [1-9]\d* MB, Names [1-9]\d* MB, Definitions [1-9]\d* MB$/ })).toBeVisible()
   await expect(indexMetrics).toContainText(/Packed40%.*Ratio7\.00×zstd frames.*Saved[1-9][\d,]*MB/)
+  await indexMetrics.scrollIntoViewIfNeeded()
+  await memoryDetails.screenshot({ path: resolve('artifacts', 'memory-nerd-metrics.png') })
   await page.keyboard.press('Space')
   await expect(nerd).toHaveAttribute('aria-expanded', 'false')
   await page.mouse.click(5, 80)

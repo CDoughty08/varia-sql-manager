@@ -88,6 +88,8 @@ internal sealed class ObjectSearchService : IDisposable
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
     internal ResourceCatalog Resources => resources;
+    /// <summary>The budget every connection's index shares (the checks charge it).</summary>
+    internal IndexBudget Budget => budget;
     /// <summary>The names and definitions every connection shares (the checks read it).</summary>
     internal StringPool Pool => pool;
     /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
