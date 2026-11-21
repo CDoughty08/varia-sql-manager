@@ -136,6 +136,11 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(uses(/\bTableRowsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
+  // Each page it reads is written into the block's writer and disposed there: none is kept for a later block, and the
+  // window it reads from carries no state of its own (a positional record with no body).
+  expect(delegate.slice(0, delegate.indexOf('\n    };'))).toMatch(/using \(page\)\n\s*\{\n\s*var count = page\.RowCount;\n\s*WriteRows\(page, plan, writer, \(int\)\(rows - writer\.Rows\)\);/)
+  expect(count(delegate.slice(0, delegate.indexOf('\n    };')), /\bpage\b/g)).toBe(6)
+  expect(residence).toMatch(/internal sealed record BigQueryWindow\([^)]*long CacheBytes\);\n/)
   // Every mention of the writer type, however a writer is built (a target-typed new included), is one of these.
   expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(7).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
   // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
@@ -245,6 +250,15 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // Disposing gives every block's bytes back through the same eviction.
   expect(remote).toMatch(/disposed\.Cancel\(\);\n\s*foreach \(var block in blocks\.Values\.ToList\(\)\) EvictLocked\(block\);/)
   expect(count(remote, /\bblocks\s*\.\s*(?:Clear|Remove)\b/g)).toBe(2)
+  // An evicted block keeps no pages, and blocks are held only by the cache's own two lists (and a block's own node): no
+  // scroll-back queue keeps evicted blocks' pages after their bytes went back.
+  expect(between('private void EvictLocked(', 'private void ReadAhead(')).toMatch(/block\.Bytes = 0;\n\s*block\.Pages\.Clear\(\);/)
+  expect(Array.from(remote.matchAll(/(?:private|internal|public|protected)\s+(?:static\s+)?(?:readonly\s+)?[^;=(\n]*\bBlock\b[^;=(\n]*\s(\w+)\s*[;=]/g), match => match[1])).toEqual(['blocks', 'lru', 'Node'])
+  // The rows on screen are every block a viewer's last read covered.
+  expect(remote).toMatch(/private bool OnScreenLocked\(Block block\) => viewers\.Values\.Any\(viewer => viewer\.First >= 0 && block\.Index >= viewer\.First && block\.Index <= viewer\.Last\);/)
+  // Seed's reservation is the same refusing one: the short overload only drops the reason.
+  expect(storeCode).toMatch(/public bool TryReserveCache\(ref long held, long limit, long bytes\) => TryReserveCache\(ref held, limit, bytes, out _\);/)
+  expect(count(storeCode, /\bbool\s+TryReserveCache\s*\(/g)).toBe(2)
   // The writer's byte count grows by every page it seals, and nowhere else, so its limit holds.
   const writer = remote.slice(remote.indexOf('internal sealed class RemoteBlockWriter('), remote.indexOf('internal sealed class RemoteExpiredException'))
   expect(writer).toMatch(/private void Seal\(\)\n\s*\{[^}]*\bbytes \+= page\.Cost;/)
