@@ -403,7 +403,7 @@ Messages).
 | `CANCELLED` | `stopped` | The job was cancelled |
 | `REMOTE_RESULT` | Sort, filter, search, profiles, distinct values, pivots, row identities, comparisons, Copy or Save of a windowed result | "This result is windowed in BigQuery: its rows are not in memory, so this is not available for it yet." |
 | `REMOTE_EXPIRED` | Rows of a windowed result not cached, or a load into memory, once BigQuery's temporary result table expired (about 24 hours) | "BigQuery no longer has this result…": run the query again |
-| `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs | Refused until that query has finished |
+| `BUSY` | A load (`results.remoteQuery`) while the query that made the result still runs, or while another result of that query loads | Refused until that query or load has finished |
 
 ## Emulator mode
 

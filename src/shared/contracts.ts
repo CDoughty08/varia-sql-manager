@@ -348,7 +348,7 @@ export interface ResultCodecCounters {
 export interface ResultMemoryDetail {
   logicalBytes: number; storedBytes: number; compressedBytes: number; packedLogicalBytes: number; cacheBytes: number
   largest: ResultMemoryEntry[]; codec: ResultCodecCounters; heap: { committedBytes: number; freeBytes: number }
-  /** Windowed BigQuery results' block caches (docs/bigquery.md, Block cache), part of the global budget. */
+  /** Windowed BigQuery results' block caches (docs/bigquery.md, Blocks), part of the global budget. */
   windowCacheBytes?: number
 }
 /** What every connection's Search Objects index holds, with each explorer.index.memory event (the Memory panel's Nerd

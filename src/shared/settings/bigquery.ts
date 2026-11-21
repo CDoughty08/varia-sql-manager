@@ -1,7 +1,7 @@
 import type { SettingDef } from './types'
 
 /**
- * BigQuery's pages (docs/bigquery.md, Cost and Residence): Text Editor › GoogleSQL, Query Execution › BigQuery and Query
+ * BigQuery's pages (docs/bigquery.md, Cost, Residence): Text Editor › GoogleSQL, Query Execution › BigQuery and Query
  * Results › BigQuery. Byte figures are whole
  * GiB, as Google bills in binary units; the cost prompts and the estimate chip read them, and the cap goes out with every job.
  */

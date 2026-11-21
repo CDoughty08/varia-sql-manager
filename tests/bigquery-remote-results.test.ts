@@ -138,19 +138,23 @@ describe('decoding a windowed result on several threads', () => {
   })
 })
 
-describe('the backend comments that point into docs/bigquery.md', () => {
+describe('the comments that point into docs/bigquery.md', () => {
   it('name its headings or bold bullets ("docs/bigquery.md, Residence: Deciding"), so a renamed section is caught', () => {
     const docs = readFileSync(join(__dirname, '..', 'docs', 'bigquery.md'), 'utf8')
     const named = new Set([...docs.matchAll(/^#+ (.+)$/gm), ...docs.matchAll(/\*\*([^*]+?)\.\*\*/g)].map(match => match[1].trim()))
-    const root = join(__dirname, '..', 'backend')
-    const files = (readdirSync(root, { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name))
-    // A pointer may wrap onto the comment's next line: continuations are joined first.
-    const joined = (text: string) => text.replace(/\r?\n\s*\/\/\/?\s*/g, ' ')
+    const root = join(__dirname, '..')
+    // The backend's C# and the app's TypeScript alike.
+    const files = [
+      ...(readdirSync(join(root, 'backend'), { recursive: true }) as string[]).filter(name => name.endsWith('.cs') && !/(^|[\\/])(bin|obj)[\\/]/.test(name)).map(name => join('backend', name)),
+      ...(readdirSync(join(root, 'src'), { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name)).map(name => join('src', name))
+    ]
+    // A pointer may wrap onto the comment's next line (/// or // in C#, * in a TypeScript doc comment): continuations are joined first.
+    const joined = (text: string) => text.replace(/\r?\n\s*(?:\/\/\/?|\*(?!\/))\s*/g, ' ')
     expect(joined('(docs/bigquery.md,\n    /// Nonexistent)').match(/docs\/bigquery\.md, ([^);\n]*)/)?.[1]).toBe('Nonexistent')
     const missing = files.flatMap(name => [...joined(readFileSync(join(root, name), 'utf8')).matchAll(/docs\/bigquery\.md, ([^);\n]*)/g)]
       .flatMap(match => match[1].split(/[,:]\s*/).map(part => part.trim()).filter(part => part && !/^decision \d+$/.test(part)).filter(part => !named.has(part))
         .map(part => `${name.replaceAll('\\', '/')}: ${part}`)))
-    expect(named.has('Residence') && named.has('Deciding') && named.has('Throughput')).toBe(true)
+    expect(named.has('Residence') && named.has('Deciding') && named.has('Throughput') && files.some(name => name.endsWith('contracts.ts'))).toBe(true)
     expect(missing).toEqual([])
   })
   it('say tabledata.list leaves a rate limit to the block\'s own backoff', () => {

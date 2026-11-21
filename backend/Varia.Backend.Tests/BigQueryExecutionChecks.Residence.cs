@@ -36,6 +36,7 @@ internal static partial class BigQueryExecutionChecks
         await LoadIntoMemoryAsync(check);
         Trace("DemoteAccounting");
         DemoteAccounting(check);
+        FitsHalf(check);
         Trace("RemoteRaces");
         await RemoteRacesAsync(check);
         Trace("TwoLoads");
@@ -581,6 +582,17 @@ internal static partial class BigQueryExecutionChecks
             await Refuses("results.identify", new JsonObject { ["by"] = "row" });
             await Refuses("results.rowIds", new JsonObject { ["firstRow"] = 0, ["count"] = 10 });
             await Refuses("results.findRows", new JsonObject { ["ids"] = new JsonArray(1) });
+            // A comparison, with the windowed result on either side (the other an in-memory result), and a seek in one.
+            var (_, inMemory, _) = await harness.Execute("SELECT n, s FROM t");
+            var memoryId = inMemory!.ResultSets.Single().ResultId;
+            async Task RefusesDiff(uint left, uint right)
+            {
+                var (refused, _, text) = await harness.Call("results.diff", new JsonObject { ["left"] = left, ["right"] = right });
+                if (refused != "REMOTE_RESULT") refusals.Add($"results.diff {left}/{right}: {refused} {text}");
+            }
+            await RefusesDiff(id, memoryId);
+            await RefusesDiff(memoryId, id);
+            await Refuses("results.diffSeek", new JsonObject { ["viewId"] = 1, ["partnerOf"] = 0 });
             check(refusals.Count == 0, "every reader of stored pages answers REMOTE_RESULT for a windowed result: " + string.Join("; ", refusals));
             var set = harness.Service.Results.Find(id)!;
             string? leased;
@@ -597,7 +609,7 @@ internal static partial class BigQueryExecutionChecks
             }
             check(leased == "REMOTE_RESULT" && set.Leases == 0, "Copy and Save's lease refuses a windowed result: " + leased);
 
-            harness.Service.Results.Release([id]);
+            harness.Service.Results.Release([id, memoryId]);
             check(harness.Service.Results.WindowCacheBytes == 0 && harness.Service.Results.UsedBytes == 0, "closing a windowed result gives back its cache: " + harness.Service.Results.UsedBytes);
         }
 
@@ -881,6 +893,10 @@ internal static partial class BigQueryExecutionChecks
     }
 
     /// <summary>Demote frees a set's pages, but only once nothing still reads them.</summary>
+    static void FitsHalf(Action<bool, string> check) =>
+        check(SqlService.FitsInMemory(100, 500, 100_000) && !SqlService.FitsInMemory(100, 501, 100_000) && !SqlService.FitsInMemory(100, 900, 100_000),
+            "Automatic keeps a result in memory only when its estimate fits in half of the room the query may still take");
+
     static void DemoteAccounting(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);

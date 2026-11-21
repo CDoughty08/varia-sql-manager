@@ -73,7 +73,7 @@ internal sealed partial class SqlService
         var rowCost = (double)pages.Sum(page => page.Cost) / Math.Max(1, measured.Rows);
         var wanted = Wanted(args, total);
         var room = Math.Min(store.QueryLimit(budget) - budget.UsedBytes, store.GlobalBytes - store.UsedBytes);
-        var fits = rowCost * wanted <= room / 2.0;
+        var fits = FitsInMemory(rowCost, wanted, room);
         if (residence == BigQueryResidence.Automatic && fits) return await KeepInMemoryAsync();
         var table = await DestinationAsync(connection, project, jobId, location, job, token);
         if (table is null) return null;
@@ -261,6 +261,10 @@ internal sealed partial class SqlService
         var available = remote.Rows;
         return new ResultsReadResult(Math.Max(next, args.FirstRow), available, next >= available, pages, rows);
     }
+
+    /// <summary>Automatic keeps a result in memory when its estimate fits in half of the room the query may still take
+    /// (docs/bigquery.md, Residence): the other half is for a misestimate and the query's other results.</summary>
+    internal static bool FitsInMemory(double rowCost, long rows, long room) => rowCost * rows <= room / 2.0;
 
     internal static RequestException Expired() =>
         new("REMOTE_EXPIRED", "BigQuery no longer has this result: its temporary result table expired. Run the query again to see the rest of the rows.");
