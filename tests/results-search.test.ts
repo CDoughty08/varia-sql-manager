@@ -573,3 +573,29 @@ describe('ResultsSearchService', () => {
     }
   })
 })
+
+describe('windowed results skipped by search', () => {
+  it('does not say a windowed result was skipped when another grid failed for another reason (a closed result)', async () => {
+    const { service, searches, set, show, settle, search } = fixture()
+    show([set(0, ['a'], [[1, 0]]), set(1, ['b'], [[0, 0]])])
+    service.setText('t1', 'x', true)
+    searches.shift()!.resolve()
+    await settle()
+    searches.shift()!.reject(new ResultError('RESULT_RELEASED', 'These results were closed.'))
+    await settle()
+    expect(search()).toMatchObject({ status: 'done', total: 1 })
+    expect(search().skipped).toBeUndefined()
+    expect(searchCount(search(), String)).toBe('1 of 1')
+  })
+  it('does not add the skipped note to a failed search whose only grid is windowed', async () => {
+    const { service, searches, set, show, settle, search, advance } = fixture()
+    show([set(0, ['a'], [[1, 0]])])
+    service.setText('t1', 'x', true)
+    searches.shift()!.reject(new ResultError('REMOTE_RESULT', 'This result is windowed in BigQuery.'))
+    await settle()
+    expect(search()).toMatchObject({ status: 'failed' })
+    expect(search().skipped).toBeUndefined()
+    advance(announceDelayMs)
+    expect(search().announcement).not.toMatch(/was not searched/)
+  })
+})
