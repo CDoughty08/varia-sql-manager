@@ -586,6 +586,7 @@ export class ResultClient implements Disposable {
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))
+    const revision = base.snapshot.revision
     const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(filters ? { filters } : {}), ...(replaces === undefined ? {} : { replaces }) }), o.signal, undefined, o.onProgress)
     if (response.type !== 'view') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     if (replaces !== undefined) this.endView(this.views.get(`${base.id}#${replaces}`), 'released')
@@ -596,6 +597,12 @@ export class ResultClient implements Disposable {
     }
     // Released or lost while it sorted: the backend dropped the view with its result.
     if (!this.tracked(base)) state.snapshot = { ...state.snapshot, state: base.snapshot.state }
+    // Switched while it sorted (the backend drops a result's views when it changes where its rows live, and may say so
+    // before it answers): the view is gone too, and asking the backend to close it is harmless if it is.
+    else if (base.snapshot.revision !== revision) {
+      this.views.set(state.id, state)
+      void this.closeView(state)
+    }
     else this.views.set(state.id, state)
     const baseHandle = base.handle ?? this.handleFor(base, () => this.release([{ generation: base.key.generation, resultId: base.key.resultId }]))
     return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, filters: response.filters ?? [], rows: response.rows, baseRows: response.baseRows, complete: response.complete, approximate: response.approximate }))
