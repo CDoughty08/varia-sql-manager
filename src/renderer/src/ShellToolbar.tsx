@@ -16,7 +16,7 @@ import { lostHint, withKey } from './query-context'
 export function CommandCentre() {
   const { commands } = useWorkbench()
   const key = useKeybindingLabel('workbench.search')
-  return <button type="button" className="command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and objects', key)}
+  return <button type="button" className="ui-button command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and objects', key)}
     onClick={event => void commands.execute('workbench.search', { anchor: event.currentTarget }, 'toolbar')}>
     <Icon name="search" /><span className="command-centre-text">Search commands, queries and objects</span><span className="command-centre-short">Search</span>{key && <kbd>{key.text}</kbd>}
   </button>
@@ -26,7 +26,7 @@ function ToolButton({ id, icon, name, title, className, args }: { id: CommandId;
   const { commands } = useWorkbench()
   const enabled = useCommandEnabled(id, args)
   const key = useKeybindingLabel(id)
-  return <button type="button" className={className ? `icon-button ${className}` : 'icon-button'} aria-label={name} title={withKey(title, key)} disabled={!enabled}
+  return <button type="button" className={className ? `ui-button icon-button ${className}` : 'ui-button icon-button'} aria-label={name} title={withKey(title, key)} disabled={!enabled}
     onClick={() => void commands.execute(id, args, 'toolbar')}><Icon name={icon} /></button>
 }
 
@@ -52,17 +52,17 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
 
   if (variant === 'classic') return <div className="toolbar" role="toolbar" aria-label="Standard">
     <div className="toolbar-actions">
-      <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
+      <button type="button" className="ui-button primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
       <span className="toolbar-divider" />
-      <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="add" />New query</button>
-      <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="folder-opened" />Open</button>
-      <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
-      <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
+      <button type="button" className="ui-button" disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="add" />New query</button>
+      <button type="button" className="ui-button" disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="folder-opened" />Open</button>
+      <button type="button" className="ui-button" disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
+      <button type="button" className="ui-button" disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
       <span className="toolbar-divider" />
-      <button className="execute" disabled={!enabled.execute} aria-label={scope.title} title={lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onClick={() => run('query.execute')}>
+      <button type="button" className="ui-button execute" disabled={!enabled.execute} aria-label={scope.title} title={lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onClick={() => run('query.execute')}>
         <Icon name="play" />{scope.title}{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <span className="query-scope">{scope.detail}</span>
-      <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
+      <button type="button" className="ui-button" disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <BigQueryCostChip tabId={tab?.id} />
       <ActualPlanToggle classic />
       <ActualPlanToggle classic live />
@@ -70,8 +70,8 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
       <ClientStatisticsToggle classic />
       <span className="toolbar-divider" />
       {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
-      <button disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
-      <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
+      <button type="button" className="ui-button icon-button" disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
+      <button type="button" className="ui-button" onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
     </div>
     <div className="toolbar-context"><QueryPickers variant="classic" /></div>
   </div>

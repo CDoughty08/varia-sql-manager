@@ -377,10 +377,11 @@ Suggested file names (a copy's strip names the view the same way, "Copying Pivot
 The toolbar fits its own pane, so a docked or popped-out Results panel folds like a narrow window. Tools give way in
 order: **Tabs**; group icons and the search box's magnifier, Previous and Next (Enter, Shift+Enter, F3, Shift+F3 still
 step); **Transposed**, **Headers**, **Compare**; **Sort text by**; **White space**; the Profile, Row size and Pivot group.
-The search field keeps its placeholder ("Search all results" or "Search column names") and narrows last, so **⋯** and
-**Close Results** stay visible. A short pane's Pivot builder drops its explanations so **Build Pivot** stays whole.
+The search field keeps its placeholder ("Search all results" or "Search column names") and narrows last. Below 400 px,
+the tools move to a second row so the search field, **Data**, **Columns**, **⋯**, and **Close Results** stay available
+beside the pane's other controls. A short pane's Pivot builder drops its explanations so **Build Pivot** stays whole.
 
-**⋯** (More results tools) shows in Results panes at least about 400 px wide and holds every tool: Results as Tabs, Go to
+**⋯** (More results tools) holds every tool: Results as Tabs, Go to
 Result…, Pivot…, Compare…, Transposed, Choose Headers… (while transposed), Column Profile, Row Size, Show Spaces and Tabs,
 Show All White Space, Sort Text by Characters or Bytes, and Close Results.
 

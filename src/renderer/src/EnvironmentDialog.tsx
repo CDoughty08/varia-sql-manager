@@ -12,6 +12,7 @@ interface FieldProps {
   readonly id: string
   readonly value: string | undefined
   readonly disabled?: boolean
+  readonly controlClassName?: string
   /** undefined is None; a custom label is passed on as typed ('' until one is typed), for the caller to check (parseEnvironment). */
   onChange(value: string | undefined): void
 }
@@ -20,7 +21,7 @@ interface FieldProps {
  * The environment of a connection: <none>, a preset, or Custom with a label of up to 32 characters. The Connect
  * dialog's Custom Properties and the server's Environment dialog both use it.
  */
-export function EnvironmentField({ id, value, disabled, onChange }: FieldProps) {
+export function EnvironmentField({ id, value, disabled, controlClassName, onChange }: FieldProps) {
   const [custom, setCustom] = useState(() => !!value?.trim() && !environmentPreset(value))
   // A profile chosen from history, a saved entry matched by the typed server, or Reset replaces the value from outside:
   // a preset then shows as itself, never as a Custom label that spells it. What the field passed on itself (a Custom
@@ -34,7 +35,7 @@ export function EnvironmentField({ id, value, disabled, onChange }: FieldProps) 
   }, [value])
   const choice = custom ? 'custom' : environmentPreset(value) ?? ''
   return <div className="property-input-action environment-field">
-    <select id={id} value={choice} disabled={disabled} onChange={event => {
+    <select id={id} className={controlClassName} value={choice} disabled={disabled} onChange={event => {
       const next = event.target.value
       setCustom(next === 'custom')
       emit(next === 'custom' ? '' : next || undefined)
@@ -43,7 +44,7 @@ export function EnvironmentField({ id, value, disabled, onChange }: FieldProps) 
       {environmentPresets.map(preset => <option key={preset} value={preset}>{preset}</option>)}
       <option value="custom">Custom…</option>
     </select>
-    {custom && <input id={`${id}-custom`} aria-label="Custom environment label" placeholder="Label, such as UAT" maxLength={maxEnvironmentLength} disabled={disabled} autoComplete="off" spellCheck={false}
+    {custom && <input id={`${id}-custom`} className={controlClassName} aria-label="Custom environment label" placeholder="Label, such as UAT" maxLength={maxEnvironmentLength} disabled={disabled} autoComplete="off" spellCheck={false}
       value={value ?? ''} onChange={event => emit(event.target.value)} />}
   </div>
 }

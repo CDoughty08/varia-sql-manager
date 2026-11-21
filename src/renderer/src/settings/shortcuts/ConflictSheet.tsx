@@ -76,9 +76,9 @@ export default function ConflictSheet({ label, commandTitle: title, scope, verdi
       {narrower && <li><strong>Use {shortcutScope(narrower).title}</strong>: {title} gets {label.text} only there, where it wins; elsewhere the key keeps its command.</li>}
     </ul>
     <div className="shortcuts-sheet-actions">
-      <button type="button" className="primary" autoFocus onClick={onReassign}>Reassign</button>
-      {narrower && <button type="button" onClick={() => onNarrower(narrower)}>Use {shortcutScope(narrower).title}</button>}
-      <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" className="ui-button primary" autoFocus onClick={onReassign}>Reassign</button>
+      {narrower && <button type="button" className="ui-button" data-control-variant="secondary" onClick={() => onNarrower(narrower)}>Use {shortcutScope(narrower).title}</button>}
+      <button type="button" className="ui-button" data-control-variant="secondary" onClick={onCancel}>Cancel</button>
     </div>
   </Sheet>
 }

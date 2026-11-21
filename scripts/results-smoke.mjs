@@ -1786,7 +1786,7 @@ try {
   await memoryDetails.screenshot({ path: resolve('artifacts', 'memory-nerd-metrics.png') })
   await page.keyboard.press('Space')
   await expect(nerd).toHaveAttribute('aria-expanded', 'false')
-  await page.mouse.click(5, 80)
+  await backendReady(page, 'fake').click()
   await expect(memoryDetails).toBeHidden()
   await run('-- varia-fake: sets=W1*10 memory=0.96')
   await expect(memory).toHaveAttribute('data-level', 'critical')
