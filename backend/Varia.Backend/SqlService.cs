@@ -117,6 +117,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long reportedIndexBytes = -1;
     private long indexMemorySeq;
     private long reportedIndexFinished = -1;
+    /// <summary>The index detail last sent: a walk whose event was refused is still unsent, so the next check sends it.</summary>
+    private IndexMemoryDetail? reportedIndexDetail;
     /// <summary>The detail worked out for an index report the control lane refused, with the figures it was for: the retry at the
     /// next check reuses it while they are unchanged, rather than walking the index again.</summary>
     private (long Used, long Builds, long Forgets, IndexMemoryDetail Detail, long WalkedAt, long WalkedUsed)? walkedIndexDetail;
@@ -2906,7 +2908,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
             // reading is walked again once the interval has passed, though nothing else moved.
             var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
-            if (publish is null || used == reportedIndexBytes && finished == reportedIndexFinished && !due) return;
+            var sent = used == reportedIndexBytes && finished == reportedIndexFinished;
+            if (publish is null || sent && !due && ReferenceEquals(walkedIndexDetail?.Detail, reportedIndexDetail)) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
             // above the last walk's is brought up to date without walking (the parts still add up, the change showing as reading);
@@ -2923,14 +2926,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 (walkedAt, walkedUsed) = (kept.WalkedAt, kept.WalkedUsed);
             }
             else detail = search.MemoryDetail(used);
-            var unchanged = due && used == reportedIndexBytes && finished == reportedIndexFinished && walkedIndexDetail?.Detail == detail;
+            var unchanged = sent && detail == reportedIndexDetail;
             walkedIndexDetail = (used, builds, forgets, detail, walkedAt, walkedUsed);
-            // A read still running with nothing new held sends nothing; the walk's time moves on.
-            if (unchanged) return;
+            // A walk that finds nothing new beside what was sent (a read still running, nothing new held) sends nothing; the walk's
+            // time moves on. One whose event is refused stays unsent, and the next check sends it.
+            if (unchanged)
+            {
+                walkedIndexDetail = (used, builds, forgets, reportedIndexDetail!, walkedAt, walkedUsed);
+                return;
+            }
             if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
             reportedIndexFinished = finished;
+            reportedIndexDetail = detail;
         }
         finally { Monitor.Exit(indexMemoryGate); }
     }

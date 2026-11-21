@@ -96,6 +96,8 @@ internal sealed class ObjectSearchService : IDisposable
     /// that the budget's figure does not show.</summary>
     private long lastBuildMs = -1, lastSearchMs = -1, finished, builds, forgets;
     private int detailWalks;
+    /// <summary>The set a memory detail walk dedupes texts in, kept between walks (empty in between).</summary>
+    private readonly HashSet<object> walkSeen = new(ReferenceEqualityComparer.Instance);
     public long Finished => Interlocked.Read(ref finished);
     /// <summary>Ended builds, finished, stopped or failed: a search changes nothing the index holds, so the memory report walks again
     /// only after a build ends (or the budget moves).</summary>
@@ -119,7 +121,7 @@ internal sealed class ObjectSearchService : IDisposable
     {
         Interlocked.Increment(ref detailWalks);
         var (build, search) = Times();
-        return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used);
+        lock (walkSeen) return IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used, walkSeen);
     }
 
     /// <summary>A memory detail from an earlier walk brought up to <paramref name="used"/> without walking: the pool's counts and the

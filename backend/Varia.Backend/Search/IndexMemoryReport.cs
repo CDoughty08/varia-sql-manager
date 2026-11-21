@@ -18,7 +18,7 @@ internal static class IndexMemoryReport
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectTable, bool[]> Kinds = [];
 
     public static IndexMemoryDetail Detail(IndexBudget budget, StringPool pool, IEnumerable<ConnectionIndex> connections, IEnumerable<ResourceSet> resources,
-        long? lastBuildMs = null, long? lastSearchMs = null, long? used = null)
+        long? lastBuildMs = null, long? lastSearchMs = null, long? used = null, HashSet<object>? reuse = null)
     {
         var budgetUsed = used ?? budget.Used;
         var (texts, references, _) = pool.Stats;
@@ -39,8 +39,21 @@ internal static class IndexMemoryReport
             }
         }
         foreach (var set in resources) { tables.Add(set.Table); recordBytes += set.Bytes; cut += set.Cut; }
-        // Pooled tables share the pool's copy of a text, so one reference is one distinct text.
-        var seen = new HashSet<object>(texts, ReferenceEqualityComparer.Instance);
+        // Pooled tables share the pool's copy of a text, so one reference is one distinct text. A reused set keeps its arrays between
+        // walks, rather than each walk allocating one the pool's size; it is emptied after the walk, so it holds no text alive.
+        var seen = reuse ?? new HashSet<object>(texts, ReferenceEqualityComparer.Instance);
+        try { return Walk(); }
+        finally
+        {
+            if (reuse is not null)
+            {
+                reuse.Clear();
+                if (reuse.EnsureCapacity(0) > 2L * texts + 1024) reuse.TrimExcess();
+            }
+        }
+
+        IndexMemoryDetail Walk()
+        {
         long objects = 0, definitions = 0, packedDefinitions = 0, definitionTexts = 0, packedTexts = 0, packedBytes = 0, packedTextBytes = 0, definitionBytes = 0, nameBytes = 0;
         var kinds = new List<bool[]>(tables.Count);
         foreach (var table in tables)
@@ -76,5 +89,6 @@ internal static class IndexMemoryReport
         // The figures are read one after another while reads may run, so reading is not allowed below zero.
         return new(holding, objects, texts, references, definitions, packedDefinitions, definitionTexts, packedTexts, packedBytes, packedTextBytes, cut, childrenLeftOut,
             recordBytes, nameBytes, definitionBytes, Math.Max(0, budgetUsed - recordBytes - nameBytes - definitionBytes), lastBuildMs, lastSearchMs);
+        }
     }
 }

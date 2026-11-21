@@ -377,6 +377,10 @@ internal static class SearchPackedChecks
         check(detail.RecordBytes == sales.Bytes + archive.Bytes + set.Bytes && detail.DefinitionBytes == held.Sum(text => StringPool.Cost(text))
             && detail.RecordBytes + detail.NameBytes + detail.DefinitionBytes == budget.Used && detail.ReadingBytes == 0,
             "records, names and definitions add up to the index budget's use");
+        var reuse = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var reused = IndexMemoryReport.Detail(budget, pool, [first, second, none], catalog.Held, 12, 3, reuse: reuse);
+        var again = IndexMemoryReport.Detail(budget, pool, [first, second, none], catalog.Held, 12, 3, reuse: reuse);
+        check(reused == detail && again == detail && reuse.Count == 0, "a walk with a reused set reports the same, walk after walk, and leaves the set holding no text");
         var sent = IndexMemoryReport.Detail(budget, pool, [first, second], catalog.Held, used: budget.Used + 4096);
         check(sent.ReadingBytes == 4096 && sent.RecordBytes + sent.NameBytes + sent.DefinitionBytes + sent.ReadingBytes == budget.Used + 4096,
             "the parts add up to the budget's use the event carries, read before the walk, not to a later reading");

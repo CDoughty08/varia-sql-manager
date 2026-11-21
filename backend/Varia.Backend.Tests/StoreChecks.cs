@@ -788,11 +788,16 @@ internal static class StoreChecks
         lock (reports)
             check(stillReading == (beforeHeld + 1, reportsHeld) && reports.Count == reportsHeld && service.Search.DetailWalks == beforeHeld + 1 && details[^1].ReadingBytes > 0,
                 "a read still running is walked again after the interval, and a walk that finds nothing new sends nothing: " + stillReading);
+        // The walk that finds it held is refused once (the control lane full); the next check sends it without walking again.
         Interlocked.Add(ref clock, SqlService.IndexDetailWalkMs);
+        during = () => false;
+        service.ReportIndexMemory();
+        var refused = (Walks: service.Search.DetailWalks, Reports: reports.Count);
         service.ReportIndexMemory();
         lock (reports)
-            check(service.Search.DetailWalks == beforeHeld + 2 && details[^1] == (1, 0L, StringPool.Cost("dbo.Late")) && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
-                "a database held without changing the budget stops showing as reading at the first check after the interval");
+            check(refused == (beforeHeld + 2, reportsHeld) && service.Search.DetailWalks == beforeHeld + 2 && reports.Count == reportsHeld + 1
+                && details[^1] == (1, 0L, StringPool.Cost("dbo.Late")) && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
+                "a database held without changing the budget stops showing as reading at the first check after the interval, and a refused walk is sent at the next check: " + refused);
         service.Search.Forget(lateConnection);
         service.ReportIndexMemory();
     }
