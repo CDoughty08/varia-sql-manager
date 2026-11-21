@@ -153,9 +153,9 @@ export function indexNerdMetrics(detail: IndexMemoryDetail): IndexNerdModel {
   const bytes = panelBytes(Math.max(total, packedTextBytes))
   const shown = split(bytes(saved))
   const tiles: Tile[] = [
-    { label: 'Packed', ...definitionTexts > 0 ? { value: percent(packedTexts, definitionTexts), unit: '%' } : { value: dash }, note: definitionTexts > 0 ? 'of definitions' : 'No definitions held' },
+    { label: 'Packed', ...definitionTexts > 0 ? { value: percent(packedTexts, definitionTexts), unit: '%' } : { value: dash }, note: definitionTexts > 0 ? 'of definitions' : 'None held' },
     { label: 'Ratio', ...packedBytes > 0 ? { value: (packedTextBytes / packedBytes).toFixed(2), unit: '×' } : { value: dash }, note: 'zstd frames' },
-    { label: 'Saved', value: shown.value, unit: shown.unit, note: packedTextBytes > 0 ? `${percent(saved, packedTextBytes)}% of ${bytes(packedTextBytes)}` : 'Nothing packed yet', ...saved > 0 ? { tone: 'saved' as const } : {} }
+    { label: 'Saved', value: shown.value, unit: shown.unit, note: packedTextBytes > 0 ? `${percent(saved, packedTextBytes)}% of ${bytes(packedTextBytes)}` : 'None packed', ...saved > 0 ? { tone: 'saved' as const } : {} }
   ]
   const scale = Math.max(total, 1)
   // Reads still running show only while there are some; the three parts that hold the index always do.

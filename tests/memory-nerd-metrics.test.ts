@@ -160,9 +160,13 @@ describe('Memory panel Nerd metrics', () => {
     const model = indexNerdMetrics(noIndex)
     expect(model.aside).toBe('0 connections · 0 objects')
     expect(model.tiles.map(tile => [tile.value, tile.unit, tile.note, tile.tone])).toEqual([
-      ['—', undefined, 'No definitions held', undefined], ['—', undefined, 'zstd frames', undefined], ['0', 'MB', 'Nothing packed yet', undefined]
+      ['—', undefined, 'None held', undefined], ['—', undefined, 'zstd frames', undefined], ['0', 'MB', 'None packed', undefined]
     ])
     expect(model.bar.segments.map(part => [part.part, part.share])).toEqual([['records', 0], ['names', 0], ['definitions', 0]])
+    // A tile's note fits at the panel's width only as long as the results' longest ("Compression off"); the smoke checks the
+    // populated panel in place, this every state, empty and large ones included.
+    const large = { ...indexed, packedBytes: 512 * 1024 ** 2, packedTextBytes: 10 * 1024 ** 3 }
+    for (const detail of [noIndex, indexed, large]) for (const tile of indexNerdMetrics(detail).tiles) expect(tile.note.length, tile.note).toBeLessThanOrEqual('Compression off'.length)
     expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toMatchObject({ 'Refs per text': '—', 'Last build': '—', 'Last search': '—', 'Without children': '0 databases' })
     // A search under a millisecond reports 0: it ran, unlike one that never did.
     expect(indexNerdMetrics({ ...noIndex, lastSearchMs: 0 }).counters.find(counter => counter.label === 'Last search')?.value).toBe('<1 ms')
