@@ -670,6 +670,30 @@ describe('ResultsPortHost', () => {
     expect(diffs).toHaveLength(4)
     expect(codes(port()).filter(([rid]) => rid === 10)).toEqual([[10, 'RESULT_UNAVAILABLE']])
   })
+  it('forwards replaces from a port opened again in the same page, and refuses them from the port of the next page', async () => {
+    const { host, port, diffs, frame } = fixture()
+    host.own([descriptor(7), descriptor(8)])
+    const answer = { descriptor: { resultId: 20, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }], rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false },
+      match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'entry' }
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: -1, layout: 'entry' })
+    diffs[0].resolve(answer)
+    await settle()
+    expect(codes(port())).toEqual([[1, 'ok']])
+    // The page's port opened again (a popped-out pane's grid uses the window's port too) still replaces it.
+    const first = port()
+    host.open(frame)
+    expect(port()).not.toBe(first)
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 8, exact: true, context: -1, replaces: 20 })
+    await settle()
+    expect(diffs.map(item => item.params.replaces)).toEqual([undefined, 20])
+    // The next page's port does not: it did not make that comparison.
+    host.reset()
+    host.open(frame)
+    port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 8, exact: true, context: -1, replaces: 20 })
+    await settle()
+    expect(diffs).toHaveLength(2)
+    expect(codes(port())).toEqual([[3, 'RESULT_UNAVAILABLE']])
+  })
   it('accepts a whole-row diff, whose match names no column, and says which members a refused answer failed', async () => {
     const refusals: [string, readonly string[]][] = []
     const { host, port, diffs } = fixture({ onRefused: (method, issues) => refusals.push([method, issues]) })

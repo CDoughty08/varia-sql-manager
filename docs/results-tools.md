@@ -206,7 +206,8 @@ Update Pivot takes access key **U**; Pivot Results… has none (arrows and type-
 
 **Compare…** (grid menu; **Compare Results…** in the palette, not offered while Results is hidden; toolbar **Compare**,
 hidden when narrow) opens the Compare popover under the toolbar button or at the grid's top right. That grid is new (+),
-the picked result old (−); **Swap old and new** turns them. Names read old → new ("Differences: Result 1 → Result 3").
+the picked result old (−); **Swap old and new** turns them. Names read old → new ("Differences: Result 1 → Result 3"),
+with " (exact text)" after them when Exact text is on.
 
 - Offered: the run's other results with all their rows and a shared column (never Pivots, comparisons or plan sets; the
   backend refuses them too). One candidate shows no list; several show each one's rows and an amber "2 of 3 columns"
@@ -225,11 +226,19 @@ the picked result old (−); **Swap old and new** turns them. Names read old →
 
 **Compare** (or Enter) starts it; the popover closes when it is ready and the comparison takes focus (unless you closed
 the popover or switched pair meanwhile; with the palette over it, it stays and offers Show It). **Cancel** shows while it
-runs; failures show in the popover, or the toolbar once it has closed. An existing identical comparison is shown (**Show
-It**); asking again while it runs does nothing.
+runs; failures show in the popover, or the toolbar once it has closed. A run has one comparison of two results each way
+round: when it already has the popover's pair, the button reads **Show It** and goes to it, or **Update** when the
+popover's Exact text differs, which changes that comparison in place. Asking again while it runs does nothing; asking
+with other options gives up the first run and starts again with them. **Compare with Previous Result** goes to the
+comparison the run has and never turns its Exact text off; its Exact Text form turns it on.
 
-The comparison is a unified, git-style diff after the results: each changed row as its old row (−) and new row (+)
-with the changed values marked, added and removed rows, and one unchanged row of context around each change. Its columns
+The comparison is a diff after the results, laid out by **Options › Query Results › SQL Server › Results to Grid ›
+Comparisons › Layout** (`queryResults.compare.layout`). **One row** (the default) shows each entry once: a changed value
+as its old value struck through, an arrow and the new value in bold, the rest of a changed row dimmed, and the active cell
+named "Price, changed from 5120.00 to 4980.00" for screen readers. **Two rows** is a unified, git-style diff: each changed
+row as its old row (−) and new row (+), the active cell named "Price, old value 5120.00" or "Price, new value 4980.00".
+A comparison with more than 2,046 compared columns cannot show one row per entry, so it shows two rows and says so. Both
+show added and removed rows, and one unchanged row of context around each change. Its columns
 are only the compared data: each row's header is a gutter with a bar for its kind, its mark (− or +) and its number in its
 own result (the old one's on a − row), and names the kind and the row in both results for screen readers and in its
 tooltip ("Changed, old values; row 3 in Result 1, row 4 in Result 2"). The kind and row numbers are not columns, so
@@ -247,6 +256,23 @@ another window, a focus key (F6, F8), a re-run, its result or the results closin
 docking, or another document showing. A picked result that closes leaves nothing picked.
 
 A comparison's strip links its two inputs while open; a closed one reads "Result 1 (closed)".
+
+### The comparison toolbar
+
+Above each comparison's grid: its title, its sides (each a link to that result, − old then + new) with **⇄ Swap sides**
+between them, **Layout** (One row, Two rows) and **Exact text**. Each changes that comparison in place: the same result
+tab, number and place, renamed when its sides or Exact text change, keeping its column widths (by column name across a
+swap, as are the key columns it matched by) and its highlights, which follow their rows; its sort, filters and scroll
+reset. Swap onto a pair the run already has the other way round goes to that comparison instead. A change shows its
+progress and Cancel in the results toolbar, and the comparison toolbar's controls show what it asks for; a newer change replaces one still running
+and builds on it (Swap sides then Exact text keeps both). While a comparison is swapped away from its pair, that pair
+reads as being compared (its Cancel stops the swap) until the swap lands. If a change fails or is cancelled the
+comparison stays as it was and its strip says so ("The comparison was not changed: …", "The change was cancelled.").
+While an input is closed, Swap sides, Layout and Exact text are unavailable and say which input is closed; closing an
+input while a change runs cancels it ("Result 1 was closed, so the change was cancelled."). The Layout setting applies to
+new comparisons; the toolbar's Layout changes one comparison. Screen readers hear "Comparison ready: …" when a comparison
+is shown and "Comparison updated: …" after a change, with what it matched by and how many rows changed, were added and
+were removed.
 
 ## Tabs
 
