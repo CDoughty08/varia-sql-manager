@@ -1132,7 +1132,7 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   memory) empties the set and reads the whole table into it under a new revision (`resultSet.residence`), then
   `resultSet.closed`; a refusal part way, a failure or Stop switches it back to windowed, whole, under another revision.
   Closing the result (Close Results, the tab closed or run again) stops the load, whose summary fails with
-  `RESULT_RELEASED`. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
+  `RESULT_RELEASED`; one whose table expired fails with `REMOTE_EXPIRED`, as a read does. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
   loading; `BUDGET_STOPPED` once the budget has stopped). Main answers `RESULT_UNAVAILABLE` for a result its renderer no
   longer owns, so the backend's `RESULT_RELEASED` reaches only a close that raced past that check.
 
