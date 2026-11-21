@@ -269,6 +269,7 @@ internal static partial class BigQueryExecutionChecks
         CostText(check);
         Trace("Converter");
         Converter(check);
+        BooleanResults(check);
         Trace("JobErrors");
         JobErrors(check);
         Trace("InsertAsync");
@@ -316,6 +317,38 @@ internal static partial class BigQueryExecutionChecks
         check(line == "Bytes processed: 1.24 GiB (< $0.01) · Bytes billed: 1.24 GiB (< $0.01) · Slot time: 1.3 s · Cache hit: no · Prices are on-demand estimates at $6.25 per TiB."
             && BigQueryCost.Summary(new BigQueryJobSummary("p", "j")) is null && BigQueryCost.Summary(new BigQueryJobSummary("p", "j", CacheHit: true)) == "Cache hit: yes",
             "the Messages cost line names each figure BigQuery reported, priced, and nothing when it reported none: " + line);
+    }
+
+    private static void BooleanResults(Action<bool, string> check)
+    {
+        var plan = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("flag", "BOOL"))))!;
+        var store = new ResultStore(1L << 27, 1L << 26);
+        var set = store.Open(store.BeginQuery("bool"), 0, 1, 1, "rows", plan.Columns, plan.Wires)!;
+        foreach (var value in new[] { "true", "false", "true" })
+        {
+            set.CountRow();
+            plan.ReadRow(JsonSerializer.SerializeToElement(Row(value)), set.BeginRow()!, _ => { });
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        var sorted = ViewSorter.Sort(set, pages, [new(0, false, SortMode.Value)], default).Order;
+        var profile = ColumnProfiler.Profile(set, pages, null, [0], true, default).Columns[0];
+        check(sorted.SequenceEqual([1, 0, 2]) && profile.Min == "false" && profile.Max == "true" && profile.Distinct == 2,
+            "BigQuery BOOL sorts and profiles false before true");
+        var output = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new ResultTextWriter(output, TextOptions.Export(TextFormat.Json, false, "empty"), set.Columns);
+        writer.Begin();
+        using var pin = set.Pin();
+        foreach (var page in pages)
+        {
+            var view = PageView.Parse(page.Body(), 1);
+            for (var r = 0; r < view.Rows; r++) writer.Row(view, r, [0]);
+        }
+        writer.End();
+        using var saved = JsonDocument.Parse(output.WrittenMemory);
+        check(saved.RootElement.EnumerateArray().Select(row => row.GetProperty("flag").GetBoolean()).SequenceEqual([true, false, true]),
+            "Save Results As writes BigQuery BOOL cells as JSON booleans");
     }
 
     /// <summary>The REST converter for every type straight into a page, as the result store reads it.</summary>
