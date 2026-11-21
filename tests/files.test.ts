@@ -856,6 +856,19 @@ describe('files main opened, Recent Files and changes made outside', () => {
     expect(model(query.id).getValue()).toBe('SELECT 9')
     expect(documents.get(query.id)?.dirty).toBe(false)
     expect(api.keepSqlFile).not.toHaveBeenCalled()
+    // A silent reload whose question, asked after an edit during the read, fails: the text stays and main's baseline is
+    // still put back.
+    const third = deferred<Awaited<ReturnType<VariaApi['reloadSqlFile']>>>()
+    api.reloadSqlFile.mockImplementationOnce(() => third.promise)
+    api.confirmReload.mockResolvedValueOnce({ ok: false, error: 'The page went away.' })
+    checking = files.checkExternalChanges()
+    await vi.waitFor(() => expect(api.reloadSqlFile).toHaveBeenCalledTimes(3))
+    model(query.id).edit('SELECT 9 -- typed a third time')
+    third.resolve({ ok: true, value: { ...openedFile('f1', 'C:/one.sql'), content: 'SELECT 10' } })
+    await checking
+    expect(model(query.id).getValue()).toBe('SELECT 9 -- typed a third time')
+    expect(api.keepSqlFile.mock.calls).toEqual([['f1']])
+    expect(files.getSnapshot()).toEqual({ error: 'one.sql was not reloaded: The page went away.', kind: 'error' })
   })
   it('reloads without asking again after an edit undone during the read, and asks again under Yes to All without its All buttons', async () => {
     const { documents, api, files, model, options } = fixture()

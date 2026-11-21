@@ -182,9 +182,12 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         // fill still appending is not an edit, and an edit undone back to the saved text loses nothing.
         const revision = this.documents.editRevision(id), read = await this.readAgain(id)
         if (!read || this.disposed || !this.documents.get(id)) continue
-        if (this.documents.editRevision(id) === revision || !this.documents.hasUnsavedEdits(id) || await ask(true)) this.applyReload(id, read)
-        // Main took the read as the file's new baseline: No puts back the one before, so the next Save asks first.
-        else unwrap(await this.api.keepSqlFile?.(fileId) ?? { ok: true, value: undefined })
+        // Main took the read as the file's new baseline: unless the text read goes in, the one before is put back (even
+        // when the question fails), so the next Save asks first.
+        let apply = this.documents.editRevision(id) === revision || !this.documents.hasUnsavedEdits(id)
+        try { if (!apply) apply = await ask(true) }
+        finally { if (!apply) unwrap(await this.api.keepSqlFile?.(fileId) ?? { ok: true, value: undefined }) }
+        if (apply) this.applyReload(id, read)
       } catch (error) { failed.push(`${document.name} was not reloaded: ${error instanceof Error ? error.message : 'The file could not be read.'}`) }
     }
     if (failed.length) throw new Error([...failed, ...deleted].join(' '))

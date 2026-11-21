@@ -837,6 +837,16 @@ describe('changes made outside', () => {
     await store.save('SELECT mine again', opened.id)
     store.keep(opened.id)
     expect(await store.changedOnDisk(opened.id)).toBe(false)
+    // A change reported, then undone outside before the read: the reload reads the saved bytes, yet the kept tab's Save
+    // still asks, as it would have without the reload.
+    await writeFile(path, 'SELECT outside a third time')
+    await utimes(path, later(30), later(30))
+    expect(await store.check(roomy)).toHaveLength(1)
+    await writeFile(path, 'SELECT mine again')
+    await utimes(path, later(40), later(40))
+    await store.reload(opened.id)
+    store.keep(opened.id)
+    expect(await store.changedOnDisk(opened.id)).toBe(true)
   })
   it('does not hide a change behind a second Open of the same file', async () => {
     const store = new SqlFileStore()
