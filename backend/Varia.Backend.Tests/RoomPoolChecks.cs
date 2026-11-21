@@ -69,6 +69,102 @@ internal static class RoomPoolChecks
         foreach (var room in rented) capped.Return(room);
         check(capped.Idle <= RoomPool.IdleBytes && capped.Idle > RoomPool.IdleBytes - RoomPool.LargestRoom, "the idle rooms stop at the pool's cap and the rest are dropped");
 
+        // A narrower result read first fills the pool with rooms too short for the wider one read next: given back, the wider
+        // one's rooms take the place of those given back longest ago, so its reads stop making rooms within a pass or two;
+        // and reading the narrower result again, its rooms take the wider ones' place the same way.
+        var crowded = new RoomPool();
+        const int shortLength = 192 * 1024, longLength = PageBuilder.SealBytes;
+        int shortCount = (int)(RoomPool.IdleBytes / shortLength), longCount = (int)(RoomPool.IdleBytes / longLength);
+        // Rents a read's rooms at once and gives them all back, as a tile does; the rooms it had to make.
+        long Pass(int count, int length)
+        {
+            var made = crowded.Made;
+            var rooms = Enumerable.Range(0, count).Select(_ => crowded.Rent(length)).ToList();
+            foreach (var room in rooms) crowded.Return(room);
+            return crowded.Made - made;
+        }
+        Pass(shortCount + 2, shortLength);
+        var full = crowded.Idle;
+        var wide = Enumerable.Range(0, 4).Select(_ => Pass(longCount, longLength)).ToArray();
+        var narrow = Enumerable.Range(0, 8).Select(_ => Pass(shortCount, shortLength)).ToArray();
+        var wideAgain = Enumerable.Range(0, 4).Select(_ => Pass(longCount, longLength)).ToArray();
+        check(full > RoomPool.IdleBytes - shortLength && wide[0] > 0 && wide[2] == 0 && wide[3] == 0 && narrow[6] == 0 && narrow[7] == 0
+            && wideAgain[2] == 0 && wideAgain[3] == 0 && crowded.Idle <= RoomPool.IdleBytes,
+            "the rooms of the result read now take the place of those an earlier, narrower or wider, read left, so reading it again soon makes none: wide "
+            + string.Join(",", wide) + " narrow " + string.Join(",", narrow) + " wide " + string.Join(",", wideAgain));
+        // A room rented for a shorter page, with none made while it was out, is kept but is the first to make way, before
+        // rooms given back earlier.
+        var misfit = new RoomPool();
+        var longRoom = misfit.Rent(longLength);
+        misfit.Return(longRoom);
+        misfit.Return(new byte[shortLength]);
+        misfit.Return(misfit.Rent(shortLength + 8 * 1024));
+        var keptMisfit = misfit.IdleRooms == 2;
+        while (misfit.Idle + shortLength <= RoomPool.IdleBytes) misfit.Return(new byte[shortLength]);
+        var roomsFull = misfit.IdleRooms;
+        misfit.Return(new byte[shortLength]);
+        check(keptMisfit && misfit.IdleRooms == roomsFull && !ReferenceEquals(misfit.Rent(longLength), longRoom),
+            "a room rented for a shorter page is kept while it fits and is the first to make way");
+
+        // A narrower read that holds rooms (a Find, a Copy group) while a wider one reads: it is lent the wider rooms, the
+        // wider read makes rooms of its own length, and both given back stay, so a later round makes none.
+        var both = new RoomPool();
+        var wideReads = longCount - 16;
+        both.Return(both.Rent(longLength));
+        long Round()
+        {
+            var made = both.Made;
+            var narrowRooms = Enumerable.Range(0, 16).Select(_ => both.Rent(shortLength)).ToList();
+            var wideRooms = Enumerable.Range(0, wideReads).Select(_ => both.Rent(longLength)).ToList();
+            foreach (var room in wideRooms) both.Return(room);
+            foreach (var room in narrowRooms) both.Return(room);
+            return both.Made - made;
+        }
+        var rounds = Enumerable.Range(0, 4).Select(_ => Round()).ToArray();
+        check(rounds[2] == 0 && rounds[3] == 0 && both.Idle <= RoomPool.IdleBytes,
+            "a narrower read holding rooms while a wider one reads settles, making none: " + string.Join(",", rounds));
+
+        // A result of wide rows: its pages end anywhere within a row past the seal, so a tile's pages take rooms of several
+        // lengths. A page lent a longer room, then a room made for a page longer than it but shorter than that room: the
+        // lent room still serves pages of its own length, so it is kept.
+        var spread = new RoomPool();
+        var widest = spread.Rent(PageBuilder.SealBytes + 96 * 1024);
+        spread.Return(widest);
+        var lent = spread.Rent(PageBuilder.SealBytes + 1);
+        var between = spread.Rent(PageBuilder.SealBytes + 48 * 1024);
+        spread.Return(between);
+        spread.Return(lent);
+        check(ReferenceEquals(lent, widest) && spread.IdleRooms == 2,
+            "a room lent to a shorter page stays when the room made meanwhile was for a longer page than that: " + spread.IdleRooms + " idle");
+
+        // Lent once, then rented by a page of its own length: given back, it is the newest, not lent still.
+        var lentOnce = new RoomPool();
+        var once = lentOnce.Rent(longLength);
+        lentOnce.Return(once);
+        lentOnce.Return(lentOnce.Rent(shortLength));
+        var other = new byte[longLength];
+        lentOnce.Return(other);
+        var fitted = lentOnce.Rent(longLength);
+        lentOnce.Return(fitted);
+        while (lentOnce.Idle + longLength <= RoomPool.IdleBytes) lentOnce.Return(new byte[longLength]);
+        lentOnce.Return(new byte[longLength]);
+        var keptOnce = false;
+        for (var i = lentOnce.IdleRooms; i > 0; i--) keptOnce |= ReferenceEquals(lentOnce.Rent(longLength), once);
+        check(ReferenceEquals(fitted, once) && keptOnce, "a room lent once and then rented by a page of its own length is given back as the newest");
+
+        // Two rooms lent to short pages, then one room made for a third: one room lacking, so only one lent room, the
+        // longer, makes way for it, and the other stays to serve the pages it served.
+        var oneEach = new RoomPool();
+        var (longer, shorter) = (oneEach.Rent(longLength + 32 * 1024), oneEach.Rent(longLength));
+        oneEach.Return(longer);
+        oneEach.Return(shorter);
+        var lentRooms = new[] { oneEach.Rent(shortLength), oneEach.Rent(shortLength) };
+        var madeShort = oneEach.Rent(shortLength);
+        foreach (var room in lentRooms.Append(madeShort)) oneEach.Return(room);
+        var heldRooms = Enumerable.Range(0, oneEach.IdleRooms).Select(_ => oneEach.Rent(1)).ToList();
+        check(heldRooms.Count == 2 && heldRooms.Contains(shorter) && heldRooms.Contains(madeShort) && !heldRooms.Contains(longer),
+            "each room made lets one room lent to a page no shorter make way, the longest: " + heldRooms.Count + " kept");
+
         var now = Environment.TickCount64;
         capped.Return(capped.Rent(10));
         capped.Trim(now + RoomPool.IdleMs / 2);
