@@ -2135,6 +2135,91 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
+  // SQL Server Agent (AG-2, behind the release gate the smoke runs open). A job's menu offers Start Job at Step… and Stop Job,
+  // then Disable, Rename and Delete. Start Job at Step… lists the job's steps, the first chosen; choosing the second sends its
+  // name with the job's identity from the tree. Stop Job runs as a status-bar job and says what it did, and Disable flips the
+  // row's badge. The Agent node's Start, Stop and Restart are offered with Varia on Windows and greyed with the reason
+  // elsewhere; Restart asks, then stays open on its four steps.
+  const jobPath = ['server-a', 'SQL Server Agent', 'Jobs', 'Nightly']
+  const startJobDialog = () => page.getByRole('dialog', { name: 'Start Job at Step - Nightly', exact: true })
+  await expandExplorerPath(page, 'server-a', 'SQL Server Agent', 'Jobs')
+  const jobMenu = await explorerMenuItems(page, ...jobPath)
+  for (const name of ['Start Job at Step…', 'Stop Job', 'Disable', 'Rename', 'Delete']) expect(jobMenu.names).toContain(name)
+  expect(jobMenu.names).not.toContain('Enable')
+  await closeMenu()
+  await chooseExplorerMenuItem(page, jobPath, 'Start Job at Step…')
+  await expect(startJobDialog().getByRole('radio')).toHaveCount(2)
+  await expect(startJobDialog().getByRole('radio', { name: '1. Extract', exact: true })).toBeChecked()
+  await startJobDialog().getByRole('radio', { name: '2. Load', exact: true }).check()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-start-job-dark.png') })
+  await startJobDialog().getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(startJobDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'startJob', target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' }, stepName: 'Load' })
+  await expect(toastMessage(toasts(page).last())).toHaveText('Started the job Nightly.')
+  await chooseExplorerMenuItem(page, jobPath, 'Stop Job')
+  await expect(toastMessage(toasts(page).last())).toHaveText('Asked SQL Server Agent to stop the job Nightly.')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'stopJob', agentIdentity: { created: '2026-01-02T03:04:05' } })
+  await chooseExplorerMenuItem(page, jobPath, 'Disable')
+  await expect(toastMessage(toasts(page).last())).toHaveText('Disabled the job Nightly.')
+  await expect.poll(async () => (await explorerMenuItems(page, ...jobPath)).names, 'a disabled job offers Enable').toContain('Enable')
+  await closeMenu()
+  const agentMenu = await explorerMenuItems(page, 'server-a', 'SQL Server Agent')
+  expect(agentMenu.names).toEqual(expect.arrayContaining(['Start', 'Stop', 'Restart']))
+  if (process.platform === 'win32') {
+    // No status sample in the stub, so the state is unknown and the dialog's describe decides: all three are offered.
+    expect(agentMenu.disabled).not.toContain('Restart')
+    await closeMenu()
+    const restartDialog = () => page.getByRole('dialog', { name: 'Restart SQL Server Agent', exact: true })
+    await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Restart')
+    await expect(restartDialog().getByText('Are you sure you want to restart the SQLSERVERAGENT service on DB01?', { exact: true })).toBeVisible()
+    await expect(restartDialog().getByRole('button', { name: 'Script', exact: true })).toHaveCount(0)
+    await restartDialog().getByRole('button', { name: 'Restart', exact: true }).click()
+    await expect(objectDialogProgress(restartDialog())).toHaveText('Success')
+    await expect(objectDialogStepItems(restartDialog())).toHaveCount(4)
+    expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'restartAgent', target: { kind: 'agent' } })
+    await page.screenshot({ path: resolve('artifacts', 'object-actions-restart-agent-dark.png') })
+    await restartDialog().getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(restartDialog()).toHaveCount(0)
+  } else {
+    expect(agentMenu.disabled).toEqual(expect.arrayContaining(['Start', 'Stop', 'Restart']))
+    await closeMenu()
+  }
+  console.log('Object action checks: a job\'s Start Job at Step…, Stop Job and Disable, and the Agent node\'s Restart (on Windows; greyed elsewhere).')
+
+  // SQL Server Agent Properties (AG-8a): the Agent node's Properties opens General with the service account and SSMS's two restart
+  // boxes. History lists what the limits keep for each job; Delete old history asks inline with Cancel focused, runs apart from OK and
+  // reads the history again, keeping the unsaved restart box, which OK then sends alone.
+  const agentPropertiesDialog = () => page.getByRole('dialog', { name: 'SQL Server Agent Properties', exact: true })
+  await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Properties')
+  await expect(agentPropertiesDialog().getByText('NT Service\\SQLSERVERAGENT', { exact: true })).toBeVisible()
+  const agentRestart = agentPropertiesDialog().getByRole('checkbox', { name: 'Auto restart SQL Server Agent if it stops unexpectedly', exact: true })
+  await expect(agentRestart).toBeChecked()
+  await agentRestart.uncheck()
+  await agentPropertiesDialog().getByRole('button', { name: 'History', exact: true }).click()
+  const retention = agentPropertiesDialog().getByRole('table', { name: /^What this keeps/ })
+  await expect(retention.getByRole('row')).toHaveCount(3)
+  await expect(retention.getByRole('row', { name: /Nightly/ })).toContainText('4 a day')
+  // Enter in Older than asks, as Delete history… does, instead of pressing OK.
+  await agentPropertiesDialog().getByRole('textbox', { name: 'Older than', exact: true }).press('Enter')
+  await expect(agentPropertiesDialog()).toHaveCount(1)
+  const purgeConfirm = agentPropertiesDialog().getByRole('group', { name: 'Confirm Delete old history now', exact: true })
+  // The cut-off is the stub server's clock advanced by the time the dialog has been open, so its seconds vary.
+  const purgeQuestion = purgeConfirm.getByText(/^Delete the history of every job on .+ from before 2026-03-03 10:\d\d:\d\d/)
+  await expect(purgeQuestion).toBeVisible()
+  const confirmedCutoff = /from before (2026-03-03) (10:\d\d:\d\d)/.exec(await purgeQuestion.innerText())
+  await expect(purgeConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-agent-properties-dark.png') })
+  await purgeConfirm.getByRole('button', { name: 'Delete history', exact: true }).click()
+  await expect(agentPropertiesDialog().getByRole('status').filter({ hasText: 'Deleted the history.' })).toContainText('500 history entries purged.')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'agentProperties', target: { kind: 'agent' }, agentPurge: { count: 4, unit: 2, before: `${confirmedCutoff?.[1]}T${confirmedCutoff?.[2]}` } })
+  await expect(agentPropertiesDialog().getByText('now 400 rows', { exact: true })).toBeVisible()
+  await agentPropertiesDialog().getByRole('button', { name: 'General', exact: true }).click()
+  await expect(agentRestart).not.toBeChecked()
+  await agentPropertiesDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(agentPropertiesDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual(expect.objectContaining({ action: 'agentProperties', agentProperties: { monitorAutostart: false } }))
+  console.log('Object action checks: SQL Server Agent Properties\' General and History, Delete old history\'s inline confirmation apart from OK, and OK sending only the changed box.')
+
   // Tasks › Detach… (D3b). Detach Database lists AppData with Drop Connections and Update Statistics (both unchecked, as SSMS
   // opens it) and the files that stay on the server; OK waits for Drop Connections while sessions are connected. Script Action
   // shows SINGLE_USER and sp_detach_db's @skipchecks; Success stays open on its steps, AppData leaves Databases, and a toast says

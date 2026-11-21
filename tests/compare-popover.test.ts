@@ -23,7 +23,7 @@ import { manualTimers } from './fixtures/workbench'
 
 type DiffAnswer = Awaited<ReturnType<FakeHandle['diff']>>
 const column = (name: string): ResultColumn => ({ name, dataType: 'int', wire: 'text', nullable: false })
-const made = (index: number): DiffAnswer => ({ descriptor: descriptor(900 + index, { index, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
+const made = (index: number): DiffAnswer => ({ descriptor: descriptor(900 + index, { index, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' })
 
 // Fixtures still drawn when a test ends (a failed expectation skips its unmount): unmounted so they do not leak into the next.
 const drawnFixtures = new Set<() => void>()
@@ -128,7 +128,7 @@ describe('Compare popover', () => {
     expect(document.activeElement).toBe(exact)
     expect(view.button('Cancel')).toBeDefined()
     expect(view.popover()!.querySelector('button[type="submit"]')?.getAttribute('aria-disabled')).toBe('true')
-    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }); await running })
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }); await running })
     view.unmount()
   })
 
@@ -225,7 +225,7 @@ describe('Compare popover', () => {
     const input = palette.appendChild(document.createElement('input'))
     try {
       act(() => { input.focus() })
-      await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }) })
+      await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }) })
       view.draw()
       expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
       expect(view.button('Show It')).toBeDefined()
@@ -243,7 +243,7 @@ describe('Compare popover', () => {
     await act(async () => { view.button('Compare')!.click() })
     act(() => { (document.activeElement as HTMLElement | null)?.blur() })
     expect(document.activeElement).toBe(document.body)
-    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }) })
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }) })
     view.draw()
     expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
     expect(view.results.getSnapshot().t1.focused).toBe(view.results.getSnapshot().t1.sets.find(set => set.descriptor.kind === 'diff')?.key)
@@ -260,7 +260,7 @@ describe('Compare popover', () => {
     const again = view.compare.compare('t1', view.keys[1])
     view.draw()
     expect(view.status()?.textContent).toBe('')
-    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }); await again })
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }); await again })
     view.draw()
     expect(view.status()?.textContent).toBe('')
     expect(view.button('Show It')).toBeDefined()
@@ -393,7 +393,7 @@ describe('Compare popover', () => {
     grid.setAttribute('data-result-grid', '')
     grid.setAttribute('data-tab-id', 't1')
     const off = view.results.subscribe(() => { const made = view.results.getSnapshot().t1?.sets.find(set => set.descriptor.kind === 'diff'); if (made) grid.setAttribute('data-result-entry', made.key) })
-    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }) })
+    await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), match: { mode: 'auto', columns: ['Id'] }, same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }) })
     view.draw()
     off()
     expect(grid.hasAttribute('data-result-entry')).toBe(true)

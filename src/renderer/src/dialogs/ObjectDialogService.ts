@@ -71,7 +71,11 @@ export interface OpenObjectDialog {
   /** Counts the times the secret slot was emptied while the dialog stayed open (`spentSecrets`): the password fields, which keep their
    *  text themselves, remount on it and come back empty. */
   readonly secretEpoch?: number
+  /** How the last of a page's own runs apart from OK went (`runInline`: SQL Server Agent Properties' Delete old history now). */
+  readonly inline?: InlineRun
 }
+/** A page's own run apart from OK, once it answered: its informational messages, or why it failed. */
+export type InlineRun = { readonly state: 'done'; readonly messages: readonly string[] } | { readonly state: 'failed'; readonly error: ActionError }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
 /** Check Names' answer for one typed name: checking, what xp_logininfo said, or why it could not say. */
@@ -106,6 +110,8 @@ export interface ObjectDialogServiceOptions {
   readonly newId?: () => string
   /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
   readonly notify?: (message: string) => void
+  /** Object Explorer's status samples the connection at once (ExplorerStatusService.refresh). */
+  readonly refreshStatus?: (connectionId: string) => void
   /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
   readonly databaseGone?: (gone: DatabaseGone) => void
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
@@ -141,6 +147,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
   /** Check Names' read in flight (D2e), apart from both: a new check cancels it. */
   private check?: { readonly id: string; readonly dialog: number }
+  /** The latest read after a page's own run (readAgain); an earlier one's answer is stale. */
+  private reread?: string
   /** The Effective tab's read in flight, apart from both: it never waits for User Mapping's, nor cancels it. */
   private effectiveLookup?: { readonly id: string; readonly dialog: number; readonly key: string }
   /** A page's own describes (Attach's Add, a path check), which Close and a disconnect cancel. */
@@ -376,6 +384,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const open = this.current
     if (!open || !open.model || !open.draft || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
     const definition = definitionOf(open.dialog)
+    // A dialog that runs no T-SQL has nothing to script (SQL Server Agent's service).
+    if (definition.noScript) return
     const built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     // As SSMS says when nothing changed in a properties dialog.
     if (!built) { this.update(open, { error: undefined, notice: noScriptNotice }); return }
@@ -398,6 +408,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    // A read-only dialog (definition.readOnly) has only Close.
+    if (definition.readOnly?.(open.model)) { this.close(); return }
     // A hand-off (Unlock's Set a new password…) runs nothing here: unless OK is blocked, this dialog closes and the next one opens.
     const handOff = definition.handOff?.(open.model, open.draft)
     if (handOff) { if (!this.blockedReason(open)) this.handOver(handOff); return }
@@ -444,7 +456,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       this.cancelLookup()
       // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
-      else this.publish({})
+      else { this.cancelExtra(); this.publish({}) }
       try { definition.afterSuccess(this.effectsOf(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
@@ -465,12 +477,49 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reloadAfterPartial(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    const model = spent?.patch.model ?? definition.afterFailure?.(open.model, failure) ?? open.model
+    // The model as it is now: a read after a page's own run (readAgain) may have landed while OK ran.
+    const known = (this.current?.id === open.id ? this.current.model : undefined) ?? open.model
+    const model = spent?.patch.model ?? definition.afterFailure?.(known, failure) ?? known
     this.update(open, { phase: 'failed', error: withNote(failure), ...(value ? { steps: value.steps } : {}), ...spent?.patch, model })
     if (partial) { this.reloadAfterPartial(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
-    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+    if (!confirmation && model !== known && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+  }
+
+  /**
+   * A page's own action apart from OK (SQL Server Agent Properties' Delete old history now, which runs once and is never stored): it runs as OK
+   * runs, in the executing phase with Stop, and the dialog stays open on `ready` with how it went in `inline`; a success reads the object
+   * again (readAgain), so the page shows what is there now, keeping what it showed if that read fails. Never while another request runs or in a read-only dialog.
+   */
+  async runInline(request: BuiltRequest): Promise<void> {
+    const open = this.current
+    if (!open?.model || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped') || definitionOf(open.dialog).readOnly?.(open.model)) return
+    const requestId = this.begin(open)
+    this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined, inline: undefined })
+    const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId: open.connectionId, requestId } as ActionRequest))
+    if (!this.end(open, requestId)) return
+    const value = result.ok ? result.value : undefined
+    if (value && !value.error) { this.update(open, { phase: 'ready', inline: { state: 'done', messages: value.messages } }); void this.readAgain(open); return }
+    const failure = value?.error ?? (!result.ok && result.code === 'CANCELLED' ? error('CANCELLED', dialogMessages.stopped)
+      : !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
+    this.update(open, { phase: 'ready', inline: { state: 'failed', error: failure } })
+  }
+
+  /** After a page's own run: reads the model again and swaps it in, keeping the phase, the draft and, if the read fails, the model it had. It is
+   *  one of the page's own describes (`extra`), not `request`, so OK may run beside it and Close, a disconnect and dispose still cancel it. */
+  private async readAgain(open: OpenObjectDialog): Promise<void> {
+    const requestId = this.newId()
+    this.extra.add(requestId)
+    // Only the latest read lands: an earlier one, slower on a large msdb, counted rows a later run has since deleted, so it is cancelled.
+    if (this.reread && this.extra.delete(this.reread)) this.cancel([this.reread])
+    this.reread = requestId
+    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
+    this.extra.delete(requestId)
+    if (this.reread !== requestId || this.disposed || this.current?.id !== open.id || this.current.phase === 'disconnected') return
+    const model = result.ok && !result.value.error ? definitionOf(open.dialog).modelOf(result.value) : undefined
+    const current = this.current
+    if (model && current && current.phase !== 'loading' && current.phase !== 'loadFailed') this.update(current, { model })
   }
 
   /** Main's box for a confirmation: Open Connections' Yes, or any action prompt answer but its cancel one. A failure counts as No. */
@@ -561,7 +610,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.patch = undefined
     this.update(open, { phase: 'ready', model, draft: open.draft ?? { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
-    if (definition.runOnOpen && !open.model) await this.ok()
+    if ((definition.runOnOpen === true || (typeof definition.runOnOpen === 'function' && definition.runOnOpen(model))) && !open.model) await this.ok()
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
       const labels = this.context(open).loginConnections
       if (labels) this.update(open, { loginConnections: labels })
@@ -669,7 +718,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       reveal: (folder, object) => this.reveal(open, folder, object),
       reload: (owner, folder) => this.reloadFolder(open, owner, folder),
       databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) },
-      notify: message => this.options.notify?.(message)
+      notify: message => this.options.notify?.(message),
+      refreshStatus: () => this.options.refreshStatus?.(open.connectionId)
     }
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */

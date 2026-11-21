@@ -299,6 +299,16 @@ describe('ResultClient', () => {
     const finding = view.findRows([12])
     expect(await answer('findRows', { positions: [5], marks: [0], truncated: false, rows: 10 })).toMatchObject({ resultId: 3, ids: [12], viewId: 2 })
     expect((await finding).positions).toEqual([5])
+    // A comparison seek goes by the view's positions, in either form, and answers what main sent.
+    const seeking = view.diffSeek({ from: -1, direction: 'previous' })
+    expect(await answer('diffSeek', { row: 9, column: 1, index: 4, total: 4, rows: 10 })).toMatchObject({ t: 'diffSeek', resultId: 3, viewId: 2, from: -1, direction: 'previous' })
+    expect(await seeking).toEqual({ row: 9, column: 1, index: 4, total: 4, rows: 10 })
+    const partnering = handle.diffSeek({ partnerOf: 3 })
+    const partnerRequest = await answer('diffSeek', { hidden: true })
+    expect(partnerRequest).toMatchObject({ t: 'diffSeek', resultId: 3, partnerOf: 3 })
+    expect(partnerRequest).not.toHaveProperty('viewId')
+    expect(partnerRequest).not.toHaveProperty('from')
+    expect(await partnering).toEqual({ hidden: true })
     // A view identifies its result: identities belong to the result, whatever order shows it.
     const again = view.identify('row')
     const sent = await answer('identify', { column: -1, unique: true, approximate: false, rows: 10 })
@@ -311,17 +321,31 @@ describe('ResultClient', () => {
     await expect(handle.findRows([-1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.rowIds(-1, 1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(await handle.rowIds(0, 0)).toMatchObject({ ids: [] })
+    // A comparison seek: a position from -1 and a direction, or a partner's position; nothing else reaches the port.
+    await expect(handle.diffSeek({ from: -2, direction: 'next' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ from: 0.5, direction: 'next' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ from: 0, direction: 'up' as never })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diffSeek({ partnerOf: -1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(before)
     // A diff compares this result with another of the same generation, by result even through a view.
     const other = client.open(descriptor({ resultId: 4 }))
     await expect(handle.diff(handle)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.diff(other, { context: 101 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.diff(client.open(descriptor({ generation: 2, resultId: 4 })))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A layout is unified or entry; a replaced comparison is another result of the same generation than either input.
+    await expect(handle.diff(other, { layout: 'rows' as never })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: other })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { replaces: client.open(descriptor({ generation: 2, resultId: 8, kind: 'diff' })) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(before)
     const comparing = view.diff(other, { exact: true, context: -1 })
-    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), match: { mode: 'rows', columns: [] }, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }
+    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), match: { mode: 'rows', columns: [] }, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }
     expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
     expect(await comparing).toEqual(diffAnswer)
+    // The layout and the replaced comparison reach the port by result id.
+    const replacing = handle.diff(other, { layout: 'entry', replaces: client.open(descriptor({ resultId: 8, kind: 'diff' })) })
+    expect(await answer('diff', { ...diffAnswer, layout: 'entry' })).toMatchObject({ t: 'diff', resultId: 3, right: 4, layout: 'entry', replaces: 8 })
+    expect(await replacing).toMatchObject({ layout: 'entry' })
     // A diff given up whose answer comes anyway is closed, and the page stops waiting for it once the worker says so.
     const abort = new AbortController()
     const dropped = handle.diff(other, { signal: abort.signal })
@@ -420,6 +444,9 @@ describe('ResultClient', () => {
     await expect(handle.sort([{ column: 1, descending: false, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([], { filters: [{ op: 'in', column: 1, rows: [0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([], { filters: [{ op: 'duplicates', columns: [0, 0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A kind filter: 1 to 4 distinct kinds, refused before the port otherwise.
+    await expect(handle.sort([], { filters: [{ op: 'kind', kinds: ['added', 'added'] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([], { filters: [{ op: 'kind', kinds: [] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     // A filtered view with no keys: the filters reach the worker, and the view holds them resolved.
     const filtering = handle.sort([], { filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
     await settle()

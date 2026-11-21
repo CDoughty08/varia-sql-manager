@@ -16,6 +16,8 @@ internal sealed class StringPool(IndexBudget budget)
     private readonly object gate = new();
     private readonly Dictionary<string, Entry> entries = new(StringComparer.Ordinal);
     private readonly Dictionary<PackedText, Entry> packed = [];
+    /// <summary>References held across every text, and what the texts cost the budget together (the Memory panel's Nerd metrics).</summary>
+    private long references, charged;
 
     private sealed class Entry(object value)
     {
@@ -26,6 +28,9 @@ internal sealed class StringPool(IndexBudget budget)
     public IndexBudget Budget => budget;
     /// <summary>Distinct texts held (the checks read it).</summary>
     public int Count { get { lock (gate) return entries.Count + packed.Count; } }
+
+    /// <summary>Distinct texts, the references taken to them, and what they cost the budget, read together.</summary>
+    public (int Texts, long References, long Bytes) Stats { get { lock (gate) return (entries.Count + packed.Count, references, charged); } }
 
     /// <summary>What a text costs the budget while the pool holds it.</summary>
     public static long Cost(string value) => IndexMemory.StringBytes(value.Length) + EntryBytes;
@@ -50,8 +55,10 @@ internal sealed class StringPool(IndexBudget budget)
                 entry = new Entry(value);
                 if (value is string text) entries[text] = entry;
                 else packed[(PackedText)value] = entry;
+                charged += cost;
             }
             entry.Refs++;
+            references++;
             return entry.Value;
         }
     }
@@ -65,10 +72,14 @@ internal sealed class StringPool(IndexBudget budget)
         lock (gate)
             foreach (var value in values)
             {
-                if (value is null || !Find(value, out var entry) || --entry.Refs > 0) continue;
+                if (value is null || !Find(value, out var entry)) continue;
+                references--;
+                if (--entry.Refs > 0) continue;
                 if (value is string text) entries.Remove(text);
                 else packed.Remove((PackedText)value);
-                budget.Release(Cost(value));
+                var cost = Cost(value);
+                charged -= cost;
+                budget.Release(cost);
             }
     }
 }

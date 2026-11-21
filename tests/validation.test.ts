@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest, validateResult } from '../src/main/validation'
 import { connectContext } from '../src/main/connection-requests'
-import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
+import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema, sessionCloseResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { deadlineFor, mainOnlyMethods, methodAllows, methodPolicies, methodProviders, providerParamMethods, requestProvider } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
@@ -66,7 +66,8 @@ describe('IPC validation', () => {
       { sql: 'SELECT 1' }, { node: { type: 'object', object: { kind: 'server' } }, subtype: 'history' }
     ]) expect(() => validateRequest('explorer.children', { ...valid, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     // Loads run on the explorer lane under the backend's own gates; main keeps the default 45 s deadline.
-    expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000 })
+    // BigQuery's tree loads through the same method (BQ-5).
+    expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000, providers: ['sqlserver', 'bigquery'] })
     // Cancellation is main's own channel (varia:explorer-cancel), not a backend method.
     expect(() => validateRequest('explorer.cancel', { requestIds: [requestId] })).toThrow('Unsupported backend method')
     expect(explorerCancelParamsSchema.parse({ requestIds: [requestId] })).toEqual({ requestIds: [requestId] })
@@ -86,7 +87,7 @@ describe('IPC validation', () => {
       { requestId: 'r1' }, { extra: 1 }
     ]) expect(() => validateRequest('scripting.script', { ...valid, ...patch }), JSON.stringify(patch).slice(0, 80)).toThrow('Invalid request')
     // SMO can run for a while: a 60 s deadline around the backend's own 55 s budget, on the metadata lane.
-    expect(methodPolicies['scripting.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 60_000 })
+    expect(methodPolicies['scripting.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 60_000, providers: ['sqlserver', 'bigquery'] })
     // Cancellation is main's own channel (varia:scripting-cancel), not a backend method.
     expect(() => validateRequest('scripting.cancel', { requestIds: [valid.requestId] })).toThrow('Unsupported backend method')
     expect(scriptCancelSchema.parse({ requestIds: [valid.requestId] })).toEqual({ requestIds: [valid.requestId] })
@@ -231,6 +232,17 @@ describe('IPC validation', () => {
       expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { ...descriptor, columns: [{ ...column, collation }] } }).success, JSON.stringify(collation)).toBe(false)
   })
   it('validates query events from the backend strictly', () => {
+    // A BigQuery job's start and end, with the session's tracked transaction; never a session id.
+    const job = { type: 'query.job', jobId: 'job_abc', project: 'demo-project', location: 'US', state: 'running', auxiliary: false, transaction: 'open' }
+    expect(queryEventSchema.safeParse(job).success).toBe(true)
+    expect(queryEventSchema.safeParse({ ...job, location: undefined, state: 'done', transaction: 'unknown' }).success).toBe(true)
+    for (const patch of [{ sessionId: 's' }, { state: 'pending' }, { transaction: 'maybe' }, { jobId: '' }, { jobId: 'j'.repeat(1025) }, { project: 'p'.repeat(129) }, { location: 'l'.repeat(65) }, { auxiliary: 'no' }])
+      expect(queryEventSchema.safeParse({ ...job, ...patch }).success, JSON.stringify(patch).slice(0, 60)).toBe(false)
+    // query.session.close's answer: a note's code is one of five, its message bounded.
+    expect(sessionCloseResultSchema.safeParse({ closed: true, note: { code: 'outcomeUnknown', jobId: 'job_abc' } }).success).toBe(true)
+    expect(sessionCloseResultSchema.safeParse({ closed: false }).success).toBe(true)
+    for (const result of [{ closed: true, note: { code: 'other' } }, { closed: true, note: { code: 'abortFailed', message: 'x'.repeat(2002) } }, { closed: true, note: { code: 'abortFailed', extra: 1 } }, { closed: true, extra: 1 }, {}])
+      expect(sessionCloseResultSchema.safeParse(result).success, JSON.stringify(result).slice(0, 60)).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'SQL error', kind: 'error', line: 16 }] }).success).toBe(true)
     for (const line of [0, -1, 1.5, 2_147_483_648, '16', null])
       expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'SQL error', kind: 'error', line }] }).success).toBe(false)
@@ -267,7 +279,17 @@ describe('IPC validation', () => {
     for (const transaction of [undefined, 'commit', 'rollback']) expect(validateRequest('query.session.close', { sessionId, ...transaction ? { transaction } : {} })).toEqual({ sessionId, ...transaction ? { transaction } : {} })
     for (const params of [{ sessionId, transaction: 'save' }, { sessionId, transaction: null }, { sessionId, commit: true }]) expect(() => validateRequest('query.session.close', params)).toThrow()
     expect(deadlineFor('query.session.close', { sessionId, transaction: 'commit' }).deadlineMs).toBe(60_000)
-    expect(deadlineFor('query.session.close', { sessionId, transaction: 'rollback' }).deadlineMs).toBe(10_000)
+    // Decision 54: every close but a commit has 30 s, enough for a BigQuery session's wait for DONE and its abort.
+    expect(deadlineFor('query.session.close', { sessionId, transaction: 'rollback' }).deadlineMs).toBe(30_000)
+    expect(deadlineFor('query.session.close', { sessionId }).deadlineMs).toBe(30_000)
+    // A BigQuery commit refused at quit keeps the session (abortOnRefusedCommit false); nothing else is accepted.
+    expect(validateRequest('query.session.close', { sessionId, transaction: 'commit', abortOnRefusedCommit: false })).toEqual({ sessionId, transaction: 'commit', abortOnRefusedCommit: false })
+    for (const abortOnRefusedCommit of ['false', 0, null]) expect(() => validateRequest('query.session.close', { sessionId, abortOnRefusedCommit })).toThrow()
+  })
+  it('accepts a selection first column for BigQuery error positions, within bounds', () => {
+    const base = { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', maxRows: 1000, timeoutSeconds: 30, startLine: 3 }
+    expect(validateRequest('query.execute', { ...base, startColumn: 7 })).toMatchObject({ startColumn: 7 })
+    for (const startColumn of [0, 1.5, 1_000_001, '7']) expect(() => validateRequest('query.execute', { ...base, startColumn })).toThrow()
   })
   it('reads a query session\'s transaction with only its id, on the control lane, within a short deadline', () => {
     const sessionId = crypto.randomUUID()

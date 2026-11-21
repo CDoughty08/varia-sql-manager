@@ -33,8 +33,9 @@ const expected: Record<string, Partial<Record<keyof typeof reservations, number>
   ProfileAsync: { work: 1, spare: 1, steps: 1, handed: 1 },
   DistinctAsync: { work: 1, spare: 1 },
   IdentifyAsync: { work: 1 },
-  // The alignment (work) and the differing cells (steps).
-  DiffAsync: { work: 1, steps: 1, handed: 1 },
+  // The alignment and the change index (work; the index's refusal is DiffChecks' IndexCharge), the cut rows' bitsets (handed
+  // to the index's builder; its refusal is DiffChecks' EntryCutRows) and the differing cells (steps). DiffAsync validates first.
+  DiffWritten: { work: 2, steps: 1, handed: 1 },
   // The groups (work), the figures (steps) and the collated keys (spare).
   PivotAsync: { work: 1, spare: 1, steps: 1, handed: 1 }
 }
@@ -44,7 +45,7 @@ const handoffs: Record<string, RegExp[]> = {
   ViewAsync: [/\bViewSorter\.Build\([^;]*\bkeyMemory\)/],
   ProfileAsync: [/\bnew ColumnProfiler\.Charges\(steps\.TryReserve\)/, /\bColumnProfiler\.Profile\([^;]*\bcharges\b/],
   DistinctAsync: [/\bViewSorter\.DistinctValues\([^;]*\bkeyMemory\)/],
-  DiffAsync: [/\bResultDiffer\.Compare\([^;]*\bcells\.TryReserve\b/],
+  DiffWritten: [/\bResultDiffer\.Compare\([^;]*\bcells\.TryReserve\b/, /\bnew DiffIndex\.Builder\([^;]*\bstore\.TryReserveWork\(left\.Budget, bytes\)\)/],
   PivotAsync: [/\bResultPivoter\.Build\([^;]*\bfigures\.TryReserve, keyMemory\)/]
 }
 
@@ -83,9 +84,9 @@ it('lists every method that reserves working memory, so a new one is added to th
   expect(count(listed, any)).toBe(count(source, any))
   expect(count('if (store.TryReserveWork(budget, bytes)) { } var ok = store.TryReserve(budget, bytes, true, out _);', any)).toBe(2)
   // And the lint sees what it pins: removing one reservation changes the counts.
-  expect(counts(body('DiffAsync').replace(/\bstore\.TryReserveWork\(/, 'store.Return('))).not.toEqual(expected.DiffAsync)
-  expect(counts(body('DiffAsync').replace(/cells\.TryReserve\b/, '_ => true'))).not.toEqual(expected.DiffAsync)
+  expect(counts(body('DiffWritten').replace(/\bstore\.TryReserveWork\(/, 'store.Return('))).not.toEqual(expected.DiffWritten)
+  expect(counts(body('DiffWritten').replace(/cells\.TryReserve\b/, '_ => true'))).not.toEqual(expected.DiffWritten)
   // Commented or compiled out, it is gone too.
-  expect(counts(strip(body('DiffAsync').replace('!store.TryReserveWork(left.Budget, working)', 'false /* !store.TryReserveWork(left.Budget, working) */')))).not.toEqual(expected.DiffAsync)
+  expect(counts(strip(body('DiffWritten').replace('!store.TryReserveWork(left.Budget, working)', 'false /* !store.TryReserveWork(left.Budget, working) */')))).not.toEqual(expected.DiffWritten)
   expect(counts(strip(body('PivotAsync').replace(/^.*figures\.TryReserve, keyMemory.*$/m, line => `#if false\n${line}\n#endif`)))).not.toEqual(expected.PivotAsync)
 })

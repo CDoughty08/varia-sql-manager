@@ -7,7 +7,7 @@ import { explorerNodeProvider, type ProviderContext } from '../../../shared/prov
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
-import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
+import { actionContextValues, actionMenuState, type ActionContextValues, type AgentServiceTarget } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -109,6 +109,8 @@ export interface ExplorerServiceOptions {
   /** SQL Server Agent's release gate (`agentEnabled`, `VARIA_AGENT_PREVIEW=1`): while off, the server's Agent node is dropped and the
    *  tree is today's. */
   readonly agentEnabled?: boolean
+  /** Varia runs on Windows: only there can the SQL Server Agent node's Start, Stop and Restart reach a Service Control Manager (AG-2). */
+  readonly windowsClient?: boolean
   /** The connection workspace: the servers' saved order and expansion (`ConnectionTargetService`). */
   readonly targets?: ExplorerTargets
 }
@@ -128,6 +130,8 @@ export interface GroupBySchemaSource { get(): boolean; subscribe(listener: () =>
  *  the samples change. */
 export interface DatabaseRuntimeSource {
   databaseRuntime(connectionId: string, database: string): { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean } | undefined
+  /** The SQL Server Agent service's last sampled state and startup type (`explorer.agentService`), for the Agent node's verbs. */
+  agentServiceOf?(connectionId: string): { readonly state?: number; readonly startup?: number } | undefined
   subscribe(listener: () => void): () => void
 }
 
@@ -199,10 +203,11 @@ const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema
 
 /** What a node is, and the server it is on: the engine and platform its connection's profile reported at connect. A database's
  *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
-const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined): ExplorerTarget => ({
+const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux' | 'options'> | undefined, runtime: DatabaseRuntime | undefined, agent?: AgentServiceTarget): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
   ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
-  engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {})
+  engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
+  ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
 })
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
@@ -210,8 +215,6 @@ export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' 
   if (connection.options?.provider === 'bigquery') return `(BigQuery${connection.login ? ' - ' + connection.login : ''})`
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : connection.serverVersion ? `(SQL Server ${connection.serverVersion})` : '(SQL Server)'
 }
-/** BigQuery's root has no children until its Explorer (docs/bigquery-plan.md, BQ-5): its datasets are not SQL Server's catalog. */
-const browsable = (connection: LiveConnection): boolean => connection.options.provider !== 'bigquery'
 const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
  * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
@@ -295,6 +298,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly unsubscribeGrouping?: () => void
   private grouped = false
   private readonly agentEnabled: boolean
+  private readonly windowsClient: boolean
   private readonly targets?: ExplorerTargets
   /** Per server row, what its saved expansion still has to restore as pages arrive. */
   private readonly restoring = new Map<number, Restoring>()
@@ -321,6 +325,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.grouping = options.groupBySchema
     this.agentEnabled = options.agentEnabled ?? false
+    this.windowsClient = options.windowsClient ?? false
     this.targets = options.targets
     this.grouped = !!this.grouping?.get()
     this.unsubscribeGrouping = this.grouping?.subscribe(() => this.guard(() => this.groupingChanged()))
@@ -570,7 +575,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
     const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
-    return targetOf(node, this.connectionOf(node.connectionId), runtime)
+    // The Agent node's verbs follow its service's sampled state (actions catalogue, agentServiceRules).
+    const service = node.kind === 'agent' ? this.status?.agentServiceOf?.(node.connectionId) : undefined
+    const agent = node.kind === 'agent' ? { windowsClient: this.windowsClient, ...(service?.state !== undefined ? { state: service.state } : {}), ...(service?.startup !== undefined ? { startup: service.startup } : {}) } : undefined
+    return targetOf(node, this.connectionOf(node.connectionId), runtime, agent)
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
@@ -853,7 +861,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (!available && !root.lost) this.markLost(root)
       else if (available && root.lost) {
         root.lost = false
-        root.hasChildren = browsable(connection)
+        root.hasChildren = true
         root.generation++
         added.push(root.id)
       }
@@ -1004,7 +1012,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.targetId = connection.targetId
     this.updateRoot(node, connection)
-    node.hasChildren = connectionAvailable(connection) && browsable(connection)
+    node.hasChildren = connectionAvailable(connection)
     node.lost = !connectionAvailable(connection)
     node.lastUsed = ++this.clock
     this.rootByConnection.set(connection.id, node.id)

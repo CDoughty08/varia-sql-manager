@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
-import { cancelSettleMs, lostSessionMessage, newSessionMessage, QueryService, sessionRequests, stateBudgetMs, type QueryApi } from '../src/renderer/src/services/queries'
+import { bigQueryLostSessionMessage, cancelSettleMs, lostSessionMessage, newSessionMessage, QueryService, sessionRequests, stateBudgetMs, type QueryApi } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
@@ -734,6 +734,82 @@ describe('BigQuery execution', () => {
     await f.queries.execute(f.tab.id)
     expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('dataset')
     expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('database')
+  })
+  it("names the provider of each BigQuery query it asks about, and the location of its session's last job", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ job: { project: 'demo', jobId: 'job_1', location: 'US' } }) })
+    await f.queries.execute(f.tab.id)
+    expect(f.queries.sessionLocation(f.tab.id)).toBe('US')
+    f.queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 0, checked: false } })
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'rollback' })
+    await f.queries.confirmSessions('close', [f.tab.id])
+    expect(f.queryApi.confirmSessions).toHaveBeenCalledExactlyOnceWith({ action: 'close', tabs: [{ name: 'query.sql', transactions: 0, running: false, unchecked: true, provider: 'bigquery' }] })
+    // An ended session has no location left to switch away from.
+    f.bus.emit({ type: 'session.ended', tabId: f.tab.id })
+    expect(f.queries.sessionLocation(f.tab.id)).toBeUndefined()
+  })
+  it("sends a selection's first column so BigQuery's [line:column] positions map back to the editor", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT 1', startLine: 4, startColumn: 9 })
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ startLine: 4, startColumn: 9 })
+    // SQL Server reports lines only.
+    Object.assign(f.connection, { providerId: undefined })
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('startColumn')
+  })
+  it('runs Preview Rows without the cost prompt, sending its table, and never for SQL Server', async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    const gate = vi.fn(async () => true)
+    f.queries.setCostGate(gate)
+    const preview = { project: 'varia-alpha', dataset: 'sales', table: 'orders' }
+    await f.queries.execute(f.tab.id, preview)
+    expect(gate).not.toHaveBeenCalled()
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ preview })
+    // An ordinary run still asks, and sends no preview.
+    await f.queries.execute(f.tab.id)
+    expect(gate).toHaveBeenCalledOnce()
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('preview')
+    Object.assign(f.connection, { providerId: undefined })
+    await f.queries.execute(f.tab.id, preview)
+    expect(f.queryApi.execute).toHaveBeenCalledTimes(2)
+  })
+  it("says BigQuery ended a lost session, not SQL Server", async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'bigquery' })
+    f.documents.update(f.tab.id, { sessionNotice: 'lost' })
+    await f.queries.execute(f.tab.id)
+    expect(f.results.finish.mock.calls[0][2]).toMatchObject({ notice: bigQueryLostSessionMessage })
+    expect(bigQueryLostSessionMessage).not.toContain('SQL Server')
+  })
+  it('shows a close note in the Messages of a query that stays, and as a notification once it has closed', () => {
+    const docs = documentFixture()
+    const addMessage = vi.fn<ResultsService['addMessage']>()
+    const queries = new QueryService(docs.documents, {} as QueryApi, () => undefined, docs.events, { begin: vi.fn(), finish: vi.fn(), addMessage })
+    const notify = vi.fn<(text: string) => void>(); queries.notify = notify
+    const tab = docs.documents.create('orders.sql', 'SELECT 1', 'sales')
+    queries.addSessionMessage(tab.id, 'Waiting for the job.')
+    expect(addMessage).toHaveBeenLastCalledWith(tab.id, 'Waiting for the job.', 'info')
+    queries.sessionNote(tab.id, { code: 'abortFailed', message: 'Access Denied' })
+    expect(addMessage).toHaveBeenLastCalledWith(tab.id, expect.stringMatching(/^orders\.sql: Varia could not end the BigQuery session \(Access Denied\)/), 'error')
+    expect(notify).not.toHaveBeenCalled()
+    queries.sessionNote('gone', { code: 'commitNotApplied', message: 'Boom' }, 'old.sql')
+    expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^old\.sql: the commit was not applied/))
+    // A query that closed gets no Messages line.
+    queries.addSessionMessage('gone', 'x')
+    expect(addMessage).toHaveBeenCalledTimes(2)
+  })
+  it('asks the location question with the one BigQuery query and answers true only for Switch', async () => {
+    const f = fixture()
+    const location = { dataset: 'sales_eu', from: 'US', to: 'EU' }
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    expect(await f.queries.confirmLocationSwitch(f.tab.id, location)).toBe(true)
+    expect(f.queryApi.confirmSessions).toHaveBeenLastCalledWith({ action: 'switchLocation', tabs: [{ name: 'query.sql', transactions: 0, running: false, provider: 'bigquery' }], location })
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    expect(await f.queries.confirmLocationSwitch(f.tab.id, location)).toBe(false)
   })
 })
 

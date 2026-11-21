@@ -31,6 +31,8 @@ internal sealed class BigQueryPage(JsonDocument document, long bytes) : IDisposa
     public int RowCount => Rows.ValueKind == JsonValueKind.Array ? Rows.GetArrayLength() : 0;
     public long? TotalRows => Count("totalRows");
     public long? NumDmlAffectedRows => Count("numDmlAffectedRows");
+    /// <summary>A top-level string property (tables.get's type), or null.</summary>
+    public string? Text(string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     /// <summary>The next page's token; null on the last page. One Varia cannot send back fails the read rather than ending it
     /// early with rows unread.</summary>
     public string? PageToken => !root.TryGetProperty("pageToken", out var value) || value.ValueKind == JsonValueKind.Null || value.ValueKind == JsonValueKind.String && value.GetString() is ""
@@ -61,8 +63,6 @@ internal sealed partial class BigQueryService
     internal TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(1);
     internal int InsertAttempts { get; set; } = 3;
     internal int ReadAttempts { get; set; } = 4;
-    /// <summary>How long one getQueryResults call waits for the job on BigQuery's side (its <c>timeoutMs</c>, a long poll).</summary>
-    internal int PollMs { get; set; } = 10_000;
     /// <summary>Rows asked per result page; BigQuery also cuts a page at about 10 MB.</summary>
     internal int PageRows { get; set; } = 10_000;
     /// <summary>The largest response body Varia reads; a larger one fails the read rather than being buffered.</summary>
@@ -115,17 +115,28 @@ internal sealed partial class BigQueryService
     internal async Task<Job> InsertJobAsync(BigQueryConnection connection, Job job, string? dataset, CancellationToken token)
     {
         var reference = job.JobReference;
+        // The first failure after which the job may exist (not one that never left, nor a 429, which created nothing). The
+        // caller then hears the last failure wrapped in BigQueryJobMayExist, so its reason shows while no caller reads it as
+        // a job never created.
+        Exception? ambiguous = null;
         for (var attempt = 1; ; attempt++)
         {
             try { return await CallAsync(t => connection.Client.Service.Jobs.Insert(job, reference.ProjectId).ExecuteAsync(t), token); }
             // The id is this request's own, so the job is the one an earlier attempt (or the library's own retry of it) created.
             catch (GoogleApiException error) when (error.HttpStatusCode == HttpStatusCode.Conflict)
             {
-                await LocateAsync(connection, reference, dataset, token);
-                return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
+                // The job exists: a lookup that fails says nothing against that, so the caller hears the 409 (or the earlier
+                // failure), which no caller reads as a job never created.
+                try
+                {
+                    await LocateAsync(connection, reference, dataset, token);
+                    return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
+                }
+                catch (Exception) when (!token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: true); }
             }
             catch (Exception error) when (Transient(error, token))
             {
+                if (!NotSent(error) && error is not GoogleApiException { HttpStatusCode: HttpStatusCode.TooManyRequests }) ambiguous ??= error;
                 // Before sending again, ask whether the first one arrived, where it would run.
                 try
                 {
@@ -134,9 +145,12 @@ internal sealed partial class BigQueryService
                 }
                 catch (GoogleApiException lookup) when (lookup.HttpStatusCode == HttpStatusCode.NotFound && attempt < InsertAttempts) { }
                 catch (Exception lookup) when (attempt < InsertAttempts && Transient(lookup, token)) { }
-                catch (Exception) when (attempt >= InsertAttempts) { throw error; }
+                // A lookup that fails in a way not retried (a 403, a 400) still leaves the first insert's fate unknown.
+                catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous is null ? error : new BigQueryJobMayExist(error, exists: false); }
                 await Task.Delay(Backoff(attempt), token);
             }
+            // A later attempt refused outright (a 403, a 400) says nothing about an earlier one that may have created the job.
+            catch (Exception error) when (ambiguous is not null && !token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: false); }
         }
     }
 
@@ -187,7 +201,13 @@ internal sealed partial class BigQueryService
         request.MaxResults = maxResults;
         request.TimeoutMs = waitMs;
         request.FormatOptionsUseInt64Timestamp = true;
-        // Sent through the service's client (its credential and the library's own retries), its body read here.
+        return await SendRawAsync(service, request, token);
+    }
+
+    /// <summary>A REST read whose JSON body Varia parses itself, under <see cref="MaxPageBytes"/>: sent through the service's
+    /// client (its credential and the library's own retries).</summary>
+    internal async Task<BigQueryPage> SendRawAsync(Google.Apis.Bigquery.v2.BigqueryService service, Google.Apis.Requests.IClientServiceRequest request, CancellationToken token)
+    {
         using var message = request.CreateRequest();
         using var response = await service.HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
         if (!response.IsSuccessStatusCode)
@@ -209,4 +229,12 @@ internal sealed partial class BigQueryService
     }
 
     RequestException TooLarge() => new("BACKEND_ERROR", "BigQuery answered with a result page larger than " + BigQueryCost.Bytes(MaxPageBytes) + ", which Varia does not read.");
+}
+
+/// <summary>An insert's failure after which its job may exist (an earlier attempt's answer was lost), or does (a 409). The
+/// message and inner exception are the last failure's, which the error mapping and the session-expiry check read; no caller
+/// reads it as a job never created.</summary>
+internal sealed class BigQueryJobMayExist(Exception inner, bool exists) : Exception(inner.Message, inner)
+{
+    public bool Exists { get; } = exists;
 }

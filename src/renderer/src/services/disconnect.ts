@@ -1,5 +1,5 @@
 import { targetServerName, type BackendConnectionHandle } from '../../../shared/connection-targets'
-import type { SessionEnd } from '../../../shared/sessions'
+import type { SessionCloseNote, SessionEnd } from '../../../shared/sessions'
 import type { DisconnectPromptRequest, DisconnectChoice } from '../disconnect/DisconnectPromptService'
 import type { ConnectionOperation, ConnectionTargetService } from './connection-targets'
 import type { PreparedQueryClose } from './files'
@@ -27,14 +27,17 @@ export interface DisconnectHost {
   readonly targets: Pick<ConnectionTargetService, 'get' | 'operation' | 'subscribe' | 'beginDisconnect' | 'completeDisconnect' | 'failDisconnect' | 'removeFromExplorer' | 'cancelConnect'>
   documents(): readonly DisconnectDocument[]
   busy(): boolean
-  runTask(action: () => Promise<void>): Promise<void>
+  runTask(action: () => Promise<unknown>): Promise<void>
   refusal(targetId: string, handle: BackendConnectionHandle): string | undefined
   confirm(request: DisconnectPromptRequest): Promise<DisconnectChoice>
   prepareClose(ids: readonly string[]): Promise<PreparedQueryClose | undefined>
   validateClose(plan: PreparedQueryClose): void
   prepareSessions(ids: readonly string[]): Promise<PreparedSessions | undefined>
   cancelSessions(plan: PreparedSessions): Promise<void>
-  endSession(id: string, transaction: SessionEnd): Promise<void>
+  /** Resolves to a BigQuery close's note, shown once the disconnect has finished (`sessionNote`). */
+  endSession(id: string, transaction: SessionEnd): Promise<SessionCloseNote | undefined>
+  /** Shows a note in the query's Messages if it is still open, else as a notification. */
+  sessionNote?(id: string, note: SessionCloseNote, name: string): void
   disconnect(handle: BackendConnectionHandle): Promise<void>
   /** Clear transport/session bindings, stop dependent work, and keep target/database/text/dirty state/results. No await. */
   detached(targetId: string, handle: BackendConnectionHandle): void
@@ -91,7 +94,7 @@ export class DisconnectCoordinator {
     let invalidated = false
     const unsubscribe = host.targets.subscribe(() => { if (!live()) invalidated = true })
     let operation: ConnectionOperation | undefined, completed = false, teardownRequested = false
-    const ended: string[] = []
+    const ended: string[] = [], notes: (readonly [string, string, SessionCloseNote])[] = []
     let result: DisconnectResult = { status: 'busy' }
     try {
       await host.runTask(async () => {
@@ -130,8 +133,9 @@ export class DisconnectCoordinator {
         validate(sessions)
         for (const [id, transaction] of sessions.plan) {
           validate(sessions)
-          await host.endSession(id, transaction)
+          const note = await host.endSession(id, transaction)
           ended.push(id)
+          if (note) notes.push([id, host.documents().find(document => document.id === id)?.name ?? 'A query', note])
         }
         validate(sessions)
         if (close) host.validateClose(close)
@@ -166,6 +170,10 @@ export class DisconnectCoordinator {
       const partial = ended.length ? ` ${ended.length} query session${ended.length === 1 ? ' already ended' : 's already ended'} as selected; those changes cannot be undone.` : ''
       const uncertain = teardownRequested && !completed ? ' The disconnect outcome may be unknown. No tabs were closed; verify the connection before retrying.' : ''
       return { status: completed ? 'failed' : invalidated ? 'stale' : 'failed', error: `${message(error)}${uncertain}${partial}` }
-    } finally { unsubscribe() }
+    } finally {
+      unsubscribe()
+      // Every note shows, whatever became of the disconnect: a commit that did not happen is never unseen.
+      for (const [id, name, note] of notes) host.sessionNote?.(id, note, name)
+    }
   }
 }

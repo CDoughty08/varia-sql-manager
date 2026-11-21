@@ -1,7 +1,7 @@
 // The Backup Timeline's arithmetic (D1e): server-local times as plain numbers (the server's clock, not this machine's
 // zone), the window an interval shows, and the keys that move the point. Pure, for vitest.
 import { timelineIntervalSpecs, type BackupSetRow, type TimelineInterval } from '../../../shared/actions/restore.ts'
-import { logCoverage } from '../../../shared/actions/restore-plan.ts'
+import { logCoverage, type Coverage } from '../../../shared/actions/restore-plan.ts'
 
 const pattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/
 /** A server-local yyyy-MM-ddTHH:mm:ss as milliseconds on a zone-free clock, or undefined. */
@@ -20,12 +20,23 @@ export function timeText(ms: number): string {
 }
 
 export interface TimelineWindow { readonly from: number; readonly to: number }
-/** The span the timeline shows: the interval, ending at the last backup's finish, or later when the point is after it. */
+/**
+ * The span the timeline shows: the interval, ending at the last backup's finish, or at the point when it is outside that (after
+ * the last backup, or before the interval, as a Manual Selection's older sets put it), so the point always shows.
+ */
 export function timelineWindow(sets: readonly BackupSetRow[], interval: TimelineInterval, point?: number): TimelineWindow {
   const finishes = sets.map(set => timeMs(set.finish)).filter((ms): ms is number => ms !== undefined)
-  const last = finishes.length > 0 ? Math.max(...finishes) : point ?? 0
-  const to = point !== undefined && point > last ? point : last
-  return { from: to - timelineIntervalSpecs[interval].ms, to }
+  const last = finishes.length > 0 ? Math.max(...finishes) : point ?? 0, ms = timelineIntervalSpecs[interval].ms
+  const to = point !== undefined && (point > last || point < last - ms) ? point : last
+  return { from: to - ms, to }
+}
+/**
+ * The window after the point moves: unchanged while the point stays inside it, so a click lands where it was clicked and Home
+ * and End reach the window's ends; otherwise slid just far enough to show the point at the edge it crossed.
+ */
+export function followPoint(window: TimelineWindow, point: number): TimelineWindow {
+  const ms = window.to - window.from, to = point > window.to ? point : point < window.from ? point + ms : window.to
+  return { from: to - ms, to }
 }
 /** Where a key moves the point: a minute with the arrows, an hour with Shift, the window's ends with Home and End. */
 export function stepPoint(key: string, shift: boolean, point: number, window: TimelineWindow): number | undefined {
@@ -42,9 +53,9 @@ export function stepPoint(key: string, shift: boolean, point: number, window: Ti
 }
 /** The fraction of the window a time is at, clamped to it. */
 export const position = (ms: number, window: TimelineWindow): number => window.to === window.from ? 1 : Math.min(1, Math.max(0, (ms - window.from) / (window.to - window.from)))
-/** The green stretches log backups cover, as fractions of the window. */
-export function coverage(sets: readonly BackupSetRow[], window: TimelineWindow): { readonly from: number; readonly to: number }[] {
-  return logCoverage(sets).flatMap(stretch => {
+/** The green stretches log backups cover, as fractions of the window. Pass `covered` (logCoverage of the sets) to reuse it. */
+export function coverage(sets: readonly BackupSetRow[], window: TimelineWindow, covered: readonly Coverage[] = logCoverage(sets)): { readonly from: number; readonly to: number }[] {
+  return covered.flatMap(stretch => {
     const from = timeMs(stretch.from), to = timeMs(stretch.to)
     return from === undefined || to === undefined || to < window.from || from > window.to ? [] : [{ from: position(from, window), to: position(to, window) }]
   })

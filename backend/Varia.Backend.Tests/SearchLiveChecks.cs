@@ -36,6 +36,14 @@ internal static class SearchLiveChecks
         created = await sql("CREATE TABLE [srch].[Rates] (id int PRIMARY KEY, rate money, valid_from datetime2 GENERATED ALWAYS AS ROW START, valid_to datetime2 GENERATED ALWAYS AS ROW END,"
             + " PERIOD FOR SYSTEM_TIME (valid_from, valid_to)) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [srch].[Rates_Archive])); CREATE TABLE [srch].[Person] (person_name nvarchar(40)) AS NODE;", database);
         check(created.Error is null, "the search checks create a temporal table and a graph node table: " + created.Error);
+        created = await sql("CREATE TABLE [srch].[Line] (id int, priced_id int CONSTRAINT [fk_srch_line_priced] FOREIGN KEY REFERENCES [srch].[Priced] (id));", database);
+        check(created.Error is null, "the search checks create a table with a foreign key: " + created.Error);
+        created = await sql("CREATE PARTITION FUNCTION [srch_pf] (int) AS RANGE LEFT FOR VALUES (10); CREATE PARTITION SCHEME [srch_ps] AS PARTITION [srch_pf] ALL TO ([PRIMARY]);"
+            + " CREATE TABLE [srch].[Parted] (a int, c int) ON [srch_ps] (c); CREATE INDEX [ix_srch_parted] ON [srch].[Parted] (a);", database);
+        check(created.Error is null, "the search checks create a partitioned table with an aligned index: " + created.Error);
+        // SQL Server 2025 and Azure SQL have vector columns; older servers refuse the table and the check after the build is skipped.
+        var vectors = (await sql("CREATE TABLE [srch].[Vectors] (v vector(3));", database)).Error is null
+            && (await sql("CREATE PROCEDURE [srch].[usp_Vector] @v vector(3) AS SELECT 1;", database)).Error is null;
 
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
@@ -61,7 +69,75 @@ internal static class SearchLiveChecks
         check(who is [{ Object: { Kind: "procedure", Schema: "sys", Name: "sp_who", Database: "master" }, Folder: "systemStoredProcedures" }],
             "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
         check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
+        // The Memory panel's index detail: a real build and search record their times, and the server's long modules show as packed.
+        var memoryDetail = service.Search.MemoryDetail();
+        check(memoryDetail is { Connections: >= 1, LastBuildMs: not null, LastSearchMs: not null, PackedTexts: > 0 } && memoryDetail.Objects >= built.Status.Objects
+            && memoryDetail.ChildrenLeftOut == built.Status.Skipped.Count(skip => skip.Code == ObjectSearchService.ChildrenLeftOut)
+            && memoryDetail.DefinitionTexts >= memoryDetail.PackedTexts && memoryDetail.PackedTextBytes > memoryDetail.PackedBytes,
+            "the index detail carries the last build's and search's times and the server's packed definitions: " + memoryDetail);
         var memoryBefore = service.Search.MemoryUsed;
+
+        // The editor metadata a build keeps beside the children, as a real server reports it: types with their lengths and flags,
+        // a key's and an index's columns, a foreign key's column pairs and referenced table, a parameter's type, and the resource
+        // database's typed parameters (sys.sp_who's @loginame is a sysname).
+        static int At(ObjectTable table, string kind, string name, string? parent)
+        {
+            for (var at = 0; at < table.Count; at++)
+                if (table.Kind(at) == kind && table.Name(at) == name && table.ParentName(at) == parent) return at;
+            return -1;
+        }
+        var held = service.Search.IndexOf(connectionId);
+        var mine = held?.Databases.SingleOrDefault(value => value.Database == database)?.Table;
+        check(mine?.Details is not null, "a build keeps the scratch database's editor metadata");
+        if (mine is not null)
+        {
+            TypedDetail? Typed(string name, string parent, string kind = "column") => At(mine, kind, name, parent) is var at and >= 0 ? mine.Typed(at) : null;
+            check(Typed("id", "Priced") is { TypeText: "int", Ordinal: 1 } id && (id.Flags & TypedFlags.Nullable) == 0
+                && Typed("price", "Priced") is { TypeText: "money" } price && (price.Flags & TypedFlags.Nullable) != 0
+                && Typed("srch_total", "Priced") is { } total && (total.Flags & TypedFlags.Computed) != 0
+                && Typed("note", "Priced") is { TypeText: "nvarchar(40)" } note && (note.Flags & TypedFlags.Default) != 0
+                && Typed("valid_from", "Rates")?.TypeText == "datetime2(7)",
+                "a real server's columns carry their types, lengths, ordinals and flags: " + string.Join(", ", new[] { "id", "price", "srch_total", "note" }.Select(name => name + " " + Typed(name, "Priced")?.TypeText)));
+            check(!vectors || Typed("v", "Vectors")?.TypeText == "vector(3)" && Typed("@v", "usp_Vector", "parameter")?.TypeText == "vector(3)",
+                "a real server's vector column and parameter read with their dimensions, not their bytes: " + Typed("v", "Vectors")?.TypeText + ", " + Typed("@v", "usp_Vector", "parameter")?.TypeText);
+            check(Typed("@srch_param", "usp_Param", "parameter") is { TypeText: "int", Ordinal: 1 }, "a real server's parameter carries its type and ordinal");
+            var priced = At(mine, "table", "Priced", null);
+            var foreign = At(mine, "key", "fk_srch_line_priced", "Line");
+            check(mine.KeyColumns(At(mine, "key", "pk_srch_priced", "Priced")) is [{ Column: 1 }] && mine.KeyColumns(At(mine, "index", "ix_srch_price", "Priced")) is [{ Column: 2, Flags: 0 }]
+                && mine.KeyColumns(foreign) is [{ Column: 2, Referenced: 1 }] && priced >= 0 && mine.Referenced(foreign) == priced,
+                "a real server's primary key, index and foreign key carry their columns, and the foreign key its referenced table");
+            check(mine.KeyColumns(At(mine, "index", "ix_srch_parted", "Parted")) is [{ Column: 1, Flags: 0 }],
+                "an aligned index on a partitioned table keeps only its own key, not the partitioning column SQL Server adds: "
+                + string.Join(", ", mine.KeyColumns(At(mine, "index", "ix_srch_parted", "Parted")).Select(column => column.Column + ":" + column.Flags)));
+        }
+        var resource = held?.Resource?.Table;
+        check(resource is not null && At(resource, "parameter", "@loginame", "sp_who") is var login and >= 0 && resource.Typed(login)?.TypeText == "sysname",
+            "the resource database's parameters carry their types");
+
+        // The editor's lookup on a real build: the scratch database is Latin1_General_100_CS_AS_SC, so its names tell case apart; a
+        // table's columns, keys and indexes and a foreign key in both directions by name; a system view from the resource set.
+        var lookup = service.Search.Lookup(connectionId);
+        var found = lookup?.Objects(database, "srch", "Priced");
+        check(found is { Database: { State: LookupState.Ready, CaseSensitive: true, ReadAt: not null }, Value: [{ Kind: "table" }] } && lookup!.Objects(database, "srch", "priced").Value.Count == 0
+            && lookup.Objects(database, "SRCH", "Priced").Value.Count == 0,
+            "a lookup in a case-sensitive database finds the exact name only: " + found?.Database);
+        var master = lookup?.Database("master");
+        check(master is { CaseSensitive: { } cased } && lookup!.Objects("master", "DBO", "SPT_FALLBACK_DB").Value.Count == (cased ? 0 : 1) && lookup.Objects("master", "dbo", "spt_fallback_db").Value.Count == 1,
+            "master's lookups follow its own collation's case rule: " + master);
+        if (found?.Value is [var pricedTable] && lookup is not null)
+        {
+            check(lookup.Columns(pricedTable).Select(column => column.Name).SequenceEqual(["id", "price", "srch_total", "note"]) && lookup.Columns(pricedTable)[3].Type?.TypeText == "nvarchar(40)",
+                "a real table's columns come by column_id with their types: " + string.Join(", ", lookup.Columns(pricedTable).Select(column => column.Name)));
+            var indexes = lookup.Indexes(pricedTable);
+            check(indexes.Any(value => value is { Kind: "key", Subtype: "primary", Entry.Name: "pk_srch_priced", Columns: [{ Name: "id" }] })
+                && indexes.Any(value => value is { Kind: "index", Entry.Name: "ix_srch_price", Columns: [{ Name: "price", Descending: false, Included: false }] }),
+                "a real table's primary key and index come with their columns by name: " + string.Join(", ", indexes.Select(value => value.Kind + " " + value.Entry.Name)));
+            check(lookup.ReferencedBy(pricedTable) is [{ Entry.Name: "fk_srch_line_priced", Table.Name: "Line", Pairs: [("priced_id", "id")] }]
+                && lookup.Objects(database, "srch", "Line").Value is [var line] && lookup.ForeignKeys(line) is [{ Referenced: { Name: "Priced" }, Pairs: [("priced_id", "id")] }],
+                "a real foreign key is found from both its tables, with its columns by name");
+            check(lookup.Objects(database, "sys", "objects").Value is [{ Kind: "view", Source: null } objects] && lookup.Columns(objects).Any(column => column is { Name: "object_id", Type.TypeText: "int" }),
+                "a system view is found from the resource set in the scratch database, with its typed columns");
+        }
 
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
@@ -129,10 +205,13 @@ internal static class SearchLiveChecks
         // Stop during a build answers CANCELLED and keeps what was read.
         using (var stop = new CancellationTokenSource())
         {
+            var ended = service.Search.Builds;
             var running = service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token);
             stop.Cancel();
             try { await running; check(true, "Stop ends a build (it had finished)"); }
             catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
+            // Stopped or finished, the build's end tells the memory report to walk again (no read left showing as running).
+            check(service.Search.Builds >= ended + 1, "a stopped build counts as ended for the memory report");
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
 
@@ -141,18 +220,37 @@ internal static class SearchLiveChecks
         // after this one, against the same server.
         using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
         {
-            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            // The editor's lookup follows the service's builds: building once listed, skipped with the build's reason after.
+            LookupDatabase? during = null;
+            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, _ => during ??= tight.Lookup(connectionId)?.Database(database));
             check(small.Status.State == "ready" && small.Status.Skipped.Any(skip => skip.Database == database && skip.Code == "TOO_LARGE"),
                 "a database past the memory budget stops its read, is skipped as TOO_LARGE, and the build ends ready (" + small.ElapsedMs + " ms)");
+            check(during is { State: LookupState.Building, Held: null } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a lookup during a real build sees a listed database as building, and after it as skipped with its reason: " + during + " then " + tight.Lookup(connectionId)?.Database(database));
+            // A build stopped once it has listed the databases leaves each one it did not reach as its last read left it.
+            using var stop = new CancellationTokenSource();
+            LookupDatabase? stopping = null;
+            var stopped = false;
+            try
+            {
+                await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token, _ =>
+                {
+                    stopping ??= tight.Lookup(connectionId)?.Database(database);
+                    stop.Cancel();
+                });
+            }
+            catch (RequestException error) when (error.Code == "CANCELLED") { stopped = true; }
+            check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
+                "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
         }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.
         check(!await RanToEnd(service, connectionId, cancel: true), "a stopped index read cancels its batch on a real server, so the rest of it is never sent");
         check(await RanToEnd(service, connectionId, cancel: false), "a reader closed short of its end without a cancel drains the batch on a real server");
-        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
+        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Line]; DROP TABLE [srch].[Priced]; DROP TABLE [srch].[Parted]; DROP TABLE IF EXISTS [srch].[Vectors]; DROP PROCEDURE IF EXISTS [srch].[usp_Vector]; DROP PROCEDURE [srch].[usp_Param];"
             + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
-            + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
+            + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch]; DROP PARTITION SCHEME [srch_ps]; DROP PARTITION FUNCTION [srch_pf];", database);
     }
 
     /// <summary>Reads the first of many large rows on the index's pool and stops, cancelling the batch (as an index read does) or

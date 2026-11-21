@@ -12,6 +12,7 @@ import {
 } from '../src/shared/actions/logins'
 import { kindSpecs, nodeSubtypes, serverEngineOf, serverEngines } from '../src/shared/explorer/catalog'
 import { designerCatalogJson, designerEngines } from '../src/shared/designer/catalog'
+import { agentLimits } from '../src/shared/agent/catalog'
 
 const uuid = () => crypto.randomUUID()
 const rename = () => ({ action: 'rename', connectionId: uuid(), requestId: uuid(), target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, newName: 'Orders2' })
@@ -25,8 +26,9 @@ describe('server engines', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
     // Attach is SQL Server's box editions' alone (decision 10), Managed Instance cannot SET OFFLINE or ONLINE, nor run sp_detach_db
     // (Take Offline, Bring Online and Detach run on box servers only), and it restores from URL only, which neither Restore Database nor Restore Files and
-    // Filegroups offers. A login's Disable and Enable (D4b) and Unlock (D4d) run wherever ALTER LOGIN does, as its Rename.
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties', 'disable', 'enable', 'unlock'])
+    // Filegroups offers. A login's Disable and Enable (D4b) and Unlock (D4d) run wherever ALTER LOGIN does, as its Rename. Managed Instance has SQL Server
+    // Agent, so its job verbs run there; its service verbs are listed but greyed with a reason (agentServiceRules).
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties', 'disable', 'enable', 'unlock', 'startJob', 'stopJob', 'startAgent', 'stopAgent', 'restartAgent'])
     expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline', 'detach', 'restore', 'restoreFiles'])
     // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
     expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
@@ -35,13 +37,17 @@ describe('server engines', () => {
     for (const row of json.actions) {
       expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
       // A restore's cleanup drops a partly restored database, which a large one takes a while to do.
-      expect(row.cleanupMs, row.action).toBe(row.action === 'restore' ? 30_000 : actionLimits.cleanupMs)
+      // SQL Server Agent's Start, Stop and Restart (AG-2) may wait for the service to reach its state after Stop.
+      const service = ['startAgent', 'stopAgent', 'restartAgent'].includes(row.action)
+      expect(row.cleanupMs, row.action).toBe(row.action === 'restore' ? 30_000 : service ? agentLimits.serviceStatementMs + agentLimits.serviceWaitMs + agentLimits.serviceReadMs : actionLimits.cleanupMs)
     }
     // New Login (D2a) runs on SQL Server, and from D2e on Managed Instance too.
     expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box', 'managedInstance']]])
     // Login Properties (D2c) is the dialog a login's Properties opens: the backend reads its kind and verb to check its target.
     expect(json.actions.filter(row => isKindDialogAction(row.action as DialogAction))).toMatchObject([{ action: 'loginProperties', class: 'dialog', kind: 'login', verb: 'properties', engines: ['box', 'managedInstance'] },
-      { action: 'tableProperties', class: 'dialog', kind: 'table', verb: 'properties', engines: ['box', 'managedInstance'] }])
+      { action: 'tableProperties', class: 'dialog', kind: 'table', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // SQL Server Agent Properties (AG-8a) opens on the Agent node, read-only on Managed Instance.
+      { action: 'agentProperties', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

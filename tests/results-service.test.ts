@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -34,6 +34,22 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
 }
 
 describe('results service', () => {
+  it('shows a line written outside any execution at once, in a messages-only view, and after a run own messages', () => {
+    const { service, tab, client } = fixture()
+    service.addMessage('t1', 'q.sql: the commit was not applied.', 'error')
+    expect(tab()).toMatchObject({ status: 'completed', view: 'messages', messagesOnly: true, messages: [{ text: 'q.sql: the commit was not applied.', kind: 'error' }] })
+    // No execution follows it: the view is closed by its own run, and no result run was opened at the backend.
+    expect(client.open).not.toHaveBeenCalled()
+    service.addMessage('t1', 'x'.repeat(2_000_000))
+    expect(tab()!.messages.at(-1)!.text.length).toBeLessThan(2_000_000)
+    // A run that has its own messages keeps them first and is not messages-only.
+    service.begin('t2', 'q2')
+    service.finish('t2', 'q2', { summary: { status: 'completed', resultSets: [], discardedResultSets: 0, messages: [{ text: '(1 row affected)', kind: 'info' }], recordsAffected: 1, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'd', messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-11-19T00:00:00Z' } })
+    service.addMessage('t2', 'Waiting for BigQuery job job_1 to finish.')
+    expect(tab('t2')!.messagesOnly).toBeUndefined()
+    expect(tab('t2')!.messages.map(message => message.text)).toEqual(['(1 row affected)', 'Waiting for BigQuery job job_1 to finish.'])
+    service.dispose()
+  })
   it('reports an output choice even before the tab has an ordinary result run', () => {
     const { service, events, client } = fixture()
     const choices: unknown[] = []
@@ -1567,7 +1583,7 @@ describe('results service filters', () => {
     const resolving = (handle: FakeHandle) => {
       let viewId = 0
       handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, ++viewId, (o?.filters ?? []).map((filter): ResolvedViewFilter => {
-        if (filter.op === 'duplicates' || filter.op === 'groups') return filter as ResolvedViewFilter
+        if (filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'kind') return filter as ResolvedViewFilter
         if (filter.op === 'keepRows') return { op: 'keepRows', rows: 'rows' in filter ? filter.rows : filter.cells.ranges.flatMap(([first, count]) => Array.from({ length: count }, (_, at) => 100 + first + at)) }
         return { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false }
       })))
@@ -1779,7 +1795,7 @@ describe('results service filters', () => {
 
   it('takes at most 16 filters, saying so, and filters only by selections whose runs of rows fit a request', async () => {
     const { service, handle, select, flush, tab } = filtered(1000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
-    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'keepRows' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
+    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'keepRows' || filter.op === 'kind' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
     for (let column = 0; column < 16; column++) {
       select([{ top: 0, bottom: 0, left: column, right: column }])
       await settle()
@@ -2233,5 +2249,16 @@ describe('results service busy state', () => {
     // Closing the tab forgets what its operations said.
     service.release('t1')
     expect(ops()).toBeUndefined()
+  })
+})
+
+describe('comparison kind filters', () => {
+  it('names a kind filter by its kinds in a fixed order, whatever order it was asked in, and marks no header funnel', () => {
+    expect(kindLabel(['added', 'changed'])).toBe('Changed or added rows')
+    expect(kindLabel(['changed'])).toBe('Changed rows')
+    expect(kindLabel(['removed', 'same', 'added'])).toBe('Unchanged, added or removed rows')
+    expect(filterLabel({ op: 'kind', kinds: ['removed', 'changed'] }, [])).toBe('Changed or removed rows')
+    const sort = { filters: [{ filter: { op: 'kind', kinds: ['added'] }, label: 'Added rows', named: true }, { filter: { op: 'in', column: 1, rows: [0] }, label: 'x', named: false }] }
+    expect(filteredColumns(sort as never)).toEqual(new Set([1]))
   })
 })

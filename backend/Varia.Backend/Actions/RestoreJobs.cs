@@ -72,7 +72,7 @@ internal sealed partial class ActionService
         for (var index = 0; index < sets.Count; index++)
         {
             var set = sets[index];
-            if (set is null || set.Id is null || set.Id.Length > Restore.Limit("setId") || !RestoreSetId().IsMatch(set.Id) || set.File < 1 || set.File > Restore.Limit("position")
+            if (set is null || set.Id is null || set.Id.Length > Restore.Limit("setId") || !RestoreSetId().IsMatch(set.Id) || (set.Guid is { } guid && !RestoreUuid().IsMatch(guid)) || set.File < 1 || set.File > Restore.Limit("position")
                 || (set.Name is { } name && (name.Length > Restore.Limit("setName") || name.Contains('\0')))) throw Invalid("restore.sets.");
             RestoreDevices(set.Devices);
             var fits = set.Type switch

@@ -37,6 +37,11 @@ if (args is [FindBench.Argument])
     FindBench.Run();
     return;
 }
+if (args is [RoomPoolBench.Argument])
+{
+    RoomPoolBench.Run();
+    return;
+}
 // The pivot benchmark, run by hand (docs/pivot-performance-findings.md): measures only, no checks.
 if (args is [PivotBench.Argument, ..])
 {
@@ -51,9 +56,23 @@ if (args is [PageCompressionBench.Argument, _, _, ..])
     return;
 }
 // The typed form over SQL Server's own catalog rows, run by hand against a server (read-only SELECTs): measures only.
+// Packing at seal, run by hand against a server (docs/page-compression-findings.md): measures only, no checks.
+if (args is [SealBench.Argument, var sealServer, ..])
+{
+    SealBench.Run(sealServer, args.Length > 2 ? int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 4);
+    return;
+}
+
 if (args is [TypedFormBench.Argument, var typedServer])
 {
     TypedFormBench.Run(typedServer);
+    return;
+}
+
+// Offline BigQuery read throughput, REST against Storage Read, run by hand (docs/bigquery.md): measures only, no checks.
+if (args is [BigQueryExecutionChecks.ReadBenchArgument, ..])
+{
+    await BigQueryExecutionChecks.ReadBenchAsync(args);
     return;
 }
 
@@ -99,6 +118,8 @@ if (args is ["--bigquery-checks"])
     BigQueryCredentialChecks.Run(Collect);
     await BigQueryChecks.RunAsync(Collect);
     await BigQueryExecutionChecks.RunAsync(Collect);
+    await BigQuerySessionChecks.RunAsync(Collect);
+    await BigQueryExplorerChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -126,6 +147,12 @@ if (args is ["--diff-checks"])
 {
     DiffChecks.Run(Check);
     Console.WriteLine("Passed " + passed + " diff checks.");
+    return;
+}
+if (args is ["--seal-packing-checks"])
+{
+    SealPackingChecks.Run(Check);
+    Console.WriteLine("Passed " + passed + " seal packing checks.");
     return;
 }
 if (args is ["--result-name-checks"])
@@ -338,7 +365,11 @@ if (liveGroup is null)
     Check(SqlScript.Parse("SELECT 1;\nGO /* count */ 2 /* trailing */\nSELECT 2;")[0].RepeatCount == 2, "comments between delimiter tokens");
     Check(SqlScript.Parse("SELECT 'GO'; SELECT [GO]; -- GO\nGO\nSELECT 2;").Count == 2, "inline identifiers and strings");
     Check(SqlScript.Parse("SELECT 1;\nGOTO label;\nGO2;\nlabel: SELECT 2;").Count == 1, "GO prefixes are not delimiters");
-    foreach (var go in new[] { "GO;", "GO 0", "GO -1", "GO +2", "GO 2.5", "GO 1001", "GO 999999999999999", "GO 2 SELECT 2", "GO '2'" }) Invalid("SELECT 1;\n" + go, go);
+    batches = SqlScript.Parse("SELECT 1;\nGO:\n  go: SELECT 2;\nGOTO GO;\nGO\nSELECT 3;");
+    Check(batches.Count == 2 && batches[0].Sql == "SELECT 1;\nGO:\n  go: SELECT 2;\nGOTO GO;\n" && batches[0].RepeatCount == 1,
+        "GO: at the start of a line is a label in the batch, as sqlcmd reads it, not a delimiter");
+    Check(SqlScript.Parse("SELECT 1;\nGO::\nGO\nSELECT 2;").Count == 2, "GO:: is T-SQL for the server to judge, as sqlcmd sends it, not a delimiter");
+    foreach (var go in new[] { "GO :", "GO/* c */:", "GO;", "GO 0", "GO -1", "GO +2", "GO 2.5", "GO 1001", "GO 999999999999999", "GO 2 SELECT 2", "GO '2'" }) Invalid("SELECT 1;\n" + go, go);
     Invalid(string.Concat(Enumerable.Repeat("SELECT 1;\nGO 1000\n", 2)), "total repetition budget");
     Invalid("SELECT 1;\nGO\n:r file.sql", "SQLCMD include rejected before executing anything");
     Invalid("!! echo command", "shell escape rejected");
@@ -454,6 +485,8 @@ if (liveGroup is null)
         ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
         ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
+        ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
+        ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("OperationProgress", Sync(() => OperationProgressChecks.Run(Check))),
@@ -462,8 +495,10 @@ if (liveGroup is null)
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Packing", Sync(() => PackingChecks.Run(Check))),
         ("TypedForm", Sync(() => TypedFormChecks.Run(Check))),
+        ("RoomPool", Sync(() => RoomPoolChecks.Run(Check))),
         ("Packer", Sync(() => PackerChecks.Run(Check))),
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
+        ("SealPacking", Sync(() => SealPackingChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
         ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
@@ -498,6 +533,9 @@ if (liveGroup is null)
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
         ("Updater", Sync(() => UpdaterChecks.Run(Check))),
         ("Agent", () => AgentChecks.RunAsync(Check)),
+        ("AgentActions", () => AgentActionChecks.RunAsync(Check)),
+        ("AgentJobs", () => AgentJobsChecks.RunAsync(Check)),
+        ("AgentProperties", () => AgentPropertiesChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
@@ -654,8 +692,11 @@ if (liveGroup is null)
         && new[] { "0/2", "3/2", "1/0", "x/2", "1/2/3" }.All(value => { try { LiveGroups.Parse(["--live-group", value]); return false; } catch (ArgumentException) { return true; } })
         && LiveGroups.Runs(null, "Query") && LiveGroups.Split([("a", 5), ("b", 5), ("c", 9)], 2) is [["c"], ["a", "b"]]
         && LiveGroups.Parse(["--live-suite", "Scripting"]) is { Suite: "Scripting" } single && LiveGroups.Runs(single, "Scripting") && !LiveGroups.Runs(single, "Query")
-        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))(),
-        "--live-group k/n names one group of n, --live-suite one known suite, and a run without either runs every suite");
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "Agent,NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))()
+        && LiveGroups.Parse(["--live-suite", "Agent,AgentService"]) is { } pair && LiveGroups.Runs(pair, "Agent") && LiveGroups.Runs(pair, "AgentService") && !LiveGroups.Runs(pair, "Query")
+        && !LiveGroups.Runs(null, "AgentService") && !LiveGroups.Runs(new LiveGroups.Group(1, 1), "AgentService") && LiveGroups.Covers([.. LiveGroups.Suites.Select(suite => suite.Name), "AgentService"]),
+        "--live-group k/n names one group of n, --live-suite one or more known suites, and a run without either runs every suite but the excluded ones (AgentService), which only --live-suite runs");
     Console.WriteLine("Passed " + passed + " offline .NET checks.");
 }
 
@@ -1036,6 +1077,7 @@ try
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
     await Suite("Agent", () => AgentLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("AgentService", () => AgentActionLiveChecks.ServiceAsync(Check, service, info, json));
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."

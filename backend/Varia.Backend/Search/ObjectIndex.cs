@@ -22,8 +22,13 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
 internal sealed class DatabaseIndex(string database, ObjectTable table, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null,
-    bool pooled = false)
+    bool pooled = false, DateTime? readAt = null)
 {
+    private readonly object gate = new();
+    private TableLookup? lookup;
+    private long lookupBytes;
+    private bool dropped;
+
     /// <summary>An index of <paramref name="objects"/> as they are, holding no pool references (checks and benchmarks).</summary>
     public DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut) : this(database, ObjectTable.Of(objects), bytes, modules, cut) { }
 
@@ -41,6 +46,93 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
+    /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
+    /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
+    public bool ChildrenLeftOut { get; set; }
+    /// <summary>Read by a build without definitions: no entry has one.</summary>
+    public bool DefinitionsLeftOut { get; set; }
+    /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
+    /// read did not reach it (a batch that failed part way).</summary>
+    public bool? CaseSensitive { get; set; }
+
+    /// <summary>Whether, ignoring case otherwise, the collation tells i from I (Turkish and Azeri: i pairs with İ and ı with I);
+    /// the second column of <see cref="ObjectSearchSql.CaseSensitive"/>.</summary>
+    public bool DottedI { get; set; }
+
+    /// <summary>When the read was made, on <see cref="IndexClock"/>: what the lookup orders reads and skips by.</summary>
+    public long Stamp { get; } = IndexClock.Next();
+    /// <summary>Held after its read failed part way (KeepPartial): it has only what came before the failure, whatever the build
+    /// records of it (set before it is held, so a lookup never sees it as whole).</summary>
+    public bool FailedPart { get; set; }
+    /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
+    public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+
+    /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
+    public long LookupBytes { get { lock (gate) return lookupBytes; } }
+
+    private int lookupBuilds;
+    private bool lookupBuilding;
+
+    /// <summary>How many times this read's lookup arrays were built (a check's view: at most once, and never when refused).</summary>
+    internal int LookupBuilds => Volatile.Read(ref lookupBuilds);
+
+    /// <summary>A check's hook: called once the build is claimed, before the arrays are built.</summary>
+    internal Action? LookupBuilding { get; set; }
+
+    /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
+    /// <paramref name="built"/> is told when this call built them. Null once it is dropped, while another call is building them, or
+    /// when the budget cannot take them: the lookup then scans the table.</summary>
+    public TableLookup? Lookup(IndexBudget budget, Action? built = null)
+    {
+        if (Volatile.Read(ref lookup) is { } held) return held;
+        var bytes = TableLookup.BytesFor(Table);
+        // Claimed and charged under the gate, so one call builds and a budget that refuses costs no build; built outside it,
+        // since Put, Keep and Dispose take it. A build that throws, or finds the read dropped, gives the charge back.
+        lock (gate)
+        {
+            if (lookup is not null || dropped || lookupBuilding) return lookup;
+            if (!budget.TryTake(bytes)) return null;
+            lookupBuilding = true;
+        }
+        TableLookup made;
+        try
+        {
+            LookupBuilding?.Invoke();
+            made = TableLookup.Build(Table);
+            Interlocked.Increment(ref lookupBuilds);
+        }
+        catch
+        {
+            lock (gate) lookupBuilding = false;
+            budget.Release(bytes);
+            throw;
+        }
+        lock (gate)
+        {
+            lookupBuilding = false;
+            if (dropped)
+            {
+                budget.Release(bytes);
+                return null;
+            }
+            lookupBytes = bytes;
+            Volatile.Write(ref lookup, made);
+        }
+        built?.Invoke();
+        return made;
+    }
+
+    /// <summary>Gives back its lookup arrays' share once the index no longer holds it; a later lookup builds none.</summary>
+    public void Dropped(IndexBudget budget)
+    {
+        lock (gate)
+        {
+            dropped = true;
+            budget.Release(lookupBytes);
+            lookupBytes = 0;
+            Volatile.Write(ref lookup, null);
+        }
+    }
 }
 
 /// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
@@ -54,6 +146,15 @@ internal static class IndexMemory
 
     /// <summary>A database's reference to one pooled text (<see cref="DatabaseIndex.Pooled"/>).</summary>
     public const long SlotBytes = 8;
+
+    /// <summary>A type in a table's <see cref="ObjectDetails"/>: its name's and schema's text ids, its id, its system type id and flags.</summary>
+    public const long TypeBytes = 16;
+    /// <summary>A column's, parameter's or function's type: its entry, type, length, precision, scale, ordinal and flags.</summary>
+    public const long TypedBytes = 13;
+    /// <summary>An index's or key's column list: its entry, where its columns start, how many, and a foreign key's table.</summary>
+    public const long KeyBytes = 14;
+    /// <summary>One column of an index or key: its column_id, a foreign key's referenced column_id, and flags.</summary>
+    public const long KeyColumnBytes = 5;
 
     /// <summary>A string of <paramref name="length"/> UTF-16 code units: header, method table, length and terminator, 8-aligned.</summary>
     public static long StringBytes(int length) => (22L + 2L * length + 7) & ~7L;
@@ -130,6 +231,21 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Table.Count) + (resource?.Table.Count ?? 0) + (server?.Table.Count ?? 0) + (agent?.Table.Count ?? 0); } }
     /// <summary>SQL Server Agent's objects (jobs, alerts, operators), read apart from the server's, whose refs name no database.</summary>
     public DatabaseIndex? Agent { get { lock (gate) return agent; } }
+    /// <summary>Every database index it holds, the server's and Agent's included, read together (the Memory panel's Nerd metrics).</summary>
+    public List<DatabaseIndex> Held
+    {
+        get
+        {
+            lock (gate)
+            {
+                var held = new List<DatabaseIndex>(databases.Count + 2);
+                held.AddRange(databases.Values);
+                if (server is not null) held.Add(server);
+                if (agent is not null) held.Add(agent);
+                return held;
+            }
+        }
+    }
 
     /// <summary>Holds Agent's objects in place of those held before, as <see cref="PutServer"/>.</summary>
     public void PutAgent(DatabaseIndex value)
@@ -167,6 +283,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private void Drop(DatabaseIndex value, long bytes)
     {
         budget.Release(bytes);
+        value.Dropped(budget);
         pool?.Release(value.Pooled);
     }
 
@@ -332,6 +449,14 @@ internal sealed class SearchMatcher
         length > 0 && (index == 0 || !Word(value[index - 1])) && (index + length >= value.Length || !Word(value[index + length]));
 
     internal static bool Word(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
+}
+
+/// <summary>A process-wide sequence that orders reads and build outcomes for the lookup; the wall clock can step back.</summary>
+internal static class IndexClock
+{
+    private static long now;
+
+    public static long Next() => Interlocked.Increment(ref now);
 }
 
 /// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name

@@ -31,18 +31,18 @@ internal static class ActionErrors
         ["BLOCKED"] = [1222],
         // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user, 3101 a restore's exclusive access,
         // 3703 sp_detach_db; 15434: a login with sessions (DROP LOGIN, D4c).
-        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3101, 3703, 15434],
+        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3101, 3703, 15434, 14372],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
         // 3709 a database snapshot of the database being detached or dropped.
         // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c); 15173: the server
         // permissions a login granted.
         ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183, 15173],
         // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login (a login's rename too), 15023 a user.
-        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
+        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023, 14261],
         // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist;
         // 50010: a guarded DROP's principal is not the one it was planned for (ActionSql.UserCheck, LoginCheck). 15404: Check Names'
         // xp_logininfo found no such Windows account (D2e, probed).
-        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401, 50010, 15404],
+        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401, 50010, 15404, 14262],
         // 5058: the option cannot be set in this database; 3707: sp_detach_db on a suspect or recovery pending database. (948, a
         // database from a newer SQL Server, is severity 20: it ends the session, so it is CONNECTION_LOST, and Attach refuses such a
         // database itself before it runs anything.) New Login (probed by D2): 15099 MUST_CHANGE without CHECK_EXPIRATION, 15122
@@ -61,7 +61,8 @@ internal static class ActionErrors
         ["FILE_ACCESS"] = [5120, 5123],
         // 2571: DBCC CHECKPRIMARYFILE (Attach's Add) outside sysadmin; 5011: ALTER DATABASE without ALTER on it (Take Offline and
         // Bring Online refused in SQL Server); 7983: sp_detach_db's DBCC DETACHDB without db_owner or sysadmin.
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983],
+        // 14392: sp_purge_jobhistory refusing a login below sysadmin and SQLAgentOperatorRole (SQL Server Agent Properties' purge, AG-8a).
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571, 5011, 7983, 14392],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         // Backup media a restore cannot use: a family misformed or missing (3241, 3242), a damaged or unreadable set (3183, 3189).
         // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system
@@ -72,7 +73,10 @@ internal static class ActionErrors
         ["BACKUP_MISMATCH"] = [3154],
         ["TAIL_LOG_NEEDED"] = [3159],
         ["RESTORE_SEQUENCE"] = [4305, 4326, 3117],
-        ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]
+        ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060],
+        // SQL Server Agent (AG-2; src/shared/agent/catalog.ts agentErrorNumbers): 14261 a job's name in use, 14262 a job or step that does not
+        // exist, 14372 a schedule still in use, 15281 Agent XPs off. 22022 is decided by a re-read (ActionService.AgentRefusalAsync).
+        ["AGENT_STOPPED"] = [15281]
     };
     public static ActionError Create(ActionsCatalog catalog, string code, string message) =>
         new(code, ScriptingErrors.Clip(message, MaxMessage), catalog.Retryable(code));

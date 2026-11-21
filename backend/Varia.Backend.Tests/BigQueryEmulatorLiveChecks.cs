@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -124,6 +125,8 @@ internal static class BigQueryEmulatorLiveChecks
             check(counted.Select(row => row["n"]?.ToString()).SingleOrDefault() == "4", "emulator: named query parameters of each type bind as values");
 
             await ExecuteAsync(check, service, connection.Id, table);
+            await StorageReadAsync(check, environment);
+            await ExplorerAsync(check, service, connection.Id, table);
 
             // The emulator finishes jobs synchronously, so cancel meets a finished job; it must still answer (Job History's Cancel).
             var cancelled = await api.Jobs.Cancel(Project, jobId).ExecuteAsync();
@@ -149,6 +152,51 @@ internal static class BigQueryEmulatorLiveChecks
 
         var (closed, disconnected, _) = await Call("connections.disconnect", new JsonObject { ["connectionId"] = connection.Id });
         check(closed == "ok" && disconnected.GetProperty("disconnected").GetBoolean() && service.BigQuery.Count == 0, "emulator: disconnect releases the BigQuery handle");
+    }
+
+    /// <summary>Object Explorer, Preview Rows and Script As end to end (docs/bigquery.md, Object Explorer): the emulator's datasets.list,
+    /// tables.list, tables.get and tabledata.list behind explorer.children, query.execute's preview and scripting.script.</summary>
+    static async Task ExplorerAsync(Action<bool, string> check, SqlService service, string connectionId, string table)
+    {
+        async Task<(string Code, object? Result, string Message)> Call(string method, JsonNode parameters)
+        {
+            using var document = JsonDocument.Parse(parameters.ToJsonString());
+            try { return ("ok", await service.DispatchAsync(method, document.RootElement.Clone(), Wire), ""); }
+            catch (RequestException error) { return (error.Code, null, error.Message); }
+        }
+        JsonObject Children(JsonObject node) => new() { ["connectionId"] = connectionId, ["requestId"] = Guid.NewGuid().ToString(), ["node"] = node, ["pageSize"] = 500 };
+        var project = new JsonObject { ["kind"] = "bqProject", ["name"] = Project };
+        var dataset = new JsonObject { ["kind"] = "bqDataset", ["name"] = Dataset, ["project"] = Project };
+        var orders = new JsonObject { ["kind"] = "bqTable", ["name"] = table, ["project"] = Project, ["dataset"] = Dataset };
+
+        var datasets = await Call("explorer.children", Children(new JsonObject { ["type"] = "object", ["object"] = project }));
+        check(datasets is { Code: "ok", Result: ExplorerChildrenResult { Error: null } listed } && listed.Nodes.Any(node => node.Label == Dataset),
+            $"emulator: a project lists its datasets in Object Explorer: {datasets.Code} {datasets.Message} {(datasets.Result as ExplorerChildrenResult)?.Error?.Message}");
+        var tables = await Call("explorer.children", Children(new JsonObject { ["type"] = "folder", ["owner"] = dataset, ["folder"] = "bqTables" }));
+        check(tables is { Code: "ok", Result: ExplorerChildrenResult { Error: null } rows } && rows.Nodes.Any(node => node.Label == table && node.Ref.Object?.Kind == "bqTable"),
+            $"emulator: a dataset's Tables folder lists the table: {tables.Code} {tables.Message} {(tables.Result as ExplorerChildrenResult)?.Error?.Message}");
+        var columns = await Call("explorer.children", Children(new JsonObject { ["type"] = "folder", ["owner"] = orders.DeepClone(), ["folder"] = "bqColumns" }));
+        var labels = (columns.Result as ExplorerChildrenResult)?.Nodes.Select(node => node.Label + " " + node.Sublabel).ToArray() ?? [];
+        check(labels.SequenceEqual(["id INT64, required", "customer STRING", "amount NUMERIC"]), "emulator: a table's Columns show each column's type: " + string.Join(", ", labels));
+
+        var preview = await Call("query.execute", new JsonObject
+        {
+            ["connectionId"] = connectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = "SELECT 1", ["maxRows"] = 0, ["timeoutSeconds"] = 0,
+            ["preview"] = new JsonObject { ["project"] = Project, ["dataset"] = Dataset, ["table"] = table }
+        });
+        var result = preview.Result as QueryResult;
+        check(result is { Status: "completed" } && result.ResultSets.Single().RowsStored == 25,
+            $"emulator: Preview Rows reads the table's rows with tabledata.list: {preview.Code} {preview.Message} {result?.Status} {result?.Error?.Message} {result?.ResultSets.FirstOrDefault()?.RowsStored}");
+
+        var options = new JsonObject();
+        foreach (var option in Varia.Backend.Scripting.ScriptingCatalog.Current.Options) options[option.Key] = JsonNode.Parse(option.Default.GetRawText());
+        var script = await Call("scripting.script", new JsonObject
+        {
+            ["connectionId"] = connectionId, ["requestId"] = Guid.NewGuid().ToString(), ["targets"] = new JsonArray(orders.DeepClone()), ["verb"] = "select", ["options"] = options
+        });
+        var text = (script.Result as ScriptResult)?.Text ?? "";
+        check(text.Contains("`customer`", StringComparison.Ordinal) && text.Contains($"FROM `{Project}`.`{Dataset}`.`{table}`", StringComparison.Ordinal),
+            $"emulator: Script As › SELECT names the table's columns from tables.get: {script.Code} {script.Message} {(script.Result as ScriptResult)?.Error?.Message}");
     }
 
     /// <summary>query.execute end to end (docs/bigquery.md, Execution): a job per query, results polled and paged into the
@@ -209,6 +257,69 @@ internal static class BigQueryEmulatorLiveChecks
         check(code == "ok" && result is { Status: "failed", Error: not null, ResultSets.Count: 0 } && result.Job is { JobId.Length: > 0 }
             && result.Messages.Any(entry => entry.Kind == "error"),
             $"emulator: a failing query is the summary's error, with its job: {code} {message} {result?.Error} {Messages(result)}");
+    }
+
+    /// <summary>Storage Read against the emulator's plaintext gRPC port (VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT, emulator mode
+    /// only): the same queries read through REST and through Arrow give identical cells, in order for a top-level ORDER BY.
+    /// Scalar columns only: the emulator fails to write DATETIME and TIME to Arrow, writes BYTES base64-encoded twice and
+    /// panics on ARRAY columns (the offline golden check covers every type).</summary>
+    static async Task StorageReadAsync(Action<bool, string> check, BigQueryEnvironment environment)
+    {
+        if (environment.StorageEndpoint is null)
+        {
+            Console.WriteLine("emulator: Storage Read checks skipped: VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT is not set.");
+            return;
+        }
+        using var rest = new SqlService(bigQuery: environment with { StorageEndpoint = null });
+        using var arrow = new SqlService(bigQuery: environment);
+        arrow.BigQuery.StorageReadMinBytes = 0;
+        async Task<string> Connect(SqlService service)
+        {
+            using var document = JsonDocument.Parse(new JsonObject
+            {
+                ["provider"] = "bigquery", ["project"] = Project, ["dataset"] = Dataset, ["authentication"] = "gcloud", ["credential"] = new JsonObject { ["source"] = "anonymous" }
+            }.ToJsonString());
+            return ((ConnectionInfo)await service.DispatchAsync("connections.connect", document.RootElement.Clone(), Wire)).Id;
+        }
+        var restId = await Connect(rest);
+        var arrowId = await Connect(arrow);
+        async Task<(QueryResult? Result, List<PageCell[]> Rows)> Run(SqlService service, string connectionId, string sql)
+        {
+            var args = new JsonObject { ["connectionId"] = connectionId, ["sessionId"] = Guid.NewGuid().ToString(), ["queryId"] = Guid.NewGuid().ToString(), ["sql"] = sql, ["maxRows"] = 0, ["timeoutSeconds"] = 0 };
+            using var document = JsonDocument.Parse(args.ToJsonString());
+            var result = await service.DispatchAsync("query.execute", document.RootElement.Clone(), Wire) as QueryResult;
+            var set = result?.ResultSets.SingleOrDefault() is { } descriptor ? service.Results.Find(descriptor.ResultId) : null;
+            return (result, set is null ? [] : [.. set.SealedSnapshot().SelectMany(page => PageReader.Read(PinnedPage.Body(page), set.Wires).Rows)]);
+        }
+        string[] queries =
+        [
+            "SELECT n, CAST(n AS STRING) AS s, n * 1.5 AS f, CAST(n AS NUMERIC) / 8 AS num, MOD(n, 2) = 0 AS b, DATE_ADD(DATE '2026-01-01', INTERVAL n DAY) AS d, "
+                + "TIMESTAMP_ADD(TIMESTAMP '2026-11-15 09:30:00.123456 UTC', INTERVAL n SECOND) AS ts, "
+                + "IF(MOD(n, 7) = 0, NULL, n) AS maybe "
+                + "FROM UNNEST(GENERATE_ARRAY(1, 1500)) AS n ORDER BY n",
+            // Unordered: up to four streams, appended as they come, so the rows are compared in any order.
+            "SELECT n, REPEAT('x', MOD(n, 40)) AS pad FROM UNNEST(GENERATE_ARRAY(1, 2500)) AS n"
+        ];
+        foreach (var sql in queries)
+        {
+            var before = arrow.BigQuery.StorageSessions;
+            var (restResult, restRows) = await Run(rest, restId, sql);
+            var (arrowResult, arrowRows) = await Run(arrow, arrowId, sql);
+            if (!sql.Contains("ORDER BY", StringComparison.Ordinal))
+            {
+                restRows = [.. restRows.OrderBy(row => long.Parse(row[0].Text ?? "0", CultureInfo.InvariantCulture))];
+                arrowRows = [.. arrowRows.OrderBy(row => long.Parse(row[0].Text ?? "0", CultureInfo.InvariantCulture))];
+            }
+            var differences = new List<string>();
+            for (var r = 0; r < Math.Min(restRows.Count, arrowRows.Count) && differences.Count < 8; r++)
+                for (var c = 0; c < restRows[r].Length; c++)
+                    if (restRows[r][c].Text != arrowRows[r][c].Text || restRows[r][c].Flags != arrowRows[r][c].Flags)
+                        differences.Add(r + "," + c + ": REST ‘" + restRows[r][c].Text + "’ Arrow ‘" + arrowRows[r][c].Text + "’");
+            var messages = string.Join(" | ", arrowResult?.Messages.Select(message => message.Text) ?? []);
+            check(restResult?.Status == "completed" && arrowResult?.Status == "completed" && arrow.BigQuery.StorageSessions == before + 1 && restRows.Count > 0
+                && restRows.Count == arrowRows.Count && differences.Count == 0,
+                $"emulator: Storage Read reads the result the REST reader reads, cell for cell and in order: {restRows.Count} {arrowRows.Count} {arrow.BigQuery.StorageSessions - before} {string.Join("; ", differences)} {messages}");
+        }
     }
 
     static async Task<string> Outcome(Func<Task> call)

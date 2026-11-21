@@ -5,6 +5,7 @@ import type { ConnectionAuthentication, ConnectionFailureReason } from './connec
 import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
+import type { BigQueryPreviewTarget, BigQueryProperties, BigQueryPropertiesRequest } from './bigquery/objects'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -25,7 +26,7 @@ import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest,
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
-import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
+import type { SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { ProductLink } from './product'
@@ -180,6 +181,8 @@ export interface QueryOptions {
   maxRows: number
   timeoutSeconds: number
   startLine?: number
+  /** A BigQuery selection's first column on `startLine`, so BigQuery's [line:column] error positions map back to the editor. */
+  startColumn?: number
   /** Result sets kept per script, 1..1000 (default 10); later ones are counted, not stored. */
   maxResultSets?: number
   /** Stop at the first batch that raises an error (SQLCMD's `:on error exit`). By default the next GO batch still runs, as in SSMS. */
@@ -195,6 +198,8 @@ export interface QueryOptions {
   maximumBytesBilled?: number
   /** BigQuery: false for Show cost as Bytes only, so the job's Messages line leaves out the dollars (default true). SQL Server refuses it. */
   prices?: boolean
+  /** BigQuery: Preview Rows of this table through tabledata.list (free, no job) instead of running `sql`, which is the SELECT the tab shows. SQL Server refuses it. */
+  preview?: BigQueryPreviewTarget
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -329,6 +334,18 @@ export interface ResultMemoryDetail {
   logicalBytes: number; storedBytes: number; compressedBytes: number; packedLogicalBytes: number; cacheBytes: number
   largest: ResultMemoryEntry[]; codec: ResultCodecCounters; heap: { committedBytes: number; freeBytes: number }
 }
+/** What every connection's Search Objects index holds, with each explorer.index.memory event (the Memory panel's Nerd
+ *  metrics). Objects and definitions count each held table once (a shared resource set once): `definitions` and
+ *  `packedDefinitions` are objects, `definitionTexts` and `packedTexts` the distinct texts behind them. `packedBytes` is what
+ *  the packed texts cost and `packedTextBytes` what they would as strings. `texts` and `references` are the shared pool's
+ *  distinct texts and the references to them. `recordBytes`, `nameBytes`, `definitionBytes` and `readingBytes` (what reads
+ *  still running added) add up to the budget's use. `cut` is definitions left out or cut short, `childrenLeftOut` databases
+ *  indexed without their children. The times are absent before the first build or search. */
+export interface IndexMemoryDetail {
+  connections: number; objects: number; texts: number; references: number; definitions: number; packedDefinitions: number; definitionTexts: number; packedTexts: number
+  packedBytes: number; packedTextBytes: number; cut: number; childrenLeftOut: number; recordBytes: number; nameBytes: number; definitionBytes: number; readingBytes: number
+  lastBuildMs?: number; lastSearchMs?: number
+}
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
@@ -338,6 +355,10 @@ export type QueryEvent =
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
   | { type: 'messages'; messages: MessageEntry[] }
+  | QueryJobEvent
+/** A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): its id, project and location, whether
+ *  it is auxiliary, and the session's tracked transaction as the job started. Never the session id. Essential. */
+export interface QueryJobEvent { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown' }
 /** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. */
 export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number }
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
@@ -365,6 +386,13 @@ export type ViewFilter =
   | { op: 'groups'; column: number; snapshotId: number }
   | { op: 'keepRows'; rows: number[] }
   | { op: 'keepRows'; cells: ViewCells }
+  | KindFilter
+/** A comparison row's kind as a `kind` filter names it; a changed entry's halves are `changed`. */
+export type DiffKindName = 'same' | 'changed' | 'added' | 'removed'
+/** `kind` keeps a comparison's (kind `diff`) rows of 1 to `limits.diff.maxKinds` distinct kinds, read from its change index;
+ *  it names no column, and is refused on any other result. Its resolved form lists the kinds in the order same, changed,
+ *  added, removed. */
+export interface KindFilter { op: 'kind'; kinds: DiffKindName[] }
 /** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), the
  *  one value's representative `row` when it names exactly one besides NULL, and `digest`, 32 hex digits naming what it
  *  keeps: two value lists over the same rows that tick the same values have the same digest whatever their snapshots. */
@@ -376,6 +404,7 @@ export type ResolvedViewFilter =
   | { op: 'duplicates'; columns: number[] }
   | ResolvedGroupsFilter
   | { op: 'keepRows'; rows: number[] }
+  | KindFilter
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
@@ -404,8 +433,13 @@ export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId
 export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
 /** results.diff: compares two complete results of the same query, `left` the earlier and `right` the later, and stores
  *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
- *  all); `exact`: text compared character for character instead of by collation. */
-export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number; match?: DiffMatch }
+ *  all); `exact`: text compared character for character instead of by collation. `layout`: `unified` (default: a changed
+ *  entry as a − row and a + row) or `entry` (one row an entry, each pair's old value in a previous-value column; at most
+ *  `limits.diff.maxEntryPairs` pairs). `replaces`: a comparison of the same two inputs (either order) this one replaces,
+ *  whose whole charge raises the query's memory limit while both are held. */
+export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number; match?: DiffMatch; layout?: DiffLayout; replaces?: number }
+/** A comparison's stored shape: two rows a change (`unified`) or one row an entry (`entry`). */
+export type DiffLayout = 'unified' | 'entry'
 /** How results.diff matches rows: `auto` (absent: the first unique key column, else whole rows), `position` (the n-th row
  *  with the n-th), `rows` (whole rows) or `columns` (a composite key of 1 to `limits.diff.maxKeyColumns` distinct pair
  *  indexes; NULL matches NULL, and a key that repeats pairs in order, flagged `dup`). */
@@ -423,7 +457,23 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; match: DiffMatchUsed; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]; repeated: number; possible: number; possibleSkipped: boolean; nothingPaired: boolean
   columnChanges: { changed: number; soft: number }[]; trailingHidden: number
+  /** Up to `limits.diff.overviewBuckets` even buckets of the stored rows, each the bits of the kinds in it: 1 changed, 2
+   *  added, 4 removed (0: unchanged rows only). */
+  overview: number[]
+  /** The change units over every stored row: each changed cell a tone lists (a cut tone one more) and each added or removed row. */
+  units: number
+  /** The layout written. */
+  layout: DiffLayout
 }
+/** results.diffSeek on a comparison: the next or previous change unit from `from` (-1: before the first), wrapping round,
+ *  or the position of a look-alike row's partner (`partnerOf`). Positions are `viewId`'s when given, else stored rows. */
+export type ResultsDiffSeekParams =
+  | { resultId: number; viewId?: number; from: number; direction: 'next' | 'previous' }
+  | { resultId: number; viewId?: number; partnerOf: number }
+/** The position landed on, the pair index (data column) of its cell (0 for an added, removed or cut unit), the unit's number
+ *  (`index`, 1 to `total`), the change units in the view and the rows it shows (`rows`, above `row`); or `none` (nothing
+ *  found), or `hidden` (the partner exists but the view hides it; `partnerOf` only). */
+export type ResultsDiffSeekResult = { row: number; column: number; index: number; total: number; rows: number } | { none: true } | { hidden: true }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
  *  SUM, AVG, MIN or MAX. */
 export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'
@@ -598,13 +648,16 @@ export interface RpcMethods {
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
+  'bigquery.properties': { params: BigQueryPropertiesRequest; result: BigQueryProperties }
   'connections.identity': { params: Record<string, never>; result: IntegratedIdentity }
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
   'query.cancel': { params: { queryId: string }; result: { cancelled: boolean } }
-  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open. */
-  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
+  /** `transaction` ends the session's open transaction first; a failed commit leaves the session open.
+   *  `abortOnRefusedCommit` (default true) lets a BigQuery commit refused on an unchecked session end the session anyway;
+   *  the result's `note` says what became of a BigQuery commit or of the session's end. */
+  'query.session.close': { params: { sessionId: string; transaction?: SessionEnd; abortOnRefusedCommit?: boolean }; result: SessionCloseResult }
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   /** The results whose grids are shown in any window now: the whole set each time, replacing the last (an advisory hint for
@@ -664,6 +717,8 @@ export interface PortMethods {
   'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
   'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
+  /** A comparison's next or previous change unit, or a look-alike row's partner, from its change index. */
+  'results.diffSeek': { params: ResultsDiffSeekParams; result: ResultsDiffSeekResult }
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
@@ -860,6 +915,7 @@ export interface VariaApi {
   /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>
+  bigQueryProperties(params: BigQueryPropertiesRequest): Promise<ApiResult<BigQueryProperties>>
   /** "Don't ask again for this connection" (docs/bigquery.md, Cost): sets the saved BigQuery entry's cost-prompt choice;
    *  resolves whether the entry holds it. */
   setBigQueryCostPrompt(input: { options: BigQueryConnectionOptions; costPrompt: boolean }): Promise<ApiResult<boolean>>
@@ -928,8 +984,8 @@ export interface VariaApi {
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
-   *  the session open, with its transaction. */
-  closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
+   *  the session open, with its transaction. The result's `note` says what became of a BigQuery commit or session end. */
+  closeQuerySession(sessionId: string, options?: SessionCloseOptions): Promise<ApiResult<SessionCloseResult>>
   /** Reads an idle query session's open transaction before it ends. A busy, lost or unknown session is an error value. */
   querySessionState(sessionId: string): Promise<ApiResult<SessionState>>
   /** Tells the backend which results' grids are shown in any window (the whole set, replacing the last). */

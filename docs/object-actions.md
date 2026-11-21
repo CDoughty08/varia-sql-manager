@@ -24,6 +24,11 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionDisable` |
 | `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionEnable` |
 | `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | SQL Server, Managed Instance | `explorerActionUnlock` |
+| `startJob` | Start Job at Step… | `explorer.startJob` | dialog (`startJobAtStep`) | `explorer.context` | `2_job` 1 | t | — | — | SQL Server, Managed Instance | `explorerActionStartJob` |
+| `stopJob` | Stop Job | `explorer.stopJob` | inline | `explorer.context` | `2_job` 2 | p | — | — | SQL Server, Managed Instance | `explorerActionStopJob` |
+| `startAgent` | Start | `explorer.startAgent` | dialog (`startAgent`) | `explorer.context` | `2_service` 1 | s | — | — | SQL Server, Managed Instance | `explorerActionStartAgent` |
+| `stopAgent` | Stop | `explorer.stopAgent` | dialog (`stopAgent`) | `explorer.context` | `2_service` 2 | t | — | — | SQL Server, Managed Instance | `explorerActionStopAgent` |
+| `restartAgent` | Restart | `explorer.restartAgent` | dialog (`restartAgent`) | `explorer.context` | `2_service` 3 | e | — | — | SQL Server, Managed Instance | `explorerActionRestartAgent` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -47,28 +52,30 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `login` | none | – | – | – | – | – | – | – | – | – | – |
-| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ |
-| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ |
-| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ |
-| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – |
-| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – |
-| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – |
-| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – |
-| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | ✓ | – | – | – | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | ✓ | – | – | – | – | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – | – | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… | Start Job at Step… | Stop Job | Start SQL Server Agent | Stop SQL Server Agent | Restart SQL Server Agent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – | – | – | – | – | – | – | – | – | – |
+| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ | – | – | – | – | – |
+| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ | – | – | – | – | – |
+| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ | – | – | – | – | – |
+| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – | – | – | – | – | – |
+| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – | – | – | – | – | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – | – | – | – | – | – |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – | – | – | – | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | ✓ | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – | – | – | – | – | – |
+| `agent` | none | – | – | – | ✓ | – | – | – | – | – | – | – | – | ✓ | ✓ | ✓ |
+| `agentJob` | none | – | ✓ | ✓ | – | – | – | – | ✓ | – | – | ✓ | ✓ | – | – | – |
 
 ## Folder actions
 
@@ -92,6 +99,7 @@ A node's status badge (`explorerNodeStatus`) can overlay its row: a disabled log
 | `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | `disabled` | Disable Login: –, Enable Login: ✓ |
 | `login` | `system` | `disabled` | Disable Login: –, Enable Login: ○ |
 | `login` | `windowsGroup` | `disabled` | Disable Login: –, Enable Login: – |
+| `agentJob` | any | `disabled` | Disable Login: –, Enable Login: ✓ |
 
 Only `disabled` changes a login's actions: a login denied permission to connect can still be disabled, as in SSMS.
 
@@ -127,6 +135,11 @@ the Servers column above says which, and on another server the menu hides the it
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
 | `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 | `tableProperties` | Table Properties - <name> | Document tab | `tableProperties` | General (`settings-gear`), Permissions (`settings-gear`), Change Tracking (`settings-gear`), Storage (`settings-gear`), Security Predicates (`settings-gear`), Extended Properties (`settings-gear`) | No |
+| `startJobAtStep` | Start Job at Step - <name> | Modal dialog | `startJob` | General (`settings-gear`) | No |
+| `startAgent` | Start SQL Server Agent | Modal dialog | `startAgent` | General (`settings-gear`) | Yes |
+| `stopAgent` | Stop SQL Server Agent | Modal dialog | `stopAgent` | General (`settings-gear`) | Yes |
+| `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
+| `agentProperties` | SQL Server Agent Properties | Modal dialog | `agentProperties` | General (`settings-gear`), History (`history`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -368,6 +381,9 @@ last resort.
 | `loginProperties` | Login Properties |
 | `backup` | A backup |
 | `shrink` | A shrink |
+| `startAgent` | A start of SQL Server Agent |
+| `stopAgent` | A stop of SQL Server Agent |
+| `restartAgent` | A restart of SQL Server Agent |
 
 Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.
 
@@ -377,10 +393,10 @@ Sales to Sales2: Closing connections…").
 
 ### Long actions and progress
 
-An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:
+An action marked long in the catalogue (a restore, a verify, a backup, or the SQL Server Agent service's Start, Stop or Restart) takes the long gate instead of the execute gate:
 1 per Varia connection and 2 in all. Another waits up to `gateWaitMs`, then answers `BUSY`
-("Another restore or backup is running on this connection.", or "Restores or backups are already running on other
-connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
+("Another restore, backup or SQL Server Agent start or stop is running on this connection.", or "Restores, backups or
+SQL Server Agent starts and stops are already running on other connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
 Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they
 arrive only for a reader: SQL Server's message 3211 ("n percent processed.", from `STATS`) becomes a droppable
 `action.progress` EVENT `{step, percent}` at most every 250 ms, and is never one of the 32 messages the reply keeps.
@@ -396,7 +412,7 @@ When the backend's generation is closed (a quit, a reload, Restart SQL Backend),
 runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
 before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
 
-Long actions: Restore Database…, Restore Files and Filegroups….
+Long actions: Restore Database…, Restore Files and Filegroups…, Start SQL Server Agent, Stop SQL Server Agent, Restart SQL Server Agent.
 
 ## Database Properties
 
@@ -698,9 +714,16 @@ Until the plan's full backup's files are read, Script waits: "The files of the f
 
 The Backup Timeline shows the backups over an interval (Hour, Six Hours, Day, Week; Day first) ending at the last
 backup: a large triangle for a full backup, a small one for a differential, a tick for a log, and a band where log
-backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an
-hour, Home and End to the interval's ends. A point outside the covered band (other than a full or differential
-backup's finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup
+backups cover. The band and the allowed points come from the planner's own full-rooted chains, so a log that a
+missing log cuts off from every full backup covers nothing until a later full or differential bridges the gap. Under
+Manual Selection they come from the checked sets instead: the band is the stretch their last log can stop in, and
+the finish of a last full or differential is allowed too. Its point is a slider that starts at the point already
+chosen, or else at the last backup taken: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down
+an hour, Home and End to the window's ends. The window opens ending at the last backup, or at the point when that
+would leave it out, and stays put while the point moves inside it; a point that leaves it slides it just far enough
+to show the point. A point the restore has no plan for (outside the covered band, other than the finish of the full
+or differential backup it would restore) leaves OK disabled. Last backup taken shows the finish of the plan without a
+point, even while a point is set. SSMS also allows a point after the last log backup, restoring the tail-log backup
 it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
 
 ### Options and script
@@ -740,22 +763,22 @@ Keep restoring).
 The backend first checks what the request names, on the action's own connection: the destination's identity (an
 existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
 tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
-each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues the set before it;
-`RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and the files the restore writes
-(`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths gives each file's path, which must be no
-other database's file and, unless it is a file of the destination, no file already on the server; a standby file or
-tail-log backup must be no database's file and have no database file's extension. Paths compare by a key
-(`ServerPath.Key`, `serverPathKey` in the renderer, both checked against `tests/fixtures/server-paths.json`): `.` and
-empty segments dropped, `..` resolved, and on Windows `/` as `\`, trailing dots and spaces trimmed, and case ignored.
-Files on disk are seen through `sys.dm_os_file_exists` (SQL Server 2017 and later) or `xp_fileexist` (2016, sysadmin
-only; otherwise not checked). Then the steps, each its own statement with every name, path and number a parameter
-(`RestoreSql`):
+each set's header on the media (`RESTORE HEADERONLY`: its BackupSetGUID is the plan's, its type, its family, and
+that it continues the set before it; `RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`),
+and the files the restore writes (`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths
+gives each file's path, which must be no other database's file and, unless it is a file of the destination, no file
+already on the server; a standby file or tail-log backup must be no database's file and have no database file's
+extension. Paths compare by a key (`ServerPath.Key`, `serverPathKey` in the renderer, both checked against
+`tests/fixtures/server-paths.json`): `.` and empty segments dropped, `..` resolved, and on Windows `/` as `\`,
+trailing dots and spaces trimmed, and case ignored. Files on disk are seen through `sys.dm_os_file_exists` (SQL Server
+2017 and later) or `xp_fileexist` (2016, sysadmin only; otherwise not checked). Then the steps, each its own statement
+with every name, path and number a parameter (`RestoreSql`):
 
 | Step | When |
 | --- | --- |
 | Close existing connections | Close existing connections is checked and the destination exists (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, after Varia's own pooled sessions in it are cleared) |
 | Back up the tail of the log | The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked) |
-| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last |
+| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last. Each first reads its set's header again: a backup file overwritten since the plan was made (the set at the position gone, of another kind or with another BackupSetGUID) fails the step with `MEDIA`, asking for the backups to be read again |
 | Restore multi-user access | After a RECOVERY restore that closed connections, unless Restrict access is checked |
 | Bring the database back online | Cleanup: the tail-log backup left the database restoring (it ended, or a Stop came as it finished), no RESTORE has written to it, and it is still RESTORING with the id the preflight read (`RESTORE DATABASE … WITH RECOVERY`) |
 | Restore multi-user access | Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted) |
@@ -831,7 +854,8 @@ the chain again before it runs: a log backup taken during the restore fails that
 The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
 256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
 database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
-the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
+the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant,
+each set's BackupSetGUID the plan's, read again right before each set's RESTORE as for Restore Database);
 that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
 that the plan reaches the log chain; that each file and filegroup is in the set, held by it, no log file and, online or
 offline, not of PRIMARY; under SIMPLE, Learn's rule
@@ -1430,6 +1454,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AUTH_ENTRA` | Yes |
 | `AUTH_IDENTITY` | No |
 | `PASSWORD_POLICY` | Yes |
+| `AGENT_STOPPED` | No |
+| `JOB_STATE` | No |
+| `SERVICE_UNREACHABLE` | No |
 
 ## Limits
 

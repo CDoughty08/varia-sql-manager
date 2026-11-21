@@ -58,6 +58,7 @@ import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
 import { PeekTabService } from '../explorer/PeekTabService'
+import { BigQueryPropertiesService } from '../explorer/BigQueryPropertiesService'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { providerSwitchToast, switchModelLanguage } from '../languages/query-language'
@@ -111,6 +112,9 @@ import { TablePropertiesService } from '../properties/TablePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { JobActivityService } from '../agent/JobActivityService'
+import { AgentJobStatusService } from '../agent/AgentJobStatusService'
+import { agentContribution } from '../contributions/agent'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -232,6 +236,7 @@ export interface Workbench extends Disposable {
   readonly peek: PeekService
   /** Peek promoted to document tabs: each tab's view. */
   readonly peekTabs: PeekTabService
+  readonly bigQueryProperties: BigQueryPropertiesService
   /** The column profile's Ctrl+hover peek at the selected columns: the tab whose panel peeks. */
   readonly profilePeek: ProfilePeekService
   /** Go To and Peek Definition in SQL editors: F12's script, the card at a name (Alt+F12, Ctrl+hover), a Peek tab (Ctrl+click). */
@@ -266,6 +271,10 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
+  readonly jobActivity: JobActivityService
+  /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
+  readonly agentJobs: AgentJobStatusService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -321,7 +330,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview }), databaseList = new DatabaseListService(api, connections, events)
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, agentEnabled: api.agentPreview, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -354,7 +363,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
   const derivedJobs = new DerivedJobs()
   // Each counts the other's new results in flight against a run's 1,000.
-  const compare: CompareService = new CompareService(results, { jobs: derivedJobs, adding: tabId => pivot.adding(tabId) })
+  // A new comparison takes the layout setting; a change of one carries its highlights over (D15).
+  const compare: CompareService = new CompareService(results, {
+    jobs: derivedJobs, adding: tabId => pivot.adding(tabId), layout: () => settings.get('queryResults.compare.layout'), carry: (tabId, key, o) => highlights.carry(tabId, key, o)
+  })
   // A shown Pivot rebuilds by itself when its Table's filters change; what is shown depends on the results' layout.
   const pivot: PivotService = new PivotService(results, {
     jobs: derivedJobs, adding: tabId => compare.adding(tabId),
@@ -374,6 +386,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
+  // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
+  queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  documents.sessionHooks = {
+    message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
+    note: (id, note) => { queries.sessionNote(id, note) },
+    bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
+  }
   const costPrompts = new CostPromptService()
   // The saved choice is read after the service exists, so it re-renders the chips once a choice is known.
   let costChoiceChanged = () => {}
@@ -404,7 +423,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
   })
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)
@@ -413,7 +432,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
-  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()),
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal) })
   // The column profile's Ctrl+hover peek at the selected columns; the key dispatcher below feeds it held keys.
   const profilePeek = new ProfilePeekService({ gestures: gesturesFor(platform) })
   // Object Explorer's Peek on Hover modifier arms the peek cursor and a press over a resting row; releasing either one
@@ -435,7 +455,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids),
-    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
+    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }),
+    refreshStatus: connectionId => explorerStatus.refresh(connectionId)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -487,6 +508,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const agentJobs = new AgentJobStatusService({ api, live, connections })
+  const jobActivity = new JobActivityService({
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
@@ -494,6 +521,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const peekTabs = new PeekTabService({
     peek, documents, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
+  })
+  const bigQueryProperties = new BigQueryPropertiesService({
+    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
   })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
   // A dependency is shown as Search Objects' Reveal shows a hit; a failed walk says why in the command banner.
@@ -534,6 +564,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultSets: results.resultSets,
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
+    resultsComparing: results.comparing,
     scripting: scripting.running,
     bookmarks,
     inputMode,
@@ -650,6 +681,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     peek,
     peekTabs,
+    bigQueryProperties,
     profilePeek,
     editorPeek,
     actions,
@@ -667,6 +699,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch,
     searchDetails,
     theme,
@@ -708,6 +742,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultsSearch.dispose()
       // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
+      bigQueryProperties.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
@@ -717,6 +752,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
+      jobActivity.dispose()
+      agentJobs.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -796,10 +833,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    agentContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)

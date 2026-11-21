@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -49,7 +49,9 @@ export const entryNumber = (entry: Pick<ResultSetEntry, 'number'>): string => `R
 /** A Pivot's name, from its Table's ("Pivot of Result 3", "Pivot of Open orders"). */
 export const pivotName = (source: string): string => `Pivot of ${source}`
 /** A comparison's name, old side first ("Differences: Result 1 → Result 3"). */
-export const comparisonName = (old: string, neu: string): string => `Differences: ${old} → ${neu}`
+export const comparisonName = (old: string, neu: string, exact = false): string => `Differences: ${old} → ${neu}${exact ? exactSuffix : ''}`
+/** What a comparison with Exact text on adds to its name, its tab label and its caption. */
+export const exactSuffix = ' (exact text)'
 /** The name the query gave an original result with a `#Name` marker, if it gave one. A Pivot's or a comparison's
  *  descriptor never carries one. */
 export const queryName = (entry: Named): string | undefined => entry.descriptor?.name || undefined
@@ -182,6 +184,7 @@ const filterIdentity = (filter: ResolvedViewFilter): string => {
     case 'groups': return `groups:${filter.digest}`
     case 'duplicates': return `duplicates:${filter.columns.join(',')}`
     case 'keepRows': return `keepRows:${[...filter.rows].sort((a, b) => a - b).join(',')}`
+    case 'kind': return `kind:${[...filter.kinds].sort().join(',')}`
     case 'between': return `between:${filter.column}:${filter.nulls}:${filter.rows.join(',')}`
     default: return `${filter.op}:${filter.column}:${filter.nulls}:${[...filter.rows].sort((a, b) => a - b).join(',')}`
   }
@@ -317,6 +320,8 @@ export interface TabResults {
   /** The run was made with Discard results after execution on: its sets were read and none kept (plans are), so the
    *  Results view says so in place of grids, whatever the setting is now. */
   readonly discard?: true
+  /** A view made only to show Messages lines written outside any execution (`addMessage`): no run summary is drawn. */
+  readonly messagesOnly?: true
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -422,6 +427,9 @@ interface Run {
   /** Its last entry was closed by `removeEntry`. */
   emptied: boolean
   readonly discard: boolean
+  /** Lines written outside the execution (`addMessage`), after its own; the summary does not replace them. */
+  notes: MessageEntry[]
+  messagesOnly?: true
 }
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
@@ -529,6 +537,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
   readonly turned: ExternalStore<Readonly<Record<string, FocusedOrientation>>> = this.turnedStore
+  private readonly comparingStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedComparison>>> { set(value: Readonly<Record<string, FocusedComparison>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs whose focused grid is a comparison, with whether both its inputs are still open: the `resultsGridComparison`
+   *  and `comparisonInputsOpen` keys. It publishes only when one changes. */
+  readonly comparing: ExternalStore<Readonly<Record<string, FocusedComparison>>> = this.comparingStore
   private readonly selectionStore = new (class extends SnapshotStore<number> { bump() { this.publish(this.getSnapshot() + 1) } clear() { this.clearListeners() } })(0)
   /** A revision that changes with any grid's selection (every arrow key): a store of its own, so a selection move redraws
    *  only what follows the selection (the column profile), never everything the service's snapshot feeds. */
@@ -561,7 +573,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.newId = o.newId ?? (() => crypto.randomUUID())
     const events = o.events.subscribe(event => { if (event.type === 'documents.closed') this.release(event.tabId) })
     // A new backend lost every result: nothing is left to save or close, or to turn back.
-    const generations = this.client.onGeneration(() => { this.updateContext(); this.updateTurned() })
+    const generations = this.client.onGeneration(() => { this.updateContext(); this.updateTurned(); this.updateComparing() })
     this.subscriptions.push(() => events.dispose(), () => generations.dispose(), this.api.onResultsJob(progress => this.progress(progress)))
   }
 
@@ -583,12 +595,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: []
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
         if (this.runs.get(tabId) === run && run.status === 'running') onSession?.(event)
-      } else this.event(tabId, run, event)
+      } else if (event.type !== 'query.job') this.event(tabId, run, event)
     })
     this.runs.set(tabId, run)
     this.publishNow(tabId)
@@ -694,6 +706,31 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const next = { ...this.getSnapshot() }
     delete next[tabId]
     this.publish(next)
+  }
+
+  /**
+   * Appends a line to the tab's Messages outside any execution (QueryService.addSessionMessage: a session close's note, a
+   * refused close): after the run's own lines, which a running run's summary does not replace; a tab with no run gets a
+   * messages-only view. The strip opens for an error line, as for a run's.
+   */
+  addMessage(tabId: string, text: string, kind: 'info' | 'error' = 'info'): void {
+    if (this.disposed) return
+    const entry: MessageEntry = { text: text.slice(0, wire.messages.characters), kind }
+    let run = this.runs.get(tabId)
+    if (!run) {
+      this.begin(tabId, crypto.randomUUID())
+      run = this.runs.get(tabId)
+      if (!run) return
+      run.subscription?.dispose()
+      run.subscription = undefined
+      run.status = 'completed'
+      run.endedAt = run.startedAt
+      run.messagesOnly = true
+    }
+    run.notes = [...run.notes, entry].slice(-resultLimits.messages)
+    if (!run.manualView && !run.sets.length) run.view = 'messages'
+    this.openStripFor(run, [entry])
+    this.publishNow(tabId)
   }
 
   /** Close Results: the memory is freed now; Messages stay. Not for a bare run (Peek's rows go with their card or tab). */
@@ -1367,6 +1404,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.setsStore.clear()
     this.steppableStore.clear()
     this.turnedStore.clear()
+    this.comparingStore.clear()
     this.selectionStore.clear()
     this.clearListeners()
   }
@@ -1518,9 +1556,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * group's selected view, collapse and splitter share, the orientation, and the sort keys, widths and header column of each
    * column whose name is unique in both results.
    */
-  private replaceSet(tabId: string, run: Run, old: ResultSetEntry, descriptor: ResultDescriptor, label: string, sources: readonly SourceRef[], pivot: PivotProvenance | undefined): EntryKey {
+  private replaceSet(tabId: string, run: Run, old: ResultSetEntry, descriptor: ResultDescriptor, label: string, sources: readonly SourceRef[], pivot: PivotProvenance | undefined, columns?: ReadonlyMap<number, number>): EntryKey {
     const key = old.key, record = run.slots.get(key)!
-    const moved = uniqueNames(old.descriptor.columns, descriptor.columns)
+    // A comparison's sort, filters and scroll reset on a replace; its widths follow their columns' names (`columns`).
+    const comparison = record.view === 'comparison'
+    const moved = columns ?? uniqueNames(old.descriptor.columns, descriptor.columns)
     run.sorting.get(key)?.abort()
     run.sorting.delete(key)
     // Releasing the old result closes its views.
@@ -1560,10 +1600,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A save of the old Pivot may still be in its file dialog, before main checks the result is there: it is released
     // once that save ends, so rebuilding never fails a save the user started.
     this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
+    if (comparison) return key
     const keys = (sort?.keys ?? []).flatMap(item => { const at = moved.get(item.column); return at === undefined ? [] : [{ ...item, column: at }] })
     if (keys.length) this.applySort(tabId, run, key, keys)
     if (sort?.filters.length) this.notify(tabId, `${distinctName(entry, run.sets)} was built again, so its filters were removed.`)
     return key
+  }
+
+  /**
+   * A comparison shows a new result in place (D9): the same entry key, number, place in Tabs and Stacked and count against
+   * the run's 1,000 (none more), named `label` (renamed on a swap or Exact text: its tab, caption and accessible name
+   * together) with `sources` (set keys, old side then new) and their `names`. Its selection, sort, filters and scroll reset;
+   * its column widths carry over by column name (`moved`, old column to new: comparisonColumns), since a swap reorders the
+   * pairs. Its highlights stay with the entry key, and the old result is released only after the new one is published
+   * (after a Save of it in its dialog ends, as `replaceSet` does). Returns the entry key, or undefined (the new result
+   * released) when the run, the comparison or an input is gone.
+   */
+  replaceComparison(tabId: string, key: EntryKey, descriptor: ResultDescriptor, label: string, sources: readonly string[], o: { readonly names?: readonly string[]; readonly moved: ReadonlyMap<number, number> }): EntryKey | undefined {
+    const run = this.runs.get(tabId), old = run?.entries.get(key)
+    const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
+    if (!run || !old || run.status === 'running' || run.status === 'closed' || run.setKeys.has(setKey(descriptor)) || run.slots.get(key)?.view !== 'comparison'
+      || sources.length !== 2 || sources.some(source => !run.setKeys.has(source))) return refuse()
+    const refs = sources.map((source, at): SourceRef => {
+      const from = run.sets.find(entry => setKey(entry.descriptor) === source)!
+      return { key: from.key, set: source, number: from.number, name: o.names?.[at] ?? distinctName(from, run.sets), ...from.ordinal === undefined ? {} : { ordinal: from.ordinal } }
+    })
+    return this.replaceSet(tabId, run, old, descriptor, label, refs, undefined, o.moved)
   }
 
   /** A derived set has all its rows when it is added: the stack sizes it to them, and its grid always shows a strip (what
@@ -1788,6 +1850,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const named = sort.filters.map(async (item): Promise<GridFilter> => {
       const filter = item.filter
       if (item.named || filter.op === 'duplicates') return item
+      if (filter.op === 'kind') return { ...item, label: filterLabel(filter, columns), named: true }
       // Its words are its rows' count, known once the view resolved its cells.
       if (filter.op === 'keepRows') return 'rows' in filter ? { ...item, label: filterLabel(filter, columns), named: true } : item
       if (filter.op === 'groups') {
@@ -1986,6 +2049,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     super.publish(snapshot)
     this.updateContext()
     this.updateTurned()
+    this.updateComparing()
+  }
+  /** `comparing` per tab: its focused entry, when that is a comparison, and whether each input it compared is still open. */
+  private updateComparing(): void {
+    const current = this.comparingStore.getSnapshot(), snapshot = this.getSnapshot(), next: Record<string, FocusedComparison> = {}
+    let changed = false
+    for (const tabId of this.runs.keys()) {
+      const tab = snapshot[tabId], focused = this.focusedEntry(tabId), slot = focused && slotOf(tab, focused.key)
+      // A comparison lost with the backend, or in closed results, can no longer be changed: no keys for it.
+      if (!focused || slot?.view !== 'comparison' || tab?.status === 'closed' || !held(slot.entry)) continue
+      const inputsOpen = comparisonInputsOpen(tab, slot.sources), was = current[tabId]
+      next[tabId] = was && was.entry === focused.key && was.inputsOpen === inputsOpen ? was : { entry: focused.key, inputsOpen }
+      if (next[tabId] !== was) changed = true
+    }
+    if (changed || Object.keys(current).length !== Object.keys(next).length) this.comparingStore.set(next)
   }
   /** `turned` per tab: its focused entry, when that view is drawn transposed and can still be turned back. Results lost
    *  with the backend keep their grids as they were drawn, under the overlay, but nothing reads as pressed for them. */
@@ -2026,11 +2104,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return {
       ...this.shapeOf(run), ...focused !== undefined && run.entries.has(focused) ? { focused } : {}, ...run.bare ? { bare: true as const } : {},
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, planSets: run.planSets,
-      messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
+      messages: run.notices.length || run.notes.length ? [...run.notices, ...run.messages, ...run.notes] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {}
+      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {},
+      ...run.messagesOnly ? { messagesOnly: true as const } : {}
     }
   }
 
@@ -2060,6 +2139,22 @@ export function uniqueNames(from: readonly ResultColumn[], to: readonly ResultCo
     const there = target.get(name)
     if (at >= 0 && there !== undefined && there >= 0) moved.set(at, there)
   }
+  return moved
+}
+
+/**
+ * How a replaced comparison's visible (data) columns map to the new one's, by name and wire type (as columns pair, the
+ * name ignoring case): the k-th such column to the new result's k-th. A swap or another layout reorders and adds columns, so
+ * positions say nothing; hidden columns (previous values, the gutter's, the tone) are never mapped.
+ */
+export function comparisonColumns(from: readonly ResultColumn[], to: readonly ResultColumn[]): ReadonlyMap<number, number> {
+  const places = (columns: readonly ResultColumn[]) => {
+    const seen = new Map<string, number[]>()
+    columns.forEach((column, at) => { if (isHiddenColumn(column)) return; const name = `${column.name.toLowerCase()}\u0000${column.wire}`; seen.set(name, [...seen.get(name) ?? [], at]) })
+    return seen
+  }
+  const target = places(to), moved = new Map<number, number>()
+  for (const [name, ats] of places(from)) ats.forEach((at, k) => { const there = target.get(name)?.[k]; if (there !== undefined) moved.set(at, there) })
   return moved
 }
 
@@ -2139,6 +2234,7 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
 export function filterLabel(filter: ResolvedViewFilter, columns: readonly ResultColumn[], texts: readonly (string | undefined)[] = []): string {
   if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => !isHiddenColumn(column)).length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
   if (filter.op === 'keepRows') return keptLabel(filter.rows.length)
+  if (filter.op === 'kind') return kindLabel(filter.kinds)
   const name = columnName(columns, filter.column)
   if (filter.op === 'between') return texts[0] && texts[1] ? `${name} between ${texts[0]} and ${texts[1]}` : `${name} between 2 values`
   const values = (filter.op === 'groups' ? filter.values : filter.rows.length) + (filter.nulls ? 1 : 0), not = filter.op === 'notIn' || (filter.op === 'groups' && !filter.keep)
@@ -2150,15 +2246,30 @@ export function filterLabel(filter: ResolvedViewFilter, columns: readonly Result
 }
 
 /** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it.
- *  Duplicates span columns and Keep Selected Rows names none, so neither marks a funnel. */
+ *  Duplicates span columns, and Keep Selected Rows and a comparison's kind filter name none, so none marks a funnel. */
 export function filteredColumns(sort: GridSort | undefined): ReadonlySet<number> {
   const columns = new Set<number>()
-  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates' && item.filter.op !== 'keepRows') columns.add(item.filter.column)
+  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates' && item.filter.op !== 'keepRows' && item.filter.op !== 'kind') columns.add(item.filter.column)
   return columns
+}
+
+/** A comparison's kind filter's words: "Changed rows", "Changed or added rows", "Changed, added or removed rows". */
+export function kindLabel(kinds: readonly DiffKindName[]): string {
+  const order: readonly DiffKindName[] = ['same', 'changed', 'added', 'removed']
+  const words = order.filter(kind => kinds.includes(kind)).map(kind => kind === 'same' ? 'unchanged' : kind)
+  const listed = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`
+  return `${listed.charAt(0).toUpperCase()}${listed.slice(1)} rows`
 }
 
 /** The column a filter change works on, for its header's ring: the first filter that is new among `filters`. */
 function changedColumn(applied: readonly GridFilter[], filters: readonly GridFilter[]): number | undefined {
   for (const item of filters) if (!applied.includes(item) && 'column' in item.filter && typeof item.filter.column === 'number' && item.filter.column >= 0) return item.filter.column
   return undefined
+}
+
+/** A focused comparison (`ResultsService.comparing`): its entry, and whether both inputs it compared are still open (D10). */
+export interface FocusedComparison { readonly entry: EntryKey; readonly inputsOpen: boolean }
+/** Whether every input a comparison compared is still open: the entry its reference names, still holding that result. */
+export function comparisonInputsOpen(tab: TabResults | undefined, sources: readonly SourceRef[]): boolean {
+  return sources.every(source => { const entry = entryOf(tab?.sets, source.key); return !!entry && setKey(entry.descriptor) === source.set })
 }

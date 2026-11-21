@@ -68,6 +68,8 @@ internal sealed class ObjectSearchService : IDisposable
         public int Indexed;
         public SkipList Skipped = new(MaxSkipped);
         public DateTime? BuiltAt;
+        /// <summary>What the editor's lookup needs of the builds: each database's last outcome, kept across builds.</summary>
+        public readonly LookupLedger Ledger = new();
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -88,8 +90,88 @@ internal sealed class ObjectSearchService : IDisposable
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
     internal ResourceCatalog Resources => resources;
+    /// <summary>The budget every connection's index shares (the checks charge it).</summary>
+    internal IndexBudget Budget => budget;
     /// <summary>The names and definitions every connection shares (the checks read it).</summary>
     internal StringPool Pool => pool;
+    /// <summary>The last finished build's and search's time, and a count of both that tells the memory report something changed
+    /// that the budget's figure does not show.</summary>
+    private long lastBuildMs = -1, lastSearchMs = -1, finished, builds, forgets;
+    private int detailWalks;
+    /// <summary>The set a memory detail walk dedupes texts in, kept between walks (empty in between).</summary>
+    private readonly HashSet<object> walkSeen = new(ReferenceEqualityComparer.Instance);
+    public long Finished => Interlocked.Read(ref finished);
+    /// <summary>Ended builds, finished, stopped or failed, and lookup arrays built (<see cref="Changed"/>): a search changes nothing the
+    /// index holds, so the memory report walks again only after one of these (or the budget moves).</summary>
+    public long Builds => Interlocked.Read(ref builds);
+    /// <summary>Indexes dropped for a disconnect: the memory report walks again at once after one.</summary>
+    public long Forgets => Interlocked.Read(ref forgets);
+    /// <summary>The slots the walk's set keeps between walks (the checks read it).</summary>
+    internal int WalkSetCapacity { get { lock (walkSeen) return walkSeen.EnsureCapacity(0); } }
+    /// <summary>How many times the memory detail walked the index (the checks read it).</summary>
+    internal int DetailWalks => Volatile.Read(ref detailWalks);
+
+    /// <summary>The last finished build's and search's times, absent before the first.</summary>
+    internal (long? Build, long? Search) Times()
+    {
+        var build = Interlocked.Read(ref lastBuildMs);
+        var search = Interlocked.Read(ref lastSearchMs);
+        return (build < 0 ? null : build, search < 0 ? null : search);
+    }
+
+    /// <summary>What every connection's index holds (<see cref="IndexMemoryReport"/>), for the Memory panel's Nerd metrics: read
+    /// only when an explorer.index.memory event goes out, against the <paramref name="used"/> that event carries.</summary>
+    internal IndexMemoryDetail MemoryDetail(long? used = null)
+    {
+        Interlocked.Increment(ref detailWalks);
+        var (build, search) = Times();
+        lock (walkSeen)
+        {
+            var detail = IndexMemoryReport.Detail(budget, pool, [.. states.Values.Select(state => state.Index)], resources.Held, build, search, used, walkSeen);
+            // The set's arrays, which no budget charges, are kept only while builds walk every few seconds; with none running,
+            // walks are rare (a disconnect, a build's end), so it is given back.
+            if (!states.Values.Any(state => Volatile.Read(ref state.Building))) walkSeen.TrimExcess();
+            return detail;
+        }
+    }
+
+    /// <summary>A memory detail from an earlier walk brought up to <paramref name="used"/> without walking: the pool's counts and the
+    /// times are read afresh, and what the budget gained since the walk shows as reading (a build's reads, not yet walked).</summary>
+    internal IndexMemoryDetail Refresh(IndexMemoryDetail walked, long used)
+    {
+        var (texts, references, _) = pool.Stats;
+        var (build, search) = Times();
+        return walked with
+        {
+            Texts = texts, References = references, LastBuildMs = build, LastSearchMs = search,
+            ReadingBytes = Math.Max(0, used - walked.RecordBytes - walked.NameBytes - walked.DefinitionBytes),
+        };
+    }
+
+    /// <summary>Records a finished build's (<paramref name="build"/>) or search's time, which the next memory report carries.</summary>
+    internal void Finish(bool build, long ms)
+    {
+        Interlocked.Exchange(ref build ? ref lastBuildMs : ref lastSearchMs, ms);
+        if (build) Ended();
+        else Interlocked.Increment(ref finished);
+    }
+
+    /// <summary>Records that what the index holds changed beside the budget's figure (lookup arrays built for the editor): the memory
+    /// report walks again, so they show with the records rather than as reading.</summary>
+    internal void Changed()
+    {
+        Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref finished);
+    }
+
+    /// <summary>Records that a build ended: a stopped or failed one keeps no time, but what its reads left is walked again, so no
+    /// read shows as still running.</summary>
+    internal void Ended()
+    {
+        // Builds before finished: a report that sees the finish sees the build.
+        Interlocked.Increment(ref builds);
+        Interlocked.Increment(ref finished);
+    }
 
     public async Task<ObjectIndexResult> IndexAsync(ObjectIndexArgs args, CancellationToken token, Action<object>? progress = null)
     {
@@ -99,11 +181,12 @@ internal sealed class ObjectSearchService : IDisposable
         var profile = host.Profile(args.ConnectionId);
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
-        var render = new SqlRender(explorer.Band);
+        var render = IndexRender(profile);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
+        var finishedBuild = false;
         lock (state.Gate)
         {
             // A newer build supersedes a running one, which answers CANCELLED and keeps what it read.
@@ -113,11 +196,16 @@ internal sealed class ObjectSearchService : IDisposable
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
+            state.Ledger.Start();
         }
         try
         {
             var names = await ListAsync(args.ConnectionId, source.Token);
-            lock (state.Gate) state.Databases = names.Count;
+            lock (state.Gate)
+            {
+                state.Databases = names.Count;
+                state.Ledger.List(names);
+            }
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
@@ -131,12 +219,15 @@ internal sealed class ObjectSearchService : IDisposable
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
                     if (skip is not null) state.Skipped.Add(at, skip);
+                    state.Ledger.Done(names[at], skip);
                 }
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
             }
+            Finish(build: true, watch.ElapsedMilliseconds);
+            finishedBuild = true;
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
@@ -157,6 +248,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             lock (state.Gate)
                 if (ReferenceEquals(state.Build, source)) { state.Build = null; state.Building = false; }
+            if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
     }
@@ -170,15 +262,42 @@ internal sealed class ObjectSearchService : IDisposable
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
-        try { return IndexSearch.Run(state.Index, query, matcher, Limits, status, token); }
+        try
+        {
+            var result = IndexSearch.Run(state.Index, query, matcher, Limits, status, token);
+            Finish(build: false, result.ElapsedMs);
+            return result;
+        }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
+
+    /// <summary>A connection's index, made if it has none (the checks hold reads in it).</summary>
+    internal ConnectionIndex Held(string connectionId) => states.GetOrAdd(connectionId, _ => new State(pool, resources)).Index;
+
+    /// <summary>How the index's batches are written for a server: its catalog band, and vector dimensions where it has them.</summary>
+    internal static SqlRender IndexRender(ServerProfile profile) => new(profile.Explorer(ExplorerCatalog.Current).Band, profile.VectorDimensions);
+
+    /// <summary>The editor's lookup into a connection's index (<see cref="IndexLookup"/>), or null when it has none: a snapshot of
+    /// its build's state and the reads held now.</summary>
+    internal IndexLookup? Lookup(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return null;
+        lock (state.Gate)
+            return new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
+    }
+
+    /// <summary>The index a connection holds, or null (the checks read it).</summary>
+    internal ConnectionIndex? IndexOf(string connectionId) => states.TryGetValue(connectionId, out var state) ? state.Index : null;
 
     /// <summary>Stops a disconnected connection's build and drops its index.</summary>
     public void Forget(string connectionId)
     {
         running.Forget(connectionId);
-        if (states.TryRemove(connectionId, out var state)) state.Index.Dispose();
+        if (!states.TryRemove(connectionId, out var state)) return;
+        state.Index.Dispose();
+        // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
+        Interlocked.Increment(ref forgets);
+        Interlocked.Increment(ref finished);
     }
 
     public void Dispose()
@@ -322,6 +441,7 @@ internal sealed class ObjectSearchService : IDisposable
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        var Put = Holding(state.Index, children);
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
@@ -337,7 +457,7 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             var index = await ReadBatchAsync(command,
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), state.Index.Put, budgetSource.Token);
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), Put, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -350,7 +470,7 @@ internal sealed class ObjectSearchService : IDisposable
         {
             // A statement that fails part way (a catalog view this edition lacks) keeps what came before it, unless an earlier build
             // read the database whole.
-            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), state.Index.Put);
+            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), Put);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, database, database);
             return new(database, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
         }
@@ -362,10 +482,23 @@ internal sealed class ObjectSearchService : IDisposable
         finally { total.Release(); }
     }
 
+    /// <summary>Puts a read into <paramref name="index"/>. A read without children is the fallback for a database too large with them
+    /// (<see cref="WithFallbackAsync"/>), so the index it holds says so.</summary>
+    internal static Action<DatabaseIndex> Holding(ConnectionIndex index, bool children) => read =>
+    {
+        read.ChildrenLeftOut = !children;
+        index.Put(read);
+    };
+
     /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
     internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)
     {
-        if (!held && reader.Any) put(reader.Partial());
+        if (!held && reader.Any)
+        {
+            var partial = reader.Partial();
+            partial.FailedPart = true;
+            put(partial);
+        }
         else reader.Abandon();
     }
 
@@ -558,6 +691,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
     private readonly List<(int At, int Owner, bool History)> pending = [];
     private char[] buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
+    /// <summary>Whether the read asked for definitions, and its database's case rule once read: kept on whatever it hands over.</summary>
+    private bool definitionsRead = true;
+    private bool? caseSensitive;
+    private bool dottedI;
 
     /// <summary>A read past the budget.</summary>
     private sealed class TooLarge : Exception;
@@ -590,7 +727,11 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         foreach (var (at, _, _) in pending) objects.Remove(at);
         pending.Clear();
-        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true);
+        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
+        {
+            // A read that failed part way (KeepPartial) says what it read as much as a whole one.
+            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI
+        };
         objects.Clear();
         taken = 0;
         credited = 0;
@@ -602,6 +743,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <paramref name="children"/> the batch has no column, index, statistics or parameter result sets.</summary>
     public async Task<DatabaseIndex?> ReadAsync(DbDataReader reader, bool definitions, CancellationToken token, bool children = true)
     {
+        definitionsRead = definitions;
         try
         {
             var byId = new Dictionary<int, int>();
@@ -667,12 +809,31 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             }
             if (children)
             {
-                await Children(reader, byId, "column", "columns", definitions, token);
-                await Children(reader, byId, "index", "indexes", false, token);
+                await reader.NextResultAsync(token);
+                var types = await ReadTypes(reader, objects, Intern, Charge, token);
+                await Columns(reader, byId, types, definitions, token);
+                var indexes = await Indexes(reader, byId, token);
                 await Children(reader, byId, "statistic", "statistics", false, token);
-                await Children(reader, byId, "parameter", "parameters", false, token);
+                await Parameters(reader, byId, types, token);
+                await Keys(reader, byId, indexes, token);
             }
             await Definitions(reader, byId, definitions, token);
+            // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
+            // Best-effort: the objects are all read by now, so a probe that fails leaves the case rule unknown rather than losing
+            // them (a stop the caller asked for still stops).
+            try
+            {
+                if (await reader.NextResultAsync(token) && await reader.ReadAsync(token))
+                {
+                    caseSensitive = reader.GetBoolean(0);
+                    dottedI = reader.FieldCount > 1 && reader.GetBoolean(1);
+                }
+            }
+            catch (Exception error) when (error is DbException or InvalidOperationException && !token.IsCancellationRequested)
+            {
+                caseSensitive = null;
+                dottedI = false;
+            }
             return Partial();
         }
         catch (TooLarge)
@@ -717,6 +878,209 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             if (!byId.TryGetValue(reader.GetInt32(0), out var at) || objects.Removed(at)) continue;
             var (text, longer) = Text(reader, 1);
             if (text is not null) objects.SetDefinition(at, text, longer);
+        }
+    }
+
+    /// <summary>Charges <paramref name="bytes"/> of details; a read past the budget stops (and is read again without children).</summary>
+    private void Charge(long bytes)
+    {
+        if (!TryCharge(bytes, 0)) throw new TooLarge();
+    }
+
+    /// <summary>A catalog int that the details hold in 16 bits (column_id, parameter_id), clamped.</summary>
+    private static short Short(int value) => (short)Math.Clamp(value, short.MinValue, short.MaxValue);
+
+    /// <summary>The types result set (<see cref="ObjectSearchSql.Types"/>, the reader on it): each type's index in the table's
+    /// details by user_type_id. Names go through <paramref name="intern"/>, each type is charged through <paramref name="charge"/>.</summary>
+    internal static async Task<Dictionary<int, ushort>> ReadTypes(DbDataReader reader, ObjectTable.Builder objects, Func<string, string> intern, Action<long> charge, CancellationToken token)
+    {
+        var types = new Dictionary<int, ushort>();
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var schema = reader.GetString(1);
+            var name = reader.GetString(2);
+            var system = reader.GetByte(3);
+            var userDefined = reader.GetBoolean(4);
+            var table = reader.GetBoolean(5);
+            if (objects.Details.TypeCount > ushort.MaxValue) continue;
+            charge(IndexMemory.TypeBytes);
+            var held = intern(name);
+            var heldSchema = userDefined ? intern(schema) : null;
+            types[id] = objects.Details.AddType(objects.Id(held), heldSchema is null ? -1 : objects.Id(heldSchema), id, system, userDefined, table);
+        }
+        return types;
+    }
+
+    /// <summary>A typed row's type and flags from <paramref name="from"/> on (<see cref="ObjectSearchSql.TypedColumns"/>, or with
+    /// <paramref name="parameter"/> <see cref="ObjectSearchSql.TypedParameters"/>), in column order as sequential access reads them.</summary>
+    internal static (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) ReadTyped(DbDataReader reader, bool parameter)
+    {
+        if (parameter)
+        {
+            var output = reader.GetBoolean(2);
+            var ordinal = Short(reader.GetInt32(3));
+            var type = reader.GetInt32(4);
+            var (length, precision, scale) = (reader.GetInt16(5), reader.GetByte(6), reader.GetByte(7));
+            var readOnly = !reader.IsDBNull(8) && reader.GetBoolean(8);
+            var parameterFlags = (output ? TypedFlags.Output : 0) | (readOnly ? TypedFlags.ReadOnly : 0);
+            if (!reader.IsDBNull(9)) (length, parameterFlags) = (Short(reader.GetInt32(9)), parameterFlags | TypedFlags.Dimensions);
+            return (type, length, precision, scale, ordinal, parameterFlags);
+        }
+        var column = Short(reader.GetInt32(2));
+        var columnType = reader.GetInt32(3);
+        var (columnLength, columnPrecision, columnScale) = (reader.GetInt16(4), reader.GetByte(5), reader.GetByte(6));
+        var flags = (!reader.IsDBNull(7) && reader.GetBoolean(7) ? TypedFlags.Nullable : 0) | (reader.GetBoolean(8) ? TypedFlags.Identity : 0)
+            | (reader.GetBoolean(9) ? TypedFlags.Computed : 0) | (reader.GetBoolean(10) ? TypedFlags.Default : 0);
+        // A vector column's length is its dimensions (TypedDetail.MaxLength): its bytes depend on its base type.
+        if (!reader.IsDBNull(11)) (columnLength, flags) = (Short(reader.GetInt32(11)), flags | TypedFlags.Dimensions);
+        return (columnType, columnLength, columnPrecision, columnScale, column, flags);
+    }
+
+    /// <summary>Gives the entry at <paramref name="at"/> its type, when the types result set listed it.</summary>
+    private void SetTyped(int at, Dictionary<int, ushort> types, (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) typed)
+    {
+        if (!types.TryGetValue(typed.Type, out var type)) return;
+        Charge(IndexMemory.TypedBytes);
+        objects.Details.SetTyped(at, type, typed.Length, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+    }
+
+    /// <summary>The columns result set: each column Object Explorer lists kept under its parent with its type (and a computed
+    /// column's expression).</summary>
+    private async Task Columns(DbDataReader reader, Dictionary<int, int> byId, Dictionary<int, ushort> types, bool definition, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var typed = ReadTyped(reader, parameter: false);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0 || name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("column", parent)) continue;
+            var (text, longer) = definition && !reader.IsDBNull(12) ? Text(reader, 12) : (None, false);
+            var child = Add(new("column", "columns", null, held));
+            objects.Attach(child, parent, objects.System(parent));
+            if (text is not null) objects.SetDefinition(child, text, longer);
+            SetTyped(child, types, typed);
+        }
+    }
+
+    /// <summary>The indexes result set: each index kept under its parent, by (object id, index_id) for its columns.</summary>
+    private async Task<Dictionary<(int, int), int>> Indexes(DbDataReader reader, Dictionary<int, int> byId, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var indexes = new Dictionary<(int, int), int>();
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var subtype = ExplorerLabels.IndexSubtype(reader.GetByte(2));
+            var indexId = reader.GetInt32(3);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0 || name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("index", parent)) continue;
+            var child = Add(new("index", "indexes", null, held, Subtype: subtype));
+            objects.Attach(child, parent, objects.System(parent));
+            indexes[(id, indexId)] = child;
+        }
+        return indexes;
+    }
+
+    /// <summary>The parameters result set: each parameter kept under its procedure or function with its type; a scalar function's
+    /// return (parameter 0) types the function itself.</summary>
+    private async Task Parameters(DbDataReader reader, Dictionary<int, int> byId, Dictionary<int, ushort> types, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var last = int.MinValue;
+        var parent = -1;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var typed = ReadTyped(reader, parameter: true);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1; }
+            if (parent < 0) continue;
+            if (typed.Ordinal == 0)
+            {
+                if (objects.Kind(parent) == "function" && Lists("parameter", parent)) SetTyped(parent, types, typed);
+                continue;
+            }
+            if (name.Length == 0) continue;
+            var held = Intern(name);
+            if (!Lists("parameter", parent)) continue;
+            var child = Add(new("parameter", "parameters", null, held, Subtype: (typed.Flags & TypedFlags.Output) != 0 ? "output" : "input"));
+            objects.Attach(child, parent, objects.System(parent));
+            SetTyped(child, types, typed);
+        }
+    }
+
+    /// <summary>The key metadata result sets: each kept index's columns in key order (included ones last), each primary or unique
+    /// key's index (whose columns it shares), and each foreign key's column pairs with the table it references.</summary>
+    private async Task Keys(DbDataReader reader, Dictionary<int, int> byId, Dictionary<(int, int), int> indexes, CancellationToken token)
+    {
+        int Kept(int id) => byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1;
+        await reader.NextResultAsync(token);
+        var items = new Dictionary<int, int>();
+        var last = (int.MinValue, int.MinValue);
+        var open = false;
+        while (await reader.ReadAsync(token))
+        {
+            var index = (reader.GetInt32(0), reader.GetInt32(1));
+            var column = Short(reader.GetInt32(2));
+            var flags = (!reader.IsDBNull(3) && reader.GetBoolean(3) ? KeyColumnFlags.Descending : 0) | (!reader.IsDBNull(4) && reader.GetBoolean(4) ? KeyColumnFlags.Included : 0);
+            if (index != last)
+            {
+                last = index;
+                open = indexes.TryGetValue(index, out var at) && !objects.Removed(at);
+                if (open)
+                {
+                    Charge(IndexMemory.KeyBytes);
+                    items[at] = objects.Details.StartKey(at, -1);
+                }
+            }
+            if (!open) continue;
+            Charge(IndexMemory.KeyColumnBytes);
+            objects.Details.AddKeyColumn(column, 0, flags);
+        }
+        await reader.NextResultAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            var key = Kept(reader.GetInt32(0));
+            var index = (reader.GetInt32(1), reader.IsDBNull(2) ? -1 : reader.GetInt32(2));
+            if (key < 0 || !indexes.TryGetValue(index, out var at) || !items.TryGetValue(at, out var item)) continue;
+            Charge(IndexMemory.KeyBytes);
+            objects.Details.ShareKey(key, item);
+        }
+        await reader.NextResultAsync(token);
+        var lastKey = int.MinValue;
+        open = false;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var column = Short(reader.GetInt32(1));
+            var referenced = reader.GetInt32(2);
+            var other = Short(reader.GetInt32(3));
+            if (id != lastKey)
+            {
+                lastKey = id;
+                var key = Kept(id);
+                open = key >= 0 && objects.Kind(key) == "key";
+                if (open)
+                {
+                    Charge(IndexMemory.KeyBytes);
+                    objects.Details.StartKey(key, Kept(referenced));
+                }
+            }
+            if (!open) continue;
+            Charge(IndexMemory.KeyColumnBytes);
+            objects.Details.AddKeyColumn(column, other, KeyColumnFlags.None);
         }
     }
 
@@ -856,6 +1220,12 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             objects.Text(name);
             byId[id] = objects.Add(item);
         }
+        await reader.NextResultAsync(token);
+        var types = await ReadTypes(reader, objects, value => { objects.Text(value); return value; }, _ => { }, token);
+        void Typed(int at, (int Type, short Length, byte Precision, byte Scale, short Ordinal, TypedFlags Flags) typed)
+        {
+            if (types.TryGetValue(typed.Type, out var type)) objects.Details.SetTyped(at, type, typed.Length, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+        }
         foreach (var (kind, folder) in new[] { ("column", "columns"), ("parameter", "parameters") })
         {
             await reader.NextResultAsync(token);
@@ -863,12 +1233,18 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 var id = reader.GetInt32(0);
                 var name = reader.GetString(1);
-                var subtype = kind == "parameter" ? reader.GetBoolean(2) ? "output" : "input" : null;
-                if (name.Length == 0 || !byId.TryGetValue(id, out var at)
-                    || !(objects.HasSchema(at) && objects.Folder(at) != "functions" && Lists(kind, objects.Kind(at), objects.Subtype(at)))) continue;
+                var typed = ReadTyped(reader, parameter: kind == "parameter");
+                if (!byId.TryGetValue(id, out var at) || !(objects.HasSchema(at) && objects.Folder(at) != "functions" && Lists(kind, objects.Kind(at), objects.Subtype(at)))) continue;
+                if (kind == "parameter" && typed.Ordinal == 0)
+                {
+                    if (objects.Kind(at) == "function") Typed(at, typed);
+                    continue;
+                }
+                if (name.Length == 0) continue;
                 objects.Text(name);
-                var child = objects.Add(kind, folder, subtype, null, name, null, true);
+                var child = objects.Add(kind, folder, kind == "parameter" ? (typed.Flags & TypedFlags.Output) != 0 ? "output" : "input" : null, null, name, null, true);
                 objects.Attach(child, at, objects.System(at));
+                Typed(child, typed);
             }
         }
         if (definitions && await reader.NextResultAsync(token))

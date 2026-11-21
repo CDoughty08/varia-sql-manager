@@ -1,6 +1,7 @@
 // Object Explorer node identity: what a node is, independent of the folder showing it. Refs carry names, never paths or
 // object_ids, so they survive refresh, drop and recreate, and map to `[schema].[name]` for drag and copy and to SMO URNs.
 import { quoteName } from '../sql/identifiers.ts'
+import { bigQueryFieldText, bigQueryPath } from '../bigquery/names.ts'
 import { kindSpecs, type dateFilterOps, type FolderId, type KindScope, type NodeKind, type NodeStatus, type NodeSubtype, type ParentKind, type ServerEngine, type textFilterOps } from './catalog.ts'
 import type { DatabaseRuntime } from './status.ts'
 
@@ -23,6 +24,12 @@ export interface ObjectRef {
   readonly ssisFolder?: string
   /** ssisProjectObject scope: the SSIS project the package is in. */
   readonly ssisProject?: string
+  /** BigQuery's bq* scopes: the project a dataset, object or column is in. */
+  readonly project?: string
+  /** bqObject and bqField scopes: the dataset an object or column is in. */
+  readonly dataset?: string
+  /** bqField scope: the table, view, materialized view or external table a column belongs to. */
+  readonly table?: string
 }
 /** A node: an object, or a folder below its nearest object (the server, a database, or a table, view, type or module). */
 export type ExplorerNodeRef =
@@ -47,6 +54,10 @@ export interface ExplorerTarget {
   readonly linux?: boolean
   /** The server's engine; absent for SQL Server. */
   readonly provider?: 'bigquery'
+  /** The row's listed create date (a SQL Server Agent job's names the job its verbs act on, AG-2). */
+  readonly created?: string
+  /** The SQL Server Agent node: what its service verbs depend on (actions catalogue, agentServiceRules). */
+  readonly agent?: import('../actions/catalog.ts').AgentServiceTarget
 }
 
 export type TextFilterOp = typeof textFilterOps[number]
@@ -81,27 +92,32 @@ export const kindScope = (kind: NodeKind): KindScope => kindSpecs[kind].scope
 
 /**
  * A node's identity within the tree: case-sensitive, and distinct for any two refs, whatever characters names hold. The SSIS
- * fields are appended only when a ref has one, so every other kind keeps the key it always had
+ * and BigQuery fields are appended only when a ref has one, so every other kind keeps the key it always had
  * (tests/fixtures/explorer/ref-keys.json).
  */
 export function refKey(connectionId: string, ref: ExplorerNodeRef): string {
   const object = ref.type === 'object' ? ref.object : ref.owner
-  const { parent, ssisFolder, ssisProject } = object
+  const { parent, ssisFolder, ssisProject, project, dataset, table } = object
   const key = [connectionId, ref.type, object.kind, object.database ?? null, object.schema ?? null, object.name ?? null,
     parent?.kind ?? null, parent?.schema ?? null, parent?.name ?? null, ref.type === 'folder' ? ref.folder : null]
-  return JSON.stringify(ssisFolder === undefined && ssisProject === undefined ? key : [...key, ssisFolder ?? null, ssisProject ?? null])
+  const ssis = ssisFolder === undefined && ssisProject === undefined ? key : [...key, ssisFolder ?? null, ssisProject ?? null]
+  return JSON.stringify(project === undefined ? ssis : [...key, ssisFolder ?? null, ssisProject ?? null, project, dataset ?? null, table ?? null])
 }
 
-/** What dragging the node into a query or Copy Name inserts: `[name]`, `[schema].[name]`, a parameter's `@name`, or nothing. */
+/**
+ * What dragging the node into a query or Copy Name inserts: `[name]`, `[schema].[name]`, a parameter's `@name`, BigQuery's
+ * backtick-quoted `` `project.dataset.table` `` (a column's quoted field path), or nothing.
+ */
 export function insertTextFor(ref: ExplorerNodeRef): string | undefined {
   if (ref.type !== 'object') return undefined
-  const { kind, schema, name } = ref.object
+  const { kind, schema, name, project, dataset } = ref.object
   // A kind this build does not know (a newer backend's Search Objects hit) inserts nothing rather than failing its menu.
   if (name === undefined || !Object.hasOwn(kindSpecs, kind)) return undefined
   switch (kindSpecs[kind].insert) {
     case 'onePart': return quoteName(name)
     case 'twoPart': return schema === undefined ? undefined : quoteName(schema) + '.' + quoteName(name)
     case 'raw': return name
+    case 'bqPath': return kind === 'bqColumn' ? bigQueryFieldText(name) : bigQueryPath(...[project, dataset, name].filter((part): part is string => part !== undefined))
     case 'none': return undefined
   }
 }

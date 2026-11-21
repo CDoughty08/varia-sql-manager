@@ -130,6 +130,11 @@ export const tablePropertiesScript = (name, token) => `USE [AppData]\r\nGO\r\nSE
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
+    // SQL Server Agent (AG-2): one job with two steps, and the service's state as the Service Control Manager reports it.
+    jobs: [{ name: 'Nightly', created: '2026-01-02T03:04:05', enabled: true, steps: ['Extract', 'Load'] }], agentState: 'running',
+    // SQL Server Agent Properties (AG-8a): msdb's settings and two jobs' history.
+    agentSettings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'C:\\Logs\\SQLAGENT.OUT', errorLoggingLevel: 3 },
+    agentHistory: 900,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
     logins: [
       { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true },
@@ -207,6 +212,7 @@ GO
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
     integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
+    agentJobs: () => stub.jobs.map(job => object({ kind: 'agentJob', name: job.name }, job.name, 'agent-job', { hasChildren: false, created: job.created, ...job.enabled ? {} : { status: 'disabled' } })),
     logins: () => stub.logins.map(login => object({ kind: 'login', name: login.name }, login.name, 'login',
       { hasChildren: false, subtype: login.subtype, ...login.disabled ? { status: 'disabled' } : login.connectDenied ? { status: 'noAccess' } : {} }))
   }
@@ -351,7 +357,9 @@ GO
   function children({ node }) {
     if (node.type === 'object') {
       const ids = statics.objects[node.object.kind] ?? []
-      return ok({ nodes: folders(node.object, ids), total: ids.length, elapsedMs: 1 })
+      // The server lists its SQL Server Agent node after its folders, as the backend does behind the release gate.
+      const agent = node.object.kind === 'server' ? [object({ kind: 'agent' }, 'SQL Server Agent', 'agent')] : []
+      return ok({ nodes: [...folders(node.object, ids), ...agent], total: ids.length + agent.length, elapsedMs: 1 })
     }
     const nodes = [...folders(node.owner, statics.folders[node.folder] ?? []), ...lists[node.folder]?.(node.owner) ?? []]
     return ok({ nodes, total: nodes.length, elapsedMs: 1 })
@@ -576,8 +584,52 @@ GO
       ...options.logBackup ? ['Back up the log', 'Restore the log backup'] : []]
     return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
   }
+  const jobOf = target => stub.jobs.find(job => job.name === target.name)
+  /** Start Job at Step's facts (AgentJobs.DescribeStartJobAsync): the job, its identity and its steps. */
+  function describeJob({ target }) {
+    const job = jobOf(target)
+    if (!job) return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
+    return ok({ elapsedMs: 1, agentJob: { name: job.name, agentIdentity: { created: job.created }, enabled: job.enabled, running: false, steps: job.steps.map((name, index) => ({ id: index + 1, name })), stepsTruncated: false } })
+  }
+  /** A job's verbs: Start and Stop answer one step; Disable, Enable and Rename change the listing. */
+  function jobVerb({ action, target, newName }) {
+    const job = jobOf(target), title = { startJob: 'Start the job', stopJob: 'Stop the job', disable: 'Disable the job', enable: 'Enable the job', rename: 'Rename the job', delete: 'Delete the job' }[action]
+    if (!job) return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
+    if (action === 'disable' || action === 'enable') job.enabled = action === 'enable'
+    if (action === 'rename') job.name = newName
+    if (action === 'delete') stub.jobs = stub.jobs.filter(item => item !== job)
+    return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
+  }
+  /** The Agent node's Start, Stop and Restart: the Service Control Manager's steps, ending in the state asked for. */
+  function agentService({ action }) {
+    const stop = [{ status: 'done', title: 'Stop SQL Server Agent' }, { status: 'done', title: 'Wait for it to stop' }]
+    const start = [{ status: 'done', title: 'Start SQL Server Agent' }, { status: 'done', title: 'Wait for it to run' }]
+    stub.agentState = action === 'stopAgent' ? 'stopped' : 'running'
+    return ok({ steps: action === 'startAgent' ? start : action === 'stopAgent' ? stop : [...stop, ...start], messages: [], elapsedMs: 1, agentService: stub.agentState })
+  }
+  /** SQL Server Agent Properties: the settings, the server's clock and every job's history; OK stores what changed, a purge empties the old rows. */
+  function agentProperties() {
+    const total = stub.agentHistory
+    return ok({ elapsedMs: 1, agentProperties: {
+      settings: { ...stub.agentSettings }, serverNow: '2026-03-31T10:00:00', serverOffsetMinutes: -new Date().getTimezoneOffset(),
+      history: { total, recent: Math.min(total, 700), jobsTruncated: false, jobs: [{ name: 'Log backup', rows: Math.min(total, 600), recent: Math.min(total, 672) }, { name: 'Nightly', rows: Math.max(0, total - 600), recent: 28 }],
+        ages: total === 900 ? [{ days: 0, rows: 100 }, { days: 3, rows: 300 }, { days: 30, rows: 400 }, { days: 60, rows: 100 }] : [{ days: 0, rows: 100 }, { days: 3, rows: 300 }] }
+    } })
+  }
+  function agentPropertiesRun({ agentProperties: changes, agentPurge }) {
+    if (agentPurge) {
+      const purged = stub.agentHistory === 900 ? 500 : 0
+      stub.agentHistory -= purged
+      return ok({ steps: [{ status: 'done', title: 'Delete old job history' }], messages: [`${purged} history entries purged.`], elapsedMs: 1 })
+    }
+    for (const [key, value] of Object.entries(changes)) stub.agentSettings[key] = value
+    return ok({ steps: [{ status: 'done', title: 'Save SQL Server Agent properties' }], messages: [], elapsedMs: 1 })
+  }
   function execute(params, sender) {
     const { target } = params
+    if (params.action === 'agentProperties') return agentPropertiesRun(params)
+    if (target.kind === 'agentJob') return jobVerb(params)
+    if (target.kind === 'agent') return agentService(params)
     if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'restoreFiles') return restoreFilesRun(params)
     if (params.action === 'createTable') return createTable(params)
@@ -663,7 +715,7 @@ GO
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'actions.describe':
         switch (params.dialog) {
-          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
+          case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           case 'loginFacts': return loginFacts(params)
           case 'unlockLogin': return unlockFacts(params)
@@ -687,6 +739,9 @@ GO
           case 'attachDatabase': return attachDescribe(params)
           case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           case 'renameDatabase': return renameFacts(params)
+          case 'startJobAtStep': return describeJob(params)
+          case 'agentProperties': return agentProperties()
+          case 'startAgent': case 'stopAgent': case 'restartAgent': return ok({ elapsedMs: 1, agentService: { machine: 'DB01', service: 'SQLSERVERAGENT', state: stub.agentState } })
           default: return params.target.kind === 'login' ? describeLogin(params) : describe(params)
         }
       case 'actions.script':
@@ -695,6 +750,7 @@ GO
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'loginProperties': return ok({ text: loginPropertiesScript(params.target.name, params.loginChanges.defaultLanguage ?? 'us_english'), database: 'master', warnings: [] })
           case 'tableProperties': return ok({ text: tablePropertiesScript(params.target.name, params.tableChanges.lockEscalation ?? 'TABLE'), database: params.target.database, warnings: [] })
+          case 'agentProperties': return ok({ text: ['USE [msdb]', 'GO', 'EXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart=0', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'msdb', warnings: [] })
           case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })

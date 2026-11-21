@@ -44,10 +44,19 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// (the connection's when left out), which SQL Server refuses.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
-    long? MaximumBytesBilled = null, bool? Prices = null);
+    long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, BigQuery.BigQueryPreviewTarget? Preview = null);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
-/// since SQL Server rolls back what a closed session left open.</summary>
-internal sealed record SessionArgs(string SessionId, string? Transaction = null);
+/// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
+/// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
+/// since its failed commit keeps the session either way.</summary>
+internal sealed record SessionArgs(string SessionId, string? Transaction = null, bool? AbortOnRefusedCommit = null);
+/// <summary>query.session.close's answer: Closed says a session was ended; Note, a BigQuery close's fixed code (with
+/// BigQuery's message or the job id it names), tells what became of a commit or of the session's end.</summary>
+internal sealed record SessionCloseResult(bool Closed, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SessionCloseNote? Note = null);
+/// <summary>commitNotApplied, committedBeforeCancel, outcomeUnknown, abortFailed or sessionExpired (src/shared/sessions.ts
+/// turns each into text).</summary>
+internal sealed record SessionCloseNote(string Code, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Message = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? JobId = null);
 internal sealed record CancelArgs(string QueryId);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
@@ -101,6 +110,22 @@ internal sealed record ResultCodecCounters(string? Name, int? Level, long PagesP
 {
     public static readonly ResultCodecCounters Off = new(null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
+/// <summary>The global explorer.index.memory EVENT: the shared index budget's figures and, for the Memory panel's Nerd metrics,
+/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out.</summary>
+internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail)
+{
+    [JsonPropertyOrder(-1)] public string Type => "explorer.index.memory";
+}
+/// <summary>What every connection's index holds. Objects and definitions count each held table once (a shared resource set once);
+/// Definitions and PackedDefinitions are objects, DefinitionTexts and PackedTexts the distinct texts behind them. PackedBytes is
+/// what the packed texts cost and PackedTextBytes what they would as strings. Texts and References are the pool's distinct texts
+/// and the references to them. RecordBytes (records, their slots, column types and keys), NameBytes, DefinitionBytes and ReadingBytes (what reads
+/// still running added) add up to the budget's use. Cut is definitions left out or cut short, ChildrenLeftOut the held databases
+/// read without their children. Connections counts those whose index holds something. LastBuildMs and LastSearchMs are left out
+/// before the first.</summary>
+internal sealed record IndexMemoryDetail(int Connections, long Objects, int Texts, long References, long Definitions, long PackedDefinitions, long DefinitionTexts,
+    long PackedTexts, long PackedBytes, long PackedTextBytes, long Cut, int ChildrenLeftOut, long RecordBytes, long NameBytes, long DefinitionBytes, long ReadingBytes,
+    long? LastBuildMs = null, long? LastSearchMs = null);
 /// <summary>The managed heap after the last collection (GC.GetGCMemoryInfo): committed bytes, and the free space inside
 /// them the runtime keeps for reuse rather than returning to the operating system.</summary>
 internal sealed record ManagedHeap(long CommittedBytes, long FreeBytes);
@@ -148,15 +173,17 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 /// <summary>One results.view filter (ViewFilter): Op "in", "notIn" or "between" on Column, with its values as base Rows
 /// (and Nulls) or as the selected Cells; Op "duplicates" on Columns; Op "groups" on Column: the values a distinct
 /// snapshot of that column (SnapshotId) ticks; or Op "keepRows", which names no column: the base Rows to keep (1 to 4,095),
-/// or the rows the selected Cells cover.</summary>
-internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null);
+/// or the rows the selected Cells cover; or Op "kind", only on a comparison (kind diff), which names no column: the Kinds of
+/// row it keeps (1 to 4 of "same", "changed", "added", "removed"; a changed entry's halves are changed).</summary>
+internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null, string[]? Kinds = null);
 /// <summary>Selected cells: 1 to 256 [first, count] ranges of positions in ViewId's order, or in the result's own.</summary>
 internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
 /// and highest). A "groups" filter comes back as it was asked, with whether it keeps (else drops) the Values it names, NULL
 /// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL. A "keepRows" filter
-/// comes back as the base Rows it keeps, ascending.</summary>
-internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null, string? Digest = null);
+/// comes back as the base Rows it keeps, ascending; a "kind" filter as its Kinds, in the order same, changed, added, removed.</summary>
+internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null, string? Digest = null,
+    string[]? Kinds = null);
 /// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
 /// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
 /// or an estimated length.</summary>
@@ -179,8 +206,11 @@ internal sealed record ResultsFindRowsArgs(uint ResultId, long[] Ids, uint? View
 internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool Truncated, long Rows);
 /// <summary>results.diff: compares two complete results of the same query (Left the earlier, Right the later) and stores
 /// the unified diff as a new result of that query (UnifiedDiff). Context is how many unchanged rows show around each change
-/// (-1: all); Exact compares text character for character instead of by collation.</summary>
-internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1, DiffMatchArgs? Match = null);
+/// (-1: all); Exact compares text character for character instead of by collation. Layout is "unified" (absent: two rows a
+/// change) or "entry" (one row an entry, its old values in previous-value columns; at most UnifiedDiff.MaxEntryPairs pairs).
+/// Replaces names a comparison of the same two results (either order) that this one replaces: while it is written the
+/// query's limit is raised by that comparison's whole charge (ResultStore.Allow).</summary>
+internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1, DiffMatchArgs? Match = null, string? Layout = null, uint? Replaces = null);
 /// <summary>How results.diff matches rows: Mode "auto" (absent: auto), "position", "rows", or "columns" with 1 to 16
 /// distinct pair indexes (ResultDiffer.MaxKeyColumns).</summary>
 internal sealed record DiffMatchArgs(string Mode, int[]? Columns = null);
@@ -193,9 +223,18 @@ internal sealed record DiffColumnChange(long Changed, long Soft);
 /// the other result, which are not compared; Soft counts values equal only by collation (case or trailing spaces, say).
 /// Repeated counts entries whose key repeats (flagged dup), Possible the pairs of removed and added rows that look alike
 /// (flagged poss), PossibleSkipped that too many unmatched rows were left to look; NothingPaired that both results have
-/// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row.</summary>
+/// rows and none matched. ColumnChanges is per pair; TrailingHidden the unchanged entries left out after the last row;
+/// Layout the layout written ("unified" or "entry").</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, DiffMatchResult Match, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
-    string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden);
+    string[] LeftOnly, string[] RightOnly, long Repeated, long Possible, bool PossibleSkipped, bool NothingPaired, DiffColumnChange[] ColumnChanges, long TrailingHidden,
+    int[] Overview, long Units, string Layout = "unified");
+/// <summary>results.diffSeek: either From (a position, -1 before the first) and Direction "next" or "previous", or PartnerOf
+/// (a look-alike row's position); positions are a view's with ViewId, else stored rows of the comparison.</summary>
+internal sealed record ResultsDiffSeekArgs(uint ResultId, uint? ViewId = null, long? From = null, string? Direction = null, long? PartnerOf = null);
+/// <summary>The position landed on (Row), the pair index of its cell (Column: an added, removed or cut unit's is 0), the
+/// unit's number (Index, 1 to Total), the change units in the view (Total) and the rows shown (Rows: the set's or the
+/// view's, which main checks Row against); or None (nothing found), or Hidden (the partner exists but the view hides it).</summary>
+internal sealed record ResultsDiffSeekResult(long? Row = null, int? Column = null, long? Index = null, long? Total = null, bool? None = null, bool? Hidden = null, long? Rows = null);
 /// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
 /// without a column counts rows.</summary>
 internal sealed record PivotValueArgs(string Aggregate, int? Column = null);
@@ -317,9 +356,10 @@ internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestI
     ExplorerFilterDto? Filter = null, bool? GroupBySchema = null);
 /// <summary>An object node (Type "object", Object) or a folder below its nearest object (Type "folder", Owner, Folder).</summary>
 internal sealed record NodeRefDto(string Type, ObjectRefDto? Object = null, ObjectRefDto? Owner = null, string? Folder = null);
-/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); null elsewhere.</summary>
+/// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); Project, Dataset and
+/// Table a BigQuery object's project, dataset and (for a column) table (the bq* scopes); null elsewhere.</summary>
 internal sealed record ObjectRefDto(string Kind, string? Database = null, string? Schema = null, string? Name = null, ParentRefDto? Parent = null, string? SsisFolder = null,
-    string? SsisProject = null);
+    string? SsisProject = null, string? Project = null, string? Dataset = null, string? Table = null);
 internal sealed record ParentRefDto(string Kind, string Schema, string Name);
 internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
 internal sealed record TextFilterDto(string Op, string Value);
@@ -401,7 +441,9 @@ internal sealed record ObjectSearchResult(List<ObjectSearchHit> Hits, int Total,
 
 /// <summary>scripting.script: one object for Script As (the wizard will send many), a verb of the catalogue, and every
 /// scripting option (src/shared/scripting/schema.ts). Cancellation is a CANCEL frame for the request.</summary>
-internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options);
+/// <summary>EstimateOnly and MaximumBytesBilled: a BigQuery CREATE's free estimate, and the cap its billed query runs under; SQL Server refuses them.</summary>
+internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options, bool? EstimateOnly = null,
+    long? MaximumBytesBilled = null);
 /// <summary>The 36 options of src/shared/scripting/options.ts in its order; a missing member fails deserialization.</summary>
 internal sealed record ScriptingOptionsDto
 {
@@ -446,7 +488,9 @@ internal sealed record ScriptingOptionsDto
 internal sealed record ScriptError(string Code, string Message, bool Retryable);
 /// <summary>The whole script (at most 4,000,000 characters) or an error. Database is where a new query window should
 /// run it: the object's, or master for databases and server objects. Commands counts the SQL commands the job sent.</summary>
-internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
+/// <para>Estimate: a BigQuery CREATE's estimate, answered instead of Text when EstimateOnly asked for it.</para>
+internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null,
+    BigQuery.BigQueryDryRunResult? Estimate = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
 /// what an inline action reads first (renameDatabase), what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),
@@ -478,7 +522,7 @@ internal sealed record RestoreSourceDto(string Kind, string? Database = null, Li
 /// where the recovery fork changed inside the set (FirstForkGuid ≠ ForkGuid); FamilyGuid the database's family across restores.</summary>
 internal sealed record BackupSetDto(string Id, string Name, string Type, string Server, string Database, int Position, string FirstLsn, string LastLsn, string CheckpointLsn,
     string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
-    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
+    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null, string? BackupSetGuid = null);
 /// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
 /// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
@@ -492,7 +536,9 @@ internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<str
 /// recovery, norecovery or standby (with StandbyFile); StopAt the server's local yyyy-MM-ddTHH:mm:ss on the last log.</summary>
 internal sealed record RestoreOptionsDto(List<RestorePlanSetDto> Sets, List<RestoreMoveDto> Relocate, bool Replace, bool KeepReplication, bool RestrictedUser, string Recovery,
     bool CloseConnections, string? StopAt = null, string? StandbyFile = null, RestoreTailLogDto? TailLog = null);
-internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null);
+/// <summary>One set of a restore plan. Guid is the BackupSetGUID the plan was reviewed against (null: the header had none); the run
+/// refuses a set at that position whose GUID differs, so a backup file overwritten after review never restores in its place.</summary>
+internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null, string? Guid = null);
 internal sealed record RestoreMoveDto(string Logical, string Physical);
 internal sealed record RestoreTailLogDto(string File, bool NoRecovery);
 /// <summary>Attach Databases' Add: the primary data file to read (a server path of at most 260 UTF-16 units).</summary>
@@ -536,7 +582,21 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
-    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null);
+    bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
+    AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null);
+/// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
+/// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
+internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
+/// <summary>SQL Server Agent Properties' "Delete old history now": every job's history older than Count (1 to agentLimits.purgeCount) days,
+/// weeks or months (Unit 1, 2 or 3) before the server's clock, which the batch computes.</summary>
+/// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
+internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
+/// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
+/// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
+/// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
+/// Agent node as their target, on actions.execute only.</summary>
+internal sealed record AgentIdentityDto(string Created);
 /// <summary>Table Properties' changes (src/shared/actions/tables.ts TableChanges): LockEscalation TABLE, AUTO or DISABLE; ChangeTracking
 /// on or off with Track columns updated (only with it on); extended properties to add, update (each with a text Value of at most the
 /// catalogue's extendedPropertyValue UTF-16 units) or drop (no Value), each name once. The tableProperties action takes them with Identity
@@ -628,7 +688,8 @@ internal sealed record LoginMappingChangeDto(string Database, string Change, str
 internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
-internal sealed record ActionError(string Code, string Message, bool Retryable);
+/// <summary>Column: the table designer's column (index in the design) a refusal is about, such as a name used twice.</summary>
+internal sealed record ActionError(string Code, string Message, bool Retryable, int? Column = null);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
 /// Service (at most loginLimits.serviceName characters) is the guarded service lookup of the loginFacts, Delete Object and Login
 /// Properties describes only. The owned
@@ -660,7 +721,7 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
     int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
-    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null);
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null, DatabaseIdentityDto? Identity = null, AgentIdentityDto? AgentIdentity = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -697,7 +758,21 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
-    TablePropertiesDto? TableProperties = null);
+    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null);
+/// <summary>SQL Server Agent Properties' describe (AG-8a, src/shared/actions/agent-properties.ts AgentPropertiesModel).</summary>
+internal sealed record AgentPropertiesDto(AgentSettingsDto Settings, string ServerNow, int ServerOffsetMinutes, string? ReadOnly = null, AgentHistoryFactsDto? History = null, string? HistoryNote = null,
+    string? SettingsNote = null);
+internal sealed record AgentSettingsDto(bool SqlserverRestart, bool MonitorAutostart, int HistoryMaxRows, int HistoryMaxRowsPerJob, bool? AutoStart = null, string? StartupAccount = null,
+    string? ErrorLogFile = null, int? ErrorLoggingLevel = null);
+internal sealed record AgentHistoryFactsDto(long Total, long Recent, List<AgentRetentionJobDto> Jobs, bool JobsTruncated, List<AgentHistoryAgeDto> Ages);
+internal sealed record AgentRetentionJobDto(string Name, long Rows, long Recent);
+internal sealed record AgentHistoryAgeDto(int Days, long Rows);
+/// <summary>Start Job at Step's facts (AG-2): the job it read, whether it is enabled and running, and its steps (at most agentLimits.stepsPerJob).</summary>
+internal sealed record AgentJobFactsDto(string Name, AgentIdentityDto AgentIdentity, bool Enabled, bool Running, List<AgentJobStepDto> Steps, bool StepsTruncated);
+internal sealed record AgentJobStepDto(int Id, string Name);
+/// <summary>The Agent service dialogs' facts (AG-2): the machine and service they act on, and the state the Service Control Manager reports
+/// (src/shared/actions/schema.ts agentServiceStates).</summary>
+internal sealed record AgentServiceFactsDto(string Machine, string Service, string State);
 /// <summary>Table Properties' describe (src/shared/actions/tables.ts TablePropertiesModel): every page's facts, the lists clipped to the
 /// catalogue's limits (the flags say so), and why nothing can change, when nothing can.</summary>
 internal sealed record TablePropertiesDto(TableGeneralDto General, TableStorageDto Storage, TableChangeTrackingDto ChangeTracking, List<TablePermissionDto> Permissions, bool PermissionsTruncated,
@@ -766,7 +841,7 @@ internal sealed record DesignTypeDto(string System, int? Length = null, bool? Ma
 /// <summary>Whole numbers of at most 38 digits, as text (decimal(38, 0) does not fit a C# number).</summary>
 internal sealed record DesignIdentityDto(string Seed, string Increment);
 internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup,
-    bool CaseSensitiveNames, bool AccentSensitiveNames, bool? CanCreate = null);
+    bool? CanCreate = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
 /// <summary>One step of an action's reply (src/shared/actions/schema.ts ActionStep). Status: done, failed, skipped or cancelled;
 /// Title: what the step does (at most 64 characters, constant text); Message: SQL Server's text for a failed one; Detail: a name
@@ -783,7 +858,7 @@ internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Ab
 /// connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
     List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null,
-    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null);
+    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null, string? AgentService = null);
 /// <summary>A confirmed action-induced change to one live handle's backend settings. Monotonic safe-integer revision;
 /// initial connect is revision 0. At most 256 distinct handles per result. PasswordChanged carries no secret: main uses
 /// only the matching validated action's transient password. NewDatabase is the resulting catalog, at most 128 characters.</summary>

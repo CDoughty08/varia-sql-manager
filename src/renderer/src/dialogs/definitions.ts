@@ -13,7 +13,7 @@ import {
 import { promptLimits, type ActionPromptRequest } from '../../../shared/actions/prompts.ts'
 import {
   detachDatabaseStepTitle, dropDatabaseStepTitle, dropUserStepTitle, loginPasswordStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts,
-  type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget, type LoginPropertiesRequest
+  type AgentJobFacts, type AgentServiceFacts, type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget, type LoginPropertiesRequest
 } from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -26,6 +26,9 @@ import {
   initialLoginPropertiesDraft, loginPropertiesFocus, loginPropertiesModelOf, loginPropertiesReadAgain, loginPropertiesRequest, withDatabaseRoles, type LoginPropertiesDraft, type LoginPropertiesModel
 } from './login-properties'
 import { initialNewLoginDraft, newLoginRequest, newLoginTarget, type NewLoginDraft, type SecretState } from './new-login'
+import { restartAgentDefinition, startAgentDefinition, startJobAtStepDefinition, stopAgentDefinition, type AgentServiceDraft, type StartJobDraft } from './agent-dialogs'
+import { agentPropertiesDefinition } from './agent-properties'
+import type { AgentPropertiesDraft, AgentPropertiesModel } from '../../../shared/actions/agent-properties.ts'
 
 /** A request without its ids. */
 export type BuiltRequest = Omit<ActionRequest, 'connectionId' | 'requestId'>
@@ -42,6 +45,8 @@ export interface DialogEffects {
   reload(owner: ObjectRef, folder: FolderId): void
   /** The dialog's database went offline or came online: its Database Properties documents follow. */
   databaseState(offline: boolean): void
+  /** Samples the dialog's server's status at once (the Agent node's state after Varia started, stopped or restarted it). */
+  refreshStatus?(): void
   /** A toast with the object actions' notice key, which the next one replaces (Unlock Login's success). */
   notify(message: string): void
 }
@@ -110,8 +115,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly initialFocus?: (model: Model, draft: Draft) => string | undefined
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
-  /** OK runs as soon as the describe answers, with nothing to choose (SSMS's Bring Online). */
-  readonly runOnOpen?: true
+  /** OK runs as soon as the describe answers, with nothing to choose (SSMS's Bring Online), or when the model leaves nothing to choose
+   *  (Start Job at Step on a job with one step). */
+  readonly runOnOpen?: true | ((model: Model) => boolean)
+  /** The dialog has no Script button: what it runs is no T-SQL (SQL Server Agent's service, through the Service Control Manager). */
+  readonly noScript?: true
   /** A success leaves the dialog open on its steps with Close, as SSMS's progress dialogs do, instead of closing it. */
   readonly keepOpen?: true
   /** Pages the dialog leaves out of "Select a page" for this model (Login Properties' Securables for SQL Server's own logins). */
@@ -121,12 +129,19 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
   /** Whether the dialog reads its model again after steps completed before a failure or Stop (ObjectDialogService.reload). */
   readonly reloadsAfterPartial?: (target: ObjectRef) => boolean
+  /** Why nothing in the dialog may change (SQL Server Agent Properties on Managed Instance), or undefined: every field is disabled, the reason
+   *  is in the message bar, and Close (primary, focused) replaces OK and Cancel; the pages stay navigable and Script has nothing to script. */
+  readonly readOnly?: (model: Model) => string | undefined
 }
 /** A folder kind and the databases whose folder of that kind changed. */
 export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
 
 /** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
-export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
+export interface DeleteDraft {
+  readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean
+  /** A SQL Server Agent job's creation time as the tree listed it, so a job created since under the name is refused. */
+  readonly listed?: string
+}
 /** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
 export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
 /**
@@ -178,6 +193,12 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   request: (target, model, draft) => {
     const database = target.kind === 'database'
     const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
+    // A SQL Server Agent job (AG-2): sp_delete_job deletes its history and the schedules only it used, as SSMS's Delete does.
+    // The identity is the row's the user chose (the dialog's read takes the name only), so a job created since is refused NOT_FOUND.
+    if (target.kind === 'agentJob') {
+      const created = draft.listed ?? model.agentIdentity?.created
+      return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(created ? { agentIdentity: { created } } : {}) }
+    }
     // The login or database the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
     if (target.kind === 'login' && model.login)
       return { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
@@ -433,11 +454,15 @@ export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel
   readonly loginProperties: LoginPropertiesModel
+  readonly startJobAtStep: AgentJobFacts; readonly startAgent: AgentServiceFacts; readonly stopAgent: AgentServiceFacts; readonly restartAgent: AgentServiceFacts
+  readonly agentProperties: AgentPropertiesModel
 }
 export interface DialogDrafts {
   readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
   readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft; readonly unlockLogin: UnlockDraft
   readonly loginProperties: LoginPropertiesDraft
+  readonly startJobAtStep: StartJobDraft; readonly startAgent: AgentServiceDraft; readonly stopAgent: AgentServiceDraft; readonly restartAgent: AgentServiceDraft
+  readonly agentProperties: AgentPropertiesDraft
 }
 export type DialogModel = DialogModels[DefinedDialogId]
 export type DialogDraft = DialogDrafts[DefinedDialogId]
@@ -450,7 +475,12 @@ export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogD
   bringOnline: bringOnlineDefinition,
   detachDatabase: detachDatabaseDefinition,
   unlockLogin: unlockLoginDefinition,
-  loginProperties: loginPropertiesDefinition
+  loginProperties: loginPropertiesDefinition,
+  startJobAtStep: startJobAtStepDefinition,
+  startAgent: startAgentDefinition,
+  stopAgent: stopAgentDefinition,
+  restartAgent: restartAgentDefinition,
+  agentProperties: agentPropertiesDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

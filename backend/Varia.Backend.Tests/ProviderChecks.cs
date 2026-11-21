@@ -35,7 +35,8 @@ internal static class ProviderChecks
         var sqlServerHandle = await Code(() => service.DispatchAsync("tables.columns", byHandle, wire));
         service.ConnectionProvider = id => id == connectionId ? Providers.BigQuery : Providers.SqlServer;
         var bigQueryHandle = await Code(() => service.DispatchAsync("tables.columns", byHandle, wire));
-        var bigQueryExplorer = await Code(() => service.DispatchAsync("explorer.children", Parse($$"""{"connectionId":"{{connectionId}}","requestId":"{{Guid.NewGuid()}}","nodeId":"server"}"""), wire));
+        // Object Explorer's tree serves both engines (BQ-5); Peek is SQL Server's.
+        var bigQueryExplorer = await Code(() => service.DispatchAsync("explorer.peek", Parse($$"""{"connectionId":"{{connectionId}}","requestId":"{{Guid.NewGuid()}}","nodeId":"server"}"""), wire));
         var bigQueryLanguage = await Code(() => service.DispatchAsync("language.complete", Parse($$"""{"text":"","context":{"providerId":"sqlserver","connectionId":"{{connectionId}}"},"position":{"line":1,"column":1} }"""), wire));
         check(bigQueryLanguage == "UNSUPPORTED_PROVIDER", $"a language request for a stub BigQuery connection, named in its context, is refused with UNSUPPORTED_PROVIDER: {bigQueryLanguage}");
         check(sqlServerHandle != "UNSUPPORTED_PROVIDER" && bigQueryHandle == "UNSUPPORTED_PROVIDER" && bigQueryExplorer == "UNSUPPORTED_PROVIDER",

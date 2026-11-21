@@ -30,13 +30,20 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   stepsPerJob: 'Steps one job save may hold',
   schedulesPerJob: 'Schedules one job save may hold',
   scheduleJobChanges: 'Jobs one schedule save may attach or detach',
+  lastRunRows: "History rows Job Activity Monitor's last run reads, newest first, before it cancels the rest",
   startJobs: 'Jobs one Start, Stop, Enable or Disable from Job Activity Monitor may name',
   watchedJobs: 'Jobs the status bar follows with live progress',
   serviceStatementMs: 'One service Start or Stop statement, in ms',
   serviceWaitMs: 'How long a Start or Stop waits for the service\'s new state, in ms',
   serviceReadMs: 'One service state read, in ms',
+  servicePollMs: "How often a Start or Stop's wait polls the service's state, in ms",
   agentUpWaitMs: 'How long the live checks wait for Agent after the server is up, in ms',
-  profileMs: 'The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role)'
+  profileMs: 'The budget of `agent.profile` once it has its Object Explorer slot, in ms (a TIMEOUT value past it, unless msdb already refused the login: then the profile with no role)',
+  historyMaxRows: 'The largest Maximum job history log size SQL Server Agent Properties sends, in rows (rows per job are 1 to it)',
+  retentionDays: 'The days of history "What this keeps" measures each job\'s rate over',
+  retentionJobs: 'Jobs "What this keeps" lists, those with the most rows first; more set `truncated`',
+  historyAgeDays: 'Whole days of age the purge\'s row estimate counts separately (older rows count together)',
+  purgeCount: 'The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`)'
 }
 
 /** The generated reference: code tables, gates, procedures and limits. */
@@ -130,7 +137,7 @@ export function renderAgentDocs(): string {
     '',
     'Writes (from AG-2) call only these, each followed by a return-code check:',
     '',
-    table(['Procedure', 'Lane'], writeProcedures.map(procedure => [code(procedure.database + '.dbo.' + procedure.name), procedure.lane])),
+    table(['Procedure', 'Arguments', 'Lane'], writeProcedures.map(procedure => [code(procedure.database + '.dbo.' + procedure.name), procedure.arguments?.map(code).join(', ') ?? 'later lanes', procedure.lane])),
     '',
     'msdb error numbers the actions map (AG-2 onward; reads map 15281 to `AGENT_DISABLED` instead):',
     '',

@@ -17,12 +17,13 @@ internal static class Providers
     internal static readonly string[] BothMethods = ["system.health", "connections.connect", "connections.disconnect", "connections.databases", "databases.list", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.visibility", "results.read", "results.close", "results.setMemoryLimit", "results.rowBytes", "results.view", "results.viewClose",
         "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot",
-        "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose", "results.copy", "results.export"];
+        "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose", "results.copy", "results.export",
+        "results.diffSeek", "explorer.children", "scripting.script"];
 
     /// <summary>Methods only BigQuery serves. Those without a connection handle (the pre-connect bigquery.account and
     /// bigquery.projects) are BigQuery's by declaration, with nothing to resolve; bigquery.dryRun names its handle, and a
     /// SQL Server handle is refused.</summary>
-    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun"];
+    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties"];
     private static readonly string[] BigQueryOnly = [BigQuery];
 
     /// <summary>The methods whose provider is their parameters' <c>provider</c> (absent: SQL Server): they open a connection.</summary>

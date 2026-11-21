@@ -7,11 +7,48 @@ place. The measurements below come from `PageCompressionBench` (see [Running the
 
 ## Policy
 
-Packing applies only to complete results of 1 MiB (four pages) or more that are not live tables (`query.Live`: small,
-64 KiB pages, replaced every tick) and not held by a pin or lease (a read, an operation, Copy or Save). It is on in
-every backend Varia starts (`SqlService`'s `packHidden`, passed only by the backend process); the checks' stores leave
+Packing applies only to results of 1 MiB (four pages) or more that are not live tables (`query.Live`: small, 64 KiB
+pages, replaced every tick) and not held by a pin or lease (a read, an operation, Copy or Save). A query's own result is
+packed as it stores ([At seal](#at-seal)); the policy below packs complete results, derived ones (pivots, diffs) and any
+page left raw. It is on in every backend Varia starts (`SqlService`'s `packHidden`, passed only by the backend process); the checks' stores leave
 it off unless a check turns it on. There is no setting: the measured costs are below a frame for plain reads, the rules
 below keep packing away from results in use, and a setting would only let users keep half the budget idle.
+
+### At seal
+
+A query's own result is packed while it stores: once it holds 1 MiB, each page is packed as it seals, the pages sealed
+before then with the one that crossed it (`ResultStore.PackAtSeal`, `ResultSetBuffer.PackSealed`). Without it the
+policy packs only complete results, so one result larger than its query's half of the budget (an eighth of the
+machine's memory by default) stopped there, though it would have fitted packed: on the local SQL Server, with a query
+half between the result's raw and packed size, `sys.messages` read four times kept 61 % of its rows (242 MiB raw, 54 MiB
+packed) and catalog columns read sixteen times 52 % (58 MiB raw, 2.7 MiB packed). Packed at seal both kept every row.
+
+- **On a worker, never the reading thread.** Each storing result has at most one thread-pool worker packing its queue,
+  at normal priority, oldest page first, so queries storing at once pack on as many threads; one thread for all of them
+  fell behind four at once, about 300 pages each, since packing with the Find filter runs near 140 MB/s a thread. It is
+  not the workers' gate, which sorts and reads share. Rows arrive at 26 to 51 MB/s from one query (reading alone takes
+  as long: SQL Server and TDS are the bottleneck) and 110 to 200 MB/s from four at once; a worker packs a page with its
+  Find filter at about 140 MB/s (320 to 920 MB/s for the codec alone), so one a result keeps up. The worker trails by at most five pages (the four
+  sealed before the floor are queued with the one that crosses it; 24 once, in a process's first fill) and finishes 2
+  to 15 ms after the last row. A fill takes as long as raw: `sys.messages` read four times 4.2 to 6.2 s against 4.2 to
+  6.7 s raw, catalog columns 2.0 to 2.1 s both, and four of each at once 5.2 to 5.6 s against 5.1 to 5.4 s and 2.2 s
+  against 2.1 s, within the machine's run-to-run noise. The packed result is charged 57 MiB rather than 54: pages of
+  32 KiB or more get their Find filters, as the policy's do.
+- **Small results are never packed.** Below 1 MiB nothing is queued, as the policy's floor.
+- **The policy's rules for holds.** A page is never replaced while a pin or lease is held: it stays queued, and the last
+  hold to end starts the worker again. A release drops the queue; so does an operation's whole unpack of a complete
+  result, a use the policy's delays then govern, and so does a failure while packing (a defect, never the user's: the
+  pages stay raw and readable). Live tables are never packed, and derived sets are left to the policy. The
+  `debug.results.synthesize` test hook's result stays raw unless it asks to pack, since the checks and benchmarks that
+  use it compare raw results with packed ones.
+- **A refused row waits for it.** While the query's own pages are queued (`QueryBudget.SealCanPack`), a row the budget
+  refuses waits for their saving as it waits for packing for room ([Room for a query](#room-for-a-query)), through a
+  pin too (a read's is brief; Find's or a profile's lasts the operation), whose end restarts the worker, within the
+  wait's bounds. While a lease holds them (a Copy or Save of a result still
+  loading), it is refused at once.
+- **Reads of a fresh result read packed pages** from its first seconds rather than after the policy's 5 or 30 s. They
+  cost what the [measurements](#measurements) show: below a frame for scrolling and random jumps, a sorted grid's slowest
+  screens one or two frames on a few cores, and Save about 0.5 s more a GiB.
 
 <a id="stage-1-as-built"></a>
 
@@ -83,8 +120,8 @@ wait, 4 waits a row, 30 s in all for the query) while the policy packs at once, 
 gate (`ViewSorter.Gate`, a page an item, sharing threads fairly with sorts and reads). It packs complete, unheld results
 of 1 MiB or more that could make room: any query's for the global budget, only the query's own when its half is full;
 hidden first, then largest, until no query waits. It ignores the idle delays but never takes one an operation unpacked
-and still uses. While a row waits, the rows committed before it are not yet
-sealed. With nothing to pack, or once the waits run out, the row is refused and the query truncated as before. Stored
+and still uses, and the query's own pages queued for packing at seal pack meanwhile unless a lease holds them. While a row waits, the rows
+committed before it are not yet sealed. With nothing to pack, or once the waits run out, the row is refused and the query truncated as before. Stored
 rows are never dropped, and a stop is never undone: stored rows stay a prefix of the rows read.
 
 Idle packing stays on the lowest-priority thread, since nobody is waiting on its saving; packing for room goes through
@@ -138,6 +175,8 @@ value shape is kept as values instead of lengths and text (`PageCodec.Typed.cs`)
 - **Two frames:** the typed values go in a Zstandard frame of their own, ahead of the form's frame. In one frame their
   bytes spoil Zstandard's literal tables for the text digits beside them: `numeric` packed 2 % larger typed in one frame,
   and 7 % smaller in two. Unpacking reads the values' frame into a pooled room, then expands the form in place as before.
+  Packing rents the values' room only once a column's every cell parsed, and the frames' room at the bounds of what it
+  compresses, so a page with no typed column takes from the shared pool what it took before the typed form.
 
 Measured with `--typed` (both forms timed page by page in turn), counting the lengths sidecar:
 
@@ -199,7 +238,10 @@ every complete result packed.
 - **Plain `results.read`:** the pages it needs, through a per-result cache of six unpacked pages charged as working
   memory, freed with the result. About 0.2 ms a 1,000-row read while scrolling `orders`, 0.8 ms on `log`, 0.4 to 1 ms
   for a jump: well inside a frame. A plain read never unpacks a result whole, so reading does not undo packing.
-- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers.
+- **`results.read` through a view:** the distinct pages behind the rows asked for, unpacked in parallel on the workers,
+  up to 64 at a time and no more than the output page being built can take (by row count and its rows' bytes): a read
+  lets them go with each output page, so through a sort of rows so wide a page holds one, a 128-row tile unpacks
+  128 pages.
 
 ### Fused per-page reads
 
@@ -223,7 +265,44 @@ working memory, so the operation holds about a page a worker and the result stay
   growth (1 and 4.2 GiB).
 - **Copy and Save** stay on one thread and unpack each page just before writing it (0.5 to 0.9 s per GiB, 1.4 to 2.5
   times the raw Save). They are never refused for want of room. Decompressing ahead on a second thread was not built.
-- Fused rooms are plain arrays freed with the operation.
+- Fused rooms come from the store's room pool ([Room pool](#room-pool)) and go back when the operation ends.
+
+### Room pool
+
+View reads and fused operations rent their rooms from one pool a store keeps (`RoomPool`) and give them back once
+nothing reads them, so a result read again allocates no new rooms. Before the pool each tile of a sorted view made a
+256 KiB room for each page it unpacked: about 33 MB of large-object-heap arrays a 128-row tile, freed only by a full
+collection, so scrolling a sorted view of a packed result collected every other tile.
+
+- **Renting:** a room is the shortest idle one at least the page's length, or a new one rounded up to 16 KiB, so pages
+  of nearly one length (most end within a row of the seal) share rooms. A reader reads its first page-length bytes.
+- **Giving back:** a view read gives its group's rooms back before it hands over a page (it may wait for credit with
+  it); Copy and Save keep them across pages. `PageRooms` gives back, when disposed, the rooms their readers gave back; a
+  room still out is dropped.
+- **Kept:** idle rooms up to `RoomPool.IdleBytes` (a tile's 64 rooms and one a worker: about 21 MiB on 16 workers),
+  none longer than four sealed pages, none twice. When they are full, the rooms given back longest ago make way for one given
+  back now, whatever their lengths, so once a read makes rooms of its own they replace those an earlier, narrower or
+  wider, result left. A room lent to a shorter page than its own goes first; each room made while
+  rooms are lent drops one of them, the longest lent to a page no shorter than the one the room was made for, so lent
+  rooms do not keep out the rooms a read lacks. A read that leaves a wider one makes its own rooms over a few tiles, and
+  results whose pages spread over many room lengths (wide rows) can make somewhat more rooms than keeping the first
+  rooms given back did. They are not charged to the budget, as a sort's or a filter's pooled scratch is not, and
+  are let go after 30 s without a rental.
+
+Measured on 1,000,000 W1 rows packed (830 pages) through a scattered view, without the pool → with it. Times are the
+best of three interleaved runs on a busy 16-worker machine; allocations, collections and pauses held across all three.
+
+| | 128-row tile | 256-row screen | Find, every page | Find through the view |
+| --- | ---: | ---: | ---: | ---: |
+| Allocated a read | 33 MB → 0.2 MB | 66 MB → 0.4 MB | 2.3–4.3 MB → 0.15 MB | 9–12 MB → 4 MB |
+| Full collections, 300 tiles or screens, 30 Finds | 194–230 → 0 | 374–385 → 0 | 4–8 → 0 | 14–17 → 2 |
+| GC pause, all reads | 150–360 ms → 1 ms | 210–370 ms → 12 ms | 5–15 ms → 0 | 7–43 ms → 1–3 ms |
+| p50 (p99) | 4.2 (23.6) → 1.9 (13.4) ms | 6.7 (30.4) → 4.2 (9.2) ms | 15.4 → 15.3 ms | 17.2 → 24.5 ms |
+
+What a Find through a view still allocates is its own row-position array (4 bytes a row), not rooms.
+
+`RoomPoolBench` (`--room-pool-bench`, run by `tests/bench/search.bench.ts`) holds the memory a tile allocates to a floor
+(`node.roomPool.tileAllocatedMb`) and reports the full collections the tiles cause.
 
 ### Operations that unpack first
 
@@ -242,7 +321,8 @@ If the reservation is refused, the operation answers `TOO_LARGE`, as a sort that
 
 - **A packed page is charged its packed length plus `PageOverhead` plus its sidecar.** Packing returns the difference
   to the query and global budgets at once.
-- **The unpacked-page cache, rooms, extracts and rehydration are working memory.**
+- **The unpacked-page cache, rooms, extracts and rehydration are working memory.** Rooms idle in the room pool are
+  not charged; the pool's cap bounds them.
 - **Returning memory to the operating system follows `ResultStore.CollectNow`.** Bytes packing frees count as freed, so
   packing triggers the same collections as a release, but it never forces a compaction on its own. A non-compacting
   collection gives back almost nothing (0.1 to 0.3 GiB), yet the freed space is reused: 4.2 to 5.3 GiB of new pages
@@ -330,6 +410,10 @@ not part of `npm run check` or CI. Every run warms the JIT with an untimed pass 
   `--untyped` with either, or with `--fused`, packs without typed columns.
 - `--typed`: the result's pages packed with and without typed columns, both timed page by page in turn, then Find over
   every page of each. `--columns`: each column of a sample of pages packed on its own, with and without typing.
+- `--seal-bench <server> [queries]` (`SealBench.cs`, its own entry point): SQL Server's own catalog rows, each SELECT run
+  several times into one set, filled raw, with each page packed on the reading thread and on a thread of its own, then
+  that many queries at once, and with a query half between the result's raw and packed size, where it stops with the
+  policy as room maker against packed at seal.
 - `--typed-form-bench <server>` (`TypedFormBench.cs`, its own entry point): the same comparison over SQL Server's own
   catalog and DMV rows, read with SELECTs and Windows authentication.
 - `VARIA_BENCH_CORES=n` holds the process to n cores and the workers to what such a machine would have.

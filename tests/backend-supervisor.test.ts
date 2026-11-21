@@ -331,10 +331,12 @@ describe('BackendSupervisor providers', () => {
     // databases.list serves both engines (BigQuery's datasets); tables.columns is SQL Server's alone.
     await expect(value.request('databases.list', { connectionId: bigQuery.id })).resolves.toEqual({ method: 'databases.list' })
     expect(await failure(value.request('tables.columns', { connectionId: bigQuery.id, database: 'sales', schema: 'dbo', name: 'orders' }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
-    expect(await failure(value.request('explorer.children', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    // Object Explorer's tree serves both engines (BQ-5); Peek is SQL Server's.
+    expect(await failure(value.request('explorer.peek', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
     // Execute serves both engines, but main refuses each engine the other's options before sending.
     expect(await failure(value.request('query.execute', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', includeActualPlan: true } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
     expect(await failure(value.request('query.execute', { connectionId: connection.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', database: 'master', dataset: 'varia_fixture' } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
+    expect(await failure(value.request('query.execute', { connectionId: connection.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', preview: { project: 'varia-alpha', dataset: 'sales', table: 'orders' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })
     // A method declared for both engines that names no connection is C#'s to check.
     await expect(value.request('results.close', { resultIds: [1] })).resolves.toEqual({ method: 'results.close' })
     expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect', 'databases.list', 'connections.connect', 'databases.list', 'results.close'])
@@ -646,6 +648,19 @@ describe('BackendSupervisor results', () => {
     const descriptor = { resultId: 4, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [], rowsRead: 1, rowsStored: 1, rowsAvailable: 1, bytesStored: 1, truncatedCells: 0, state: 'complete', incomplete: false }
     last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: descriptor })
     expect(await synthetic).toEqual({ ...descriptor, generation: 1 })
+  })
+  it("checks a session close's answer, passing a BigQuery note on and failing an invalid one", async () => {
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const closing = value.request('query.session.close', { sessionId: 'tab-1', transaction: 'commit' })
+    await settle(8)
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: { closed: true, note: { code: 'outcomeUnknown', jobId: 'job_1' } } })
+    expect(await closing).toEqual({ closed: true, note: { code: 'outcomeUnknown', jobId: 'job_1' } })
+    const invalid = failure(value.request('query.session.close', { sessionId: 'tab-2' }))
+    await settle(8)
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: { closed: true, note: { code: 'committed' } } })
+    expect(await invalid).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
   })
 })
 

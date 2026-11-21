@@ -63,7 +63,7 @@ internal static class ScriptingChecks
         check(rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))), "every row names an Object Explorer kind and subtype");
         check(Catalog.Verbs.Select(verb => verb.Verb).SequenceEqual(Enum.GetValues<ScriptVerb>()) && Catalog.Verb("dropAndCreate") is { Name: "DROP And CREATE", Class: VerbClass.Ddl }
             && Catalog.Verb("execute")?.Class == VerbClass.Execute && Catalog.Verb("Create") is null, "the ten verbs map onto ScriptVerb in order");
-        check(Catalog.ErrorCodes.Count() == 19 && Catalog.ErrorCodes.Contains("UNSUPPORTED_PROVIDER") && !Catalog.Retryable("UNSUPPORTED_PROVIDER") && Catalog.Retryable("AUTH_KERBEROS") && Catalog.Retryable("AUTH_ENTRA") && Catalog.ErrorCodes.Contains("AUTH_IDENTITY") && !Catalog.Retryable("AUTH_IDENTITY") && Catalog.Retryable("BLOCKED") && !Catalog.Retryable("NOT_FOUND") && Catalog.Limit("maxScriptChars") == 4_000_000
+        check(Catalog.ErrorCodes.Count() == 22 && Catalog.ErrorCodes.Contains("COST_CAP") && Catalog.Retryable("QUOTA") && !Catalog.Retryable("AUTH_EXPIRED") && Catalog.ErrorCodes.Contains("UNSUPPORTED_PROVIDER") && !Catalog.Retryable("UNSUPPORTED_PROVIDER") && Catalog.Retryable("AUTH_KERBEROS") && Catalog.Retryable("AUTH_ENTRA") && Catalog.ErrorCodes.Contains("AUTH_IDENTITY") && !Catalog.Retryable("AUTH_IDENTITY") && Catalog.Retryable("BLOCKED") && !Catalog.Retryable("NOT_FOUND") && Catalog.Limit("maxScriptChars") == 4_000_000
             && Catalog.Limit("maxDefinitionBytes") == ScriptPreflight.MaxDefinitionBytes && Catalog.Limit("budgetMs") == (long)new ScriptingServiceOptions().Budget.TotalMilliseconds
             && Catalog.Limit("gatePerConnection") == new ScriptingServiceOptions().PerConnection && Catalog.Limit("gateTotal") == new ScriptingServiceOptions().Total
             && Catalog.Limit("registered") == new ScriptingServiceOptions().MaxRegistered, "the backend's limits are the catalogue's");
@@ -77,7 +77,8 @@ internal static class ScriptingChecks
             "procedure preflights also find extended and replication-filter procedures, so their deferred subtype can refuse them");
     }
 
-    private static IEnumerable<(string Kind, string? Parent)> ScriptableKinds() => Catalog.Targets.Where(row => row.Scriptable).GroupBy(row => row.Kind)
+    /// <summary>SQL Server's scriptable kinds (BigQuery's are BigQueryExplorerChecks').</summary>
+    private static IEnumerable<(string Kind, string? Parent)> ScriptableKinds() => Catalog.Targets.Where(row => row.Scriptable && ExplorerCatalog.Current.KindOf(row.Kind).Serves(Providers.SqlServer)).GroupBy(row => row.Kind)
         .SelectMany(group => group.First().Parents.Count == 0 ? [(group.Key, (string?)null)] : group.First().Parents.Select(parent => (group.Key, (string?)parent)));
 
     private static void Statements(Action<bool, string> check)
@@ -599,7 +600,7 @@ internal static class ScriptingChecks
         check(Classify(new ScriptRefusedException("it depends on an object in another database.")) is { Code: "SMO_ERROR", Message: "Could not script dbo.Orders: it depends on an object in another database." },
             "a script Varia refuses is a value that says why");
         var messages = Catalog.ErrorCodes.Select(code => ScriptingErrors.Create(Catalog, code, subject with { Display = new string('x', 400) }, new string('d', 5000), 1)).ToList();
-        check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 19
+        check(messages.All(error => error.Message.Length <= ScriptingErrors.MaxMessage && error.Retryable == Catalog.Retryable(error.Code)) && messages.Count == 22
             && messages.Single(error => error.Code == "AUTH_IDENTITY") is { Retryable: false },
             "every message stays within 2,048 characters and carries the catalogue's retryability");
         check(ScriptingErrors.Display("a\u202eb\u0007\uD800") == "a⟨U+202E⟩b⟨U+0007⟩⟨U+D800⟩" && ScriptingErrors.Display(new string('x', 500)).Length == 400
@@ -691,7 +692,8 @@ internal static class ScriptingChecks
             ("deferred kind", Args(new ObjectRefDto("certificate", "Sales", Name: "c"))), ("verb", Args(verb: "truncate")), ("verb the kind never offers", Args(verb: "execute")),
             ("table type child", Args(new ObjectRefDto("index", "Sales", Name: "i", Parent: new ParentRefDto("tableType", "dbo", "t")))),
             ("enum option", Args(with: options with { TargetServerVersion = "120" })), ("engine type", Args(with: options with { TargetEngineType = "azure" })),
-            ("no options", Args() with { Options = null! })
+            ("no options", Args() with { Options = null! }),
+            ("BigQuery kind", Args(new ObjectRefDto("bqTable", Name: "orders", Project: "varia-alpha", Dataset: "sales"), verb: "select"))
         };
         var accepted = new List<string>();
         foreach (var (name, args) in invalid)

@@ -107,6 +107,10 @@ internal sealed class ActionServiceOptions
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
     /// <summary>Test seam: the newest database version Attach Databases takes the server to open, in place of master's.</summary>
     internal int? AttachServerVersion { get; set; }
+    /// <summary>Test seam: the Service Control Manager client SQL Server Agent's Start, Stop and Restart use (AG-2), in place of Windows' own.</summary>
+    internal Agent.IServiceControl? ServiceControl { get; set; }
+    /// <summary>Test seam: whether Varia counts as running on Windows for those verbs, in place of the operating system's answer.</summary>
+    internal bool? WindowsClient { get; set; }
 }
 
 /// <summary>A job's gate when it is not the read or execute gates: the picker's listings, Restore Database's reads.</summary>
@@ -290,6 +294,10 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        // SQL Server Agent's job verbs and service control (AG-2) validate themselves.
+        if (ValidateAgent(args, script) is { } agentTarget) return agentTarget;
+        // SQL Server Agent Properties (AG-8a) validates itself too.
+        if (ValidateAgentProperties(args) is { } propertiesTarget) return propertiesTarget;
         if (args.LoginChanges is not null && args.Action != "loginProperties") throw Invalid(args.Action + " takes no loginChanges.");
         if (args.TableChanges is not null && args.Action != "tableProperties") throw Invalid(args.Action + " takes no tableChanges.");
         // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
@@ -438,6 +446,7 @@ internal sealed partial class ActionService : IDisposable
                 error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", own: OwnGate.Browse);
         }
         if (args.Restore is not null) return DescribeRestoreAsync(args, token);
+        if (AgentServiceActions.Any(action => action == args.Dialog)) return DescribeAgentServiceAsync(args, token);
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? (args.Login is null ? "createLogin" : "loginProperties")
             : args.Dialog == catalog.Logins.Securables.EffectiveDescribe ? "loginProperties"
             : args.Dialog == catalog.Logins.CheckNamesDescribe ? "createLogin"
@@ -460,6 +469,9 @@ internal sealed partial class ActionService : IDisposable
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
                 _ when args.Dialog == catalog.Logins.Securables.EffectiveDescribe => DescribeEffectiveJobAsync(connection, target, args.Securable!, job),
+                "startJobAtStep" => DescribeStartJobAsync(connection, target, job),
+                "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
+                "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -469,6 +481,8 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
+        if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
+        if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
         if (catalog.Restore.Requests.Contains(args.Action))
         {
@@ -504,6 +518,9 @@ internal sealed partial class ActionService : IDisposable
         if (args.Action == "delete" && args.CloseConnections == true && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine == "managedInstance")
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
+        if (AgentServiceActions.Contains(args.Action)) return ExecuteAgentServiceAsync(args, token);
+        // Managed Instance refuses sp_set_sqlagent_properties (41905): refused before any connection opens, as the dialog opens read-only there.
+        if (args.Action == "agentProperties" && AgentPropertiesRefusal(args) is { } agentRefused) return Task.FromResult(new ActionExecuteResult([], [], 0, agentRefused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
@@ -519,6 +536,8 @@ internal sealed partial class ActionService : IDisposable
                 "detach" => ExecuteDetachJobAsync(connection, args, target, profile.Linux, band, job),
                 "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 "tableProperties" => ExecuteTableJobAsync(connection, args, target, band, job),
+                _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
+                "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -641,8 +660,8 @@ internal sealed partial class ActionService : IDisposable
     /// must look for them there.</summary>
     private static RequestException Busy(ActionGate kind, bool total) => (kind, total) switch
     {
-        (ActionGate.Long, false) => new("BUSY", "Another restore or backup is running on this connection. Retry after it finishes."),
-        (ActionGate.Long, true) => new("BUSY", "Restores or backups are already running on other connections. Retry after one finishes."),
+        (ActionGate.Long, false) => new("BUSY", "Another restore, backup or SQL Server Agent start or stop is running on this connection. Retry after it finishes."),
+        (ActionGate.Long, true) => new("BUSY", "Restores, backups or SQL Server Agent starts and stops are already running on other connections. Retry after one finishes."),
         (_, false) => new("BUSY", "Other object actions are running on this connection. Retry after they finish."),
         _ => new("BUSY", "Object actions are already running on other connections. Retry after they finish.")
     };

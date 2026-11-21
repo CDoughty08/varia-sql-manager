@@ -8,7 +8,7 @@ import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import {
   actionDialog, actionErrorCodes, actionLimits, actionOffered, actionVerb, dialogIds, dialogSpecs, factDescribeIds, factDescribeSpecs, isCreateAction, isKindDialogAction, isServerAction, kindDialogActionSpecs,
-  objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type DialogAction, type DialogId, type ObjectAction
+  objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type AgentServiceAction, type DialogAction, type DialogId, type ObjectAction
 } from './catalog.ts'
 import {
   credentialAuths, defaultsAuths, isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMappingChanges, loginMessages, loginPropertiesStatements, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes,
@@ -22,10 +22,11 @@ import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
-import { designerDescribeIds } from '../designer/catalog.ts'
+import { designerDescribeIds, designerLimits } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
+import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentPropertiesModel, type AgentPropertiesRequest } from './agent-properties.ts'
 import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
@@ -53,8 +54,19 @@ export interface ActionDescribeRequest {
  */
 export interface RenameRequest {
   readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string; readonly closeConnections?: boolean
-  readonly identity?: DatabaseIdentity
+  readonly identity?: DatabaseIdentity; readonly agentIdentity?: AgentIdentity
 }
+/**
+ * The SQL Server Agent job a verb acts on (AG-2): its sysjobs date_created to the second, as the tree lists it (`created`) or the
+ * describe read it. The batch resolves the job's id from its name and this date, and refuses one that has taken the name since.
+ */
+export interface AgentIdentity { readonly created: string }
+/** Start Job at Step (AG-2): sp_start_job at `stepName`, or at the job's first step without it. */
+export interface StartJobRequest { readonly action: 'startJob'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentIdentity?: AgentIdentity; readonly stepName?: string }
+/** Stop Job (AG-2): sp_stop_job. */
+export interface StopJobRequest { readonly action: 'stopJob'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentIdentity?: AgentIdentity }
+/** The SQL Server Agent node's Start, Stop or Restart (AG-2): its service through the server machine's Service Control Manager. actions.execute only. */
+export interface AgentServiceRequest { readonly action: AgentServiceAction; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef }
 /**
  * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first), `deleteHistory` and `identity` (the database Delete Object read)
  * apply to databases only; `dropMappedUsers` (DROP USER in each database first, D4c) and `loginIdentity` (the login Delete Object read)
@@ -63,6 +75,8 @@ export interface RenameRequest {
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
   readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity; readonly identity?: DatabaseIdentity
+  /** A job's (AG-2): the job Delete Object read, and whether sp_delete_job drops the schedules only it used. */
+  readonly agentIdentity?: AgentIdentity; readonly deleteUnusedSchedule?: boolean
 }
 /** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
 export interface DatabaseChanges {
@@ -130,7 +144,11 @@ export interface CreateLoginRequest {
  */
 export interface LoginIdentity { readonly sid: string; readonly created: string }
 /** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master, of the login its facts were read from. */
-export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity }
+export interface LoginStateRequest {
+  readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity
+  /** A job's Disable or Enable (AG-2): sp_update_job @enabled of the job the tree listed. */
+  readonly agentIdentity?: AgentIdentity
+}
 /**
  * Unlock Login (D4d): turns the password policy off and on again in one transaction, which unlocks the login and keeps its
  * password. No password crosses for it; the identity is the login Unlock…'s describe read.
@@ -155,14 +173,16 @@ export interface TablePropertiesRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
-  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest
+  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
-export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest
 export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
+export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
-export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
+/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. */
+export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number }
 /** Something that stops or affects the DROP; `blocking` ones make it fail until they are dealt with. */
 export interface ActionWarning { readonly text: string; readonly blocking: boolean }
 /** The Delete Object dialog's row: SSMS's Object Name, Object Type and Owner, and what it found in the way. */
@@ -191,6 +211,8 @@ export interface DeleteTarget {
   /** A login (D4c): its facts with what it owns (the warnings say what blocks the DROP), and the database users mapped to it. */
   readonly login?: LoginFacts
   readonly mappings?: LoginMappings
+  /** A SQL Server Agent job (AG-2): the job it read, which the Delete request names. */
+  readonly agentIdentity?: AgentIdentity
 }
 /** A session in a database that Delete Object lists; program and host are clipped to `actionLimits.blockerChars`. */
 export interface DatabaseBlocker {
@@ -358,7 +380,25 @@ export interface ActionDescribeResult {
   readonly effectivePermissions?: EffectivePermissions
   /** tableProperties: every page's facts. */
   readonly tableProperties?: TablePropertiesModel
+  /** startJobAtStep (AG-2): the job and its steps. */
+  readonly agentJob?: AgentJobFacts
+  /** startAgent, stopAgent and restartAgent (AG-2): the service the dialog asks about. */
+  readonly agentService?: AgentServiceFacts
+  /** agentProperties (AG-8a): SQL Server Agent Properties' settings, the server's clock and, for sysadmin, every job's history counts. */
+  readonly agentProperties?: AgentPropertiesModel
 }
+/** One step of a job, as sp_help_jobstep lists it. */
+export interface AgentJobStepFact { readonly id: number; readonly name: string }
+/** Start Job at Step's facts: the job it read, whether it is enabled and running, and its steps (at most `agentLimits.stepsPerJob`). */
+export interface AgentJobFacts {
+  readonly name: string; readonly agentIdentity: AgentIdentity; readonly enabled: boolean; readonly running: boolean
+  readonly steps: readonly AgentJobStepFact[]; readonly stepsTruncated: boolean
+}
+/** The service states a reply names: the Service Control Manager's, or `unreadable`. */
+export const agentServiceStates = ['stopped', 'startPending', 'stopPending', 'running', 'continuePending', 'pausePending', 'paused', 'unreadable'] as const
+export type AgentServiceStateName = typeof agentServiceStates[number]
+/** The Agent service dialogs' facts: the machine and service they act on, and the state the Service Control Manager reports. */
+export interface AgentServiceFacts { readonly machine: string; readonly service: string; readonly state: AgentServiceStateName }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
   readonly text?: string
@@ -423,6 +463,8 @@ export interface ActionExecuteResult {
   /** A login action's target: the sessions connected as the login when it ran, which a Disable leaves connected; absent
    *  without VIEW SERVER STATE. */
   readonly sessions?: number
+  /** A start, stop or restart of SQL Server Agent: the service's state after its last step, as the Service Control Manager reports it. */
+  readonly agentService?: AgentServiceStateName
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
@@ -433,7 +475,8 @@ const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb',
 export const detachDatabaseStepTitle = 'Detach the database'
 const verbs: Readonly<Record<ObjectAction, string>> = {
   selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online',
-  detach: 'detached', restore: 'restored', restoreFiles: 'restored', disable: 'disabled', enable: 'enabled', unlock: 'unlocked'
+  detach: 'detached', restore: 'restored', restoreFiles: 'restored', disable: 'disabled', enable: 'enabled', unlock: 'unlocked',
+  startJob: 'started', stopJob: 'stopped', startAgent: 'started', stopAgent: 'stopped', restartAgent: 'restarted'
 }
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
@@ -544,13 +587,22 @@ const realDate = (text: string) => { const date = new Date(text + 'Z'); return !
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/).refine(realDate, 'not a date') }).strict()
 // One schema per action, one per line, so later actions append cleanly.
-const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional() }).strict()
+// A job's date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it.
+export const agentIdentitySchema = z.object({ created: z.string().max(19).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$/).refine(text => realDate(text + '.000'), 'not a date') }).strict() satisfies z.ZodType<AgentIdentity>
+const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional() }).strict()
 const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
 const deleteSchema = z.object({
   action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
-  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional(), identity: identitySchema.optional()
+  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional(), identity: identitySchema.optional(), agentIdentity: agentIdentitySchema.optional(),
+  deleteUnusedSchedule: z.boolean().optional()
 }).strict()
-const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
+const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), agentIdentity: agentIdentitySchema.optional() }).strict()
+// A step name: sysjobsteps.step_name is sysname.
+const startJobSchema = z.object({ action: z.literal('startJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), stepName: ident.optional() }).strict()
+const stopJobSchema = z.object({ action: z.literal('stopJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional() }).strict()
+export const agentServiceRequestSchema = z.object({
+  action: z.enum(['startAgent', 'stopAgent', 'restartAgent']), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict()
+}).strict() satisfies z.ZodType<AgentServiceRequest>
 const unlockSchema = z.object({ action: z.literal('unlock'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, mode: z.enum(unlockModes), loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
@@ -732,8 +784,13 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   loginStateSchema,
   unlockSchema,
   loginPropertiesSchema,
-  tablePropertiesSchema
+  tablePropertiesSchema,
+  startJobSchema,
+  stopJobSchema,
+  agentPropertiesRequestSchema
 ]).superRefine((request, context) => {
+  // A job's identity goes only with a job's verb.
+  if ('agentIdentity' in request && request.agentIdentity !== undefined && request.target.kind !== 'agentJob') issue(context, 'agentIdentity', 'Only a SQL Server Agent job has an Agent identity.')
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.
   if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action)) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
@@ -747,7 +804,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       if (request.target.kind === 'login' && isSystemLoginName(request.newName)) issue(context, 'newName', loginMessages.systemName)
       break
     case 'delete':
-      if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
+      if (request.target.kind === 'agentJob' ? request.closeConnections : kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close, and only a database or a job history to delete.')
+      if (request.target.kind !== 'agentJob' && request.deleteUnusedSchedule !== undefined) issue(context, 'deleteUnusedSchedule', 'Only a job has schedules to delete.')
       if (request.target.kind !== 'login' && (request.dropMappedUsers !== undefined || request.loginIdentity !== undefined)) issue(context, 'dropMappedUsers', 'Only a login has mapped users and an identity to check.')
       if (request.target.kind !== 'database' && request.identity !== undefined) issue(context, 'identity', 'Only a database has an identity its describe read.')
       break
@@ -770,14 +828,19 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'tableProperties':
       tablePropertiesIssues(request, context)
       break
+    case 'agentProperties':
+      for (const problem of agentPropertiesProblems(request)) issue(context, 'agentProperties', problem)
+      break
   }
 }) satisfies z.ZodType<ActionRequest>
 /** actions.execute: the same requests, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g), with
  *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
  *  lets the server decide), and none for a Windows login; and a login's Delete must name the login Delete Object read (`loginIdentity`),
  *  which binds DROP LOGIN and every DROP USER to that principal (Script runs nothing and may leave it out). C# Validate refuses the same. */
-export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]).superRefine((request, context) => {
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema, agentServiceRequestSchema]).superRefine((request, context) => {
   if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
+  // Every job verb names the job it read (AG-2's identity guard); Script runs nothing and may leave it out.
+  if (request.target.kind === 'agentJob' && (request as { agentIdentity?: AgentIdentity }).agentIdentity === undefined) issue(context, 'agentIdentity', "A job's verb needs the identity of the job it read.")
   if (request.action === 'loginProperties') {
     // A new password exactly when the changes set one, never blank (blank keeps the current one); the old one exactly with Specify old password.
     const password = request.loginChanges.password
@@ -801,7 +864,7 @@ export const actionStepSchema = z.object({
   status: z.enum(actionStepStatuses), title: z.string().max(loginLimits.stepTitle), message: z.string().max(actionLimits.messageChars).optional(),
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
-const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
+const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean(), column: z.number().int().min(0).max(designerLimits.columns - 1).optional() }).strict() satisfies z.ZodType<ActionError>
 const fileRefSchema = z.object({
   fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
 }).strict() satisfies z.ZodType<DatabaseFileRef>
@@ -814,7 +877,7 @@ export const actionExecuteResultSchema = z.object({
   restored: z.union([
     z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
-  ]).optional(), identity: identitySchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional(),
+  ]).optional(), identity: identitySchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional(), agentService: z.enum(agentServiceStates).optional(),
   bindingChanges: z.array(backendConnectionBindingChangeSchema).max(256).optional(), bindingChangesComplete: z.boolean().optional()
 }).strict().refine(value => (value.bindingChanges === undefined) === (value.bindingChangesComplete === undefined), 'Binding receipts require their completion flag.')
   .refine(value => !value.bindingChanges || new Set(value.bindingChanges.map(change => change.connectionId)).size === value.bindingChanges.length, 'A binding receipt lists each connection once.') satisfies z.ZodType<ActionExecuteResult>

@@ -30,9 +30,11 @@ import { scriptDestinations } from '../src/shared/scripting/catalog'
 const every = (kind: NodeKind) => [undefined, ...kindSpecs[kind].subtypes ?? []] as (NodeSubtype | undefined)[]
 /** The context menu's row actions (Select Top, Rename, Delete, Properties, and a login's Disable and Enable); a folder's actions (Attach, Restore Database) are not a
  *  row's own items, and a database's Tasks (Detach…, Take Offline, Bring Online, and Restore › Database… and Files and Filegroups…, the restores' `rows`) are `tasks`. */
-const states = (kind: NodeKind, subtype?: NodeSubtype, status?: NodeStatus) => objectActions.filter(action => !objectActionSpecs[action].folder && !objectActionSpecs[action].menu).map(action => actionMenuState({ kind, subtype, status })[action] || '-').join(' ')
+// SQL Server Agent's verbs (AG-2) have rows on the Agent kinds only; their own checks are below.
+const agentVerbs: readonly string[] = ['startJob', 'stopJob', 'startAgent', 'stopAgent', 'restartAgent']
+const states = (kind: NodeKind, subtype?: NodeSubtype, status?: NodeStatus) => objectActions.filter(action => !objectActionSpecs[action].folder && !objectActionSpecs[action].menu && !agentVerbs.includes(action)).map(action => actionMenuState({ kind, subtype, status })[action] || '-').join(' ')
 const tasks = (kind: NodeKind, subtype?: NodeSubtype) => (['detach', 'takeOffline', 'bringOnline', 'restore', 'restoreFiles'] as const).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
-const none = { selectTop: '', rename: '', delete: '', properties: '', attach: '', takeOffline: '', bringOnline: '', detach: '', restore: '', restoreFiles: '', disable: '', enable: '', unlock: '' }
+const none = { selectTop: '', rename: '', delete: '', properties: '', attach: '', takeOffline: '', bringOnline: '', detach: '', restore: '', restoreFiles: '', disable: '', enable: '', unlock: '', startJob: '', stopJob: '', startAgent: '', stopAgent: '', restartAgent: '' }
 const online = { state: 0, userAccess: 0, readOnly: false, standby: false }
 
 describe('object action catalogue', () => {
@@ -43,7 +45,7 @@ describe('object action catalogue', () => {
       for (const subtype of Object.keys(spec.subtypes ?? {})) expect(kindSpecs[kind].subtypes, `${kind} ${subtype}`).toContain(subtype)
     }
     for (const subtype of Object.keys(actionKindSpecs.login?.subtypeStatuses ?? {})) expect(kindSpecs.login.subtypes, subtype).toContain(subtype)
-    expect(Object.keys(actionKindSpecs).sort()).toEqual(['database', 'function', 'login', 'procedure', 'table', 'view'])
+    expect(Object.keys(actionKindSpecs).sort()).toEqual(['agent', 'agentJob', 'database', 'function', 'login', 'procedure', 'table', 'view'])
     expect(actionRow('table', 'clr' as NodeSubtype)).toBeUndefined()
     expect(actionMenuState({ kind: 'folder' })).toEqual(none)
     // A login of a type the Logins folder does not list has no subtype, and no actions.
@@ -66,8 +68,10 @@ describe('object action catalogue', () => {
     expect(states('function', 'aggregate')).toBe('- enabled disabled - - - -')
     // Properties opens for every database, SQL Server's own and snapshots included, as in SSMS.
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled - - -', '- disabled disabled enabled - - -', '- disabled enabled enabled - - -'])
-    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties.
-    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table'])
+    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties, and the
+    // SQL Server Agent node's SQL Server Agent Properties (AG-8a).
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table', 'agent'])
+    expect([actionDialog('agent', 'properties'), kindDialogActionSpecs.agentProperties]).toEqual(['agentProperties', { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
     // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
     // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
     expect([tasks('database'), tasks('database', 'system'), tasks('database', 'snapshot')]).toEqual(['enabled enabled enabled enabled enabled', 'disabled disabled disabled disabled disabled', '- - - - -'])
@@ -78,10 +82,11 @@ describe('object action catalogue', () => {
   })
   it('publishes one context key per action', () => {
     expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties', 'explorerActionAttach', 'explorerActionTakeOffline', 'explorerActionBringOnline', 'explorerActionDetach', 'explorerActionRestore', 'explorerActionRestoreFiles',
-      'explorerActionDisable', 'explorerActionEnable', 'explorerActionUnlock'])
+      'explorerActionDisable', 'explorerActionEnable', 'explorerActionUnlock', 'explorerActionStartJob', 'explorerActionStopJob', 'explorerActionStartAgent', 'explorerActionStopAgent', 'explorerActionRestartAgent'])
     expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({
       explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled', explorerActionAttach: '', explorerActionTakeOffline: '', explorerActionBringOnline: '', explorerActionDetach: '', explorerActionRestore: '',
-      explorerActionRestoreFiles: '', explorerActionDisable: '', explorerActionEnable: '', explorerActionUnlock: ''
+      explorerActionRestoreFiles: '', explorerActionDisable: '', explorerActionEnable: '', explorerActionUnlock: '', explorerActionStartJob: '', explorerActionStopJob: '', explorerActionStartAgent: '',
+      explorerActionStopAgent: '', explorerActionRestartAgent: ''
     })
   })
   it('generates the action commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
@@ -89,7 +94,8 @@ describe('object action catalogue', () => {
     // The restores' row placements (Tasks › Restore › Database… and Files and Filegroups…) are commands of their own, out of the palette:
     // a context menu shows each command once.
     expect(Object.keys(entries)).toEqual(['explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase',
-      'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.disable', 'explorer.enable', 'explorer.unlock'])
+      'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.startJob', 'explorer.stopJob', 'explorer.startAgent', 'explorer.stopAgent',
+      'explorer.restartAgent'])
     expect(entries['explorer.tasks.restoreDatabase']).toMatchObject({ title: 'Restore Database…', palette: false, precondition: entries['explorer.restoreDatabase'].precondition })
     expect(entries['explorer.tasks.restoreFiles']).toMatchObject({ title: 'Restore Files and Filegroups…', palette: false, precondition: entries['explorer.restoreFiles'].precondition })
     expect(entries['explorer.restoreFiles'].menus).toEqual([{ menu: 'explorer.context', group: '0_new', order: 4, mnemonic: 'e', when: "explorerActionRestoreFiles != '' && explorerNode == 'folder'" }])
@@ -196,10 +202,15 @@ describe('object action catalogue', () => {
     // A login's Disable and Enable have their own group between Copy Name and Rename.
     expect(ids.slice(at('explorer.copyName') + 1, at('explorer.rename'))).toEqual(['---', 'explorer.disable', 'explorer.enable', 'explorer.unlock', '---'])
     // Properties is the last item, after Refresh in its own group, as in SSMS; an SSIS Catalog object's Properties takes its place.
-    expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
+    // A BigQuery table's or view's Properties (BQ-5) after SQL Server's.
+    expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'explorer.bigQueryProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties'])
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties',
+      'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
+    // SSMS's SQL Server Agent Properties (AG-8a) stays a modal dialog, with General and History.
+    expect(dialogSpecs.agentProperties).toEqual({ title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties',
+      pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }, { id: 'history', title: 'History', icon: 'history' }] })
     // Learn's Detach Database dialog, as a modal (wave 5 decisions): its title names the database.
     expect(dialogSpecs.detachDatabase).toEqual({ title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }], steps: true })
@@ -235,16 +246,16 @@ describe('object action catalogue', () => {
     expect([actionVerb('loginProperties'), actionVerb('properties'), actionVerb('createLogin')]).toEqual(['properties', 'properties', undefined])
     // Delete Object is a confirmation, and Attach, New Login, Take Offline, Bring Online, Detach, Unlock and Login Properties are dialogs (wave 5 decisions 1), so
     // they are modal; Database Properties opens as a document (U1 D2).
-    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties'])
+    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'startJobAtStep', 'startAgent', 'stopAgent', 'restartAgent', 'agentProperties'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })
   it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.detachDatabase' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
-      | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock'>()
-    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties'])
+      | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock' | 'explorer.startJob' | 'explorer.stopJob' | 'explorer.startAgent' | 'explorer.stopAgent' | 'explorer.restartAgent'>()
+    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties' | 'startJobAtStep' | 'startAgent' | 'stopAgent' | 'restartAgent' | 'agentProperties'>()
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties' | 'history'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties', 'history'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)
@@ -260,8 +271,9 @@ describe('object action catalogue', () => {
     expect(actionRow('database', undefined, 'unavailable', specs)).toEqual({ rename: 'enabled', delete: 'disabled' })
     expect(actionRow('database', 'system', 'readOnly', specs)).toEqual({ rename: 'disabled', properties: 'enabled' })
     expect(actionRow('database', undefined, 'noAccess', specs)).toEqual({ rename: 'enabled', delete: 'enabled' })
-    // Only logins have an overlay (D4b), so a status leaves every other kind's row as it is, and the menu keys with it.
-    for (const kind of nodeKinds.filter(kind => kind !== 'login')) {
+    // Only logins (D4b) and Agent jobs (AG-2) have an overlay, so a status leaves every other kind's row as it is, and the menu keys with it.
+    expect(actionStatuses('agentJob')).toEqual(['disabled'])
+    for (const kind of nodeKinds.filter(kind => kind !== 'login' && kind !== 'agentJob')) {
       expect(actionStatuses(kind), kind).toEqual([])
       for (const status of ['disabled', 'unavailable', 'readOnly', 'noAccess'] as const) expect(actionRow(kind, undefined, status), kind).toEqual(actionRow(kind))
     }
@@ -481,13 +493,13 @@ describe('object action catalogue', () => {
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
     expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'UNSUPPORTED_PROVIDER', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
-      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY'])
+      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY', 'AGENT_STOPPED', 'JOB_STATE', 'SERVICE_UNREACHABLE'])
     // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
     expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
     expect(actionLimits.browseMs).toBeLessThan(serverFilesDeadlineMs)
   })
   it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
-    const backend = ['ActionService.cs', 'ActionErrors.cs', 'ServerFiles.cs', 'RestoreDescribe.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
+    const backend = ['ActionService.cs', 'ActionErrors.cs', 'ServerFiles.cs', 'RestoreDescribe.cs', 'AgentJobs.cs', '../Agent/AgentServiceControl.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
       // UNSUPPORTED_PROVIDER comes from SqlService.DispatchAsync's provider check, before ActionService sees the request.
       + readFileSync(join('backend', 'Varia.Backend', 'SqlService.cs'), 'utf8')
     // Each code appears as a C# string literal: ActionErrors.Numbers, an Error(...) or Create(...) call, or (AUTH_*) the sign-in's codes.

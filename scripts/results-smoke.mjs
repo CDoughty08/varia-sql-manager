@@ -12,7 +12,7 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, captionFits, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, captionFits, comparisonTools, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, localGrid, localGridFrame, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, dialogClosed, dialogWindow, pressToClose
@@ -1337,7 +1337,7 @@ try {
     // overflow, without it they would fit. The columns can still settle narrower after the first measure (a slow runner), so
     // each poll sizes the frame again from the head's current width until the scroller overflows only beside the bar.
     const sizes = () => tallFrame.locator(gridPart.scroller).evaluate(element => `${element.scrollWidth} in ${element.clientWidth} of ${element.offsetWidth}`)
-    await expect.poll(async () => {
+    const fit = async () => {
       const measured = await tallFrame.evaluate((element, [half, parts]) => {
         const scroller = element.querySelector(parts.scroller), head = element.querySelector(parts.head)
         element.parentElement.style.width = `${element.parentElement.offsetWidth - scroller.offsetWidth + Math.ceil(head.getBoundingClientRect().width) + half}px`
@@ -1345,9 +1345,17 @@ try {
       }, [Math.floor(scrollbar / 2), { scroller: gridPart.scroller, head: gridPart.head }])
       const [scroll, client, offset] = measured.split(/ in | of /).map(Number)
       return scroll > client && offset > scroll || measured
+    }
+    await expect.poll(fit, { timeout: 15_000 }).toBe(true)
+    // Generous: a slow runner's resize frame can lag, and columns that settle narrower still drop the bar, so a poll that
+    // finds no overflow sizes the frame again; on failure the message carries the scroller's sizes.
+    await expect.poll(async () => {
+      const height = await headerHeight()
+      if (Math.abs(height - (tallHeight + scrollbar)) < 0.5) return true
+      const sized = await sizes(), [scroll, client] = sized.split(/ in | of /).map(Number)
+      if (scroll <= client) await fit()
+      return `${height} (scroller ${sized})`
     }, { timeout: 15_000 }).toBe(true)
-    // Generous: a slow runner's resize frame can lag; on failure the message carries the scroller's sizes.
-    await expect.poll(async () => { const height = await headerHeight(); return Math.abs(height - (tallHeight + scrollbar)) < 0.5 || `${height} (scroller ${await sizes()})` }, { timeout: 15_000 }).toBe(true)
     await tallFrame.evaluate(element => { element.parentElement.style.width = '640px' })
     await expect.poll(headerHeight).toBeCloseTo(tallHeight, 0)
   } else console.log('Results checks: local card scroll bar room skipped (overlay scroll bars take none).')
@@ -1768,9 +1776,17 @@ try {
   await expect(biggest).toHaveCount(1)
   await expect(biggest.first()).toContainText(/ · Result \d+.*Raw$/)
   await expect(memoryDetails).toContainText('Compression off')
+  // Below the results' part, the Search Indexer's: the connected server's definitions, packed, and what that saved.
+  const indexMetrics = memoryDetails.getByRole('region', { name: 'Search Indexer metrics', exact: true })
+  await expect(indexMetrics.getByRole('img', { name: /^Budget used: [1-9]\d* MB\. Records [1-9]\d* MB, Names [1-9]\d* MB, Definitions [1-9]\d* MB$/ })).toBeVisible()
+  await expect(indexMetrics).toContainText(/Packed40%.*Ratio7\.00×zstd frames.*Saved[1-9][\d,]*MB/)
+  // No tile note, label or counter is cut short at the panel's width.
+  expect(await indexMetrics.evaluate(region => [...region.querySelectorAll('*')].filter(node => node.scrollWidth > node.clientWidth && getComputedStyle(node).textOverflow === 'ellipsis').map(node => node.textContent))).toEqual([])
+  await indexMetrics.scrollIntoViewIfNeeded()
+  await memoryDetails.screenshot({ path: resolve('artifacts', 'memory-nerd-metrics.png') })
   await page.keyboard.press('Space')
   await expect(nerd).toHaveAttribute('aria-expanded', 'false')
-  await page.mouse.click(5, 80)
+  await backendReady(page, 'fake').click()
   await expect(memoryDetails).toBeHidden()
   await run('-- varia-fake: sets=W1*10 memory=0.96')
   await expect(memory).toHaveAttribute('data-level', 'critical')
@@ -2781,7 +2797,9 @@ try {
   console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches (F3 in a grid moving its active cell, an IME Enter doing nothing), the live region says only settled counts, a sort searches again in its order, Columns matches column names, and Escape clears it, then returns to the grid.')
 
   // 14f. Compare with Previous Result: the second result against the first, aligned by ItemId in the backend, adds their
-  // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
+  // diff as a third result, one row per entry by default: the changed price drawn as its old value struck through, an arrow
+  // and the new one, named with both for screen readers. Its toolbar's Two rows replaces it in place with the two-row
+  // layout: a changed row as its old row (−) then its new one (+) with the changed price marked, a
   // name changed only in case underlined (equal by the collation), a removed and an added row, a row of context between.
   // Only the data columns are columns: the change marker and each input's row number are drawn in the row header's gutter
   // (no Change, R1 or R2 header), which names the row's kind and both rows for screen readers.
@@ -2789,8 +2807,28 @@ try {
   await expect(cell(3, 0, grid('Result 2'))).toHaveText('5')
   await cell(0, 0, grid('Result 2')).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Compare with Previous Result', exact: true }).click()
-  const diff = grid('Result 3')
+  const diff = grid('Result 3'), diffTools = comparisonTools(page, 'Result 3')
+  await expect(cell(4, 0, diff)).toHaveText('5')
+  await expect(diff.getByRole('columnheader')).toHaveCount(4)
+  expect(await Promise.all([0, 1, 2, 3, 4].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, diff).textContent()))))).toEqual([
+    ['1', 'apple', '1.50\u21921.75'],
+    ['2', 'PEAR', '2.00'],
+    ['3', 'plum', '3.00'],
+    ['4', 'fig', '4.00'],
+    ['5', 'kiwi', '5.00']
+  ])
+  await expect(diff.locator(gridPart.changedCell)).toHaveCount(1)
+  // Its gutter names the changed entry as changed, numbered in the new result.
+  await expect(diff.getByRole('rowheader').first()).toHaveAccessibleName(/^Changed; row 1 in Result 1, row 1 in Result 2$/)
+  await cell(0, 2, diff).click()
+  await expect(cell(0, 2, diff)).toHaveAttribute('aria-label', 'Price, changed from 1.50 to 1.75')
+  await expect(diffTools.getByRole('button', { name: 'One row', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(diffTools.getByRole('status')).toContainText('Comparison ready: matched by ItemId, 1 changed, 1 added, 1 removed.')
+  await diffTools.getByRole('button', { name: 'Two rows', exact: true }).click()
   await expect(cell(5, 0, diff)).toHaveText('5')
+  await expect(diffTools.getByRole('button', { name: 'Two rows', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(diffTools.getByRole('status')).toContainText('Comparison updated: matched by ItemId, 1 changed, 1 added, 1 removed.')
   for (const name of ['ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   for (const name of ['Change', 'R1', 'R2', 'Old row', 'New row']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(0)
   // The row-number corner and the three data columns.
@@ -2841,14 +2879,19 @@ try {
   await expect(cell(2, 1, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
   await expect(strip('Result 3')).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
   await expect(page.getByText('Differences: Result 1 \u2192 Result 2', { exact: true })).toBeVisible()
-  // The active cell names a changed value and its row's kind for screen readers.
+  // The active cell names a changed value by its column and its half's value for screen readers.
+  await cell(0, 2, diff).click()
+  await expect(cell(0, 2, diff)).toHaveAttribute('aria-label', 'Price, old value 1.50')
   await cell(1, 2, diff).click()
-  await expect(cell(1, 2, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
+  await expect(cell(1, 2, diff)).toHaveAttribute('aria-label', 'Price, new value 1.75')
   // Where the features meet, nothing hides the diff's colour: the selection, a highlight and a search match are layers
   // over it, in that order from the top.
   const changedTint = await tokenColor('resultsGrid.diffChangedAddedBackground')
   expect(await fill(cell(1, 2, diff))).toBe(changedTint)
   await expect.poll(() => layers(cell(1, 2, diff))).toContain(await tokenColor('resultsGrid.selectionOverlay'))
+  // Row 3 can sit at the grid's bottom edge (the comparison toolbar takes room): a click brings it into view first, as
+  // the grid scrolling to a right-clicked row's active cell closes the menu it opened.
+  await cell(3, 1, diff).click()
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
@@ -2880,11 +2923,12 @@ try {
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   await searchBox.click()
   await searchBox.press('Escape')
+  await cell(3, 1, diff).click()
   await cell(3, 1, diff).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
   await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
   await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights, search matches and the selection lie over its colours without hiding them.')
+  console.log('Results checks: Compare with Previous Result adds a diff of the two results one row per entry, a changed value drawn old struck through then new; Two rows replaces it in place, aligned by their key, with changed, soft, added and removed rows marked, its marker and row numbers in the gutter rather than columns; highlights, search matches and the selection lie over its colours without hiding them.')
 
   // 14g. The Compare popover: on Result 1's grid it offers the other Table, Result 2 (never the comparison), as the old
   // side with Result 1 as the new. With one target it shows no list, only the two sides, and says nothing that does not
@@ -2947,6 +2991,15 @@ try {
   await expect(second).toBeFocused()
   await expect(picker).toHaveCount(0)
   await expect(page.getByText('Differences: Result 2 → Result 1', { exact: true })).toBeVisible()
+  // Result 3's ⇄ goes to the comparison the run has the other way round (Result 4) rather than making another one.
+  await diffTools.getByRole('button', { name: 'Swap sides', exact: true }).click()
+  await expect(second).toBeFocused()
+  await expect(page.getByText('Differences: Result 1 → Result 2', { exact: true })).toBeVisible()
+  // Result 3's Exact text replaces it in place, renamed for it.
+  await diffTools.getByRole('button', { name: 'Exact text', exact: true }).click()
+  await expect(diffTools.getByRole('button', { name: 'Exact text', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('Differences: Result 1 → Result 2 (exact text)', { exact: true })).toBeVisible()
+  await expect(diff.getByRole('columnheader')).toHaveCount(4)
   await expect(strip('Result 4')).toContainText('Result 2 → Result 1, rows matched by ItemId:')
   await expect(strip('Result 4')).toContainText('Filters and sorts on the inputs were not applied.')
   await strip('Result 4').getByRole('button', { name: 'Result 2', exact: true }).click()
@@ -2956,7 +3009,17 @@ try {
   await expect(strip('Result 4')).toContainText('Result 2 (closed) → Result 1')
   await expect(strip('Result 4').getByRole('button', { name: 'Result 2', exact: true })).toHaveCount(0)
   await expect(strip('Result 4').getByRole('button', { name: 'Result 1', exact: true })).toHaveCount(1)
-  console.log('Results checks: the Compare popover offers the other Table only, says only what applies, closes on Escape giving the focus back, opens and closes from the toolbar, shows a comparison the run has and makes a new one that takes the focus as it closes, offers the last choice again, and its strip links to its inputs and reads a closed one closed.')
+  // With an input closed, each toolbar control that runs the comparison again is unavailable and says why (D10); the open
+  // side still links to its input.
+  const secondTools = comparisonTools(page, 'Result 4')
+  await expect(secondTools.getByRole('group', { name: 'Sides' })).toContainText('Result 2 (closed)')
+  for (const name of ['Swap sides', 'One row', 'Two rows', 'Exact text']) {
+    await expect(secondTools.getByRole('button', { name, exact: true })).toHaveAttribute('aria-disabled', 'true')
+    await expect(secondTools.getByRole('button', { name, exact: true })).toHaveAttribute('title', /unavailable because Result 2 is closed$/)
+  }
+  await secondTools.getByRole('button', { name: 'Result 1', exact: true }).click()
+  await expect(grid('Result 1')).toBeFocused()
+  console.log('Results checks: the Compare popover offers the other Table only, says only what applies, closes on Escape giving the focus back, opens and closes from the toolbar, shows a comparison the run has and makes a new one that takes the focus as it closes, offers the last choice again, and its strip links to its inputs and reads a closed one closed; the comparison toolbar swaps onto the pair the run has, applies Exact text in place, and is unavailable while an input is closed.')
 
   // 14h. Results with no column unique in both (repeated rows, NULLs) compare by whole rows: Compare counts each side's
   // rows as the grid does, and Compare makes the comparison instead of saying the results could not be compared.

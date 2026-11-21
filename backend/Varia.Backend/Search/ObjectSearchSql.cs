@@ -76,9 +76,13 @@ internal static class ObjectSearchSql
     /// <item>the other named database objects (principals, schemas, assemblies, keys, certificates, storage and external
     /// resources, XML schema collections) by a two-letter code;</item>
     /// <item>the database DDL triggers; the plan guides (with their query text);</item>
-    /// <item>with <paramref name="children"/>, the columns Object Explorer shows (with a computed column's expression), indexes,
-    /// statistics and parameters, each by its object's id;</item>
-    /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id.</item>
+    /// <item>with <paramref name="children"/>, the database's types (system and user-defined), the columns Object Explorer shows
+    /// with their type, length, precision, scale, ordinal and flags (and a computed column's expression), indexes with their ids,
+    /// statistics, parameters with their types (and a scalar function's return type as parameter 0), then the editor's key
+    /// metadata: each index's columns in key order, which index each primary or unique key is, and each foreign key's column
+    /// pairs and referenced table, each by its object's id;</item>
+    /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id;</item>
+    /// <item>whether the database's catalog collation is case sensitive and whether it tells i from I (<see cref="CaseSensitive"/>).</item>
     /// </list>
     /// Every object of the database's own catalog is listed, Microsoft-shipped ones too (master's spt_ tables, msdb's procedures).
     /// The resource database's sys and INFORMATION_SCHEMA objects, the same in every database, are not in sys.objects: the
@@ -127,18 +131,49 @@ internal static class ObjectSearchSql
         + "SELECT tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped FROM sys.triggers AS tr WHERE tr.parent_class = 0 ORDER BY tr.object_id;\n"
         + "SELECT g.name, g.modify_date" + (definitions ? ", g.query_text" : "") + " FROM sys.plan_guides AS g ORDER BY g.plan_guide_id;\n"
         + (children
-            ? "SELECT c.object_id, c.name" + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
+            ? Types(userDefined: true)
+                + "SELECT c.object_id, c.name, " + TypedColumns(r.VectorDimensions) + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
                 + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
                 + " WHERE " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.object_id, c.column_id;\n"
-                + "SELECT i.object_id, i.name, i.type FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
+                + "SELECT i.object_id, i.name, i.type, i.index_id FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
                 + "SELECT st.object_id, st.name FROM sys.stats AS st ORDER BY st.object_id, st.stats_id;\n"
-                + "SELECT p.object_id, p.name, p.is_output FROM sys.parameters AS p WHERE p.parameter_id > 0 ORDER BY p.object_id, p.parameter_id;\n"
+                + "SELECT p.object_id, p.name, " + TypedParameters(r.VectorDimensions) + " FROM sys.parameters AS p ORDER BY p.object_id, p.parameter_id;\n"
+                + "SELECT ic.object_id, ic.index_id, ic.column_id, ic.is_descending_key, ic.is_included_column FROM sys.index_columns AS ic"
+                + " WHERE NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)"
+                + " ORDER BY ic.object_id, ic.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id;\n"
+                + "SELECT kc.object_id, kc.parent_object_id, kc.unique_index_id FROM sys.key_constraints AS kc ORDER BY kc.object_id;\n"
+                + "SELECT fk.constraint_object_id, fk.parent_column_id, fk.referenced_object_id, fk.referenced_column_id FROM sys.foreign_key_columns AS fk"
+                + " ORDER BY fk.constraint_object_id, fk.constraint_column_id;\n"
             : "")
         + (definitions
             ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL"
                 + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
                 + " UNION ALL SELECT dc.object_id, dc.definition FROM sys.default_constraints AS dc WHERE dc.definition IS NOT NULL ORDER BY object_id;\n"
-            : "");
+            : "")
+        + CaseSensitive;
+
+    /// <summary>Whether the database's catalog collation, which its object names compare under, tells case apart: a and A compared
+    /// under CATALOG_DEFAULT (the database's collation, or a contained database's fixed catalog collation). No catalog row, so no
+    /// metadata visibility can hide it.</summary>
+    internal const string CaseSensitive = "SELECT CONVERT(bit, CASE WHEN NCHAR(97) COLLATE CATALOG_DEFAULT = NCHAR(65) THEN 0 ELSE 1 END), "
+        + "CONVERT(bit, CASE WHEN NCHAR(105) COLLATE CATALOG_DEFAULT = NCHAR(73) THEN 0 ELSE 1 END);\n";
+
+    /// <summary>The types columns and parameters name, by user_type_id: system ones, and with <paramref name="userDefined"/> the
+    /// database's own (alias, CLR and table types) with their schema.</summary>
+    internal static string Types(bool userDefined) =>
+        "SELECT t.user_type_id, s.name, t.name, t.system_type_id, t.is_user_defined, t.is_table_type FROM sys.types AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id"
+        + (userDefined ? "" : " WHERE t.is_user_defined = 0") + " ORDER BY t.user_type_id;\n";
+
+    /// <summary>A column's type and flags after its object id and name: column_id, user_type_id, max_length, precision, scale,
+    /// nullable, identity, computed, whether it has a default, and a vector's dimensions (where <paramref name="vector"/> says the
+    /// server has the column; null otherwise).</summary>
+    internal static string TypedColumns(bool vector) => "c.column_id, c.user_type_id, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed,"
+        + " CONVERT(bit, CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END), " + (vector ? "c.vector_dimensions" : "CONVERT(int, NULL)");
+
+    /// <summary>A parameter's direction, ordinal, type, READONLY and a vector's dimensions (where <paramref name="vector"/> says the
+    /// server has the column; null otherwise) after its object id and name.</summary>
+    internal static string TypedParameters(bool vector) => "p.is_output, p.parameter_id, p.user_type_id, p.max_length, p.precision, p.scale, p.is_readonly, "
+        + (vector ? "p.vector_dimensions" : "CONVERT(int, NULL)");
 
     /// <summary>What identifies the resource database's objects as the login sees them (negative ids, in every database): how many,
     /// the latest change, and a checksum of their ids, names, types, schemas and dates. With the server's version and edition it
@@ -147,13 +182,15 @@ internal static class ObjectSearchSql
     public const string ResourceFingerprint = "SELECT COUNT_BIG(*), MAX(o.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(o.object_id, o.name, o.type, o.schema_id, o.modify_date))"
         + " FROM sys.all_objects AS o WHERE o.object_id < 0;";
 
-    /// <summary>The resource database's objects of the indexed types, their columns and parameters, then (with
-    /// <paramref name="definitions"/>) their definitions, each in id order. Every one is a system object.</summary>
+    /// <summary>The resource database's objects of the indexed types, the system types, their columns and parameters with their
+    /// types (a scalar function's return as parameter 0), then (with <paramref name="definitions"/>) their definitions, each in id
+    /// order. Every one is a system object.</summary>
     public static string ResourceObjects(bool definitions) =>
         "SELECT o.object_id, s.name, o.name, o.type, o.modify_date FROM sys.all_objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id"
         + " WHERE o.object_id < 0 AND o.type IN (" + ResourceTypes + ") ORDER BY o.object_id;\n"
-        + "SELECT c.object_id, c.name FROM sys.all_columns AS c WHERE c.object_id < 0 ORDER BY c.object_id, c.column_id;\n"
-        + "SELECT p.object_id, p.name, p.is_output FROM sys.all_parameters AS p WHERE p.object_id < 0 AND p.parameter_id > 0 ORDER BY p.object_id, p.parameter_id;\n"
+        + Types(userDefined: false)
+        + "SELECT c.object_id, c.name, " + TypedColumns(vector: false) + " FROM sys.all_columns AS c WHERE c.object_id < 0 ORDER BY c.object_id, c.column_id;\n"
+        + "SELECT p.object_id, p.name, " + TypedParameters(vector: false) + " FROM sys.all_parameters AS p WHERE p.object_id < 0 ORDER BY p.object_id, p.parameter_id;\n"
         + (definitions ? "SELECT m.object_id, m.definition FROM sys.all_sql_modules AS m WHERE m.object_id < 0 AND m.definition IS NOT NULL ORDER BY m.object_id;\n" : "");
 
     /// <summary>Problems with every statement the index runs; empty when they pass. Each passes Object Explorer's own lint
@@ -172,6 +209,9 @@ internal static class ObjectSearchSql
                 {
                     texts.Add(Batch(render, definitions, children));
                     problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                    var vector = render with { VectorDimensions = true };
+                    texts.Add(Batch(vector, definitions, children));
+                    problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children), vector, list: false, mayCheckAccess: false).Select(problem => "vector batch " + band + " " + problem));
                 }
                 problems.AddRange(CatalogSql.Lint(ResourceObjects(definitions), render, list: false, mayCheckAccess: false).Select(problem => "resource " + problem));
                 foreach (var box in new[] { false, true })

@@ -1,0 +1,345 @@
+using Varia.Backend.Results;
+
+namespace Varia.Backend.Tests;
+
+/// <summary>The store's room pool (RoomPool): view reads and operations over a packed result rent their rooms from it and
+/// give them back, so reading again makes none; the pool keeps rooms only up to its cap, never one twice, and lets them go
+/// when idle; a room goes back only once nothing reads it. The suite sets each store's packing itself, so it is not in the
+/// packed pass.</summary>
+internal static class RoomPoolChecks
+{
+    private static readonly IReadOnlyList<ResultColumn> W1Columns = [.. SyntheticRows.Columns("W1").Select(column => new ResultColumn(column.Name, column.DataType, column.Wire == WireKind.Text ? "text" : "binary"))];
+    private static readonly IReadOnlyList<WireKind> W1Wires = [.. SyntheticRows.Columns("W1").Select(column => column.Wire)];
+
+    public static void Run(Action<bool, string> check)
+    {
+        Pool(check);
+        ViewReads(check);
+        WideRows(check);
+        HeldAcrossPages(check);
+        Operations(check);
+        Refused(check);
+    }
+
+    private static ResultSetBuffer Filled(ResultStore store, int rows)
+    {
+        var set = store.Open(store.BeginQuery("rooms"), 0, 1, 1, "rows", W1Columns, W1Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        for (var row = 0L; row < rows; row++)
+        {
+            set.CountRow();
+            if (set.BeginRow() is not { } builder) continue;
+            SyntheticRows.WriteCells("W1", row, builder);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        return set;
+    }
+
+    private static int[] Scattered(int rows) => [.. Enumerable.Range(0, rows).OrderBy(row => (row * 2654435761u) % 1000003)];
+
+    private static void Pool(Action<bool, string> check)
+    {
+        var pool = new RoomPool();
+        var first = pool.Rent(1000);
+        pool.Return(first);
+        var again = pool.Rent(500);
+        check(first.Length >= 1000 && first.Length % (16 * 1024) == 0 && ReferenceEquals(first, again) && pool.Made == 1 && pool.Reused == 1 && pool.IdleRooms == 0,
+            "a room given back is rented again for a page it holds, and rooms are made a multiple of 16 KiB");
+
+        var small = pool.Rent(20_000);
+        var large = pool.Rent(70_000);
+        pool.Return(large);
+        pool.Return(again);
+        pool.Return(small);
+        var fit = pool.Rent(17_000);
+        var bigger = pool.Rent(40_000);
+        check(ReferenceEquals(fit, small) && ReferenceEquals(bigger, large) && pool.IdleRooms == 1, "a reader gets the shortest idle room long enough");
+
+        pool.Return(fit);
+        pool.Return(fit);
+        check(pool.IdleRooms == 2 && ReferenceEquals(pool.Rent(17_000), fit) && !ReferenceEquals(pool.Rent(17_000), fit),
+            "a room given back twice is kept once, so two readers never share it");
+
+        var huge = pool.Rent(RoomPool.LargestRoom + 1);
+        var before = pool.IdleRooms;
+        pool.Return(huge);
+        check(huge.Length == RoomPool.LargestRoom + 1 && pool.IdleRooms == before, "a room longer than the largest kept is made to length and dropped when given back");
+
+        var capped = new RoomPool();
+        var rented = Enumerable.Range(0, (int)(RoomPool.IdleBytes / RoomPool.LargestRoom) + 4).Select(_ => capped.Rent(RoomPool.LargestRoom)).ToList();
+        foreach (var room in rented) capped.Return(room);
+        check(capped.Idle <= RoomPool.IdleBytes && capped.Idle > RoomPool.IdleBytes - RoomPool.LargestRoom, "the idle rooms stop at the pool's cap and the rest are dropped");
+
+        // A narrower result read first fills the pool with rooms too short for the wider one read next: given back, the wider
+        // one's rooms take the place of those given back longest ago, so its reads stop making rooms within a pass or two;
+        // and reading the narrower result again, its rooms take the wider ones' place the same way.
+        var crowded = new RoomPool();
+        const int shortLength = 192 * 1024, longLength = PageBuilder.SealBytes;
+        int shortCount = (int)(RoomPool.IdleBytes / shortLength), longCount = (int)(RoomPool.IdleBytes / longLength);
+        // Rents a read's rooms at once and gives them all back, as a tile does; the rooms it had to make.
+        long Pass(int count, int length)
+        {
+            var made = crowded.Made;
+            var rooms = Enumerable.Range(0, count).Select(_ => crowded.Rent(length)).ToList();
+            foreach (var room in rooms) crowded.Return(room);
+            return crowded.Made - made;
+        }
+        Pass(shortCount + 2, shortLength);
+        var full = crowded.Idle;
+        var wide = Enumerable.Range(0, 4).Select(_ => Pass(longCount, longLength)).ToArray();
+        var narrow = Enumerable.Range(0, 8).Select(_ => Pass(shortCount, shortLength)).ToArray();
+        var wideAgain = Enumerable.Range(0, 4).Select(_ => Pass(longCount, longLength)).ToArray();
+        check(full > RoomPool.IdleBytes - shortLength && wide[0] > 0 && wide[2] == 0 && wide[3] == 0 && narrow[6] == 0 && narrow[7] == 0
+            && wideAgain[2] == 0 && wideAgain[3] == 0 && crowded.Idle <= RoomPool.IdleBytes,
+            "the rooms of the result read now take the place of those an earlier, narrower or wider, read left, so reading it again soon makes none: wide "
+            + string.Join(",", wide) + " narrow " + string.Join(",", narrow) + " wide " + string.Join(",", wideAgain));
+        // A room rented for a shorter page, with none made while it was out, is kept but is the first to make way, before
+        // rooms given back earlier.
+        var misfit = new RoomPool();
+        var longRoom = misfit.Rent(longLength);
+        misfit.Return(longRoom);
+        misfit.Return(new byte[shortLength]);
+        misfit.Return(misfit.Rent(shortLength + 8 * 1024));
+        var keptMisfit = misfit.IdleRooms == 2;
+        while (misfit.Idle + shortLength <= RoomPool.IdleBytes) misfit.Return(new byte[shortLength]);
+        var roomsFull = misfit.IdleRooms;
+        misfit.Return(new byte[shortLength]);
+        check(keptMisfit && misfit.IdleRooms == roomsFull && !ReferenceEquals(misfit.Rent(longLength), longRoom),
+            "a room rented for a shorter page is kept while it fits and is the first to make way");
+
+        // A narrower read that holds rooms (a Find, a Copy group) while a wider one reads: it is lent the wider rooms, the
+        // wider read makes rooms of its own length, and both given back stay, so a later round makes none.
+        var both = new RoomPool();
+        var wideReads = longCount - 16;
+        both.Return(both.Rent(longLength));
+        long Round()
+        {
+            var made = both.Made;
+            var narrowRooms = Enumerable.Range(0, 16).Select(_ => both.Rent(shortLength)).ToList();
+            var wideRooms = Enumerable.Range(0, wideReads).Select(_ => both.Rent(longLength)).ToList();
+            foreach (var room in wideRooms) both.Return(room);
+            foreach (var room in narrowRooms) both.Return(room);
+            return both.Made - made;
+        }
+        var rounds = Enumerable.Range(0, 4).Select(_ => Round()).ToArray();
+        check(rounds[2] == 0 && rounds[3] == 0 && both.Idle <= RoomPool.IdleBytes,
+            "a narrower read holding rooms while a wider one reads settles, making none: " + string.Join(",", rounds));
+
+        // A result of wide rows: its pages end anywhere within a row past the seal, so a tile's pages take rooms of several
+        // lengths. A page lent a longer room, then a room made for a page longer than it but shorter than that room: the
+        // lent room still serves pages of its own length, so it is kept.
+        var spread = new RoomPool();
+        var widest = spread.Rent(PageBuilder.SealBytes + 96 * 1024);
+        spread.Return(widest);
+        var lent = spread.Rent(PageBuilder.SealBytes + 1);
+        var between = spread.Rent(PageBuilder.SealBytes + 48 * 1024);
+        spread.Return(between);
+        spread.Return(lent);
+        check(ReferenceEquals(lent, widest) && spread.IdleRooms == 2,
+            "a room lent to a shorter page stays when the room made meanwhile was for a longer page than that: " + spread.IdleRooms + " idle");
+
+        // Lent once, then rented by a page of its own length: given back, it is the newest, not lent still.
+        var lentOnce = new RoomPool();
+        var once = lentOnce.Rent(longLength);
+        lentOnce.Return(once);
+        lentOnce.Return(lentOnce.Rent(shortLength));
+        var other = new byte[longLength];
+        lentOnce.Return(other);
+        var fitted = lentOnce.Rent(longLength);
+        lentOnce.Return(fitted);
+        while (lentOnce.Idle + longLength <= RoomPool.IdleBytes) lentOnce.Return(new byte[longLength]);
+        lentOnce.Return(new byte[longLength]);
+        var keptOnce = false;
+        for (var i = lentOnce.IdleRooms; i > 0; i--) keptOnce |= ReferenceEquals(lentOnce.Rent(longLength), once);
+        check(ReferenceEquals(fitted, once) && keptOnce, "a room lent once and then rented by a page of its own length is given back as the newest");
+
+        // Two rooms lent to short pages, then one room made for a third: one room lacking, so only one lent room, the
+        // longer, makes way for it, and the other stays to serve the pages it served.
+        var oneEach = new RoomPool();
+        var (longer, shorter) = (oneEach.Rent(longLength + 32 * 1024), oneEach.Rent(longLength));
+        oneEach.Return(longer);
+        oneEach.Return(shorter);
+        var lentRooms = new[] { oneEach.Rent(shortLength), oneEach.Rent(shortLength) };
+        var madeShort = oneEach.Rent(shortLength);
+        foreach (var room in lentRooms.Append(madeShort)) oneEach.Return(room);
+        var heldRooms = Enumerable.Range(0, oneEach.IdleRooms).Select(_ => oneEach.Rent(1)).ToList();
+        check(heldRooms.Count == 2 && heldRooms.Contains(shorter) && heldRooms.Contains(madeShort) && !heldRooms.Contains(longer),
+            "each room made lets one room lent to a page no shorter make way, the longest: " + heldRooms.Count + " kept");
+
+        var now = Environment.TickCount64;
+        capped.Return(capped.Rent(10));
+        capped.Trim(now + RoomPool.IdleMs / 2);
+        var kept = capped.IdleRooms;
+        capped.Trim(Environment.TickCount64 + RoomPool.IdleMs + 1);
+        var trimmed = capped.IdleRooms;
+        pool.Trim();
+        check(kept > 0 && trimmed == 0 && capped.Idle == 0 && pool.IdleRooms == 0, "idle rooms are kept while rooms were rented lately and all let go once none has been for the idle time");
+    }
+
+    /// <summary>Tiles of a scattered view of a packed result read the same bytes as of the result unpacked, and reading
+    /// them again makes no room: every room went back.</summary>
+    private static void ViewReads(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = Filled(store, 60_000);
+        var order = Scattered(60_000);
+        var rawView = store.AddView(set, order, [], false, true, 0, null);
+        byte[][] Read(ResultView view, long from) => [.. ViewPages.Build(view, from, 300).Select(page => page.Body())];
+        var expected = new[] { 0L, 12_345, 59_800 }.Select(from => Read(rawView, from)).ToArray();
+        set.Pack();
+        var view = store.AddView(set, order, [], false, true, 0, null);
+        var first = new[] { 0L, 12_345, 59_800 }.Select(from => Read(view, from)).ToArray();
+        var made = store.Rooms.Made;
+        var second = new[] { 0L, 12_345, 59_800 }.Select(from => Read(view, from)).ToArray();
+        static bool Same(byte[][][] a, byte[][][] b) => a.Length == b.Length && a.Zip(b).All(pair => pair.First.Length == pair.Second.Length && pair.First.Zip(pair.Second).All(p => p.First.AsSpan().SequenceEqual(p.Second)));
+        check(set.HasPacked && Same(first, expected) && Same(second, expected) && made > 0 && store.Rooms.Made == made && store.Rooms.Reused > 0
+            && store.Rooms.IdleRooms == made,
+            $"a packed view's tiles read as unpacked, through rooms from the pool, all back after each read and none made a second time (made {made}, then {store.Rooms.Made})");
+        store.Release(set.ResultId);
+    }
+
+    /// <summary>A read lets its group of unpacked pages go with each output page, so it unpacks no more ahead than the output
+    /// page can take: through a sorted view of rows so wide a page holds one, a 128-row tile unpacks about one page a row (it
+    /// unpacked 48 a row, 6,129 a tile, when its group looked 64 pages ahead), and reads what the raw view reads.</summary>
+    private static void WideRows(Action<bool, string> check)
+    {
+        const int rows = 512, tile = 128, width = 55_705;
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = store.Open(store.BeginQuery("wide"), 0, 1, 1, "rows",
+            [new ResultColumn("key", "int", "text"), .. Enumerable.Range(1, 5).Select(i => new ResultColumn("payload" + i, "varchar", "text", MaxLength: -1))],
+            [.. Enumerable.Repeat(WireKind.Text, 6)])!;
+        var value = new byte[width];
+        value.AsSpan().Fill((byte)'x');
+        for (var row = 0; row < rows; row++)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            value[0] = (byte)('a' + row % 26);
+            builder.AppendText((row * 183 % rows).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            for (var c = 0; c < 5; c++) builder.AppendUtf8(value);
+            set.TryCommitRow();
+        }
+        set.Complete();
+        int[] order = [.. Enumerable.Range(0, rows).Select(row => row * 263 % rows)];
+        var rawView = store.AddView(set, order, [], false, true, 0, null);
+        byte[][] Read(ResultView view) => [.. ViewPages.Build(view, tile, tile).Select(page => page.Body())];
+        var expected = Read(rawView);
+        set.Pack();
+        var view = store.AddView(set, order, [], false, true, 0, null);
+        var before = store.PackingSnapshot().PagesUnpacked;
+        var read = Read(view);
+        var unpacked = store.PackingSnapshot().PagesUnpacked - before;
+        check(set.HasPacked && set.SealedSnapshot().All(page => page.Rows == 1) && read.Length == expected.Length && read.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second))
+            && unpacked <= 2 * tile,
+            $"a read through a sorted view of wide rows unpacks about a page a row: {unpacked} pages for a {tile}-row tile, as the raw view reads");
+        store.Release(set.ResultId);
+    }
+
+    /// <summary>A read (which may wait for credit with a page) holds no room between its pages; Copy and Save keep their
+    /// group's rooms across pages, and those stay theirs: changing every idle room between pages changes no page.</summary>
+    private static void HeldAcrossPages(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = Filled(store, 60_000);
+        var order = Scattered(60_000);
+        var rawView = store.AddView(set, order, [], false, true, 0, null);
+        var expected = ViewPages.Stored(rawView, 100, 20_000).Select(page => page.Body()).ToArray();
+        set.Pack();
+        var view = store.AddView(set, order, [], false, true, 0, null);
+        var allBack = true;
+        var reads = 0;
+        foreach (var _ in ViewPages.Build(view, 100, 20_000))
+        {
+            allBack &= store.Rooms.IdleRooms == store.Rooms.Made;
+            reads++;
+        }
+        void Scribble()
+        {
+            var idle = new List<byte[]>();
+            while (store.Rooms.IdleRooms > 0) idle.Add(store.Rooms.Rent(1));
+            foreach (var room in idle)
+            {
+                room.AsSpan().Fill(0xEE);
+                store.Rooms.Return(room);
+            }
+        }
+        var copied = new List<byte[]>();
+        var heldSome = false;
+        foreach (var page in ViewPages.Stored(view, 100, 20_000))
+        {
+            heldSome |= store.Rooms.IdleRooms < store.Rooms.Made;
+            copied.Add(page.Body());
+            Scribble();
+        }
+        check(reads > 1 && allBack, "a view read of a packed result gives every room back before it hands over a page");
+        check(heldSome && copied.Count == expected.Length && copied.Zip(expected).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second)),
+            "Copy and Save through a view keep their group's rooms across pages, and nothing else writes them meanwhile");
+        store.Release(set.ResultId);
+    }
+
+    /// <summary>Find over a packed result rents its workers' rooms from the pool and gives them back, so a second Find makes
+    /// none; a room still out when its operation's rooms are disposed is not given back.</summary>
+    private static void Operations(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = Filled(store, 60_000);
+        set.Pack();
+        var pages = set.SealedSnapshot();
+        ResultSearcher.Search(set, pages, null, "zqxjvk", 0, false, 10, CancellationToken.None, narrow: false, filters: false);
+        var made = store.Rooms.Made;
+        ResultSearcher.Search(set, pages, null, "zqxjvk", 0, false, 10, CancellationToken.None, narrow: false, filters: false);
+        check(made > 0 && store.Rooms.Made == made && store.Rooms.IdleRooms == made, $"a second Find over a packed result makes no room (made {made}, then {store.Rooms.Made})");
+
+        using (set.Pin())
+        {
+            var rooms = PageRooms.Over(pages, set.Wires.Count, () => new InvalidOperationException())!;
+            var given = rooms.Rent();
+            var kept = rooms.Rent();
+            given.Dispose();
+            var idle = store.Rooms.IdleRooms;
+            rooms.Dispose();
+            var afterDispose = store.Rooms.IdleRooms;
+            kept.Dispose();
+            check(afterDispose == idle + 1 && store.Rooms.IdleRooms == afterDispose && !RentsBack(store.Rooms, kept.Bytes),
+                "an operation's rooms go back to the pool when they are disposed, but not a room its reader still holds");
+        }
+        store.Release(set.ResultId);
+    }
+
+    private static bool RentsBack(RoomPool pool, byte[] room)
+    {
+        var rented = new List<byte[]>();
+        var found = false;
+        while (pool.IdleRooms > 0)
+        {
+            var next = pool.Rent(1);
+            found |= ReferenceEquals(next, room);
+            rented.Add(next);
+        }
+        foreach (var back in rented) pool.Return(back);
+        return found;
+    }
+
+    /// <summary>Pages read together that fail (cancelled) give their rooms back and hold nothing.</summary>
+    private static void Refused(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.OnRequest };
+        var set = Filled(store, 60_000);
+        set.Pack();
+        var pages = set.SealedSnapshot();
+        var used = store.UsedBytes;
+        var rooms = new List<byte[]> { new byte[1] };
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var failed = false;
+        long reserved = -1;
+        using (set.Pin())
+        {
+            try { set.BodiesTogether([.. pages.Take(8)], out reserved, cancelled.Token, rooms); }
+            catch (OperationCanceledException) { failed = true; }
+        }
+        check(failed && reserved == 0 && rooms.Count == 1 && store.Rooms.IdleRooms == 8 && store.UsedBytes == used,
+            "pages read together that are cancelled give their rooms back, leave the caller's earlier rooms, and hold nothing");
+        store.Release(set.ResultId);
+    }
+}

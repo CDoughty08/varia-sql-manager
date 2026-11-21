@@ -120,7 +120,7 @@ Every frame is a 16-byte little-endian header followed by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq, detail }` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -250,7 +250,7 @@ noted where it matters.
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
-| `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for an ended generation or with no backend |
+| `query.session.close` | invoke | unary | control | 30 s, 60 s with `transaction: 'commit'` (a BigQuery close waits for a stopped job and ends the session within them); answered locally `{ closed: false }` for an ended generation or with no backend |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend |
 | `results.visibility` | invoke (`ResultVisibilityService`) | unary | control | 10 s (note 1 below) |
 | `results.read` | port | stream | results | 60 s |
@@ -261,7 +261,8 @@ noted where it matters.
 | `results.identify` | port | unary | results | 120 s ([Row identities and highlights](#row-identities-and-highlights)) |
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows |
 | `results.findRows` | port | unary | results | 60 s; 1 – 10,000 identities in a result or view |
-| `results.diff` | port | unary | results | 120 s; stored as a new result ([Result diffs](#result-diffs)) |
+| `results.diff` | port | unary | results | 120 s; stored as a new result, two rows a change or one row an entry, optionally replacing an earlier comparison under its allowance ([Result diffs](#result-diffs)) |
+| `results.diffSeek` | port | unary | results | 10 s; the next or previous change, or a look-alike's partner, in a comparison or its view ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; stored as a new result ([Pivots](#pivots)) |
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
@@ -392,7 +393,9 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`, `NAME_IN_USE`, `PATH_NOT_FOUND`, `FILE_ACCESS` (a file SQL Server
   cannot open), `MEDIA` (unusable backup media), `BACKUP_MISMATCH`, `TAIL_LOG_NEEDED`, `RESTORE_SEQUENCE` (restore), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`,
   `CANCELLED`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `PASSWORD_POLICY` (the server's password policy
-  refused a password) (docs/object-actions.md).
+  refused a password), `AGENT_STOPPED` (SQL Server Agent is not running), `JOB_STATE` (a job not running when stopped, or
+  running when started), `SERVICE_UNREACHABLE` (the Service Control Manager on the server's machine could not be reached);
+  the last three are not retryable (docs/object-actions.md, docs/sql-server-agent.md).
 - `actions.execute` answers `{ steps: { status: done | failed | skipped | cancelled | rolledBack, title, message?,
   detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`; statements run in order and
   stop at the first failure; `rolledBack` marks a step undone by a later failure or Stop in its transaction. The
@@ -407,9 +410,9 @@ and script use `LOCK_TIMEOUT 10000`. A lost backend answers `BACKEND_LOST` (unkn
   ownedRoles, readOnly, ownedSecurables, grantedPermissions, canDrop }[] (≤ 100), mapped, checked, notChecked }`, read
   per database within `loginLimits.scanMs` (unread databases count in `notChecked`, never an error).
 
-**Action progress.** A long action (catalogue `long`: restore, verify, backup) runs under the long gate; the next waits
-up to 30 s, then `BUSY` ("Another restore or backup is running on this connection." or "Restores or backups are already
-running on other connections."). Action statements use a data reader, never `ExecuteNonQuery`
+**Action progress.** A long action (catalogue `long`: restore, verify, backup, Agent Start/Stop/Restart) runs under the long
+gate; the next waits up to 30 s, then `BUSY` ("Another restore, backup or SQL Server Agent start or stop is running on
+this connection." or "Restores, backups or SQL Server Agent starts and stops are already running on other connections."). Action statements use a data reader, never `ExecuteNonQuery`
 (`tests/action-reader-lint.test.ts`).
 - Message 3211 (`STATS`) becomes droppable `{ type: 'action.progress', step: 0–519, percent: 0–100 }` EVENTs: a step's
   start at once as 0, then at most every 250 ms (`progressEventMs`); a percent held inside the interval goes out when it
@@ -590,11 +593,11 @@ lets a long run reach Restart only while the backend does not answer (a run on a
 crash resets the list.
 
 **Table Designer** (docs/table-designer.md). `dialog: 'tableDesigner'` (database target) answers `{ tableDesigner:
-{ database, band, schemas (≤ 2,048), schemasTruncated, defaultSchema, defaultFilegroup, caseSensitiveNames,
-accentSensitiveNames, canCreate? } }`. `action: 'createTable', design: { schema, name, columns: [{ name, type: { system,
+{ database, band, schemas (≤ 2,048), schemasTruncated, defaultSchema, defaultFilegroup, canCreate? } }`. `action: 'createTable', design: { schema, name, columns: [{ name, type: { system,
 length?, max?, precision?, scale?, dimensions? }, allowNulls, identity?: { seed, increment } }] (1–1,024), primaryKey:
 [index] (≤ 32) }`, checked by `designProblems` and `TableDesignValidator` (`INVALID_PARAMS`, also for a table name starting with `#` and
-column names differing only in trailing spaces). Script answers SSMS's change
+column names differing only in trailing spaces); the preflight refuses column names equal under the catalog collation
+(`NAME_IN_USE`, its `error.column` the later column's index). Script answers SSMS's change
 script (`designerLimits.scriptChars`) with refusals as warnings; execute runs CREATE TABLE, the key, `LOCK_ESCALATION` and
 `Commit` in one transaction; a failure or Stop rolls it back. The design is one JSON parameter shredded with OPENJSON (master below level 130:
 `NOT_SUPPORTED`).
@@ -754,10 +757,11 @@ demand, within the strict CSP; a virtualized DOM outline serves keyboard, screen
 ## Query execution
 
 `query.execute` takes `{ connectionId, sessionId, database?, dataset?, sql, queryId, maxRows, timeoutSeconds, startLine?,
-maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices? }`. `database` is
-required for SQL Server; `dataset` (≤ 1,024 characters) is a BigQuery query's default dataset, `maximumBytesBilled` (1 to
-2^53 − 1) Tools › Options' cap, which the job carries when its connection sets none, and `prices: false` leaves the dollars
-out of the job's Messages line; SQL Server refuses all three. A BigQuery query runs as one job
+startColumn?, maxResultSets?, stopOnError?, includeActualPlan?, discardResults?, maximumBytesBilled?, prices? }`.
+`startColumn` (1 to 1,000,000) is a selection's first column, which BigQuery's `[line:column]` error positions add on the
+selection's first line. `database` is required for SQL Server; `dataset` (≤ 1,024 characters) is a BigQuery query's
+default dataset, `maximumBytesBilled` (1 to 2^53 − 1) Tools › Options' cap, which the job carries when its connection
+sets none, and `prices: false` leaves the dollars out of the job's Messages line; SQL Server refuses all three. A BigQuery query runs as one job
 whose rows are read into the same result store, and its summary adds `job` (`{ project, jobId, location?, statementType?,
 bytesProcessed?, bytesBilled?, cacheHit?, slotMs? }`); SQL Server's options are refused for it ([BigQuery's
 Execution](bigquery.md#execution)). `sessionId` is the query tab's UUID: its SQL session
@@ -778,8 +782,12 @@ server changes, or it is lost.
   SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
   SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;`. A script's own SET statements then persist in the session. A
   session whose prologue fails is closed, and the next execution opens a new one.
+- **Database.** When `database` differs from the session's, the backend changes it before the first batch. A session
+  with `SET NOEXEC`, `PARSEONLY`, `FMTONLY` or `SHOWPLAN_*` on compiles that `USE` without running it, so when SqlClient's
+  catalog is unchanged the server confirms it (`DB_ID() = DB_ID(@database)`); when it does not, nothing runs and the result is
+  `failed` (batch 0) with `database` still the session's and a message naming the options that cause this.
 - **Batches.** `GO` and `GO n` split the script (SQLCMD commands are refused before anything runs; a line starting with
-  `::` is T-SQL). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
+  `::` is T-SQL, and a line starting with the label `GO:` is part of its batch, as in sqlcmd). As in SSMS, a batch that raised an error (severity 11–19) ends only itself; when a batch remains,
   Messages gets "Batch {b} raised an error; execution continued with the next batch." (for `GO n`: "Batch {b},
   repetition {k}, raised an error; execution continued with the next repetition." or "… next batch."). Severity 17–19
   errors do not stop the batch on the server either (SQL Server runs the whole batch; only SqlClient's view differs), but
@@ -820,7 +828,13 @@ it then asks about: a kept session then sees `@@ROWCOUNT` 1, `@@ERROR` 0, and ot
 its most recent SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`). A cancel does not roll
 back; an `XACT_ABORT`-doomed transaction ends by the batch's end (3998).
 
-**Ending a session.** `query.session.close { sessionId, transaction? }`. Without `transaction`, or with `'rollback'`, it
+**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit? }` answers
+`{ closed, note? }`. `abortOnRefusedCommit` (default true) and `note` are BigQuery's ([BigQuery's
+Sessions](bigquery.md#sessions)): a commit refused on an unchecked session ends the session with a note unless quitting
+sent false; `note` is `{ code, message? (≤ 2,000 characters), jobId? }`, `code` one of `commitNotApplied`,
+`committedBeforeCancel`, `outcomeUnknown`, `abortFailed` and `sessionExpired`. A BigQuery commit or rollback close on a
+session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. Main checks the
+answer (`sessionCloseResultSchema`). For SQL Server: Without `transaction`, or with `'rollback'`, it
 cancels any running script and closes the session; SQL Server rolls back, unwaited. `'commit'` reads `@@TRANCOUNT`
 (if no row, or a plan, came back, it turns SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off, then reads again), then,
 only with a transaction open,
@@ -848,11 +862,15 @@ Connection > Disconnect), then execute again." Idle sessions are never reclaimed
 **Prompts.** Before sessions end, the renderer reads each idle query's state (8 at a time, 5 s in all). A count above 0
 is an open transaction; `checked: false`, a read not done in time, or a failure other than a gone session
 (`SESSION_CLOSED`, `SESSION_LOST`, `NOT_CONNECTED`, `CONNECTION_LOST`, `BACKEND_LOST`), e.g. `SESSION_BUSY`, `TIMEOUT`,
-`TOO_MANY_REQUESTS`, is `unchecked`. After a `SESSION_LOST` read the query's next run first says it runs in a new SQL session
+`TOO_MANY_REQUESTS`, is `unchecked`. A BigQuery tab's state is the backend's tracked transaction, read with no request to
+BigQuery. After a `SESSION_LOST` read the query's next run first says it runs in a new SQL session
 and that its previous transaction was rolled back, unless the query moves to another connection or disconnects first. It sends main `varia:confirm-sessions { action, tabs }` (`action`: `close`, `closeAll`,
-`changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll` or `exit`; ≤ 1,024 tabs `{ name ≤ 512,
-transactions, running, unchecked? }`, only those with an open or unchecked transaction or a running script). Main
-composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page gets Cancel.
+`changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll`, `exit` or `switchLocation`; ≤ 1,024 tabs `{ name ≤
+512, transactions, running, unchecked?, provider? }`, only those with an open or unchecked transaction or a running
+script). `provider` (`sqlserver` or `bigquery`) picks the "not checked" note's causes. A BigQuery tab switching to a
+dataset in another location first sends `location: { dataset, from, to }` with that one tab, which asks "Switch this tab
+to …?" (Switch or Don't Switch). Main composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page
+gets Cancel.
 
 - Open transactions ask SSMS's "There are uncommitted transactions. Do you wish to commit these transactions before
   closing the window?" (or before changing the connection, disconnecting, disconnecting the server, closing Varia SQL
@@ -880,9 +898,10 @@ it when no port is open).
 | `progress` | At most 10 a second per query, latest wins; up to 64 sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set stopped storing. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once |
 | `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept set, with its final descriptor |
+| `query.job` | A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): `{ jobId, project, location?, state, auxiliary, transaction }`, `transaction` (`none`, `open`, `unknown`) being the session's as the job started; never the session id |
 
 Progress and messages are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
-256 KiB. `session.opened`, `resultSet.opened` and `resultSet.closed` are essential: never refused, up to 4 MiB (a
+256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed` and `query.job` are essential: never refused, up to 4 MiB (a
 4,096-column descriptor with 128-character names). RESPONSE, PONG and GOAWAY are never dropped. The summary is
 authoritative; a query's events after it are ignored.
 
@@ -891,7 +910,7 @@ authoritative; a query's events after it are ignored.
 | type | Emitted |
 | --- | --- |
 | `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
-| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample and changes in the shared index budget's use. Own sequence |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last), a build's end, a disconnect and a finished search (whose time `detail` carries). Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
 generation, keeps the latest per feature, and replays both when a results port opens.
@@ -908,6 +927,22 @@ bar Memory panel's Nerd metrics ([status-bar-memory.md](status-bar-memory.md)); 
 | `largest` | At most 8 results, largest first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'partial' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`; `partial` = a packing pass not finished |
 | `codec` | Since start: `name` and `level` (`zstd`, 2; absent while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (last whole-result unpack; 0 before one) |
 | `heap` | After the last GC (`GC.GetGCMemoryInfo`): `committedBytes`, `freeBytes` |
+
+`explorer.index.memory`'s `detail` (`indexMemoryDetailSchema`, `IndexMemoryDetail`, worked out by `IndexMemoryReport`) is what
+every connection's Search Objects index holds, for the same panel. It is read only when an event goes out, never by a search:
+one walk of the held tables, each counted once (a shared resource set once, however many connections show it). A refused event's detail is kept for its retry, and the timer skips a check while another report is still walking. Main forwards
+it to the page as the report's `index`.
+
+| Field | Meaning |
+| --- | --- |
+| `connections`, `objects` | Connections whose index holds something, and the objects their held tables list |
+| `texts`, `references` | The shared pool's distinct names and definitions, and the references reads and resource sets hold to them |
+| `definitions`, `packedDefinitions` | Objects with a definition, and those whose definition is packed |
+| `definitionTexts`, `packedTexts` | The distinct definitions the held tables hold (modules, constraint and computed column expressions, plan guides: texts an object names as its definition, and packed ones, including one pooled for a row a read then left out), and how many are zstd frames (`PackedText`) |
+| `packedBytes`, `packedTextBytes` | What the packed definitions cost the budget, and what they would as strings |
+| `recordBytes`, `nameBytes`, `definitionBytes`, `readingBytes` | The budget's use by what holds it: records (with each read's slots for its texts, and the column types, keys and index columns the editor reads), names, definitions, and what reads still running have added (their records and pooled texts; a rebuild's records count against the table they replace until it is swapped in, so only growth beyond it shows). They add up to `usedBytes`. The walk behind them runs at once after a build's end (finished, stopped or failed) or a disconnect, else at the first check 5 s after the last: between walks a budget at or above the last walk's counts the change as reading, and a fall below it is sent with the next walk. A walk that still shows reading is repeated at the first check 5 s after it, though nothing moved (holding a read changes no byte), and sends an event only when the detail changed |
+| `cut`, `childrenLeftOut` | Definitions left out or cut short; held databases read without their children (`CHILDREN_LEFT_OUT`), whatever later builds reported |
+| `lastBuildMs`, `lastSearchMs` | The last finished build's and search's time; absent before the first |
 
 ## Result pages
 
@@ -957,6 +992,16 @@ Results stay in backend memory, never on disk (`ResultStore`).
   on it answer `BUDGET_STOPPED`). A query's own ceiling fixed when it began (an actual plan's) stays: the smaller of it and
   the current half holds. Test hooks'
   `VARIA_RESULT_BUDGET_BYTES` fixes the figure and turns off the memory-load check.
+- **Allowances.** A comparison that replaces another (`results.diff`'s `replaces`, [Result diffs](#result-diffs)) raises
+  its query's limit by the replaced comparison's whole charge (its rows, metadata, change index, views, identity and
+  value lists) while both are held, so a new comparison can be written beside the old one it replaces. The query's
+  limit is `min(half, its own ceiling) + allowances` (`ResultStore.QueryLimit`), read by every reservation of the query:
+  rows, working memory on any thread, rooms, waits for room and spare memory alike. One allowance per replaced
+  comparison, granted once; allowances of different comparisons add up. It ends when the replaced comparison's bytes go
+  back (its release, after its last lease or pin) or when nothing holds it (the replace failed or was cancelled, or the
+  new comparison was released first). While it lasts the query's other operations (sorts, filters, pivots, profiles of
+  any of its results) may use the raised limit too, so the query's use can pass its half (the meter above 100 %); the
+  global budget and the memory-load check are not raised.
 - **Working memory** of operations (sort keys, profile figures) is charged to the same budget (pinned by
   `tests/working-memory-lint.test.ts`). Reservations of 64 MiB or more, any memory that only makes an operation faster once 64 MiB
   of it is held (`ResultStore.TryReserveSpare`), and stepped ones (`WorkSteps`) at each further 64 MiB, are refused under high system memory load with `TOO_LARGE` (low on memory); refused Distinct Count bounds are not an
@@ -995,7 +1040,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Packing results.** A complete result of 1 MiB or more is packed when hidden for 5 s (stage 1) or shown but idle for
   30 s (**Stage 2**, `ResultPacker.VisibleIdleMs`, doubling per whole unpack up to 4 minutes): each page becomes
   Zstandard level 2 bytes of its lengths form with typed columns ([typed form](page-compression-findings.md#typed-form); a page
-  saving under a tenth stays raw), charged at its packed size. Never a result still
+  saving under a tenth stays raw), charged at its packed size. A query's own result is also packed as it stores, each
+  page as it seals once the result holds 1 MiB, on a thread of its own beside the reading thread
+  ([at seal](page-compression-findings.md#at-seal)). The policy never packs a result still
   storing, a live table, or one held by a read, operation, Copy or Save; a sorted or filtered grid does not keep its
   result raw, and sorting or filtering a packed result reads it packed and leaves it packed. `ResultPacker` runs on its own thread, compressing at the lowest priority (honoured on Windows) but taking
   locks and allocating at normal priority (never preempted holding a lock), one result at a time (hidden first, then largest), outside
@@ -1006,7 +1053,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `ResultStore.RoomWaitMs`; 4 waits a row, `SqlService.MaxRoomWaits`; 30 s a query, `SqlService.MaxRoomWaitMs`; never
   a live table's or a derived set's row) while the packer packs other unheld complete results of 1 MiB or more on the
   results' workers (any query's for the global budget, only the query's own when its own half is full), except one an
-  operation unpacked and still uses; then it retries, or the query is truncated.
+  operation unpacked and still uses, and while its own pages queued for packing at seal pack; then it retries, or the
+  query is truncated.
   SQL Server sees `ASYNC_NETWORK_IO` meanwhile.
 - **Leases.** `results.copy` and `results.export` lease their result: released mid-job, it leaves lookup at once (new
   reads get `RESULT_RELEASED`) but is freed when the last lease ends. Every 64 MiB released (across releases) triggers a gen2 collection,
@@ -1145,6 +1193,11 @@ view is an order of some or all of a result's base rows, read through the result
   - `{ op: 'groups', column, snapshotId }`: a distinct snapshot's ticks ([Distinct values](#distinct-values)).
   - `{ op: 'duplicates', columns }`: rows whose values in those columns (1 – 4,096, distinct) equal another row's (NULL = NULL), grouped in
     order of each group's first row.
+  - `{ op: 'kind', kinds }`: a comparison's rows of 1 – 4 distinct kinds (`same`, `changed`, `added`, `removed`;
+    `limits.diff.maxKinds`), read from its change index ([Result diffs](#result-diffs)); both halves of a changed entry
+    are `changed`. No `column`, `rows`, `nulls`, `cells`, `columns` or `snapshotId`; `kinds` on another op, or a kind
+    filter on a result that is not a diff, is `INVALID_PARAMS`. It answers `{ op: 'kind', kinds }` in that order. It names
+    no column, so no header funnel shows it.
   - Equality is the sort's (the collation decides text matches; `2` = `2.0` in float; truncated by prefix, `approximate`).
     A named view that is gone: `VIEW_NOT_FOUND`.
 - **Keep Selected Rows.** `{ op: 'keepRows', cells: { ranges: 1 – 256 [first, count], viewId? } }` keeps rows by position,
@@ -1261,9 +1314,10 @@ Compare with Previous Result and the Compare popover compare two results of one 
 (`Results/ResultDiff.cs`), producing a new result. The renderer runs at most four comparisons per window (`DerivedJobs`,
 shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s.
 
-- **`results.diff { left, right, exact?, context?, match? }`** answers `{ descriptor, match, same, changed, added, removed,
-  soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired, columnChanges,
-  trailingHidden }`. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
+- **`results.diff { left, right, exact?, context?, match?, layout?, replaces? }`** answers `{ descriptor, match, same,
+  changed, added, removed, soft, approximate, leftOnly, rightOnly, repeated, possible, possibleSkipped, nothingPaired,
+  columnChanges, trailingHidden, overview, units, layout }`. `layout` is `unified` (absent: two rows a change) or `entry`
+  (one row an entry, below); any other is `INVALID_PARAMS`, and the answer says which was written. Both must be the same query's own `rows` sets (`INVALID_PARAMS`, "Only a query's
   own result sets can be compared: not a pivot, a comparison or an execution plan set."), complete (`RESULT_OPEN`,
   "Compare the results after they finish loading."), and the query must not have stopped storing (`BUDGET_STOPPED`, see
   [Pivots](#pivots)). Columns pair by name case-insensitively (`src/shared/ordinal-casing.ts`), in `left`'s order, when
@@ -1289,14 +1343,39 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   never change. `possibleSkipped`: more than 1,000 removed or added rows, more than 4,000,000 comparisons (removed ×
   added × columns), or the values' working memory refused. `nothingPaired`: both inputs have rows and none matched.
   `columnChanges`: each pair's `{ changed, soft }` cells, in pair order (the true counts, whatever a cut tone lists).
-  `trailingHidden`: unchanged entries left out after the last stored row (with `context` ≥ 0).
+  `trailingHidden`: unchanged entries left out after the last stored row (with `context` ≥ 0). `overview`: up to 512
+  buckets (`limits.diff.overviewBuckets`; one a row when fewer rows are stored, empty for none) over the stored rows in
+  order, each the bits of the kinds in it: 1 changed, 2 added, 4 removed. `units`: the stored rows' change units (below).
+- **The change index** (`Results/DiffIndex.cs`) is built with the stored rows and kept with the diff until it is
+  released. Per stored row: its kind (both halves of a changed entry are `changed`), whether its key repeats, whether its
+  tone was cut, and its change units: each changed cell the tone lists, plus one for a cut tone, on a changed entry's
+  `changedNew` half (its `changedOld` half has none); one for an added or removed row; none for an unchanged row (soft
+  cells are not changes). Running totals of units every 4,096 rows (`limits.diff.indexBlockRows`) let a seek skip empty
+  stretches. A look-alike row holds its partner as a stored row (none when the partner was not stored). In the one-row
+  layout a changed row is one entry with the units of its listed cells (plus one when cut), and each cut row keeps its
+  full list of changed pairs as a bitset (4 bytes plus 8 per 64 pairs), found by stored row through a sorted list of cut
+  rows, so Save can write every changed cell's old value. It is charged to the query's budget before the rows are
+  written (a cut row's bitset as it is met), and refused with the diff. A view of a diff keeps its own running totals
+  over its order, charged with the view.
+- **`results.diffSeek { resultId, viewId?, from, direction }`** (`direction`: `next` or `previous`; `from`: a position,
+  -1 before the first) finds the nearest row with change units after or before `from`, wrapping round, in stored order
+  or the view's. It answers `{ row, column, index, total, rows }`: the position, the column to land on (the first listed
+  changed cell going forward, the last going back; 0 for an added or removed row, or going back onto a cut row), the
+  1-based unit it lands on among the `total` units of the rows shown (the row's first unit going forward, its last going
+  back), and the rows shown, or `{ none: true }` when no row shown has a change. It steps by row: moving between one
+  row's own units is the renderer's, from the tone it has read, numbering them from the row's `index`.
+  **`results.diffSeek { resultId, viewId?, partnerOf }`** answers the look-alike partner of the row at that position:
+  `{ row, column: 0, index, total, rows }`, `{ hidden: true }` when the view does not show the partner, or
+  `{ none: true }` when it has none (or the position is past the end). Main refuses an answer whose `row` is not below
+  `rows`, `hidden` to a seek, or a partner off the first column (`BACKEND_ERROR`). Both forms on a result that is not a
+  diff are `INVALID_PARAMS`, on a released one `RESULT_RELEASED`; both engines.
 - **The unified result** (`kind: 'diff'`, stamped with the generation and owned by main) is in the later result's order,
   each removed row after the row it followed, a changed row as old (−) then new (+). Columns: the shared columns with
   `right`'s names and types (the data columns, in pair order), then a hidden suffix: `Change` (role `mark`: " ", "−",
   "+"), `Old row` and `New row` (roles `leftRow`, `rightRow`: bigint, the 1-based row in each input, NULL where the entry
   has none; both halves of a changed entry carry both), and an `nvarchar(500)` tone (role `tone`): `<kind> [flag…] [cell…]`.
-  Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves); `changed` is
-  reserved for the one-row layout. Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
+  Kinds: `same`, `added`, `removed`, `changedOld` and `changedNew` (a changed entry's − and + halves), and `changed`
+  (the one-row layout's changed entry, marked `~`). Flags, at most 3 and 34 characters: `dup` (the key repeats; both halves),
   `poss=<row>` (on `added`/`removed` only: the possible match's 1-based row in the other input) and `gap=<n>` (the
   unchanged entries left out just before this row, under any `context` but -1, absent when 0; on a change, its
   `changedOld` half). Readers ignore unknown flags. Then the differing cells as pair indexes, which are the data columns' indexes, soft ones `~`, runs as
@@ -1304,20 +1383,41 @@ shared with Pivot) and retries `TOO_MANY_REQUESTS` or `BUSY` after 1, 4 and 16 s
   included, is at most 500 characters. An unchanged row with no flags and no soft cell has a NULL tone. Hidden columns (`old`, `mark`, `leftRow`, `rightRow`,
   `tone`; a previous value's `of` names its pair) are not data: `results.view` sort keys and filters, `duplicates`
   columns, `results.distinct`, `results.profile` and `results.identify`'s `column` refuse them (`INVALID_PARAMS`), search
-  and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only (a transposed
-  Save of a diff is `INVALID_PARAMS`). `results.identify` on a diff refuses `by: 'column'`; `auto` and `row` answer
+  and Copy skip them, and Save writes `Change`, `Old row`, `New row` as its first columns for a diff only, and each
+  shown data column's previous values after it as `<name> (old)` (a transposed Save of a diff is `INVALID_PARAMS`). `results.identify` on a diff refuses `by: 'column'`; `auto` and `row` answer
   column -1 with one identity per entry, a hash of its (input result id, row) pairs ordered by input id, so both halves
   share it, `unique` counts entries, and it survives a swap of the same inputs. `context` unchanged rows show each side
   of a change (default 1, at most 100, -1 for all). Data cells keep their source lengths for `results.rowBytes`; the
   suffix is not measured, so a row's bytes are its shown values'. It is a derived set
   (`ResultStore.Open(derived: true)`) charged to the query's budget and stored whole or not at all (`TOO_LARGE`, "There is
   not enough result memory to show the differences. Close other results and try again."; the query is not stopped),
-  released with the query's results or at once when its answer is not delivered. A source released meanwhile:
+  released with the query's results or at once when its answer is not delivered. When what was refused grows with the
+  rows stored (the rows, their previous values, the change index or a cut row's bitset) and `context` is -1 (All rows),
+  the refusal is `DIFF_ROWS_TOO_LARGE` ("There is not enough result memory for all rows of the differences. Show changes
+  only, or close other results and try again."), which Changes only may fit; with any other `context`, for the
+  alignment's working memory and for other causes it stays `TOO_LARGE` (low system memory: its own sentence). A source
+  released meanwhile:
   `RESULT_RELEASED`. Building holds about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) plus 12 bytes per
   differing cell, charged to the budget as they grow (`TOO_LARGE` without room); a `columns` match adds 9 bytes a row to find
   repeated keys, and the look-alike search 9 bytes a value it reads (refused: the search is skipped). Work is split across
   threads with one thread's result.
-- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"). A new run in the
+- **The one-row layout** (`layout: 'entry'`): the same entries and suffix, a changed entry as one row (mark `~`, tone
+  `changed`, both row numbers) of the new values. After the data columns come previous-value columns, one a pair (role
+  `old`, `of` its pair, named `<name> (old)`), with `left`'s type, collation and length rule: the old value in every
+  changed (not soft) cell, listed by the tone or past its cut, NULL elsewhere. They are not measured for
+  `results.rowBytes` but count toward the 8 MiB row limit; past it a value is stored truncated and marked. Data, previous
+  values and suffix must fit a page's 4,096 columns, so more than 2,046 pairs (`limits.diff.maxEntryPairs`) is
+  `INVALID_PARAMS`; the renderer asks for two rows itself then.
+- **Replaces** (`replaces`: a comparison's result id): the new comparison is written under an allowance of the replaced
+  one's charge ([Result store and memory budget](#result-store-and-memory-budget)), kept by the new comparison until
+  either is released. It must be a comparison of the same query and the same two inputs, in either order
+  (`INVALID_PARAMS`; released: `RESULT_RELEASED`). Main forwards it only for a comparison its port owns whose recorded
+  inputs are the request's, either way round (`RESULT_UNAVAILABLE` for a result that is not a comparison it owns, `INVALID_REQUEST` for other
+  inputs); the record belongs to the page that made the comparison, so the next page load cannot replace it, while a
+  port reopened within the page (popped-out panes use the window's port) still can. The caller releases the old
+  comparison once the new one is shown.
+- **Renderer.** `CompareService` appends it as the run's last set ("Differences: Result 1 → Result 2"); a change of it
+  (Layout, Exact text, swapped sides) replaces it in place under the same entry (`replaceComparison`). A new run in the
   tab gives up a comparison in flight, and `addSet` takes a diff only into the run that holds both compared sets; one it
   refuses is released. `GridView`
   colours rows and cells from the tone column (`is-chg`, `is-soft`, `resultsGrid.diff*`): its kind is the row's tone (the
@@ -1472,7 +1572,8 @@ The results toolbar's search runs in the backend over held rows in the grid's or
   Find Next) into results of eleven collations, in base order, through a sort and a filter, packed and not, dense and
   one cell a row, and while a result loads, and compares every answer with a search of every row; breaking any rule
   above fails it. The value search narrows its distinct values the same way from the last search's marks, which its
-  snapshot already charges.
+  snapshot already charges; over a packed result it reads them in the row order its first search kept, so a key that
+  keeps most values costs no more than a search of every value.
 - **Main** checks the answer: equal row and column counts, cells strictly ordered within the rows searched and on the
   asked side of `fromRow`, columns in range, `first + matches ≤ total`.
 - **Renderer.** `ResultsSearchService` (`results/search.ts`) searches after a 200 ms pause (Enter at once), one grid at a
@@ -1735,6 +1836,9 @@ with `BACKEND_ERROR`.
   acknowledged, paused or not) writes each table whose order changes as a new revision from those rows, with the same retire rule, its own
   budget (`BUDGET` if it does not fit), `diff`, `tracked`, `departed`, no facets, marked `resorted`. No statement runs; a
   table with nothing held waits for its next sample.
+- **View and filter.** An update that sets or clears a probe's view or filter reads that probe again as a refresh would
+  (within its minimum gap and interval, and no sooner than its cost allows under the load guard's duty cycle), so the rows
+  match without waiting a whole interval; a paused, backing-off, stopped or load-slowed probe keeps its schedule.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, nvarchar, never a key, facet, sort or filter
   column): `error`, `warning`, `running`, `muted` or NULL. `ResultColumn.role` `tone` keeps it hidden in the grid, and Copy
   and Save Results As leave it out (`ResultTextWriter.Hidden`).
@@ -1937,7 +2041,7 @@ behaviour.
   applies to views already hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) cancels
   (`dormant`, the backend releasing what it held); shown again it subscribes with a new id and the last resume token, its
   history continuing after a gap. `liveData.pauseWhenHidden` off keeps hidden views running. A source allowing
-  `hidden: 'statusOnly'` (none does yet; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
+  `hidden: 'statusOnly'` (agent.jobs does; only the renderer acts on it) lets up to 4 views a window with `whileHidden` keep
   table-less probes at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never going dormant, with
   their table probes paused; the rest pause, and a view that ends, is lost, closes or shows hands its slot to the oldest
   view that paused only for want of one.
@@ -2028,7 +2132,7 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'identify'; rid; generation; resultId: u32; by: 'auto' | 'column' | 'row'; column? }  // column only with by: 'column'
 { t: 'rowIds'; rid; generation; resultId: u32; firstRow; count: 1..limits.identity.maxRows; viewId?: u32 }
 { t: 'findRows'; rid; generation; resultId: u32; ids: id[1..limits.identity.maxFind]; viewId?: u32 }
-{ t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext }  // main sends { left, right }
+{ t: 'diff'; rid; generation; resultId: u32; right: u32; exact: boolean; context: -1..limits.diff.maxContext; match?; layout?: 'unified' | 'entry'; replaces?: u32 }  // main sends { left, right }
 { t: 'profile'; rid; generation; resultId: u32; columns: distinct column[≤ limits.profile.maxColumns]; viewId?: u32 }
 { t: 'pivot'; rid; generation; resultId: u32; rows: distinct column[≤ limits.pivot.maxRowFields]; column?; values: PivotValue[1..limits.pivot.maxValues]; viewId?: u32 }
 { t: 'distinct'; rid; generation; resultId: u32; column; viewId?: u32; keptViewId?: u32 }
@@ -2205,7 +2309,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Shown results a set names | `results.visibility`: 0 – 4,096 distinct ids (`limits.visibility.maxResults`, `ResultVisibility.MaxResults`), `seq` 1 – 2^31 − 1, `source` a UUID | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (plus a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side, 1 – 16 key columns (`limits.diff`); look-alikes over at most 1,000 removed and 1,000 added rows and 4,000,000 comparisons; about 74 bytes a left row and 36 a right row (`ResultDiffer.WorkingBytes`) and 12 a differing cell while aligning; the diff's rows under the query budget, whole or refused; the change index at 3 bytes a stored row, 8 bytes per 4,096 rows of running totals, 64 bytes a look-alike row and 1 KiB, under the same budget and refused with the diff (`DiffIndex.BytesFor`), plus 4 bytes and 8 per 64 pairs for each cut row of the one-row layout (`DiffIndex.CutBytes`), and 8 bytes per 4,096 positions of a view's totals; the one-row layout at most 2,046 pairs (`limits.diff.maxEntryPairs`); a replace's allowance of the replaced comparison's charge on the query's limit, ended with it; `overview` at most 512 buckets; a kind filter 1 – 4 kinds | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters (at least one), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (plus ranked or whole text, date or binary key values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transposed Copy and Save | `transposed` boolean; `headerColumn` 0 – 4,095, a shown column, only with `transposed`; at most 4,095 source rows a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any (`INVALID_PARAMS`); column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
@@ -2289,7 +2393,7 @@ configuration or ADC file Varia cannot use, naming the field and never the conte
 another account), `NOT_FOUND`, `BACKEND_ERROR` (Google's 5xx), `TIMEOUT`, and `CONNECTION_LOST` when Google cannot be
 reached. A query adds `LOCATION_MISMATCH` (its dataset is in another location; the text names both), `RESULT_TOO_LARGE`
 (over BigQuery's 10 GB result limit), `COST_CAP` (over the connection's maximum bytes billed, naming the cap) and
-`SQL_ERROR` (BigQuery's own text); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
+`SQL_ERROR` (BigQuery's own text); Preview Rows (`query.execute` with a `preview` table) adds `ROW_ACCESS` (the table has row access policies, which tabledata.list cannot apply); a session close adds `JOB_RUNNING` (a job still runs in the session, which is kept); a query's failures are its summary's `error`, as SQL Server's are. [BigQuery's Errors](bigquery.md#errors) has each row's text and recovery.
 
 **Microsoft Entra** failures answer `AUTH_ENTRA` (Entra Integrated off Windows answers `AUTH_UNSUPPORTED` before
 opening). Connect and Load databases `details` are number 0, class 11, state 0 and the server, except AADSTS50126
@@ -2309,7 +2413,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -2558,7 +2662,9 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   below real multilingual text's. It also types a 14-letter word a key at a time into
   400,000 cells of the sentences the fold vouches for, narrowed and searching every row each key
   (`node.find.typeAhead*`, about 3.8 times); `--find-bench-messages <server> [language_id]`, run by hand, does the same
-  over `sys.messages` with one SELECT.
+  over `sys.messages` with one SELECT. Its `--room-pool-bench` mode (`RoomPoolBench.cs`) reads 200 random 128-row tiles
+  of a scattered view of 400,000 packed W1 rows and reports the memory a tile allocates and the full collections
+  (`node.roomPool.*`; about 0.2 MB and none with the room pool, 23 to 33 MB and one every tile or two without it).
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching the
   UI thread for long tasks and frame gaps, and times 500 live ticks of `debug.synthetic` through `ResultClient.live`;
   `--live` stores a million W1-like rows from SQL Server with `maxRows: 0`, then 200,000 rows each holding a small xml

@@ -18,6 +18,8 @@ import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from
 import SecurablesPage from './pages/SecurablesPage'
 import UserMappingPage from './pages/UserMappingPage'
 import UnlockLoginPage from './pages/UnlockLoginPage'
+import { AgentServicePage, StartJobPage } from './pages/AgentPages'
+import { AgentGeneralPage, AgentHistoryPage } from './pages/AgentPropertiesPages'
 import { findInWindows, returnFocusTo } from '../core/focus'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
@@ -33,7 +35,14 @@ export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Reco
   detachDatabase: { general: DetachDatabasePage },
   unlockLogin: { general: UnlockLoginPage },
   // Login Properties (D2c) shows New Login's pages on the login, each in its properties form.
-  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage }
+  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage },
+  // SQL Server Agent (AG-2): a job's Start Job at Step, and the Agent node's service confirmations.
+  startJobAtStep: { general: StartJobPage },
+  startAgent: { general: AgentServicePage },
+  stopAgent: { general: AgentServicePage },
+  restartAgent: { general: AgentServicePage },
+  // SQL Server Agent Properties (AG-8a): General and History; the other pages come later.
+  agentProperties: { general: AgentGeneralPage, history: AgentHistoryPage }
 }
 /** The pages "Select a page" lists for a model: the spec's, less those the definition hides for it (definition.hiddenPages). */
 export function shownPages(pages: readonly DialogPageSpec[], hidden: readonly PageId[]): readonly DialogPageSpec[] {
@@ -182,6 +191,15 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   // A run that succeeded leaves Close as the one button, focused, as SSMS's progress dialogs do.
   useEffect(() => { if (succeeded) closeButton.current?.focus() }, [succeeded])
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
+  // A dialog the login may only look at (SQL Server Agent Properties below sysadmin): its reason, pages that cannot change, and Close.
+  const readOnly = open.model ? definitionOf(open.dialog).readOnly?.(open.model) : undefined
+  // Close is then the one button, focused once, when the model is read.
+  const readOnlyFocused = useRef(false)
+  useEffect(() => {
+    if (!readOnly || open.phase !== 'ready' || readOnlyFocused.current) return
+    readOnlyFocused.current = true
+    closeButton.current?.focus()
+  }, [readOnly, open.phase])
   // Unlock's Set a new password… hands over to Login Properties, and OK says so.
   const okLabel = (open.draft && definitionOf(open.dialog).okLabel?.(open.draft)) || 'OK'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
@@ -255,22 +273,23 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         </section>
       </div>
       <div className="object-dialog-main">
-        <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>
+        {!definitionOf(open.dialog).noScript && <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>}
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
         {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}
+        {!open.error && readOnly && <div className="object-dialog-message info" role="status"><Icon name="lock" /><span>{readOnly}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         {spec.steps && open.steps && <StepsPanel steps={open.steps} />}
         {mounted.map(({ page, shown }) => {
           const Page = components[page.id]
           return <div key={page.id} className="object-dialog-page" hidden={!shown} {...tabs ? { role: 'tabpanel', id: pagePanelId(page.id), 'aria-labelledby': pageTabId(page.id) } : {}}>
-            {Page && <Page open={open} editable={usable && !busy} />}</div>
+            {Page && <Page open={open} editable={usable && !busy && !readOnly} />}</div>
         })}
       </div>
     </div>
     <div className="connection-footer">
       <span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>
-      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} okLabel={okLabel} />
+      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} okLabel={okLabel} readOnly={!!readOnly} />
     </div>
   </form></div>
 }
@@ -281,6 +300,8 @@ interface DialogButtonsProps {
   readonly blocked: string | undefined
   /** OK's label when the definition names one (Unlock's "Continue in Login Properties…"). */
   readonly okLabel?: string
+  /** The login may only look: Close is the one button. */
+  readonly readOnly?: boolean
   readonly closeRef: Ref<HTMLButtonElement>
   readonly stopRef: Ref<HTMLButtonElement>
   onClose(): void
@@ -291,8 +312,8 @@ interface DialogButtonsProps {
  * different elements (their keys): focus the run moved to Stop then drops as Stop goes, and the run's end puts it back on the
  * password the server's policy refused, or on the dialog, instead of staying on a reused button that now says Cancel.
  */
-export function DialogButtons({ phase, busy, blocked, okLabel = 'OK', closeRef, stopRef, onClose, onStop }: DialogButtonsProps) {
-  if (phase === 'succeeded') return <button key="close" ref={closeRef} className="primary" type="button" onClick={onClose}>Close</button>
+export function DialogButtons({ phase, busy, blocked, okLabel = 'OK', readOnly, closeRef, stopRef, onClose, onStop }: DialogButtonsProps) {
+  if (phase === 'succeeded' || (readOnly && phase !== 'executing')) return <button key="close" ref={closeRef} className="primary" type="button" onClick={onClose}>Close</button>
   return <>
     <button key="ok" className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
       disabled={busy || !!blocked || phase === 'loadFailed' || phase === 'disconnected'}>{okLabel}</button>

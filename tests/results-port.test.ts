@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type OperationProgressSink, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -89,6 +89,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
+    diffSeek: vi.fn(async (_generation: number, params: ResultsDiffSeekParams): Promise<ResultsDiffSeekResult> => 'partnerOf' in params ? { hidden: true } : { row: 4, column: 2, index: 3, total: 7, rows: 9 }),
     view: (generation, params, onProgress) => {
       let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
       const done = new Promise<ResultsViewResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
@@ -529,6 +530,53 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'cancel', rid: 18 })
     expect(identifies[2].cancels).toEqual([cancelReasons.user])
   })
+  it('relays a comparison seek member by member, answers hidden only to a partner request, and refuses a malformed one', async () => {
+    const { host, backend, port } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'diffSeek', rid: 1, generation: 1, resultId: 7, viewId: 3, from: -1, direction: 'next' })
+    port().send({ t: 'diffSeek', rid: 2, generation: 1, resultId: 7, partnerOf: 4 })
+    port().send({ t: 'diffSeek', rid: 3, generation: 1, resultId: 7, from: 0 })
+    port().send({ t: 'diffSeek', rid: 4, generation: 1, resultId: 7, from: 0, direction: 'next', partnerOf: 1 })
+    port().send({ t: 'diffSeek', rid: 5, generation: 1, resultId: 7, from: -2, direction: 'previous' })
+    port().send({ t: 'diffSeek', rid: 6, generation: 1, resultId: 7 })
+    port().send({ t: 'diffSeek', rid: 7, generation: 1, resultId: 8, from: 0, direction: 'next' })
+    await settle()
+    expect(vi.mocked(backend.diffSeek).mock.calls).toEqual([[1, { resultId: 7, viewId: 3, from: -1, direction: 'next' }], [1, { resultId: 7, partnerOf: 4 }]])
+    expect(Object.fromEntries(codes(port()))).toEqual({ 1: 'ok', 2: 'ok', 3: 'INVALID_REQUEST', 4: 'INVALID_REQUEST', 5: 'INVALID_REQUEST', 6: 'INVALID_REQUEST', 7: 'RESULT_UNAVAILABLE' })
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { row: 4, column: 2, index: 3, total: 7, rows: 9 } })
+    expect(port().ends().find(end => end.rid === 2)).toEqual({ t: 'end', rid: 2, ok: true, result: { hidden: true } })
+    // Hidden answers only a partner request; a unit past the total, or members it does not have, are the backend's mistakes.
+    vi.mocked(backend.diffSeek)
+      .mockResolvedValueOnce({ hidden: true })
+      .mockResolvedValueOnce({ row: 1, column: 0, index: 3, total: 2, rows: 5 })
+      .mockResolvedValueOnce({ none: true, row: 1 } as never)
+      .mockResolvedValueOnce({ none: true })
+    for (const rid of [8, 9, 10, 11]) port().send({ t: 'diffSeek', rid, generation: 1, resultId: 7, from: 0, direction: 'previous' })
+    await settle()
+    expect(codes(port()).slice(-4)).toEqual([[8, 'BACKEND_ERROR'], [9, 'BACKEND_ERROR'], [10, 'BACKEND_ERROR'], [11, 'ok']])
+    // A row past the rows shown, or a partner landing anywhere but the first column, is the backend's mistake too.
+    vi.mocked(backend.diffSeek)
+      .mockResolvedValueOnce({ row: 5, column: 0, index: 1, total: 2, rows: 5 })
+      .mockResolvedValueOnce({ row: 1, column: 3, index: 1, total: 2, rows: 5 })
+      .mockResolvedValueOnce({ row: 1, column: 0, index: 1, total: 2, rows: 5 })
+    port().send({ t: 'diffSeek', rid: 12, generation: 1, resultId: 7, from: 0, direction: 'next' })
+    port().send({ t: 'diffSeek', rid: 13, generation: 1, resultId: 7, partnerOf: 2 })
+    port().send({ t: 'diffSeek', rid: 14, generation: 1, resultId: 7, partnerOf: 2 })
+    await settle()
+    expect(codes(port()).slice(-3)).toEqual([[12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR'], [14, 'ok']])
+  })
+  it('copies a kind filter member by member', async () => {
+    const { host, port, views } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'view', rid: 1, generation: 1, resultId: 7, sort: [], filters: [{ op: 'kind', kinds: ['changed', 'added'] }] })
+    port().send({ t: 'view', rid: 2, generation: 1, resultId: 7, sort: [], filters: [{ op: 'kind', kinds: ['added', 'added'] }] })
+    port().send({ t: 'view', rid: 3, generation: 1, resultId: 7, sort: [], filters: [{ op: 'kind', kinds: [] }] })
+    port().send({ t: 'view', rid: 4, generation: 1, resultId: 7, sort: [], filters: [{ op: 'kind', kinds: ['moved'] }] })
+    port().send({ t: 'view', rid: 5, generation: 1, resultId: 7, sort: [], filters: [{ op: 'kind', kinds: ['added'], column: 0 }] })
+    await settle()
+    expect(views.map(view => view.params.filters)).toEqual([[{ op: 'kind', kinds: ['changed', 'added'] }]])
+    expect(codes(port()).filter(([, code]) => code !== 'ok').map(([rid]) => rid)).toEqual([2, 3, 4, 5])
+  })
   it('compares only two owned results of the current generation, owns the diff it answers, and closes one answered after its port went', async () => {
     const { host, backend, port, diffs } = fixture()
     host.own([descriptor(7), descriptor(8)])
@@ -536,7 +584,7 @@ describe('ResultsPortHost', () => {
       resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
       rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
     })
-    const answer = (resultId: number) => ({ descriptor: diffDescriptor(resultId), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: ['Extra'], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 })
+    const answer = (resultId: number) => ({ descriptor: diffDescriptor(resultId), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: ['Extra'], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' })
     port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
     port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 9, exact: false, context: 1 })
     port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 7, exact: false, context: 1 })
@@ -583,6 +631,69 @@ describe('ResultsPortHost', () => {
     ])
     expect(codes(port())).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST']])
   })
+  it('copies a diff\'s layout, and forwards replaces only for an owned comparison of the same two inputs', async () => {
+    const { host, port, diffs } = fixture()
+    host.own([descriptor(7), descriptor(8), descriptor(9)])
+    const diffDescriptor = (resultId: number) => ({
+      resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
+      rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
+    })
+    const answer = (resultId: number, layout: 'unified' | 'entry' = 'unified') => ({ descriptor: diffDescriptor(resultId), match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout })
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: -1, layout: 'entry' })
+    diffs[0].resolve(answer(20, 'entry'))
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 9, exact: false, context: -1 })
+    diffs[1].resolve(answer(21))
+    await settle()
+    // Replacing 20 (of 7 and 8): the same inputs and the swapped ones are forwarded; other inputs, a result that is not a
+    // comparison this port made, an unknown one and a malformed layout are refused before the backend is asked.
+    port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 8, exact: false, context: 0, layout: 'unified', replaces: 20 })
+    port().send({ t: 'diff', rid: 4, generation: 1, resultId: 8, right: 7, exact: false, context: -1, replaces: 20 })
+    port().send({ t: 'diff', rid: 5, generation: 1, resultId: 7, right: 9, exact: false, context: -1, replaces: 20 })
+    port().send({ t: 'diff', rid: 6, generation: 1, resultId: 7, right: 8, exact: false, context: -1, replaces: 9 })
+    port().send({ t: 'diff', rid: 7, generation: 1, resultId: 7, right: 8, exact: false, context: -1, replaces: 99 })
+    port().send({ t: 'diff', rid: 8, generation: 1, resultId: 7, right: 8, exact: false, context: -1, layout: 'rows' })
+    port().send({ t: 'diff', rid: 9, generation: 1, resultId: 7, right: 8, exact: false, context: -1, replaces: 0 })
+    await settle()
+    expect(diffs.map(item => item.params)).toEqual([
+      { left: 7, right: 8, exact: false, context: -1, layout: 'entry' },
+      { left: 7, right: 9, exact: false, context: -1 },
+      { left: 7, right: 8, exact: false, context: 0, layout: 'unified', replaces: 20 },
+      { left: 8, right: 7, exact: false, context: -1, replaces: 20 }
+    ])
+    expect(codes(port())).toEqual([[1, 'ok'], [2, 'ok'], [5, 'INVALID_REQUEST'], [6, 'RESULT_UNAVAILABLE'], [7, 'RESULT_UNAVAILABLE'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST']])
+    expect(port().ends().find(end => end.rid === 1)).toMatchObject({ ok: true, result: { layout: 'entry' } })
+    // A comparison closed by the renderer can no longer be replaced.
+    port().send({ t: 'close', rid: 11, generation: 1, resultIds: [20] })
+    await settle()
+    port().send({ t: 'diff', rid: 10, generation: 1, resultId: 7, right: 8, exact: false, context: -1, replaces: 20 })
+    await settle()
+    expect(diffs).toHaveLength(4)
+    expect(codes(port()).filter(([rid]) => rid === 10)).toEqual([[10, 'RESULT_UNAVAILABLE']])
+  })
+  it('forwards replaces from a port opened again in the same page, and refuses them from the port of the next page', async () => {
+    const { host, port, diffs, frame } = fixture()
+    host.own([descriptor(7), descriptor(8)])
+    const answer = { descriptor: { resultId: 20, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }], rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false },
+      match: { mode: 'auto', columns: ['Id'] }, same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'entry' }
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: -1, layout: 'entry' })
+    diffs[0].resolve(answer)
+    await settle()
+    expect(codes(port())).toEqual([[1, 'ok']])
+    // The page's port opened again (a popped-out pane's grid uses the window's port too) still replaces it.
+    const first = port()
+    host.open(frame)
+    expect(port()).not.toBe(first)
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 8, exact: true, context: -1, replaces: 20 })
+    await settle()
+    expect(diffs.map(item => item.params.replaces)).toEqual([undefined, 20])
+    // The next page's port does not: it did not make that comparison.
+    host.reset()
+    host.open(frame)
+    port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 8, exact: true, context: -1, replaces: 20 })
+    await settle()
+    expect(diffs).toHaveLength(2)
+    expect(codes(port())).toEqual([[3, 'RESULT_UNAVAILABLE']])
+  })
   it('accepts a whole-row diff, whose match names no column, and says which members a refused answer failed', async () => {
     const refusals: [string, readonly string[]][] = []
     const { host, port, diffs } = fixture({ onRefused: (method, issues) => refusals.push([method, issues]) })
@@ -592,7 +703,7 @@ describe('ResultsPortHost', () => {
       rowsRead: 110, rowsStored: 110, rowsAvailable: 110, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
     })
     // As the backend sends a diff of results with no unique column (repeated rows, NULLs): matched by whole rows, no column named.
-    const wholeRows = { descriptor: diffDescriptor(30), match: { mode: 'rows', columns: [] }, same: 45, changed: 0, added: 55, removed: 55, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0 }
+    const wholeRows = { descriptor: diffDescriptor(30), match: { mode: 'rows', columns: [] }, same: 45, changed: 0, added: 55, removed: 55, soft: 0, approximate: false, leftOnly: [], rightOnly: [], repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, columnChanges: [], trailingHidden: 0, overview: [], units: 0, layout: 'unified' }
     port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
     diffs[0].resolve(wholeRows)
     await settle()

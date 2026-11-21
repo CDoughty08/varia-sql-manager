@@ -59,7 +59,7 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 | `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query's Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release. Not in SSMS. |
 | `environment.reduceMotionWithSystem` | Reduce motion when the system asks | Boolean | False |  | All | At once | Follows the operating system's reduced-motion preference: while the system asks for reduced motion, menus, dialogs and hover fills appear at once, and spinners and the live dot stop. Off, every animation plays whatever the system asks. Not in SSMS. |
 | `environment.layout.panelTabs` | Show panel tabs | Boolean | False |  | All | At once | Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs. Not in SSMS. Not shown in Options. |
-| `environment.statusBar.memoryNerdMetrics` | Show nerd metrics in the Memory panel | Boolean | False |  | All | At once | Whether the status bar's Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec's counters and the managed heap. The section's heading opens and closes it, and Varia remembers the choice. Not in SSMS. Not shown in Options. |
+| `environment.statusBar.memoryNerdMetrics` | Show nerd metrics in the Memory panel | Boolean | False |  | All | At once | Whether the status bar's Memory panel opens its Nerd metrics section: what results hold as read and in memory, the largest results, the page codec's counters, the managed heap and what the Search Objects index holds. The section's heading opens and closes it, and Varia remembers the choice. Not in SSMS. Not shown in Options. |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
 ### Environment › AutoRecover
@@ -235,7 +235,7 @@ _No settings yet._
 
 ### Query Results › SQL Server › Results to Grid
 
-Sections: **Grid display** (How results look in the grid), **Copy and save**, **Limits and memory** (Rows past a limit are still read and counted, but not kept), **Execution plan** (The panes beside a graphical execution plan).
+Sections: **Grid display** (How results look in the grid), **Copy and save**, **Limits and memory** (Rows past a limit are still read and counted, but not kept), **Execution plan** (The panes beside a graphical execution plan), **Comparisons** (How Compare shows the differences between two results).
 
 | Section | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -260,6 +260,7 @@ Sections: **Grid display** (How results look in the grid), **Copy and save**, **
 | Execution plan | `queryResults.plan.rowFlow` | Show row flow | Boolean | True |  | All | At once | Label edges with actual, estimated, unavailable or partial live rows. Named "Show execution plan row flow" outside its section. Not in SSMS. |
 | Execution plan | `queryResults.plan.outlineWidth` | Outline width | Integer 120–600 px | 220 px |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Named "Execution plan outline width" outside its section. Not in SSMS. |
 | Execution plan | `queryResults.plan.propertiesWidth` | Properties width | Integer 140–600 px | 260 px |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Named "Execution plan properties width" outside its section. Not in SSMS. |
+| Comparisons | `queryResults.compare.layout` | Show a comparison as | One of `entry` (One row per entry), `unified` (Two rows (−/+)) | One row per entry |  | All | At once | How a new comparison draws its rows. One row per entry, the default, shows a changed row once, each changed value as old → new. Two rows shows a changed row as its old row (−) and its new row (+), with the changed values coloured. A comparison too wide for one row per entry (more than 2,046 compared columns) shows two rows. The Layout button in a comparison toolbar changes that comparison only. Named "Comparison layout" outside its section. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -382,4 +383,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (129 today).
+A patch holds at most one entry per setting (130 today).

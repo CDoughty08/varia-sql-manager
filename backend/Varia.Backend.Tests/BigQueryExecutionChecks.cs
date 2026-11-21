@@ -16,7 +16,7 @@ namespace Varia.Backend.Tests;
 /// and the cell caps, read errors, each error row, the lookup after a network failure and the 409 path, statistics and
 /// cost text. No request leaves the process.
 /// </summary>
-internal static class BigQueryExecutionChecks
+internal static partial class BigQueryExecutionChecks
 {
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -31,6 +31,10 @@ internal static class BigQueryExecutionChecks
         public List<JsonNode> Rows = [];
         /// <summary>The most rows one page answers, whatever maxResults asks (BigQuery's own ~10 MB cut).</summary>
         public int PageCap = int.MaxValue;
+        /// <summary>Serializes each page's rows once and reuses the text (the read bench: building the page's JSON again for
+        /// every read would time the fake, not Varia).</summary>
+        public bool CacheRows;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int Offset, int Count), string> cachedRows = new();
         public int PollsBeforeDone;
         public string StatementType = "SELECT";
         public long? DmlAffected;
@@ -48,9 +52,13 @@ internal static class BigQueryExecutionChecks
         /// <summary>Replaces the next page's token (one Varia cannot send back).</summary>
         public string? Token;
         public string? Location;
+        /// <summary>The job's destination table (configuration.query.destinationTable), and what tables.get says of it.</summary>
+        public JsonObject? Destination;
+        public long? TableBytes;
         public readonly ConcurrentQueue<string> InsertedIds = new();
         public readonly ConcurrentQueue<JsonNode> InsertBodies = new();
         public readonly ConcurrentQueue<Uri> Reads = new();
+        public readonly ConcurrentQueue<string> Cancels = new();
         public readonly HashSet<string> Created = [];
         /// <summary>Set when a held getQueryResults arrives: the query is running.</summary>
         public TaskCompletionSource Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,6 +78,11 @@ internal static class BigQueryExecutionChecks
             fake.On("POST", Base + "/jobs", Insert);
             fake.On("GET", Base + "/queries/[^/]+", Results);
             fake.On("GET", Base + "/jobs/[^/]+", Get);
+            // A script's children, listed between polls: these jobs have none.
+            fake.On("GET", Base + "/jobs", new BigQueryFake.Reply(200, "{\"kind\":\"bigquery#jobList\"}"));
+            // Stop's jobs.cancel, best-effort.
+            fake.On("POST", Base + "/jobs/[^/]+/cancel", request => { Cancels.Enqueue(request.Url.Split('/')[^2]); return new(200, "{\"kind\":\"bigquery#jobCancelResponse\"}"); });
+            fake.On("GET", Base + "/datasets/[^/]+/tables/[^/]+", Table);
             return fake;
         }
 
@@ -89,6 +102,13 @@ internal static class BigQueryExecutionChecks
             return new(200, Job(id, FailsAtInsert ? "DONE" : "RUNNING", FailsAtInsert ? Failure : null, null).ToJsonString());
         }
 
+        BigQueryFake.Reply Table(BigQueryFake.Request request)
+        {
+            var table = new JsonObject { ["kind"] = "bigquery#table", ["tableReference"] = Destination?.DeepClone(), ["numRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            if (TableBytes is { } bytes) table["numBytes"] = bytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return Destination is null ? BigQueryFake.Fixture("error-not-found", 404) : new(200, table.ToJsonString());
+        }
+
         JsonObject Job(string id, string state, JsonNode? error, JsonNode? statistics)
         {
             var status = new JsonObject { ["state"] = state };
@@ -99,6 +119,7 @@ internal static class BigQueryExecutionChecks
                 ["jobReference"] = Reference(id), ["status"] = status,
                 ["configuration"] = new JsonObject { ["jobType"] = "QUERY", ["query"] = new JsonObject { ["useLegacySql"] = false } }
             };
+            if (Destination is not null) job["configuration"]!["query"]!["destinationTable"] = Destination.DeepClone();
             if (statistics is not null) job["statistics"] = statistics.DeepClone();
             return job;
         }
@@ -112,7 +133,7 @@ internal static class BigQueryExecutionChecks
 
         string Id(BigQueryFake.Request request) => request.Url[(request.Url.LastIndexOf('/') + 1)..];
 
-        BigQueryFake.Reply Get(BigQueryFake.Request request)
+        public BigQueryFake.Reply Get(BigQueryFake.Request request)
         {
             var id = Id(request);
             bool known;
@@ -151,13 +172,18 @@ internal static class BigQueryExecutionChecks
                 if (Rows.Count > 0)
                 {
                     answer["totalRows"] = Rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    answer["rows"] = new JsonArray([.. Rows.Skip(offset).Take(count).Select(row => row.DeepClone())]);
+                    if (!CacheRows) answer["rows"] = PageRows(offset, count);
                 }
                 if (offset + count < Rows.Count) answer["pageToken"] = Token ?? "page-" + (offset + count).ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
             if (DmlAffected is { } dml) answer["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return new(200, answer.ToJsonString());
+            var text = answer.ToJsonString();
+            if (CacheRows && Schema is not null && Rows.Count > 0)
+                text = string.Concat(text.AsSpan(0, text.Length - 1), ",\"rows\":", cachedRows.GetOrAdd((offset, count), key => PageRows(key.Offset, key.Count).ToJsonString()), "}");
+            return new(200, text);
         }
+
+        JsonArray PageRows(int offset, int count) => new([.. Rows.Skip(offset).Take(count).Select(row => row.DeepClone())]);
     }
 
     sealed class Harness : IDisposable
@@ -167,13 +193,14 @@ internal static class BigQueryExecutionChecks
         public SqlService Service { get; }
         public string ConnectionId { get; private set; } = "";
 
-        public Harness(Jobs jobs, ResultStore? store = null)
+        public Harness(Jobs jobs, ResultStore? store = null, IBigQueryStorageRead? storage = null, Func<BigQueryEnvironment, BigQueryEnvironment>? environment = null)
         {
             Jobs = jobs;
             Fake = jobs.Fake();
-            Service = new SqlService(store: store, bigQuery: new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([])));
+            var settings = new BigQueryEnvironment(new Uri("http://localhost:9050/"), Fake.Factory, new SubjectTokens([]), Storage: storage is null ? null : _ => storage);
+            Service = new SqlService(store: store, bigQuery: environment is null ? settings : environment(settings));
             Service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(1);
-            Service.BigQuery.PollMs = 50;
+            Service.BigQuery.ChildPollMs = 50;
         }
 
         public async Task ConnectAsync(Action<JsonObject>? change = null)
@@ -262,6 +289,7 @@ internal static class BigQueryExecutionChecks
         await EdgesAsync(check);
         Trace("CancelAsync");
         await CancelAsync(check);
+        await StorageReadAsync(check);
     }
 
     /// <summary>VARIA_TRACE_CHECKS=1 names each section on stderr, to find a section that hangs.</summary>
@@ -832,8 +860,10 @@ internal static class BigQueryExecutionChecks
         var (code, value, _) = await running.WaitAsync(TimeSpan.FromSeconds(30));
         var result = value as QueryResult;
         check(busy.Code == "SESSION_BUSY" && stop.Code == "ok" && code == "ok" && result is { Status: "cancelled", Error.Code: "CANCELLED" }
-            && Says(result, "The script was cancelled.") && Says(result, "keeps running in BigQuery until it finishes; its id is varia-emulator:" + jobs.InsertedIds.Single()),
-            $"a tab runs one query at a time, and Stop ends the request, saying the job runs on in BigQuery: {busy.Code} {code} {result?.Status} {Texts(result?.Messages ?? [])}");
+            && Says(result, "The script was cancelled.") && Says(result, "Varia asked BigQuery to cancel job varia-emulator:" + jobs.InsertedIds.Single() + ". Cancelling is best-effort"),
+            $"a tab runs one query at a time, and Stop ends the request, saying Varia asked BigQuery to cancel the job: {busy.Code} {code} {result?.Status} {Texts(result?.Messages ?? [])}");
+        var cancelled = await BigQuerySessionChecks.Poll(() => jobs.Cancels.Contains(jobs.InsertedIds.Single()));
+        check(cancelled, "Stop sends jobs.cancel for the running job");
         jobs.Hang = false;
         var again = await harness.Execute("SELECT 1", next => next["sessionId"] = args["sessionId"]!.GetValue<string>());
         check(again is { Code: "ok", Result.Status: "completed" }, $"the tab runs again once its query ended: {again.Code} {again.Result?.Status}");
@@ -850,7 +880,7 @@ internal static class BigQueryExecutionChecks
         await Task.WhenAny(jobs.Polling.Task, reading).WaitAsync(TimeSpan.FromSeconds(30));
         await harness.Call("query.cancel", new JsonObject { ["queryId"] = paging["queryId"]!.GetValue<string>() });
         var stopped = (await reading.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
-        check(stopped is { Status: "cancelled" } && !Says(stopped, "keeps running") && stopped.ResultSets.Single() is { RowsStored: 1, Incomplete: true },
+        check(stopped is { Status: "cancelled" } && !Says(stopped, "cancel job") && stopped.ResultSets.Single() is { RowsStored: 1, Incomplete: true },
             $"Stop after the job finished keeps the rows read and does not say the job runs on: {stopped?.Status} {Texts(stopped?.Messages ?? [])}");
         jobs.HangPages = false;
         jobs.Hang = true;

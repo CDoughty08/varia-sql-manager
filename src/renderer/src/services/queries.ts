@@ -1,7 +1,8 @@
 import type { ConnectionInfo, QueryResult, VariaApi } from '../../../shared/contracts'
+import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
-import { sessionPromptLimits, type SessionAction, type SessionEnd } from '../../../shared/sessions'
+import { sessionCloseNoteText, sessionPromptLimits, type SessionAction, type SessionCloseNote, type SessionEnd, type SessionLocationSwitch } from '../../../shared/sessions'
 import { defaultSettings, type SettingsValues } from '../../../shared/settings/catalog'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -46,6 +47,8 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export const newSessionMessage = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted, so its SET options, temporary tables, and open transaction no longer exist.'
 export const lostSessionMessage = 'This query opened a new SQL session. The previous session was lost (SQL Server ended it, or its connection broke), so SQL Server rolled back its open transaction, and its SET options and temporary tables no longer exist.'
 const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: newSessionMessage, lost: lostSessionMessage }
+/** The `lost` notice for a BigQuery query: BigQuery ends a session itself (BigQueryService.ExpiredNotice says the same). */
+export const bigQueryLostSessionMessage = 'This query started a new BigQuery session. The previous session expired (BigQuery ends a session after 24 hours idle or 7 days), so its temp tables, variables and any open transaction are gone.'
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
 type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly provider?: string; readonly advanced?: { readonly commandTimeout?: number } } }
 /** Failures after which the tab has no session, so no open transaction. */
@@ -73,23 +76,48 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
+  /** Each BigQuery query's session location, from its last job: a dataset in another location ends the session (decision 18). */
+  private readonly locations = new Map<string, string>()
+  /** Shows a note whose query has closed, as a notification. Set once the workbench is built. */
+  notify?: (text: string) => void
   /** BigQuery's estimate and cost prompts before a run (BigQueryCostService.beforeExecute); resolves whether to run. */
   private costGate?: CostGate
   /** Runs waiting on the cost gate, which Cancel stops before anything is sent: the tab goes back as it was at once. */
   private readonly gated = new Map<string, { readonly queryId: string; readonly stop: AbortController; readonly before: QueryState | undefined }>()
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
-    private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
+    private results: Pick<ResultsService, 'begin' | 'finish'> & Partial<Pick<ResultsService, 'addMessage'>>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
     super({})
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
-      if (event.type === 'documents.closed') { this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId) }
+      if (event.type === 'documents.closed') { this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId); this.locations.delete(event.tabId) }
       if (event.type === 'query.outputSelected') {
         const state = this.getSnapshot()[event.tabId]
         if (state?.estimated && state.estimated.view !== event.view)
           this.update(event.tabId, { ...state, estimated: { ...state.estimated, view: event.view } })
       }
     })
+  }
+  /** The location of a BigQuery query's session, while it has one Varia knows of. */
+  sessionLocation(id: string): string | undefined { return this.locations.get(id) }
+  /** Appends a line to the query's Messages at once, outside any execution (a messages-only view when no results are open). */
+  addSessionMessage(tabId: string, text: string, kind: 'info' | 'error' = 'info'): void {
+    if (!this.disposed && this.documents.get(tabId)) this.results.addMessage?.(tabId, text, kind)
+  }
+  /** Shows a BigQuery close's note: in the query's Messages while it is open, else as a notification naming it (`name`,
+   *  since a closed query has none left to read), so a commit that did not happen is never unseen. */
+  sessionNote(tabId: string, note: SessionCloseNote, name?: string): void {
+    const document = this.documents.get(tabId), text = sessionCloseNoteText(name ?? document?.name ?? 'A query', note)
+    if (document) this.addSessionMessage(tabId, text, note.code === 'sessionExpired' ? 'info' : 'error')
+    else this.notify?.(text)
+  }
+  /** Asks decision 18's question before a BigQuery query's dataset moves its session to another location: true for Switch. */
+  async confirmLocationSwitch(tabId: string, location: SessionLocationSwitch): Promise<boolean> {
+    const document = this.documents.get(tabId)
+    if (!document || this.disposed) return false
+    const response = await this.api.confirmSessions({ action: 'switchLocation', tabs: [{ name: document.name.slice(0, sessionPromptLimits.name), transactions: 0, running: false, provider: 'bigquery' }], location })
+    if (!response.ok) throw new Error(response.error)
+    return !this.disposed && response.value === 'proceed'
   }
   setCostGate(gate: CostGate): void { this.costGate = gate }
   /** Stops a run still waiting on its estimate or cost prompt (nothing was sent): the tab is as it was. */
@@ -190,6 +218,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** The tab's session ended (closed, or lost), and its transaction with it. */
   sessionEnded(id: string): void {
     this.statistics.sessionEnded(id)
+    this.locations.delete(id)
     const state = this.getSnapshot()[id]
     if (state?.session) this.update(id, { ...state, session: undefined })
   }
@@ -218,11 +247,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
       ...estimateMode ? { estimateMode } : {} })
   }
-  /** Runs the active query, or the query `tabId` names. */
-  execute(tabId = this.documents.getSnapshot().activeId): Promise<void> {
+  /** Runs the active query, or the query `tabId` names. `preview`: a BigQuery tab's Preview Rows, read with tabledata.list
+   *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. */
+  execute(tabId = this.documents.getSnapshot().activeId, preview?: BigQueryPreviewTarget): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
-    const run = this.run(tabId)
+    const run = this.run(tabId, preview)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
   }
@@ -276,9 +306,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     this.publish(next)
   }
-  private async run(tabId: string): Promise<void> {
+  private async run(tabId: string, preview?: BigQueryPreviewTarget): Promise<void> {
     const document = this.documents.get(tabId)!
     const connection = this.getConnection(document.connectionId!)!
+    if (preview && connection.providerId !== 'bigquery') return
     const { sql, startLine, startColumn } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), before = this.getSnapshot()[tabId], previous = before?.session
@@ -293,7 +324,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
     // BigQuery dry-runs first (free) and may ask (docs/bigquery.md, Cost). Declined or cancelled, the tab is as it was.
-    if (bigQuery && this.costGate) {
+    if (bigQuery && this.costGate && !preview) {
       const stop = new AbortController()
       this.gated.set(tabId, { queryId, stop, before })
       const stopped = new Promise<false>(resolve => { stop.signal.addEventListener('abort', () => resolve(false), { once: true }) })
@@ -321,9 +352,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       }, { discard: options.discardResults === true })
       this.events.emit({ type: 'query.started', tabId, queryId })
       const target = !bigQuery ? { database: document.database } : /^\w{1,1024}$/.test(document.database) ? { dataset: document.database } : {}
-      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, ...target, sql, startLine, queryId,
+      // A BigQuery error names a column too, so a selection's first column maps it back to the editor.
+      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, ...target, sql, startLine, ...bigQuery && startColumn > 1 ? { startColumn } : {}, queryId,
         ...options, ...sqlServerOnly.includeActualPlan ? { includeActualPlan: true } : {},
-        ...sqlServerOnly.includeClientStatistics ? { includeClientStatistics: true } : {}, ...sqlServerOnly.includeLivePlan ? { includeLivePlan: true } : {} })
+        ...sqlServerOnly.includeClientStatistics ? { includeClientStatistics: true } : {}, ...sqlServerOnly.includeLivePlan ? { includeLivePlan: true } : {}, ...preview ? { preview } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }
@@ -334,11 +366,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (!this.documents.get(tabId)) { this.results.finish(tabId, queryId, { summary, error, code }); return }
     if (this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
     if (summary?.database) this.documents.update(tabId, { database: summary.database })
+    if (bigQuery && summary?.job?.location) this.locations.set(tabId, summary.job.location)
     // A summary means the backend ran the script in a session; the first one after a reconnect is a new session.
     let notice: string | undefined
     const reason = this.documents.get(tabId)?.sessionNotice
     if (summary && reason) {
-      notice = noticeMessages[reason]
+      notice = bigQuery && reason === 'lost' ? bigQueryLostSessionMessage : noticeMessages[reason]
       this.documents.update(tabId, { sessionNotice: undefined })
     }
     // A summary carries the session's SPID and login while it is open (none when it was lost or never opened); a failure
@@ -390,7 +423,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // A session not read in time may hold a transaction; a query with no live connection has none to read.
       // An isolated estimate leaves the ordinary session idle: ask about its transaction before cancelling the estimate.
       const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
-      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation,
+      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation, bigQuery: connection?.providerId === 'bigquery',
         connectionId: document.connectionId, generation: connection?.generation, version: this.executionVersions.get(id),
         state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
     })
@@ -411,7 +444,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const running = tabs.filter(tab => tab.running), open = tabs.filter(tab => !tab.running)
     const ask = async (asked: typeof tabs) => {
       const response = await this.api.confirmSessions({
-        action, tabs: asked.map(tab => ({ name: tab.name, running: tab.running, transactions: tab.running ? 0 : tab.state.transactions, ...!tab.running && tab.state.unchecked ? { unchecked: true as const } : {} }))
+        action, tabs: asked.map(tab => ({ name: tab.name, running: tab.running, transactions: tab.running ? 0 : tab.state.transactions, ...!tab.running && tab.state.unchecked ? { unchecked: true as const } : {}, ...tab.bigQuery ? { provider: 'bigquery' as const } : {} }))
       })
       if (!response.ok) throw new Error(response.error)
       return this.disposed ? 'cancel' : response.value

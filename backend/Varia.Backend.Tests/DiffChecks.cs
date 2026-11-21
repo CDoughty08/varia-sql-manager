@@ -37,6 +37,9 @@ internal static partial class DiffChecks
         Refusals(check);
         LowMemorySteps(check);
         Matches(check);
+        IndexChecks(check);
+        LayoutChecks(check);
+        AllowanceChecks(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
@@ -162,6 +165,64 @@ internal static partial class DiffChecks
         var vb = PageView.Parse(PinnedPage.Body(b.SealedSnapshot()[0]), 2);
         check(left2.Same(va, 0, 0, right2, vb, 0, 0) && left2.Same(va, 1, 0, right2, vb, 1, 0) && !left2.Same(va, 0, 0, right2, vb, 0, 1) && !left2.Same(va, 1, 0, right2, vb, 1, 1)
             , "values compare by value (collation, trailing spaces, numeric form), so a hash collision cannot make different values equal");
+
+        // Text that is not a number never equals one, whichever result holds the number: the second result's text compares by
+        // the first's exact kind, which once read "" (and "-", ".") as 0.
+        ResultColumn[] keyedInts = [new("Id", "int", "text"), new("Qty", "int", "text")], keyedTexts = [new("Id", "int", "text"), new("Qty", "nvarchar", "text", Collation: CaseInsensitive)];
+        string Both(string text, bool exact)
+        {
+            var (intLeft, textRight) = Pair(store, [["1", "0"]], [["1", text]], keyedTexts, keyedInts);
+            var forward = ResultDiffer.Compare(intLeft, intLeft.SealedSnapshot(), textRight, textRight.SealedSnapshot(), exact, CancellationToken.None);
+            var (textLeft, intRight) = Pair(store, [["1", text]], [["1", "0"]], keyedInts, keyedTexts);
+            var backward = ResultDiffer.Compare(textLeft, textLeft.SealedSnapshot(), intRight, intRight.SealedSnapshot(), exact, CancellationToken.None);
+            return Entries(forward) + string.Join(",", forward.CellsOf(forward.Entries[0]).ToArray()) + " / " + Entries(backward) + string.Join(",", backward.CellsOf(backward.Entries[0]).ToArray());
+        }
+        foreach (var exact in new[] { false, true })
+        {
+            foreach (var text in new[] { "", " ", "  ", "-", ".", "-.", " 0 ", " 0", "+0", "0x0", "O", "abc", "1.2.3", "--1", "0-" })
+                check(Both(text, exact) is var both && both == "~0:01 / ~0:01", "integer 0 and the text '" + text + "' differ in both directions" + (exact ? " (Exact)" : "") + ": " + both);
+            // Trailing spaces are text's soft difference whichever result holds the text, and a change under Exact.
+            check(Both("0 ", exact) is var padded && padded == (exact ? "~0:01 / ~0:01" : "=0:0-2 / =0:0-2"), "integer 0 and the text '0 ' compare alike in both directions" + (exact ? " (Exact)" : "") + ": " + padded);
+        }
+        var (zeroLeft, zerosRight) = Pair(store, [["1", "0"], ["2", "-1.50"]], [["1", "-0.00"], ["2", "-01.5"]], keyedTexts, keyedInts);
+        var numbers = ResultDiffer.Compare(zeroLeft, zeroLeft.SealedSnapshot(), zerosRight, zerosRight.SealedSnapshot(), true, CancellationToken.None);
+        check(Entries(numbers) == "=0:0 =1:1", "text that is a number still compares by value against the first's numbers (-0.00 is 0, -01.5 is -1.50): " + Entries(numbers));
+        // Whole rows: the empty text's row hashes apart from the 0 row, so neither matches the other.
+        var (wholeLeft, wholeRight) = Pair(store, [["0"]], [[""]], [new("Qty", "nvarchar", "text")], [new("Qty", "int", "text")]);
+        var whole = ResultDiffer.Compare(wholeLeft, wholeLeft.SealedSnapshot(), wholeRight, wholeRight.SealedSnapshot(), false, CancellationToken.None);
+        check(!whole.Entries.Any(entry => entry.Kind == DiffKind.Same), "an empty text row does not match an integer 0 row by whole rows: " + Entries(whole));
+        // A padded char key matches the first's decimals by value (its padding a soft difference): the key's hash and the
+        // cell comparison agree, so matching by it does not depend on which values were padded.
+        var (decimalKeys, charKeys) = Pair(store, [["1.50"], ["2.00"], ["3.10"]], [["2.00   "], ["1.5    "], ["3.1"]], [new("Qty", "nchar", "text", Collation: CaseInsensitive)], [new("Qty", "decimal", "text", Precision: 9, Scale: 2)]);
+        var padKeys = ResultDiffer.Compare(decimalKeys, decimalKeys.SealedSnapshot(), charKeys, charKeys.SealedSnapshot(), false, CancellationToken.None);
+        check(padKeys.KeyPair == 0 && Entries(padKeys) == "=1:0 =0:1 =2:2" && padKeys.Counts().Soft == 2, "padded char keys match decimals by value, the padding soft: " + Entries(padKeys));
+        // Cells hash alike exactly when they compare equal, so a key or whole row matches as its cells compare.
+        string[] values = ["0", "0 ", "0.0", "0.0 ", "-0", "00", "", " ", "-", ".", "abc", "abc ", "1.50", "1.5  ", "01.5", "-1.5", "1.5x"];
+        var hashed = Fill(store, store.BeginQuery("hashes"), 0, values.Select(value => new string?[] { value }).ToArray(), [new("Qty", "decimal", "text")]);
+        var hashes = new CellHasher(hashed.Columns, hashed.Wires);
+        var forked = hashes.Fork();
+        var page = PageView.Parse(PinnedPage.Body(hashed.SealedSnapshot()[0]), 1);
+        var disagree = new List<string>();
+        for (var i = 0; i < values.Length; i++)
+            for (var j = 0; j < values.Length; j++)
+            {
+                var same = hashes.Same(page, 0, i, forked, page, 0, j, out var asText);
+                if (same != (hashes.CellValue(page, 0, i) == forked.CellValue(page, 0, j))) disagree.Add("'" + values[i] + "'~'" + values[j] + "'");
+                var literal = hashes.Literal(0, System.Text.Encoding.UTF8.GetBytes(values[i])) || hashes.Literal(0, System.Text.Encoding.UTF8.GetBytes(values[j]));
+                if (asText != literal) disagree.Add("text '" + values[i] + "'~'" + values[j] + "'");
+            }
+        check(disagree.Count == 0, "exact cells hash alike exactly when they compare equal, and compare as text exactly when one is literal: " + string.Join(" ", disagree.Take(5)));
+        // Exact's look-alikes take a padded number's characters in, as its comparison does: the padded row is no look-alike.
+        ResultColumn[] wide = [new("Id", "int", "text"), new("A", "int", "text"), new("B", "int", "text"), new("D", "int", "text")];
+        ResultColumn[] wideText = [wide[0], wide[1], wide[2], new("D", "nvarchar", "text", Collation: CaseInsensitive)];
+        string Possible(DiffModel model) => string.Join(",", model.Possible.OrderBy(item => item.Key).Select(item => item.Key + ">" + item.Value));
+        var (lookLeft, lookRight) = Pair(store, [["1", "5", "6", "0"]], [["2", "5", "6", "0 "]], wideText, wide);
+        var looks = ResultDiffer.Compare(lookLeft, lookLeft.SealedSnapshot(), lookRight, lookRight.SealedSnapshot(), true, CancellationToken.None);
+        var (lookTextLeft, lookIntRight) = Pair(store, [["1", "5", "6", "0 "]], [["2", "5", "6", "0"]], wide, wideText);
+        var looksBack = ResultDiffer.Compare(lookTextLeft, lookTextLeft.SealedSnapshot(), lookIntRight, lookIntRight.SealedSnapshot(), true, CancellationToken.None);
+        check(Possible(looks) == "" && Possible(looksBack) == "", "Exact pairs look-alikes alike whichever result holds the padded text: " + Possible(looks) + " / " + Possible(looksBack));
+        foreach (var (text, valid) in new[] { ("0", true), ("-0", true), ("5.", true), (".5", true), ("-.5", true), ("007", true), ("", false), ("-", false), (".", false), (" 1", false), ("1e3", false) })
+            check(CellHasher.NumericParts(System.Text.Encoding.UTF8.GetBytes(text), out _, out _, out _) == valid, "'" + text + "' is " + (valid ? "" : "not ") + "an exact numeric");
     }
 
     /// <summary>A row that differs in every one of many columns lists each of them in its tone.</summary>
@@ -599,9 +660,9 @@ internal static partial class DiffChecks
     private static void Refusals(Action<bool, string> check)
     {
         static string?[][] Rows(int count, string price, int pad = 0) => [.. Enumerable.Range(1, count).Select(i => new[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), new string('n', pad) + i.ToString(System.Globalization.CultureInfo.InvariantCulture), price })];
-        static string? Message(SqlService service, ResultSetBuffer left, ResultSetBuffer right)
+        static string? Message(SqlService service, ResultSetBuffer left, ResultSetBuffer right, int context = -1)
         {
-            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = -1 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
             catch (RequestException error) { return error.Code + ": " + error.Message; }
         }
         const string tooLarge = "TOO_LARGE: There is not enough result memory to show the differences. Close other results and try again.";
@@ -627,8 +688,11 @@ internal static partial class DiffChecks
             store.Release(part.ResultId);
             if (reserved) store.Return(left.Budget, working);
             var refused = Message(service, left, right);
-            check(written is { RowsStored: > 0 and < 800 } && written.RowsStored < written.RowsRead && refused == tooLarge && Held.Bytes(store) == used && left.Budget.Stopped == TruncationReason.None,
-                $"a diff the budget cuts short is refused whole, releases what it stored and leaves its query's budget open: {written.RowsStored}/{written.RowsRead} {refused} {Held.Bytes(store) - used} {left.Budget.Stopped}");
+            check(written is { RowsStored: > 0 and < 800 } && written.RowsStored < written.RowsRead && refused == "DIFF_ROWS_TOO_LARGE: " + SqlService.DiffRowsTooLarge && Held.Bytes(store) == used && left.Budget.Stopped == TruncationReason.None,
+                $"a diff of all rows the budget cuts short is refused whole as too many rows (DIFF_ROWS_TOO_LARGE), releases what it stored and leaves its query's budget open: {written.RowsStored}/{written.RowsRead} {refused} {Held.Bytes(store) - used} {left.Budget.Stopped}");
+            // Every row changed: Changes only stores the same rows, and its refusal offers nothing smaller.
+            var changesOnly = Message(service, left, right, context: 0);
+            check(changesOnly == tooLarge && Held.Bytes(store) == used, "the same refusal of a Changes only diff (context 0) stays TOO_LARGE: " + changesOnly);
         }
 
         // Low system memory: the diff's first page seals after 64 rows.

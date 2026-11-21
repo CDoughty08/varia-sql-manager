@@ -88,6 +88,9 @@ import { searchContribution } from '../../src/renderer/src/contributions/search'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
+import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
+import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
@@ -265,7 +268,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; agentPreview?: boolean } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
     provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
@@ -275,6 +278,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const bindingListeners = new Set<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>()
   const api = {
     ...doc.api,
+    // SQL Server Agent's release gate (VARIA_AGENT_PREVIEW=1): off, as in a release, unless a test asks for it.
+    agentPreview: options.agentPreview ?? false,
     onConnectionBindingsChanged: vi.fn<VariaApi['onConnectionBindingsChanged']>(listener => { bindingListeners.add(listener); return () => { bindingListeners.delete(listener) } }),
     pushConnectionBindings: (update: Parameters<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>[0]) => { for (const listener of bindingListeners) listener(update) },
     connect: vi.fn<VariaApi['connect']>(async () => ({ ok: false, error: 'No connection response configured in this fixture.' })),
@@ -434,6 +439,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const agentJobs = new AgentJobStatusService({ api, live, connections })
+  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -443,6 +450,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
+    agentEnabled: api.agentPreview,
     settings,
     documents,
     queries,
@@ -458,6 +466,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSets: results.resultSets,
     resultsSteppable: results.steppable,
     resultsTurned: results.turned,
+    resultsComparing: results.comparing,
     scripting: scripting.running,
     bookmarks,
     recentFiles,
@@ -562,6 +571,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     gestures,
     activity,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch
   }
   const contributions = [
@@ -588,10 +599,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     helpContribution(workbench, api),
     updatesContribution(workbench, api),
     scriptingContribution(workbench),
-    actionsContribution(workbench),
+    actionsContribution(workbench, { agentEnabled: api.agentPreview }),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    agentContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -643,6 +655,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    jobActivity.dispose()
+    agentJobs.dispose()
     objectSearch.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -702,6 +716,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     liveViews,
     operations,
+    jobActivity,
+    agentJobs,
     objectSearch,
     live,
     focusEditor,
