@@ -256,6 +256,22 @@ describe('SQL Server Agent Properties in ObjectDialogService', () => {
     await settle()
     expect(dialogs.current).toBeUndefined()
   })
+  it("keeps the latest read when two purges' reads land out of order", async () => {
+    const { dialogs, api, settle } = setup(model())
+    dialogs.open('agentProperties', node)
+    await settle()
+    const first = deferred<ApiResult<ActionDescribeResult>>(), second = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const purged = { ok: true, value: { steps: [{ status: 'done', title: 'Delete old job history' }], messages: [], elapsedMs: 1 } } as const
+    api.executeObjectAction.mockResolvedValueOnce(purged).mockResolvedValueOnce(purged)
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
+    await dialogs.runInline(agentPurgeRequest(agentRef, dialogs.current!.draft as AgentPropertiesDraft, '2026-03-31T10:00:00')!)
+    second.resolve({ ok: true, value: { agentProperties: model({ serverNow: '2026-03-31T10:02:00' }), elapsedMs: 1 } as ActionDescribeResult })
+    await settle()
+    first.resolve({ ok: true, value: { agentProperties: model({ serverNow: '2026-03-31T10:01:00' }), elapsedMs: 1 } as ActionDescribeResult })
+    await settle()
+    expect(dialogs.current?.model).toMatchObject({ serverNow: '2026-03-31T10:02:00' })
+  })
   it('shows a failed purge as a value and stays open', async () => {
     const { dialogs, api, settle } = setup(model())
     dialogs.open('agentProperties', node)

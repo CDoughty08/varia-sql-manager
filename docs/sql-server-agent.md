@@ -78,8 +78,9 @@ in later lanes, behind the same gate until 0.11.0.
   `AgentSql.LintServerExecutable`. msdb grants `sp_set_sqlagent_properties` to no role and Managed Instance refuses it, so
   below sysadmin and on Managed Instance the dialog opens read-only with the reason and only Close; the action and its Script
   are refused `NOT_SUPPORTED` on Managed Instance before any connection opens. On Linux, where mssql-conf sets Agent's settings and
-  `sp_set_sqlagent_properties`' registry writes end the session, the settings show read-only with that reason, a settings write
-  and its Script are refused `NOT_SUPPORTED` before any connection opens, and Delete old history still runs. A purge msdb refuses (14392) is
+  `sp_set_sqlagent_properties`' registry writes end the session, the settings show read-only with that reason, and Delete old history still runs. The describe and
+  the write read the platform themselves: a settings write and its Script are refused `NOT_SUPPORTED` before any connection
+  opens, or, when the connect probe could not tell, by the write's own platform read before msdb is called. A purge msdb refuses (14392) is
   `PERMISSION_DENIED`, and Agent XPs off is `AGENT_STOPPED`.
 - **Script As.** A job, alert, operator or proxy node offers SSMS's Script Job as, Script Alert as, Script Operator as and
   Script Proxy as, each with CREATE, DROP and DROP And CREATE to a new query, a file or the clipboard (rows in

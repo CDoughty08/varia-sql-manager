@@ -79,7 +79,7 @@ internal sealed partial class ActionService
             Int(Value("auto_start")) is { } start ? start == 1 : null, Text(Value("startup_account")), Text(Value("errorlog_file")), Int(Value("errorlogging_level")));
         var managed = profile.Explorer(explorer).ServerEngine == "managedInstance";
         var readOnly = managed ? AgentPropertiesManagedInstance : sysadmin ? null : AgentPropertiesNotSysadmin;
-        var settingsNote = readOnly is null && !WritesProperties(profile.EngineEdition, profile.Linux || linux) ? AgentPropertiesLinux : null;
+        var settingsNote = SettingsNote(readOnly, profile.EngineEdition, profile.Linux || linux);
         if (!sysadmin) return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, null, AgentHistoryHidden));
         try { return new(null, 0, AgentProperties: new(settings, now, offset, readOnly, await ReadAgentHistoryAsync(connection, token), SettingsNote: settingsNote)); }
         catch (SqlException) when (!token.IsCancellationRequested && connection.State == ConnectionState.Open)
@@ -137,8 +137,13 @@ internal sealed partial class ActionService
     }
 
     /// <summary>Whether the platform takes the settings write (the agentPropertiesWrite gate: Windows only; Linux sets them with mssql-conf).</summary>
-    private static bool WritesProperties(int engineEdition, bool linux) =>
+    internal static bool WritesProperties(int engineEdition, bool linux) =>
         AgentCatalog.Current.PlatformOf(engineEdition, linux) is { } platform && AgentCatalog.Current.Offers("agentPropertiesWrite", platform);
+
+    /// <summary>The describe's settings note: why only the settings cannot change (Linux, from the probe or the describe's own read), unless the
+    /// whole dialog is already read-only.</summary>
+    internal static string? SettingsNote(string? readOnly, int engineEdition, bool linux) =>
+        readOnly is null && !WritesProperties(engineEdition, linux) ? AgentPropertiesLinux : null;
 
     private ActionError? AgentPropertiesRefusal(ActionArgs args)
     {
@@ -178,6 +183,7 @@ internal sealed partial class ActionService
                     await using (var platform = connection.CreateCommand())
                     {
                         platform.CommandText = AgentSql.Platform;
+                        platform.CommandTimeout = 0;
                         await using var read = await platform.ExecuteReaderAsync(context.Token);
                         linux = await read.ReadAsync(context.Token) && read.GetInt32(0) == 1;
                     }

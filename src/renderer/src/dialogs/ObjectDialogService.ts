@@ -147,6 +147,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
   /** Check Names' read in flight (D2e), apart from both: a new check cancels it. */
   private check?: { readonly id: string; readonly dialog: number }
+  /** The latest read after a page's own run (readAgain); an earlier one's answer is stale. */
+  private reread?: string
   /** The Effective tab's read in flight, apart from both: it never waits for User Mapping's, nor cancels it. */
   private effectiveLookup?: { readonly id: string; readonly dialog: number; readonly key: string }
   /** A page's own describes (Attach's Add, a path check), which Close and a disconnect cancel. */
@@ -509,9 +511,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private async readAgain(open: OpenObjectDialog): Promise<void> {
     const requestId = this.newId()
     this.extra.add(requestId)
+    // Only the latest read lands: an earlier one, slower on a large msdb, counted rows a later run has since deleted.
+    this.reread = requestId
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     this.extra.delete(requestId)
-    if (this.disposed || this.current?.id !== open.id || this.current.phase === 'disconnected') return
+    if (this.reread !== requestId || this.disposed || this.current?.id !== open.id || this.current.phase === 'disconnected') return
     const model = result.ok && !result.value.error ? definitionOf(open.dialog).modelOf(result.value) : undefined
     const current = this.current
     if (model && current && current.phase !== 'loading' && current.phase !== 'loadFailed') this.update(current, { model })

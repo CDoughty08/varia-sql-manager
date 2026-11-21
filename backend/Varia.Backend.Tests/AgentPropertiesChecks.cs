@@ -142,5 +142,8 @@ internal static class AgentPropertiesChecks
         check(AgentCatalog.Current.Offers("agentPropertiesWrite", "windows") && !AgentCatalog.Current.Offers("agentPropertiesWrite", "linux") && !AgentCatalog.Current.Offers("agentPropertiesWrite", "managedInstance")
             && AgentSql.Clock.Contains(AgentSql.OnLinux, StringComparison.Ordinal) && AgentSql.Platform.Contains(AgentSql.OnLinux, StringComparison.Ordinal),
             "the agentPropertiesWrite gate offers the settings write on Windows only, and the describe and the write read the platform themselves, apart from the connect probe");
+        check(ActionService.SettingsNote(null, 3, true) == ActionService.AgentPropertiesLinux && ActionService.SettingsNote(null, 3, false) is null
+            && ActionService.SettingsNote(ActionService.AgentPropertiesNotSysadmin, 3, true) is null && ActionService.WritesProperties(2, false) && !ActionService.WritesProperties(3, true),
+            "a server the describe reads as Linux shows the settings read-only though the connect probe said Windows, and the write step refuses it; a read-only dialog keeps its own reason");
     }
 }

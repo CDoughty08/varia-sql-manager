@@ -165,7 +165,7 @@ writes, Windows-identity credentials, service control. Initial values from Micro
 - **Linux**: no alerts at all (folder, job Alerts page, New › Alert…, operator Notifications › Alerts), step types without
   CmdExec, PowerShell, Queue Reader, SSIS, SSAS or merge replication; the Proxies folder shows (Microsoft's list does not
   exclude proxies) with the subsystems `syssubsystems` lists, which AG-1 checks against the CI container; no event log notification, no service
-  control.
+  control, no Agent Properties writes (mssql-conf sets them; Delete old history still runs).
 - **Managed Instance**: no alerts (folder, job Alerts page, New › Alert…, notifications from alerts), no proxies, step types
   limited to T-SQL, SSIS, log reader, snapshot and distributor (no CmdExec, PowerShell, Queue Reader, merge or SSAS), no
   event log notification, no CPU-idle schedules, Targets local only, Agent Properties read-only, no Windows-identity
