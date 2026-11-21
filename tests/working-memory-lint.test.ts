@@ -222,6 +222,26 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(count(remote, /\bPages\s*\.\s*(?:Add|AddRange|Insert|InsertRange)\b|\bPages\s*\[/g)).toBe(2)
   expect(count(between('public void Seed(', 'public async Task<long> ReadAsync('), /block\.Pages\.Add\(page\);/g)).toBe(1)
   expect(count(fetch, /block\.Pages\.AddRange\(pages\);\n\s*block\.Bytes \+= cost;/g)).toBe(1)
+  // No other container keeps pages (an evicted block's kept for scroll-back would grow uncounted): every mention of the page
+  // type and of a block's pages is one of today's.
+  expect(count(remote, /\bRemotePage\b/g)).toBe(8)
+  expect(count(remote, /\bPages\b/g)).toBe(7)
+  // A page costs the cache what a stored page costs the store: both charges are this one formula, so neither drifts alone.
+  expect(remote).toMatch(/public long Cost => Body\.Length \+ ResultStore\.PageOverhead \+ Lengths\.MemoryBytes;/)
+  const bufferCode = strip(readFileSync(join(__dirname, '..', 'backend', 'Varia.Backend', 'Results', 'ResultSetBuffer.cs'), 'utf8'))
+  expect(bufferCode).toMatch(/var cost = page\.Length \+ ResultStore\.PageOverhead \+ lengths\.MemoryBytes;/)
+  // The figures reserved and settled are never changed after they are computed: each is assigned once.
+  const writes = (code: string, name: string) => count(code, new RegExp(`\\b${name}\\s*(?:[-+*/%&|^]|<<|>>>?|\\?\\?)?=(?!=)|(?:\\+\\+|--)\\s*${name}\\b|\\b${name}\\s*(?:\\+\\+|--)|\\b(?:ref|out)\\s+${name}\\b`, 'g'))
+  expect([writes(fetch, 'estimate'), writes(fetch, 'cost')]).toEqual([1, 1])
+  expect([writes(between('private bool Reserve(', 'private void EvictLocked('), 'bytes'), writes(between('private async Task ReserveOverrunAsync(', 'private bool Reserve('), 'bytes')]).toEqual([0, 0])
+  // A seeded block's charge is the sum of its pages', and the store gives back exactly what it is told on every counter.
+  expect(count(between('public void Seed(', 'public async Task<long> ReadAsync('), /block\.Bytes \+= page\.Cost;/g)).toBe(1)
+  expect(count(remote, /\bblock\.Bytes\s*(?:[-+*/%&|^]|<<|>>>?|\?\?)?=(?!=)/g)).toBe(3)
+  const returnCache = storeCode.slice(storeCode.indexOf('public void ReturnCache(ref long held, long bytes)'))
+  expect(returnCache.slice(0, returnCache.indexOf('\n    }\n'))).toMatch(/\{\n\s*if \(bytes <= 0\) return;\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*Interlocked\.Add\(ref windowCacheUsed, -bytes\);\n\s*Interlocked\.Add\(ref used, -bytes\);\n\s*RoomChanged\(\);\n\s*Freed\(bytes\);$/)
+  // Disposing gives every block's bytes back through the same eviction.
+  expect(remote).toMatch(/disposed\.Cancel\(\);\n\s*foreach \(var block in blocks\.Values\.ToList\(\)\) EvictLocked\(block\);/)
+  expect(count(remote, /\bblocks\s*\.\s*(?:Clear|Remove)\b/g)).toBe(2)
   // The writer's byte count grows by every page it seals, and nowhere else, so its limit holds.
   const writer = remote.slice(remote.indexOf('internal sealed class RemoteBlockWriter('), remote.indexOf('internal sealed class RemoteExpiredException'))
   expect(writer).toMatch(/private void Seal\(\)\n\s*\{[^}]*\bbytes \+= page\.Cost;/)
