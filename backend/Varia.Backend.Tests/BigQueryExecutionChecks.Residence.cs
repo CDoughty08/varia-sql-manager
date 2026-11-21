@@ -882,16 +882,37 @@ internal static partial class BigQueryExecutionChecks
     /// under a read (a release, or Load into memory), and a block evicted between the read-ahead's choice and its fetch.</summary>
     static async Task RemoteRacesAsync(Action<bool, string> check)
     {
+        // Rows of about 200 KB (blocks near half the cache): a grid that scrolls up a few rows past two cached blocks reads
+        // three blocks. The third passes the cache's limit for the read (trimmed back after) rather than answering no rows
+        // again and again with nothing fetched.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 200_000 };
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+            var size = remote.BlockRows;
+            await ReadRemote(remote, size, 2 * size, viewer: 1);
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            var outcomes = new List<string>();
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try { outcomes.Add((await ReadRemote(remote, size - 5L, 2 * size, viewer: 1)).Next - (size - 5L) + ""); }
+                catch (RequestException error) { outcomes.Add(error.Code); }
+            }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(outcomes.All(outcome => outcome == (2 * size).ToString(Inv)) && remote.CachedBytes <= remote.CacheLimit && store.WindowCacheBytes == remote.CachedBytes,
+                $"a read of three blocks near half the cache each passes the limit for the read, never answers no rows: {string.Join(",", outcomes)} of {2 * size}, cached {remote.CachedBytes} of {remote.CacheLimit}");
+        }
+
         // Two grids on one result, rows near half the cache wide: while one grid's block is fetching, the other grid's read
-        // finds the cache's own limit full. It answers short (the grid reads again), never TOO_LARGE "not enough result
-        // memory" while the global budget is nearly empty.
+        // finds the cache's own limit full. Its block passes the limit (trimmed back after), never TOO_LARGE "not enough
+        // result memory" while the global budget is nearly empty.
         {
             var store = new ResultStore(1L << 30, 1L << 29);
             var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var blockRows = 0;
             RemoteFetch fetch = async (first, rows, writer, token) =>
             {
-                if (first >= 2L * blockRows) await gate.Task.WaitAsync(token);
+                if (first / blockRows == 2) await gate.Task.WaitAsync(token);
                 for (var row = first; row < first + rows; row++) Blocks.Write(writer, row, 50_000);
             };
             using var remote = RemoteResult.Create(store, 1, OneText, 100_000, false, 50_000, 16L << 20, new SemaphoreSlim(RemoteResult.FetchesPerConnection), fetch);
@@ -905,8 +926,8 @@ internal static partial class BigQueryExecutionChecks
             catch (RequestException error) { other = error.Code; }
             gate.TrySetResult();
             var (next, _) = await first;
-            check(other.StartsWith("next ", StringComparison.Ordinal) && next >= 2L * blockRows + 5,
-                $"another grid's read past a full window cache answers short, not TOO_LARGE: {other}, first grid next {next - 2L * blockRows}");
+            check(other.StartsWith("next ", StringComparison.Ordinal) && long.Parse(other[5..], Inv) >= 10 && next >= 2L * blockRows + 5,
+                $"another grid's read past a full window cache passes its limit by its block, not TOO_LARGE: {other}, first grid next {next - 2L * blockRows}");
         }
 
         // Three grids on one result, rows far wider than measured: one block is held while sent, two more are fetched at

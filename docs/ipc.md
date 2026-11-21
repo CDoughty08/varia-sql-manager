@@ -1111,8 +1111,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   `results.rowBytes` answers from the cache only. The cache is LRU per result, charged to the global budget (the memory
   detail's `windowCacheBytes`), and reserves a block's estimate before fetching it and any overrun after, within its own
   limit (`TOO_LARGE` when the global budget has no room, or when one block's rows outgrow the cache: the block stops
-  being built there). A block's estimate the cache's own limit refuses (other reads of the result hold it) fetches
-  nothing and answers the read short. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
+  being built there). A block's estimate the cache's own limit refuses (reads of the result hold it) stops a block
+  only read ahead, with nothing fetched; one a read waits for passes the limit by one block at most, as an overrun may. An overrun the cache's limit refuses while another fetch of the result holds room stops read-ahead
   no read waits for and waits once for the rest; when the read's own blocks still do not fit together, the overrun passes
   the cache's limit by one block at most (the global budget still refusing it; past twice the limit, `TOO_LARGE` names
   the window cache and its setting), and the cache trims back once no read holds them. A read that already sent rows answers short with them instead of failing: when a later block is

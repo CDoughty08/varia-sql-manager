@@ -428,10 +428,21 @@ internal sealed class RemoteResult : IDisposable
                 // room; what it really cost is settled once its pages are built (BlockRowsFor keeps a block within half the
                 // cache, so the estimate is capped there): an overrun is reserved the same way, within the cache's limit.
                 var estimate = Math.Min(EstimateOf(rows), CacheLimit / 2);
-                // The cache's own limit, held by other reads' blocks (another grid on this result): nothing was fetched yet,
-                // so the read answers with the rows it has and the grid asks again; TOO_LARGE stays for a full global budget.
                 try { Reserve(estimate, block); }
-                catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + estimate > CacheLimit) { throw new RemoteRetryException(error); }
+                catch (RequestException error) when (error.Code == "TOO_LARGE" && Interlocked.Read(ref held) + estimate > CacheLimit)
+                {
+                    // The cache's own limit, held by blocks reads wait for (this read's others, or another grid's). A block
+                    // only read ahead stops, nothing fetched (a read that joins it answers short and asks again); one a read
+                    // waits for passes the limit by one block at most, as an overrun may, and the cache trims back after.
+                    bool waited;
+                    lock (gate) waited = block.Waiters > 0;
+                    if (!waited) throw new RemoteRetryException(error);
+                    if (!store.TryReserveCache(ref held, OverLimit, estimate))
+                    {
+                        if (Interlocked.Read(ref held) + estimate > OverLimit) throw RemoteBlockWriter.CacheTooSmall();
+                        throw;
+                    }
+                }
                 lock (gate) block.Holding = true;
                 // Never more than the cache holds: a block whose rows grew far wider than the first page's stops being built.
                 var writer = new RemoteBlockWriter(resultId, wires, from, CacheLimit);

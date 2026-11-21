@@ -28,7 +28,7 @@ function fixture(rowsAvailable = 1000, state = 'complete', timers?: { setTimeout
 afterEach(() => { vi.useRealTimers() })
 
 describe('row sizes', () => {
-  it('wakes once the last of several windowed short blocks has waited, so none is left unread', async () => {
+  it('wakes for each of several windowed short blocks once it has waited, so none is left unread', async () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     const live = new Map<number, { callback: () => void; due: number }>()
     let id = 0
@@ -42,14 +42,58 @@ describe('row sizes', () => {
     vi.advanceTimersByTime(50)
     reads[1].resolve({ firstRow: 256, bytes: [], rowsAvailable: 100_000, estimated: [] })
     await settle()
-    // One wake, due after the later block's wait: when it fires, both blocks are asked again.
-    expect(live.size).toBe(1)
-    const [wake] = live.values()
-    vi.advanceTimersByTime(wake.due - performance.now())
-    wake.callback()
-    sizes.ensure(0, 400)
-    expect(reads.slice(2).map(read => read.first)).toEqual([0, 256])
+    // One wake at a time, due when the earliest block has waited: it asks that block again, then wakes for the next.
+    for (const expected of [[0], [0, 256]]) {
+      expect(live.size).toBe(1)
+      const [[key, wake]] = live.entries()
+      live.delete(key)
+      vi.advanceTimersByTime(wake.due - performance.now())
+      wake.callback()
+      sizes.ensure(0, 400)
+      expect(reads.slice(2).map(read => read.first)).toEqual(expected)
+    }
+    expect(live.size).toBe(0)
     sizes.dispose()
+  })
+
+  it('wakes a windowed block that grew at the plain wait while another backs off, and stops one whose rows come and go', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const live = new Map<number, { callback: () => void; due: number }>()
+    let id = 0
+    const timers = { setTimeout: (callback: () => void, ms: number) => { live.set(++id, { callback, due: performance.now() + ms }); return id }, clearTimeout: (handle: unknown) => { live.delete(handle as number) } }
+    const { sizes, reads, settle, snapshot } = fixture(100_000, 'complete', timers)
+    snapshot.residence = 'remote'
+    const answer = async (index: number, rows: number) => { reads[index].resolve({ firstRow: reads[index].first, bytes: Array.from({ length: rows }, () => 10), rowsAvailable: 100_000, estimated: [] }); await settle() }
+    const next = () => Math.min(...[...live.values()].map(wake => wake.due)) - performance.now()
+    // Block 256 backs off (no rows, three times); block 0 grows each time: its wake stays at the plain wait.
+    sizes.ensure(0, 400)
+    await answer(0, 0)
+    await answer(1, 0)
+    for (let round = 1; round <= 3; round++) {
+      vi.advanceTimersByTime(rowSizeLimits.retryMs * 2 ** (round - 1) + 1)
+      sizes.ensure(0, 400)
+      const zero = reads.findLastIndex(read => read.first === 0), other = reads.findLastIndex(read => read.first === 256)
+      await answer(zero, round)
+      if (other > 1 && reads.length - 1 === Math.max(zero, other)) await answer(other, 0)
+      expect(next()).toBeLessThanOrEqual(rowSizeLimits.retryMs + 1)
+    }
+    sizes.dispose()
+    // A block whose rows go 100, 50, 100, ... answers no more than it once did: it backs off and stops.
+    const second = fixture(100_000, 'complete', timers)
+    second.snapshot.residence = 'remote'
+    live.clear()
+    let wakes = 0
+    for (let cycle = 0; cycle < 40; cycle++) {
+      vi.advanceTimersByTime(rowSizeLimits.retryMs * 2 ** rowSizeLimits.unchangedWakes + 1)
+      second.sizes.ensure(0, 40)
+      const before = live.size
+      second.reads.at(-1)!.resolve({ firstRow: 0, bytes: Array.from({ length: cycle % 2 ? 50 : 100 }, () => 10), rowsAvailable: 100_000, estimated: [] })
+      await second.settle()
+      if (live.size > before) wakes++
+      live.clear()
+    }
+    expect(wakes).toBeLessThanOrEqual(rowSizeLimits.unchangedWakes + 1)
+    second.sizes.dispose()
   })
 
   it('wakes the grid once a windowed short block has waited, so its bars fill without a scroll', async () => {
@@ -84,8 +128,8 @@ describe('row sizes', () => {
       expect(reads).toHaveLength(attempt + 2)
     }
     expect(scheduled).toHaveLength(rowSizeLimits.unchangedWakes + 1)
-    // One that grew wakes once more, at the plain wait.
-    vi.advanceTimersByTime(rowSizeLimits.retryMs + 1)
+    // Asked again after its longest wait, one that grew wakes once more, at the plain wait.
+    vi.advanceTimersByTime(rowSizeLimits.retryMs * 2 ** rowSizeLimits.unchangedWakes + 1)
     sizes.ensure(0, 40)
     reads.at(-1)!.resolve({ firstRow: 0, bytes: [10, 20], rowsAvailable: 100_000, estimated: [] })
     await settle()

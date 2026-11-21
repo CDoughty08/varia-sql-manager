@@ -33,12 +33,12 @@ export class RowSizes {
   private revision: number | undefined
   /** One repaint once a windowed short block has waited: nothing else paints a grid whose cells have all arrived. */
   private wakeTimer: unknown
-  /** When the wake is due: a block arming it later than that moves it, never earlier, so no block's wake is lost. */
+  /** When the wake is due: the earliest block wake still to come. */
   private wakeDue = 0
-  /** The rows each windowed short block answered when it last armed the wake, and how often it has since answered no more:
-   *  a block still fetching wakes again after twice the wait each time, a few times, so one that never fits the cache stops
-   *  asking rather than polling. */
-  private readonly woken = new Map<number, { rows: number; unchanged: number }>()
+  /** Each windowed short block's most rows answered, how often since it answered no more, and when it is next asked: a block
+   *  still fetching waits twice as long each time, a few times, so one that never fits the cache (or whose rows come and go)
+   *  stops asking rather than polling. */
+  private readonly woken = new Map<number, { rows: number; unchanged: number; due: number }>()
 
   constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void, private readonly timers: Timers = browserTimers) {}
 
@@ -71,7 +71,9 @@ export class RowSizes {
       if (held && !short) { this.blocks.delete(block); this.blocks.set(block, held); continue }
       if (this.pending.has(block) || this.pending.size >= rowSizeLimits.inflight) continue
       const failedAt = this.failed.get(block)
-      if (failedAt !== undefined && performance.now() - failedAt < rowSizeLimits.retryMs) continue
+      // A windowed short block waits its own backoff; any other failed block the plain wait.
+      const wait = rowSizeLimits.retryMs * 2 ** (this.woken.get(block)?.unchanged ?? 0)
+      if (failedAt !== undefined && performance.now() - failedAt < wait) continue
       this.read(block)
     }
   }
@@ -118,10 +120,11 @@ export class RowSizes {
         // times only.
         const last = this.woken.get(block)
         const unchanged = last === undefined || result.bytes.length > last.rows ? 0 : last.unchanged + 1
+        const rows = Math.max(last?.rows ?? 0, result.bytes.length)
         if (unchanged <= rowSizeLimits.unchangedWakes) {
-          this.woken.set(block, { rows: result.bytes.length, unchanged })
-          this.wake(rowSizeLimits.retryMs * 2 ** unchanged + 1)
-        }
+          this.woken.set(block, { rows, unchanged, due: performance.now() + rowSizeLimits.retryMs * 2 ** unchanged + 1 })
+          this.wake()
+        } else this.woken.set(block, { rows, unchanged: rowSizeLimits.unchangedWakes, due: 0 })
       } else {
         this.failed.delete(block)
         this.woken.delete(block)
@@ -136,16 +139,22 @@ export class RowSizes {
     })
   }
 
-  /** Arms the one wake for `ms` from now, unless it is already due later (which still covers this block's wait). */
-  private wake(ms: number): void {
-    const due = performance.now() + ms
-    if (this.wakeTimer !== undefined && this.wakeDue >= due) return
+  /** Arms the one wake for the earliest block wake still to come; when it fires it paints, then arms for the next. */
+  private wake(): void {
+    const now = performance.now()
+    let due = Infinity
+    for (const entry of this.woken.values()) if (entry.due > now && entry.due < due) due = entry.due
+    if (this.wakeTimer !== undefined && this.wakeDue === due) return
     if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+    this.wakeTimer = undefined
+    if (due === Infinity) return
     this.wakeDue = due
     this.wakeTimer = this.timers.setTimeout(() => {
       this.wakeTimer = undefined
-      if (!this.disposed) this.changed()
-    }, ms)
+      if (this.disposed) return
+      this.changed()
+      this.wake()
+    }, due - now)
   }
 
   private profile(): void {
