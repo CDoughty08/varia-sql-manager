@@ -89,7 +89,7 @@ internal static class DmlTemplates
     /// <summary>EXECUTE To, in sqltoolsservice's layout: DECLAREs for the return code and every parameter, the TODO line,
     /// then the call with one parameter per line. The space after the object name is SSMS's. A CLR procedure is called
     /// without a return code; a scalar function's return code has its return type. The return code is @RC unless a
-    /// parameter has that name (case-insensitively, as a case-insensitive collation compares it): then @RC1, @RC2 and on.</summary>
+    /// parameter has that name as the loosest collation compares it: then @RC1, @RC2 and on.</summary>
     public static string Execute(string obj, IReadOnlyList<ParameterRow> parameters, bool clr, bool schemaQualify)
     {
         var returnValue = parameters.FirstOrDefault(parameter => parameter.Id == 0);
@@ -108,9 +108,14 @@ internal static class DmlTemplates
         return text.ToString();
     }
 
+    // Case-, width-, kana- and accent-insensitive collations (the default SQL_Latin1_General_CP1_CI_AS is width-insensitive,
+    // so a fullwidth @RC is @RC) all clash; a needless @RC1 under a stricter one is harmless.
+    private static readonly StringComparer VariableNames = StringComparer.Create(CultureInfo.InvariantCulture,
+        CompareOptions.IgnoreCase | CompareOptions.IgnoreWidth | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreNonSpace);
+
     private static string ReturnCodeName(IReadOnlyList<ParameterRow> inputs)
     {
-        var taken = inputs.Select(parameter => parameter.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = inputs.Select(parameter => parameter.Name).ToHashSet(VariableNames);
         var name = "@RC";
         for (var suffix = 1; taken.Contains(name); suffix++) name = "@RC" + suffix.ToString(CultureInfo.InvariantCulture);
         return name;

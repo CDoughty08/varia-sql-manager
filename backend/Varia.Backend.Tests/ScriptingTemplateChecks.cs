@@ -148,6 +148,8 @@ internal static class ScriptingTemplateChecks
             == Lines("DECLARE @RC2 int", "DECLARE @rc int", "DECLARE @RC1 int", "DECLARE @b int", "", "-- TODO: Set parameter values here.", "", "EXECUTE @RC2 = [dbo].[p] ", "   @rc", "  ,@RC1 OUTPUT", "  ,@b")
             && DmlTemplates.Execute("[dbo].[f]", [P(0, "", T("int", 4), output: true), P(1, "@RC")], false, true).StartsWith("DECLARE @RC1 int" + NL + "DECLARE @RC int" + NL, StringComparison.Ordinal),
             "EXECUTE To names the return code after any parameter called @RC, @RC1 and so on, compared case-insensitively, so the batch declares no variable twice");
+        check(DmlTemplates.Execute(obj, [P(1, "@ＲＣ"), P(2, "@RC１"), P(3, "@RÇ2")], false, true).StartsWith("DECLARE @RC3 int" + NL, StringComparison.Ordinal),
+            "a width- or accent-insensitive collation's clashes count too: a fullwidth @RC, a fullwidth digit in @RC1 and an accented @RC2 move the return code to @RC3");
     }
 
     private static ResolvedTarget Target(string kind, string subtype = "", string? objectType = null, IReadOnlyList<ColumnRow>? columns = null, IReadOnlyList<ParameterRow>? parameters = null,
