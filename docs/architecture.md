@@ -689,6 +689,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `BigQuerySql` (`COMMIT TRANSACTION` in the tab's session; `CALL BQ.ABORT_SESSION(@session_id)` outside it, the id a
   STRING parameter), held to constant text by `BigQuerySessionChecks`; a session id is kept only when `BigQuerySql.SessionId`
   accepts it, and never leaves the backend.
+- **BigQuery names** (`BqNames`, docs/bigquery.md#object-explorer). BigQuery has no `QUOTENAME` and no identifier parameters,
+  so an object's name reaches SQL text (Script As' templates and CREATE's `INFORMATION_SCHEMA` qualifier) only through
+  `BqNames`: its kind's rule, the same as `src/shared/bigquery/names.ts`, then backticks with backslashes and backticks
+  escaped; a refused name throws `INVALID_PARAMS` first, and values stay parameters. `BigQueryExplorerChecks` renders every
+  template with hostile names. Object Explorer, Preview Rows and Properties read only BigQuery's free REST metadata calls,
+  through the per-principal limiter (`BigQueryRateLimiter`), and never run a job; Script As › CREATE's billed query goes
+  through the cost prompts first.
 - **Dry runs send query text.** `bigquery.dryRun` sends a BigQuery tab's editor text to Google without running it. It is
   the one path that does so automatically, without a user action: after an editing pause, for diagnostics and the estimate
   beside Execute (`BigQueryCostService`). It runs only for a connected BigQuery tab, only after the user edits or executes

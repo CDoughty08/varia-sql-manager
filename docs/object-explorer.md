@@ -173,6 +173,13 @@ which list in deployment order (`package_id`: a package name can be longer than 
 | `ssisProject` | any | Packages |
 | `agent` | any | Jobs, Job Activity Monitor (its own node), Alerts, Operators, Proxies, Error Logs |
 | `agentProxySubsystem` | any | Proxy rows (`agentProxies`) |
+| `bqProject` | any | Dataset rows (`bqDatasets`) |
+| `bqDataset` | any | Tables, Views, Materialized Views, External Tables, Routines, Models |
+| `bqTable` | none, `snapshot` | Columns |
+| `bqView` | any | Columns |
+| `bqMaterializedView` | any | Columns |
+| `bqExternalTable` | any | Columns |
+| `bqColumn` | none, `struct` | Column rows (`bqFields`) |
 
 | Folder | Id | Below | Lists (query) |
 | --- | --- | --- | --- |
@@ -192,6 +199,13 @@ which list in deployment order (`package_id`: a package name can be longer than 
 | Proxies | `agentProxies` | `agent` | Proxy Subsystem (`agentProxySubsystems`) |
 | Unassigned Proxies | `agentUnassignedProxies` | `agent` | Proxy (`agentUnassignedProxies`) |
 | Error Logs | `agentErrorLogs` | `agent` | Error Log (`agentErrorLogs`) |
+| Tables | `bqTables` | `bqDataset` | Table (`bqTables`) |
+| Views | `bqViews` | `bqDataset` | View (`bqViews`) |
+| Materialized Views | `bqMaterializedViews` | `bqDataset` | Materialized View (`bqMaterializedViews`) |
+| External Tables | `bqExternalTables` | `bqDataset` | External Table (`bqExternalTables`) |
+| Routines | `bqRoutines` | `bqDataset` | Routine (`bqRoutines`) |
+| Models | `bqModels` | `bqDataset` | Model (`bqModels`) |
+| Columns | `bqColumns` | `bqTable`, `bqView`, `bqMaterializedView`, `bqExternalTable` | Column (`bqColumns`) |
 
 ## SQL Server Agent
 
@@ -220,7 +234,7 @@ a job, alert, operator or proxy name unquoted, as the msdb procedures take it. T
 | Unassigned Proxies | `agentUnassignedProxies` | SQL Server Agent platforms `windows`, `linux` |
 | Error Logs | `agentErrorLogs` | SQL Server Agent platforms `windows`, `linux`, `managedInstance` |
 
-## Node kinds (64)
+## Node kinds (73)
 
 Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
@@ -291,28 +305,43 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `agentProxySubsystem` | Proxy Subsystem | `serverObject` | `folder` | — | No | — |
 | `agentProxy` | Proxy | `serverObject` | `agent-proxy` | ProxyAccount | Yes | the name as is (`@name`) |
 | `agentErrorLog` | Error Log | `serverObject` | `output` | — | No | — |
+| `bqProject` | Project | `bqProject` | `project` | — | No | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqDataset` | Dataset | `bqDataset` | `database` | — | No | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqTable` | Table | `bqObject` | `table`; `snapshot` → `device-camera` | — | Yes | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqView` | View | `bqObject` | `view` | — | Yes | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqMaterializedView` | Materialized View | `bqObject` | `layers` | — | Yes | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqExternalTable` | External Table | `bqObject` | `cloud` | — | Yes | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqRoutine` | Routine | `bqObject` | `symbol-function`; `procedure` → `procedure` | — | Yes | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqModel` | Model | `bqObject` | `circuit-board` | — | No | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
+| `bqColumn` | Column | `bqField` | `symbol-field`; `struct` → `symbol-structure` | — | No | BigQuery's backtick-quoted path (`` `project.dataset.table` ``) |
 
 ## Node identity
 
 A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry
 names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,
-used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260, if it
+used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 4514, if it
 owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).
 SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.
+BigQuery objects carry their `project`, `dataset` and (for a column) `table`, and keep to BigQuery's own name rules and
+lengths (`src/shared/bigquery/names.ts`) instead, a column's name being its dot-joined field path; no sysname names them.
 
 | Scope | Requires | Forbids | Kinds |
 | --- | --- | --- | --- |
-| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server`, `agent`, `agentJobActivity` |
-| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog` |
-| `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `database` |
-| `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
-| `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
-| `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
-| `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject` | `returnValue` |
-| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisCatalog` |
-| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisFolder` |
-| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | `ssisProject`, `ssisEnvironment` |
-| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | `ssisPackage` |
+| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `server`, `agent`, `agentJobActivity` |
+| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger`, `agentJob`, `agentAlert`, `agentOperator`, `agentProxySubsystem`, `agentProxy`, `agentErrorLog` |
+| `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `database` |
+| `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
+| `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
+| `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
+| `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `returnValue` |
+| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `ssisCatalog` |
+| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `ssisFolder` |
+| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject`, `project`, `dataset`, `table` | `ssisProject`, `ssisEnvironment` |
+| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent`, `project`, `dataset`, `table` | `ssisPackage` |
+| `bqProject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `project`, `dataset`, `table` | `bqProject` |
+| `bqDataset` | `project`, `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `dataset`, `table` | `bqDataset` |
+| `bqObject` | `project`, `dataset`, `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject`, `table` | `bqTable`, `bqView`, `bqMaterializedView`, `bqExternalTable`, `bqRoutine`, `bqModel` |
+| `bqField` | `project`, `dataset`, `table`, `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `bqColumn` |
 
 | Child kind | Parent kinds |
 | --- | --- |
@@ -613,4 +642,4 @@ connection leaves the tree read-only; reconnect and open View Dependencies again
 | `sublabel` | 200 | Characters in a sublabel |
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
-| `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |
+| `maxName` | 4,514 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |

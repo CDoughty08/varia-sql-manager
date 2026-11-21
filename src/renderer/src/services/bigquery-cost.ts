@@ -339,6 +339,23 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     // Disconnected or switched while the dry run was out: no prompt about a connection the tab no longer has (Execute
     // reports that itself).
     if (!estimate || this.entries.get(tabId) !== entry || this.connection(tabId)?.id !== connection.id) return true
+    return this.prompts(connection, estimate, entry, signal)
+  }
+
+  /**
+   * Before Script As runs a billed query on a BigQuery connection (CREATE reads INFORMATION_SCHEMA's ddl column): the same
+   * prompts as Execute for the CREATE query's estimate. Resolves whether to run, and the cap it runs under.
+   */
+  async beforeScript(connectionId: string, estimate: BigQueryDryRunResult, signal?: AbortSignal): Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }> {
+    const connection = this.deps.connections.isLive(connectionId) ? this.deps.connections.get(connectionId) : undefined
+    if (!connection || !isBigQueryConnection(connection)) return { run: false }
+    const run = await this.prompts(connection, estimate, undefined, signal)
+    const cap = this.cap(connection)
+    return { run, ...cap !== undefined && connection.options.provider === 'bigquery' && connection.options.maximumBytesBilled === undefined ? { maximumBytesBilled: cap } : {} }
+  }
+
+  /** The prompts for an estimate, in turn (the threshold, then an incomplete estimate's warning); resolves whether to run. */
+  private async prompts(connection: LiveConnection, estimate: BigQueryDryRunResult, entry: Entry | undefined, signal?: AbortSignal): Promise<boolean> {
     await this.deps.optOut.refresh(connection)
     if (signal?.aborted || this.disposed) return false
     const settings = this.deps.settings, threshold = () => gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
@@ -346,7 +363,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     // again), so the incomplete-estimate warning it was hiding still asks.
     const current = () => costPrompt(estimate, {
       askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes: threshold(),
-      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !this.incompleteOff && !entry.warnedIncomplete
+      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !this.incompleteOff && !entry?.warnedIncomplete
     })
     // Each turn ends in an answer or a prompt found moot by another tab's answer or a settings change, which only the user
     // makes; the bound is a guard, not a limit anyone reaches.
@@ -367,7 +384,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       await applied?.catch(() => {})
       if (signal?.aborted) return false
       if (answer.moot) { prompt = current(); continue }
-      if (kind === 'incomplete' && answer.run) entry.warnedIncomplete = true
+      if (kind === 'incomplete' && answer.run && entry) entry.warnedIncomplete = true
       return answer.run && !this.disposed
     }
     return !this.disposed
