@@ -117,7 +117,13 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(uses(/\bTabledata\b/g)).toEqual(['BigQuery/BigQueryService.Jobs.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
   const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
-  expect(tableRows.slice(0, tableRows.indexOf('\n    internal ') < 0 ? undefined : tableRows.indexOf('\n    internal ')).includes('service.Tabledata.List(')).toBe(true)
+  expect(tableRows.indexOf('\n\n    ')).toBeGreaterThan(0)
+  expect(tableRows.slice(0, tableRows.indexOf('\n\n    ')).includes('service.Tabledata.List(')).toBe(true)
+  // Every page of rows is read by PageAsync, called only for a job's results and for TableRowsAsync: no request of another
+  // shape (a table's data endpoint by hand) reaches it.
+  expect(uses(/\bPageAsync\(/g)).toEqual(Array(3).fill('BigQuery/BigQueryService.Jobs.cs'))
+  expect(count(tableRows.slice(0, tableRows.indexOf('\n\n    ')), /\bPageAsync\(/g)).toBe(1)
+  expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bPageAsync\(service, request\.CreateRequest\(\), token\)/g)).toBe(1)
   expect(uses(/\bTableRowsAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
@@ -151,7 +157,16 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   const overrun = between('private async Task ReserveOverrunAsync(', 'private bool Reserve(')
   expect(overrun).toMatch(/\{\n\s*if \(Reserve\(bytes, keep\)\) return;\n/)
   expect(overrun).toMatch(/if \(others\.Length == 0 \|\| round > 0\)\n\s*\{\n\s*if \(store\.TryReserveCache\(ref held, OverLimit, bytes, out var full\)\) return;\n(\s*\/\/[^\n]*\n)*\s*throw full \? RemoteBlockWriter\.CacheTooSmall\(\) : BudgetFull\(\);/)
-  expect(remote).not.toMatch(/Interlocked\.Read\(ref held\) \+/)
+  // The cache's bytes are read in two places only, neither deciding a refusal: CachedBytes, and the trim's loop.
+  expect(count(remote, /Interlocked\.Read\(ref held\)/g)).toBe(2)
+  expect(remote).toMatch(/public long CachedBytes => Interlocked\.Read\(ref held\);/)
+  expect(remote).toMatch(/while \(Interlocked\.Read\(ref held\) > CacheLimit\)/)
+  // The limits are what they say: CacheLimit set once, in the constructor, and never shadowed; OverLimit twice it.
+  expect(count(remote, /\bCacheLimit\s*=[^=>]/g)).toBe(1)
+  expect(remote).toMatch(/\n\s*CacheLimit = Math\.Max\(TargetBlockBytes, cacheLimit\);\n/)
+  expect(remote).toMatch(/public long CacheLimit \{ get; \}/)
+  expect(count(remote, /\bOverLimit\s*=[^=>]/g)).toBe(0)
+  expect(remote).not.toMatch(/\b(?:long|var|int|double)\s+(?:CacheLimit|OverLimit)\b(?!\s*(?:\{ get; \}|=>))/)
   const reserveBody = between('private bool Reserve(', 'private void EvictLocked(')
   expect(reserveBody).toMatch(/while \(!store\.TryReserveCache\(ref held, CacheLimit, bytes, out var full\)\)/)
   expect(reserveBody).toMatch(/if \(victim is null\) return full \? false : throw BudgetFull\(\);/)
