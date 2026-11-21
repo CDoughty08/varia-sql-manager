@@ -38,7 +38,7 @@ internal sealed partial class ActionService
         {
             if (changes is { SqlserverRestart: null, MonitorAutostart: null, HistoryMaxRows: null, HistoryMaxRowsPerJob: null }) throw Invalid("there is nothing to change.");
             if (changes.HistoryMaxRows is { } rows && rows != -1 && (rows < 2 || rows > max)) throw Invalid("historyMaxRows.");
-            if (changes.HistoryMaxRowsPerJob is { } perJob && (perJob < 1 || perJob > max || changes.HistoryMaxRows == -1 || perJob > (changes.HistoryMaxRows ?? max))) throw Invalid("historyMaxRowsPerJob.");
+            if (changes.HistoryMaxRowsPerJob is { } perJob && (perJob < 1 || changes.HistoryMaxRows is not { } log || log == -1 || perJob > log)) throw Invalid("historyMaxRowsPerJob.");
         }
         if (args.AgentPurge is { } purge && (purge.Count < 1 || purge.Count > AgentCatalog.Current.Limit("purgeCount") || purge.Unit is < 1 or > 3)) throw Invalid("agentPurge.");
         return target;

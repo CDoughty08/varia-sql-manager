@@ -95,7 +95,7 @@ internal static class AgentPropertiesChecks
             ("nothing", Args()), ("both", Args(new(true, null, null, null), new(1, 1))), ("no change", Args(new(null, null, null, null))),
             ("a log of 0 rows", Args(new(null, null, 0, null))), ("a log of 1 row", Args(new(null, null, 1, null))), ("a log of -2", Args(new(null, null, -2, null))),
             ("a log past the cap", Args(new(null, null, 1_000_000, null))), ("rows per job without a limit", Args(new(null, null, -1, 10))),
-            ("rows per job above the log", Args(new(null, null, 100, 101))), ("rows per job of 0", Args(new(null, null, null, 0))),
+            ("rows per job above the log", Args(new(null, null, 100, 101))), ("rows per job of 0", Args(new(null, null, 10, 0))), ("rows per job without the log size", Args(new(null, null, null, 10))),
             ("a purge of 0", Args(purge: new(0, 1))), ("a purge past the cap", Args(purge: new(1000, 3))), ("a purge unit of 4", Args(purge: new(1, 4))),
             ("a job's target", Args(purge: new(1, 1), target: new ObjectRefDto("agentJob", Name: "Nightly"))), ("a named agent", Args(purge: new(1, 1), target: new ObjectRefDto("agent", Name: "x"))),
             ("another member", Args(purge: new(1, 1)) with { NewName = "x" }),

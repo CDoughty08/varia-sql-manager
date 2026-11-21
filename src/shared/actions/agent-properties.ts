@@ -106,6 +106,8 @@ export function agentPropertiesProblems(request: Pick<AgentPropertiesRequest, 't
   if (changes) {
     if (!Object.values(changes).some(value => value !== undefined)) problems.push('There is nothing to change.')
     if (changes.historyMaxRows === -1 && changes.historyMaxRowsPerJob !== undefined) problems.push('An unlimited log takes no rows per job.')
+    // msdb checks rows per job against the log's size, so both are sent together.
+    if (changes.historyMaxRows === undefined && changes.historyMaxRowsPerJob !== undefined) problems.push("Rows per job go with the log's size.")
     if (changes.historyMaxRows !== undefined && changes.historyMaxRows !== -1 && changes.historyMaxRowsPerJob !== undefined && changes.historyMaxRowsPerJob > changes.historyMaxRows)
       problems.push(agentPropertiesText.perJobTooMany(changes.historyMaxRows))
   }

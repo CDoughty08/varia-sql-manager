@@ -59,10 +59,11 @@ internal static class AgentPropertiesLiveChecks
         var restored = await Describe();
         check(restored.AgentProperties?.Settings == settings, "the live checks leave SQL Server Agent's properties as they found them: " + JsonSerializer.Serialize(restored.AgentProperties?.Settings));
 
-        // Delete old history on the scratch job's own rows: 999 months back reaches 1943, so only rows planted in 1930 are older.
+        // Delete old history on the scratch job's own rows: 999 months back is in the 1940s, so only rows planted in 1930 are older. The
+        // precheck counts other jobs' rows up to the same server-computed cut-off day, so nobody else's history is deleted.
         var id = "'" + job.ToString("D") + "'";
-        var others = await sql("SELECT COUNT_BIG(*) FROM msdb.dbo.sysjobhistory WHERE run_date < 19430101 AND job_id <> " + id + ";", "msdb");
-        if (others.Status != "completed" || others.Scalar != "0") Console.WriteLine("SQL Server Agent Properties' purge check skipped: another job has history from before 1943, which it would delete.");
+        var others = await sql("SELECT COUNT_BIG(*) FROM msdb.dbo.sysjobhistory WHERE run_date <= CONVERT(int, CONVERT(char(8), DATEADD(month, -999, GETDATE()), 112)) AND job_id <> " + id + ";", "msdb");
+        if (others.Status != "completed" || others.Scalar != "0") Console.WriteLine("SQL Server Agent Properties' purge check skipped: another job has history older than 999 months, which it would delete.");
         else
         {
             var planted = await sql("INSERT INTO msdb.dbo.sysjobhistory (job_id, step_id, step_name, sql_message_id, sql_severity, message, run_status, run_date, run_time, run_duration, operator_id_emailed, operator_id_netsent, operator_id_paged, retries_attempted, server)\n"

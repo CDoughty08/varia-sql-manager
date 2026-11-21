@@ -91,7 +91,9 @@ function PurgeSection({ open, model, draft, editable }: { readonly open: PagePro
     <div className="agent-purge-row">
       <label htmlFor="agent-purge-count">Older than</label>
       <input id="agent-purge-count" type="text" inputMode="numeric" className="agent-purge-count" value={draft.purgeCount} aria-invalid={!valid}
-        onChange={event => dialogs.updateDraft({ purgeCount: event.target.value, purgeConfirming: false })} />
+        onChange={event => dialogs.updateDraft({ purgeCount: event.target.value, purgeConfirming: false })}
+        // Enter here asks to delete, as Delete history… does, rather than pressing OK, which would save the settings instead.
+        onKeyDown={event => { if (event.key !== 'Enter') return; event.preventDefault(); event.stopPropagation(); if (valid) dialogs.updateDraft({ purgeConfirming: true }) }} />
       <select aria-label="Unit" value={draft.purgeUnit} onChange={event => dialogs.updateDraft({ purgeUnit: Number(event.target.value) as AgentPurgeUnit, purgeConfirming: false })}>
         {agentPurgeUnits.map(unit => <option key={unit} value={unit}>{agentPurgeUnitLabels[unit]}</option>)}
       </select>

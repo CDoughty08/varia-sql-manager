@@ -2199,7 +2199,9 @@ try {
   const retention = agentPropertiesDialog().getByRole('table', { name: /^What this keeps/ })
   await expect(retention.getByRole('row')).toHaveCount(3)
   await expect(retention.getByRole('row', { name: /Nightly/ })).toContainText('4 a day')
-  await agentPropertiesDialog().getByRole('button', { name: 'Delete history…', exact: true }).click()
+  // Enter in Older than asks, as Delete history… does, instead of pressing OK.
+  await agentPropertiesDialog().getByRole('textbox', { name: 'Older than', exact: true }).press('Enter')
+  await expect(agentPropertiesDialog()).toHaveCount(1)
   const purgeConfirm = agentPropertiesDialog().getByRole('group', { name: 'Confirm Delete old history now', exact: true })
   await expect(purgeConfirm.getByText(/^Delete the history of every job on .+ from before 2026-03-03 10:00:00/)).toBeVisible()
   await expect(purgeConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()

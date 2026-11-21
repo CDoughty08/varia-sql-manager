@@ -44,6 +44,7 @@ describe('the agentProperties request', () => {
     expect(parse({ agentProperties: { historyMaxRows: -1, historyMaxRowsPerJob: 10 } })).toBe(false)
     expect(parse({ agentProperties: { historyMaxRows: 100, historyMaxRowsPerJob: 101 } })).toBe(false)
     expect(parse({ agentProperties: { historyMaxRows: 100, other: 1 } })).toBe(false)
+    expect(parse({ agentProperties: { historyMaxRowsPerJob: 10 } })).toBe(false)
     expect(parse({ agentPurge: { count: 0, unit: 1 } })).toBe(false)
     expect(parse({ agentPurge: { count: 1000, unit: 3 } })).toBe(false)
     expect(parse({ agentPurge: { count: 1, unit: 4 } })).toBe(false)

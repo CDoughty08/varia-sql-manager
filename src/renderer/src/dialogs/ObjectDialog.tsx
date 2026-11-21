@@ -193,8 +193,13 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
   // A dialog the login may only look at (SQL Server Agent Properties below sysadmin): its reason, pages that cannot change, and Close.
   const readOnly = open.model ? definitionOf(open.dialog).readOnly?.(open.model) : undefined
-  // Close is then the one button, focused once the model is read.
-  useEffect(() => { if (readOnly && open.phase === 'ready') closeButton.current?.focus() }, [readOnly, open.phase])
+  // Close is then the one button, focused once, when the model is read.
+  const readOnlyFocused = useRef(false)
+  useEffect(() => {
+    if (!readOnly || open.phase !== 'ready' || readOnlyFocused.current) return
+    readOnlyFocused.current = true
+    closeButton.current?.focus()
+  }, [readOnly, open.phase])
   // Unlock's Set a new password… hands over to Login Properties, and OK says so.
   const okLabel = (open.draft && definitionOf(open.dialog).okLabel?.(open.draft)) || 'OK'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
