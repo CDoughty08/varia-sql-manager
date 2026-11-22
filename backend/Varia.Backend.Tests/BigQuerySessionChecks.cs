@@ -17,7 +17,7 @@ namespace Varia.Backend.Tests;
 /// jobs in the shapes Google documents for jobs.insert, jobs.getQueryResults, jobs.get, jobs.list and jobs.cancel. The
 /// emulator has no sessions, so everything here is proved on the fake; no request leaves the process.
 /// </summary>
-internal static class BigQuerySessionChecks
+internal static partial class BigQuerySessionChecks
 {
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -57,6 +57,10 @@ internal static class BigQuerySessionChecks
         public readonly Dictionary<string, (string Statement, JsonNode? Error)[]> Scripts = new(StringComparer.Ordinal);
         public readonly Dictionary<string, JsonNode> Failures = new(StringComparer.Ordinal);
         public readonly HashSet<string> Expired = new(StringComparer.Ordinal);
+        /// <summary>Jobs another principal created: jobs.list without allUsers leaves them out.</summary>
+        public readonly HashSet<string> Foreign = new(StringComparer.Ordinal);
+        /// <summary>DONE jobs whose result table is gone (getQueryResults answers 404).</summary>
+        public readonly HashSet<string> ExpiredResults = new(StringComparer.Ordinal);
         /// <summary>Queries whose failure jobs.insert already answers (DONE with the error), as BigQuery does for most analysis errors.</summary>
         public readonly HashSet<string> FailAtInsert = new(StringComparer.Ordinal);
         /// <summary>The next user queries stay RUNNING until released (Stop, JOB_RUNNING).</summary>
@@ -212,9 +216,18 @@ internal static class BigQuerySessionChecks
 
         BigQueryFake.Reply List(BigQueryFake.Request request)
         {
-            var parent = HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] ?? "";
+            var query = HttpUtility.ParseQueryString(request.Uri.Query);
+            var parent = query["parentJobId"] ?? "";
             Lists.Enqueue(parent);
             if (ListDenied) return new(403, Error(403, "Access Denied: Project varia-alpha: User does not have bigquery.jobs.list permission in project varia-alpha.", "accessDenied"));
+            if (parent.Length == 0 && query["minCreationTime"] is { } min && query["maxCreationTime"] is { } max)
+            {
+                // The caller's own jobs created in the window (no allUsers): another principal's are not listed.
+                var from = long.Parse(min, CultureInfo.InvariantCulture);
+                var to = long.Parse(max, CultureInfo.InvariantCulture);
+                var own = Jobs.Values.Where(item => item.Parent is null && item.Created >= from && item.Created <= to && !Foreign.Contains(item.Id)).Select(item => (JsonNode)Json(item)).ToArray();
+                return new(200, new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray(own) }.ToJsonString());
+            }
             if (!Jobs.TryGetValue(parent, out var job)) return new(200, "{\"kind\":\"bigquery#jobList\"}");
             // Newest first, as BigQuery lists them.
             var items = job.Children.Take(job.Released).Reverse().Select(child => (JsonNode)Json(child)).ToArray();
@@ -224,6 +237,7 @@ internal static class BigQuerySessionChecks
         BigQueryFake.Reply Results(BigQueryFake.Request request)
         {
             if (!Jobs.TryGetValue(Last(request), out var job)) return BigQueryFake.Fixture("error-not-found", 404);
+            if (ExpiredResults.Contains(job.Id) && job.State == "DONE") return BigQueryFake.Fixture("error-not-found", 404);
             var reference = new JsonObject { ["projectId"] = "varia-alpha", ["jobId"] = job.Id, ["location"] = "US" };
             if (job.Polls > 0)
             {
@@ -267,6 +281,7 @@ internal static class BigQuerySessionChecks
             BigQuery.ChildPollMs = 50;
             BigQuery.DonePoll = TimeSpan.FromMilliseconds(10);
             BigQuery.PendingPoll = TimeSpan.FromMilliseconds(20);
+            BigQuery.HeldPoll = TimeSpan.FromMilliseconds(20);
         }
 
         public async Task ConnectAsync(JsonObject key)
@@ -361,6 +376,10 @@ internal static class BigQuerySessionChecks
         await ExpiryAsync(check, key);
         await StopAsync(check, key);
         await StopWhileDecidingAsync(check, key);
+        await DetachAsync(check, key);
+        await AttachAsync(check, key);
+        await IdleEndsAsync(check, key);
+        await CancelJobsAsync(check, key);
     }
 
     /// <summary>Stop while a script child's residence is being decided (its jobs.get hangs): the set the run's end closes was
@@ -1065,18 +1084,20 @@ internal static class BigQuerySessionChecks
         check(next is { Code: "ok", Result.Status: "completed" } && Says(next.Result, "Waiting for BigQuery job") && Says(next.Result, "runs one job at a time"),
             $"the next execution in a tab waits for its stopped job to finish: {next.Code} {Texts(next.Result?.Messages ?? [])}");
 
-        // A plain close while a query runs stops it, as a SQL Server close does.
+        // A plain close while a query runs never aborts the session holding its job (the safety net): the request ends detached.
         bq.HoldQueries = true;
         bq.KeepRunningAfterCancel = false;
         bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var closeArgs = harness.Query(waitTab, "SELECT slow");
         var closing = harness.Call("query.execute", closeArgs);
         await Task.WhenAny(bq.Polling.Task, closing).WaitAsync(TimeSpan.FromSeconds(30));
+        var abortsBefore = bq.Aborts.Count;
         var plain = await harness.Close(waitTab);
         var result = (await closing.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
         var closeJob = bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
-        check(plain is { Code: "ok", Result.Closed: true } && result is { Status: "cancelled" } && await Poll(() => bq.Cancels.Contains(closeJob)),
-            $"a plain close stops the tab's running query and ends its session: {plain.Code} {plain.Result} {result?.Status}");
+        check(plain is { Code: "ok", Result.Closed: true } && result is { Status: "detached" } && !bq.Cancels.Contains(closeJob) && bq.Aborts.Count == abortsBefore,
+            $"a plain close while the tab's job runs leaves the job and its session: {plain.Code} {plain.Result} {result?.Status} cancels {bq.Cancels.Contains(closeJob)} aborts {bq.Aborts.Count - abortsBefore}");
+        bq.Release(bq.Jobs[closeJob]);
         bq.HoldQueries = false;
     }
 }
