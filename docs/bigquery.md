@@ -337,8 +337,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Copy.** Copy of a windowed result reads the selected rows through its block cache (blocks not cached are fetched,
   outside the grid's read-ahead) and writes them through `ResultTextWriter` within the usual Copy limit: a selection
   whose text passes it is refused, before anything reaches the clipboard, with a pointer to Save Results As; one whose
-  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sorted or filtered
-  view of a windowed result is not copied yet (`VIEW_NOT_FOUND`). Rows already cached copy after the table expired; others
+  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sort or filter run
+  in BigQuery is a result of its own, which Copy reads as itself. Rows already cached copy after the table expired; others
   answer `REMOTE_EXPIRED`. A result that starts loading into memory under a Copy refuses it (try again once loaded), and
   one released under it says so.
 - **Save.** Save Results As streams every row the query keeps (Maximum rows honoured) from BigQuery to the file, never
@@ -346,7 +346,7 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   fault resumed at its offset without repeating rows), else `tabledata.list` pages, each page reserved from the result
   budget while it is written. It has the usual progress and Cancel, so the rows touch disk only in the file the user chose
   (written to a temporary file and renamed). A transposed Save reads its rows as Copy does, holding them in result memory (at most 128 MB). An expired table answers
-  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sorted or filtered view's Save waits for windowed sort and filter.
+  `REMOTE_EXPIRED` and leaves no file. Save reads the table itself, so it carries on through a load or Close Results. A sort or filter run in BigQuery saves as its own result.
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
   its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute

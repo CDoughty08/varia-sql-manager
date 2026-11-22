@@ -460,6 +460,11 @@ const saveCancelled = 'Saving was cancelled. The file was not written.'
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
 const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+/** What Copy and Save read: the result, or its view by id. A sort or filter in BigQuery is a result of its own (viewId 0),
+ *  which they read as itself. */
+const jobSource = (handle: ResultHandle, view: ResultView | undefined): { generation: number; resultId: number; viewId?: number } =>
+  isRemoteView(view) ? { generation: view.key.generation, resultId: view.key.resultId }
+    : { generation: handle.key.generation, resultId: handle.key.resultId, ...view ? { viewId: view.viewId } : {} }
 /** How many sets a run made with Discard results after execution read and did not keep. */
 const discardedSets = (run: Pick<Run, 'discard' | 'summary'>): number => run.discard ? run.summary?.discardedResultSets ?? 0 : 0
 /** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
@@ -1158,7 +1163,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     let result
     // The view the selection's rows are positions in (a sort just built is not it until the grid has swapped to it).
     const view = this.drawnView(run, set.key)
-    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
+    try { result = await this.api.copyResults({ jobId, ...jobSource(set.handle, view), headers, parts, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
       const { rows, partial, truncatedCells, capped } = result.value
@@ -1194,14 +1199,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     let saved!: () => void
     const done = new Promise<void>(resolve => { saved = resolve })
-    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
+    const running: RunningJob = { tabId, handle: set.handle, done, job: { jobId, kind: 'save', entry: set.key, label: this.jobLabel(run, set), rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : isRemoteView(sort?.view) ? sort.view.rows : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
     const suggested = saveName(baseName, this.saveSubject(run, set, !!turned))
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggested.name, ...suggested.suffix ? { suggestedSuffix: suggested.suffix } : {}, ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
+    try { result = await this.api.saveResults({ jobId, ...jobSource(set.handle, sort?.view), suggestedName: suggested.name, ...suggested.suffix ? { suggestedSuffix: suggested.suffix } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running); saved() }
     if (this.disposed) return undefined
     if (result.ok) {

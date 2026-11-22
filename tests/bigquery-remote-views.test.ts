@@ -9,6 +9,7 @@ import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { EventBus } from '../src/renderer/src/core/events'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
+import { selectAll } from '../src/renderer/src/grid/selection'
 
 // Sort, filter and value lists of a result windowed in BigQuery (docs/bigquery.md, Sort and filter in BigQuery): the
 // contract main checks, the renderer's mapping of grid filters, the estimate and prompts before each billed query, and
@@ -219,7 +220,9 @@ describe('remote views', () => {
 function serviceFixture() {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const api = {
-    copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 3, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
+    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 3, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'out.csv', format: 'csv' as const } })),
+    cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
   }
   const remote = {
@@ -236,7 +239,7 @@ function serviceFixture() {
   const key = service.getSnapshot().t1!.sets[0].key
   service.registerGrid('t1', key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn: () => {} })
   const tab = () => service.getSnapshot().t1!
-  return { client, service, remote, key, tab }
+  return { client, service, remote, key, tab, api }
 }
 
 describe('a windowed grid in the results service', () => {
@@ -252,6 +255,21 @@ describe('a windowed grid in the results service', () => {
     await vi.waitFor(() => expect(f.service.sortOf('t1', f.key)?.view).toBeDefined())
     expect(f.remote.view.mock.calls[0][2]).toEqual([{ column: 0, descending: false, mode: 'value' }])
     expect(isRemoteView(f.service.sortOf('t1', f.key)!.view)).toBe(true)
+  })
+  it('copies and saves a view built in BigQuery as its own result, never as a view id of the source', async () => {
+    const f = serviceFixture()
+    f.service.cycleSort('t1', f.key, 0)
+    await vi.waitFor(() => expect(f.service.sortOf('t1', f.key)?.view).toBeDefined())
+    f.service.setSelection('t1', f.key, selectAll(f.key))
+    await f.service.copy('t1', f.key, false)
+    expect(f.api.copyResults).toHaveBeenCalledTimes(1)
+    const copied = f.api.copyResults.mock.calls[0][0]
+    expect(copied).toMatchObject({ resultId: 50 })
+    expect(copied).not.toHaveProperty('viewId')
+    await f.service.saveAs('t1', f.key, 'SQLQuery1')
+    const saved = f.api.saveResults.mock.calls[0][0]
+    expect(saved).toMatchObject({ resultId: 50 })
+    expect(saved).not.toHaveProperty('viewId')
   })
   it('keeps what the grid showed, silently, when a cost prompt is declined', async () => {
     const f = serviceFixture()
