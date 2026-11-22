@@ -1044,6 +1044,7 @@ internal static partial class ViewSorter
             ticks += fraction;
         }
         if (at == text.Length) return true;
+        if (dated && text[at..].SequenceEqual(" UTC"u8)) { zoned = true; return true; }
         if (text.Length - at != 7 || text[at] != (byte)' ' || text[at + 1] is not ((byte)'+' or (byte)'-') || text[at + 4] != (byte)':') return false;
         if (!Number(text.Slice(at + 2, 2), out var hours) || !Number(text.Slice(at + 5, 2), out var minutes) || hours > 14 || minutes > 59 || (hours == 14 && minutes > 0)) return false;
         offset = (hours * 60L + minutes) * TimeSpan.TicksPerMinute * (text[at + 1] == (byte)'-' ? -1 : 1);
