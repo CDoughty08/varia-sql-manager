@@ -104,7 +104,7 @@ internal sealed partial class SqlService
                     {
                         if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; switchedFor = chunk.Refusal; break; }
                         set.Skip(chunk.Refusal);
-                        budget.Stop(chunk.Refusal);
+                        if (!set.Derived) budget.Stop(chunk.Refusal);
                         storing = false;
                         break;
                     }
@@ -118,7 +118,7 @@ internal sealed partial class SqlService
                         {
                             if (window is not null && SwitchesOn(set, refusal)) { switched = true; switchedFor = refusal; break; }
                             set.Skip(refusal);
-                            budget.Stop(refusal);
+                            if (!set.Derived) budget.Stop(refusal);
                             storing = false;
                             break;
                         }

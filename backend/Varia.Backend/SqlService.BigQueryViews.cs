@@ -26,7 +26,7 @@ internal sealed partial class SqlService
 
     /// <summary>A derived remote query, checked and written: its source result and window, its SQL and parameters, whether it
     /// runs the original query again, and the value list's column.</summary>
-    private sealed record RemotePlan(ResultSetBuffer Set, BigQueryWindow Window, string Sql, List<QueryParameter> Parameters, bool Fallback, int? Column);
+    private sealed record RemotePlan(ResultSetBuffer Set, BigQueryWindow Window, string Sql, List<QueryParameter> Parameters, bool Fallback, int? Column, bool Lists);
 
     /// <summary>Whether a windowed result's original query may run again in place of its expired result table: one query the
     /// scanner finds deterministic, not a script's child, run outside a session. Every tab job runs in the tab's session
@@ -74,7 +74,9 @@ internal sealed partial class SqlService
         var parameters = new List<QueryParameter>();
         var sql = kind == "view" ? BigQueryViewSql.View(source, fields, sort, resolved, parameters)
             : BigQueryViewSql.Values(source, fields, column!.Value, resolved, keptRows, parameters);
-        return new RemotePlan(set, window, sql, parameters, fallback, column);
+        // Whether it reads a value list's table: a missing table it did not read is not a list's.
+        var lists = (filters ?? []).Concat(kept ?? []).Any(filter => filter?.List is not null);
+        return new RemotePlan(set, window, sql, parameters, fallback, column, lists);
     }
 
     /// <summary>Refuses a column the result does not show, or one BigQuery cannot order and group, with why.</summary>
@@ -311,6 +313,8 @@ internal sealed partial class SqlService
                         ?? throw new RequestException("BACKEND_ERROR", "BigQuery did not name the value list's result table.");
                     derived.ValueList = new RemoteValueList(table, set.ResultId, plan.Column!.Value, (int)total, total >= BigQueryViewSql.ValueListCap);
                 }
+                // The source released while the last rows came: nothing owns the new result (the catch releases it).
+                if (set.IsReleased) throw Unavailable(args.ResultId);
                 events.Closed(derived);
                 messages.Add(distinct ? "The column's values were listed in BigQuery."
                     : total == 1 ? "(1 row affected)" : "(" + total.ToString(CultureInfo.InvariantCulture) + " rows affected)");
@@ -349,7 +353,7 @@ internal sealed partial class SqlService
             }
             else
             {
-                var mapped = error as RequestException ?? await RemoteFailureAsync(error, connection, window, created, cap, prices);
+                var mapped = error as RequestException ?? await RemoteFailureAsync(error, connection, window, created, cap, prices, plan.Lists);
                 status = "failed";
                 messages.Add(mapped.Message, MessageKind.Error);
                 failure = new(mapped.Code, mapped.Message.Length > 16384 ? mapped.Message[..16384] + "…" : mapped.Message, 1, 1);
@@ -370,13 +374,13 @@ internal sealed partial class SqlService
 
     /// <summary>A derived query's failure: an expired result table (or value list) as REMOTE_EXPIRED, an ORDER BY BigQuery had
     /// no resources for with a pointer to filtering first, anything else as Execute reports it.</summary>
-    private async Task<RequestException> RemoteFailureAsync(Exception error, BigQueryConnection connection, BigQueryWindow window, bool created, long? cap, bool prices)
+    private async Task<RequestException> RemoteFailureAsync(Exception error, BigQueryConnection connection, BigQueryWindow window, bool created, long? cap, bool prices, bool lists)
     {
         var mapped = await BigQueryFailureAsync(error, connection, created, cap, prices, CancellationToken.None);
         if (error is BigQueryJobException job && job.Errors.Concat([job.Result]).Any(entry => entry.Reason == "resourcesExceeded"))
             return new RequestException(mapped.Code, mapped.Message + " Filter the result first, so BigQuery sorts fewer rows.");
         if (NotFound(error) || (error is BigQueryJobException missing && missing.Errors.Concat([missing.Result]).Any(entry => entry.Reason == "notFound")))
-            return await TableGoneAsync(connection, window.Table, CancellationToken.None) ? Expired() : ValueListExpired();
+            return await TableGoneAsync(connection, window.Table, CancellationToken.None) ? Expired() : lists ? ValueListExpired() : mapped;
         return mapped;
     }
 
@@ -393,6 +397,7 @@ internal sealed partial class SqlService
         var pages = set.SealedSnapshot();
         var charged = ViewSorter.DistinctSnapshotBytes(list.Rows);
         if (!store.TryReserveWork(set.Budget, charged)) throw TooLarge(ViewSorter.DistinctTooLarge);
+        DistinctSnapshot built;
         try
         {
             var reps = new List<int>(list.Rows);
@@ -424,14 +429,16 @@ internal sealed partial class SqlService
             var countArray = counts.ToArray();
             var snapshot = new DistinctSnapshot(set, 0, new KeptPages(set, pages, set.Wires.Count), [.. reps], countArray, ViewSorter.ByCount(countArray), [.. ticks], rows, nulls, nullTicked,
                 complete: !list.Capped, approximate) { Charged = charged };
-            store.AddSnapshot(snapshot);
-            var (ticked, nullsTicked) = snapshot.Ticks;
-            return new ResultsDistinctResult(snapshot.SnapshotId, snapshot.Rows, snapshot.Complete, snapshot.Nulls, snapshot.Distinct, snapshot.Approximate, ticked, nullsTicked);
+            built = snapshot;
         }
         catch
         {
             store.Return(set.Budget, charged);
             throw;
         }
+        // Outside the catch: a refusal here returns the charge itself.
+        store.AddSnapshot(built);
+        var (ticked, nullsTicked) = built.Ticks;
+        return new ResultsDistinctResult(built.SnapshotId, built.Rows, built.Complete, built.Nulls, built.Distinct, built.Approximate, ticked, nullsTicked);
     }
 }

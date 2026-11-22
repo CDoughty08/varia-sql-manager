@@ -205,6 +205,18 @@ internal static partial class BigQueryExecutionChecks
         var (keptCode, _, _, keptMessage) = await Run(harness, "results.remoteQuery", distinct);
         check(keptCode == "ok" && InsertedSql(harness).Contains("COALESCE(LOGICAL_OR((`s` IS NOT NULL AND `s` IN (SELECT value FROM", StringComparison.Ordinal),
             $"a value list's ticks are the kept filters' rows: {keptCode} {keptMessage} {InsertedSql(harness)}");
+        // A snapshot the list cannot keep (past its 24) returns its memory once: the budget's count stays true.
+        {
+            // Opened until the list refuses one (it already keeps a few), measuring before each.
+            string full = "ok";
+            long before = 0;
+            for (var open = 0; open <= ViewSorter.MaxDistinctSnapshots && full == "ok"; open++)
+            {
+                before = harness.Service.Results.UsedBytes;
+                full = (await harness.Call("results.distinct", new JsonObject { ["resultId"] = list.ResultId, ["column"] = 0 })).Item1;
+            }
+            check(full == "TOO_LARGE" && harness.Service.Results.UsedBytes == before, $"a value list's snapshot past the limit returns its memory once: {full} {before} -> {harness.Service.Results.UsedBytes}");
+        }
         // Values that do not fit the store are refused whole, never kept in part.
         {
             var (small, smallId) = await WindowedAsync();
@@ -217,6 +229,10 @@ internal static partial class BigQueryExecutionChecks
             check(refused == "ok" && refusedResult is { Status: "failed", Error.Code: "TOO_LARGE" } && refusedResult.ResultSets.Count == 0
                 && small.Service.Results.Find(smallId)?.IsRemote == true && small.Service.Results.Find(smallId + 1) is null,
                 $"a value list too large for the store is refused whole: {refused} {refusedMessage} {refusedResult?.Status} {refusedResult?.Error?.Code} {refusedResult?.ResultSets.Count}");
+            // ...and stops only itself: the result sorts in BigQuery after it, its budget not stopped.
+            var (after, afterResult, _, afterMessage) = await Run(small, "results.remoteQuery", View(smallId, sort: [Key(0)]));
+            check(after == "ok" && afterResult?.Status == "completed" && small.Service.Results.Find(smallId)!.Budget.Stopped == TruncationReason.None,
+                $"a refused value list leaves its result's budget running: {after} {afterMessage} {afterResult?.Status} {afterResult?.Error?.Code}");
         }
     }
 
@@ -331,6 +347,15 @@ internal static partial class BigQueryExecutionChecks
             badColumn["remote"]!["sort"] = new JsonArray(Key(99));
             var (refused, _, _) = await harness.Call("bigquery.dryRun", badColumn);
             check(refused == "INVALID_PARAMS" && harness.Jobs.TableReads.Count == reads, $"a refused remote estimate probes no table: {refused} {harness.Jobs.TableReads.Count - reads}");
+        }
+        // A view that names no value list never blames one for a missing table: BigQuery's own words stand.
+        {
+            var (harness, id) = await WindowedAsync();
+            using var _ = harness;
+            harness.Jobs.Failure = new JsonObject { ["reason"] = "notFound", ["message"] = "Not found: Table varia-emulator:other.missing was not found in location US" };
+            var (_, result, _, _) = await Run(harness, "results.remoteQuery", View(id, sort: [Key(0)]));
+            check(result is { Status: "failed" } && result.Error?.Message.Contains("value list", StringComparison.Ordinal) == false && result.Error.Code != "REMOTE_EXPIRED",
+                $"a missing table is no value list's when the view names none: {result?.Error?.Code} {result?.Error?.Message}");
         }
         // An ORDER BY BigQuery had no resources for says to filter first.
         {
