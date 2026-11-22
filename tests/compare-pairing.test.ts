@@ -13,6 +13,19 @@ describe('Compare popover column pairing', () => {
     expect(pairColumns(item.left, item.right).pairs).toEqual(item.pairs)
   })
 
+  it('reads each column name a bounded number of times for wide, mostly disjoint results', () => {
+    let reads = 0
+    const columns = (prefix: string) => Array.from({ length: 1024 }, (_, i) => ({
+      get name() { reads++; return i === 0 ? 'shared' : prefix + i },
+      wire: 'text' as const
+    }))
+    const result = pairColumns(columns('left'), columns('right'))
+    expect(result.pairs).toEqual([[0, 0]])
+    expect(result.oldOnly).toHaveLength(1023)
+    expect(result.newOnly).toHaveLength(1023)
+    expect(reads).toBeLessThanOrEqual(1024 * 4)
+  })
+
   it('has the cases both suites need', () => expect(cases.length).toBeGreaterThanOrEqual(9))
 
   // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it.
