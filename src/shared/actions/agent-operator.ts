@@ -9,7 +9,7 @@ import { agentLimits, type AgentPlatform } from '../agent/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident } from '../explorer/schema.ts'
 import { mailProblem, type AgentDutyHours, type AgentJobMail } from './agent-job.ts'
-import { notificationChangeSchema, notificationChanges, notifyEmail, notifyNetSend, notifyPager, type AgentAlertKind, type AgentNotificationChange, type AgentObjectCommandEntry } from './agent-alert.ts'
+import { agentAlertText, notificationChangeSchema, notificationChanges, notifyEmail, notifyNetSend, notifyPager, type AgentAlertKind, type AgentNotificationChange, type AgentObjectCommandEntry } from './agent-alert.ts'
 
 /** An operator as sp_help_operator describes it. Last notified dates are the server's local time, absent when never. */
 export interface AgentOperatorRecord {
@@ -101,7 +101,7 @@ export function initialAgentOperatorDraft(model: Pick<AgentOperatorDocumentModel
 const hours = (value: AgentDutyHours) => `${value.start}-${value.end}`
 function fieldValue(draft: AgentOperatorDraft, field: AgentOperatorField): string {
   switch (field) {
-    case 'name': return draft.name
+    case 'name': return draft.name.trim()
     case 'enabled': return String(draft.enabled)
     case 'email': return draft.email
     case 'pager': return draft.pager
@@ -206,6 +206,7 @@ export function agentOperatorProblems(model: AgentOperatorDocumentModel, draft: 
   const error = (field: AgentOperatorField, message: string) => problems.push({ field, severity: 'error', message })
   const warning = (field: AgentOperatorField, message: string) => problems.push({ field, severity: 'warning', message })
   if (!draft.name.trim()) error('name', agentOperatorText.nameRequired)
+  if (operatorNotifyChanges(initialAgentOperatorDraft(model), draft).length > agentLimits.notificationChanges) error('notify', agentAlertText.tooManyChanges)
   for (const field of ['email', 'pager', 'netSend'] as const) if (draft[field].length > agentLimits.addressChars) error(field, agentOperatorText.addressTooLong)
   if (!draft.email.trim() && !draft.pager.trim() && !draft.netSend.trim()) warning('email', agentOperatorText.noAddress)
   if (draft.netSend.trim()) warning('netSend', agentOperatorText.netSendRetired)
@@ -252,6 +253,9 @@ export function matrixChanges(model: AgentOperatorsModel, base: AgentNotifyMatri
     return changes.length ? [{ alert, changes }] : []
   })
 }
+/** An alert row whose changes one save cannot carry (each alert's changes are one request). */
+export const matrixProblems = (model: AgentOperatorsModel, draft: AgentNotifyMatrix) => matrixChanges(model, notifyMatrix(model), draft)
+  .filter(entry => entry.changes.length > agentLimits.notificationChanges).map(entry => ({ severity: 'error' as const, message: `${entry.alert.name}: ${agentAlertText.tooManyChanges}` }))
 export const matrixChangeCount = (model: AgentOperatorsModel, base: AgentNotifyMatrix, draft: AgentNotifyMatrix) => matrixChanges(model, base, draft).reduce((count, entry) => count + entry.changes.length, 0)
 /** A cell's text: E, P and N for e-mail, pager and net send. */
 export const cellText = (methods: number) => `${methods & notifyEmail ? 'E' : ''}${methods & notifyPager ? 'P' : ''}${methods & notifyNetSend ? 'N' : ''}`
@@ -324,7 +328,7 @@ export function agentOperatorCommandEntries(): { readonly [K in AgentOperatorCom
     },
     'agentOperator.sendTest': {
       title: 'Send Test E-mail', category: 'SQL Server Agent', icon: 'agent-operator', keywords: ['agent', 'operator', 'mail', 'test', 'databasemail', 'notify'],
-      precondition: 'agentEnabled && backendReady && (activeDocumentIsAgentOperator || activeDocumentIsAgentOperators)', unavailableHint: 'Open an operator with an e-mail address first.'
+      precondition: 'agentEnabled && backendReady && activeDocumentIsAgentOperator', unavailableHint: 'Open an operator with an e-mail address first.'
     },
     'agentOperators.save': {
       title: 'Save Notifications', category: 'SQL Server Agent', icon: 'save', keywords: ['agent', 'operator', 'alert', 'notification', 'apply'],

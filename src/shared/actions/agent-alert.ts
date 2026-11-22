@@ -151,7 +151,7 @@ function whenValue(draft: AgentAlertDraft): string {
 }
 function fieldValue(draft: AgentAlertDraft, field: AgentAlertField): string {
   switch (field) {
-    case 'name': return draft.name
+    case 'name': return draft.name.trim()
     case 'enabled': return String(draft.enabled)
     case 'when': return whenValue(draft)
     case 'database': return draft.kind === 'event' ? draft.database : ''
@@ -298,6 +298,7 @@ export function agentAlertSaveProblems(save: AgentAlertSave, create: boolean): s
 export interface AgentAlertProblem { readonly field: AgentAlertField; readonly severity: 'error' | 'warning'; readonly message: string }
 
 export const agentAlertText = {
+  tooManyChanges: `One save changes at most ${agentLimits.notificationChanges} notifications. Save some, then the rest.`,
   nameRequired: 'The alert needs a name.',
   messageRequired: 'Type the error number the alert raises on.',
   messageInvalid: 'An error number is a whole number of 1 or more.',
@@ -337,6 +338,7 @@ export function agentAlertProblems(model: AgentAlertDocumentModel, draft: AgentA
   const error = (field: AgentAlertField, message: string) => problems.push({ field, severity: 'error', message })
   const warning = (field: AgentAlertField, message: string) => problems.push({ field, severity: 'warning', message })
   if (!draft.name.trim()) error('name', agentAlertText.nameRequired)
+  if (alertNotifyChanges(initialAgentAlertDraft(model), draft).length > agentLimits.notificationChanges) error('notify', agentAlertText.tooManyChanges)
   if (draft.kind === 'event') {
     if (draft.raiseOn === 'message') {
       const id = draft.messageId.trim()

@@ -215,6 +215,12 @@ internal static partial class AgentSql
     /// <summary>Every notification (alert, operator, methods), for SQLAgentOperatorRole and sysadmin.</summary>
     public static readonly AgentStatement Notifications = new("notifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n;",
         ["alert_id", "operator_id", "notification_method"], [], "listRows");
+    /// <summary>One alert's notifications (the alert document).</summary>
+    public static readonly AgentStatement AlertNotifications = new("alertNotifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n WHERE n.alert_id = @alert_id;",
+        ["alert_id", "operator_id", "notification_method"], [new("@alert_id", SqlDbType.Int)], "listRows");
+    /// <summary>One operator's notifications (the operator document and Delete Object's count).</summary>
+    public static readonly AgentStatement OperatorNotifications = new("operatorNotifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n WHERE n.operator_id = @operator_id;",
+        ["alert_id", "operator_id", "notification_method"], [new("@operator_id", SqlDbType.Int)], "listRows");
     /// <summary>The jobs that notify an operator, by the operators' names (sysjobs_view filters by role itself).</summary>
     public static readonly AgentStatement JobNotifications = new("jobNotifications",
         "SELECT j.job_id, j.name, e.name AS email_operator, p.name AS page_operator, s.name AS netsend_operator FROM msdb.dbo.sysjobs_view AS j\n"

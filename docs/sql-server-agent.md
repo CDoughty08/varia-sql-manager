@@ -58,7 +58,7 @@ later lanes, behind the same gate until 0.11.0.
   Linux server, Managed Instance, the service changing state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
-- **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first item), Enter or double-click on its
+- **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first after New), Enter or double-click on its
   Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
@@ -104,13 +104,13 @@ later lanes, behind the same gate until 0.11.0.
   with the counter's current values read through `agent.counterValues`), **Then** (a job to run, and the operators to notify as chips
   with E-mail, Pager and Net send toggles, an "Add an operator" pick and an inline New operator created in the same save) and
   **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message). The header shows
-  the history: when it last fired and how often. WMI alerts open read-only. The **operator document** has General (name, enabled,
+  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** has General (name, enabled,
   e-mail, pager and net send addresses, Send test e-mail), Pager duty (the days and each day kind's hours) and Notifications (the
   alerts that notify it, each a method toggle, and the jobs that notify it, read-only). Save sends only what changed as one batch
   in one transaction (`AgentSql.ObjectBatch`): an existing object's opens with its identity guard (name and id; 50010 `NOT_FOUND`
   when the object was replaced), every call checks its return code, and a refusal names the call that failed with the document's
-  edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Agent node's menu
-  or the palette) opens the grid: one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
+  edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Alerts and Operators folders'
+  menus or the palette) opens the grid (read-only past the notifications it reads at once): one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
   Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its side pane opens
   the selected operator, sends a test e-mail or deletes it, and lists the jobs that notify operators. **Add recommended alerts…**
   creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if

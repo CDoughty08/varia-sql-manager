@@ -455,7 +455,7 @@ keys it uses are listed below.
 | Operators and Notifications… | `agent.operators` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › Operators and Notifications… |
 | Save Operator | `agentOperator.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
 | Reload Operator | `agentOperator.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
-| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `agentEnabled && backendReady && (activeDocumentIsAgentOperator \|\| activeDocumentIsAgentOperators)` | — |
+| Send Test E-mail | `agentOperator.sendTest` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperator` | — |
 | Save Notifications | `agentOperators.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
 | Reload Notifications | `agentOperators.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentOperators` | — |
 | View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |

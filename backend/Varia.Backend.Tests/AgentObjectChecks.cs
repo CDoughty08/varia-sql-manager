@@ -49,7 +49,7 @@ internal static class AgentObjectChecks
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
         check(failures.Count == 0 && results.Count == 8, "the alert and operator batch shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
         check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("object batch ", StringComparison.Ordinal)) == 8, "the Agent write lint (and so the object actions' lint) runs the alert and operator batches too");
-        foreach (var statement in new[] { AgentSql.AlertDocument, AgentSql.AlertRows, AgentSql.OperatorRows, AgentSql.Notifications, AgentSql.JobNotifications, AgentSql.AlertJobs, AgentSql.AlertDatabases,
+        foreach (var statement in new[] { AgentSql.AlertDocument, AgentSql.AlertRows, AgentSql.OperatorRows, AgentSql.Notifications, AgentSql.AlertNotifications, AgentSql.OperatorNotifications, AgentSql.JobNotifications, AgentSql.AlertJobs, AgentSql.AlertDatabases,
             AgentSql.Counters, AgentSql.CounterValues, AgentSql.MessageText })
             check(AgentSql.Known(statement) && AgentSql.Lint(statement, null).Count == 0, "the alert and operator read " + statement.Id + " is one the reader runs, and passes the Agent read lint: " + string.Join(", ", AgentSql.Lint(statement, null)));
         check(AgentSql.LintRead(AgentSql.AlertByName, null).Count == 0 && AgentSql.LintRead(AgentSql.OperatorByName, null).Count == 0, "the by-name reads pass the Agent read lint");
@@ -117,6 +117,9 @@ internal static class AgentObjectChecks
             "New Operator creates it with its addresses and duty, then the alerts that notify it");
         var operatorUpdate = ActionService.OperatorSavePlan(OperatorSave(new(Name: "Ops 2", Pager: "")), Operator);
         check(operatorUpdate.Head == AgentObjectHead.Operator && Equals(ValueOf(operatorUpdate, "@c1_pager_address"), "") && Equals(ValueOf(operatorUpdate, "@c1_new_name"), "Ops 2"), "an operator update clears an address with ''");
+        var notifiedFirst = ActionService.OperatorSavePlan(OperatorSave(new(Name: "Ops 2", Notifications: [new("Sev 19", 1, "add")])), Operator);
+        check(Procedures(notifiedFirst) == "sp_add_notification,sp_update_operator" && Equals(ValueOf(notifiedFirst, "@c1_operator_name"), Operator.Name) && AgentSql.LintObjectBatch(notifiedFirst.Text).Count == 0,
+            "an operator save changes its notifications by the name read, then sp_update_operator last, whose fail-safe registry write a later failure could not roll back");
 
         var reassign = ActionService.ObjectVerbPlan(Args("delete", Operator) with { CloseConnections = false, DeleteHistory = false, ReassignTo = "Backup DBA" }, Operator, 9);
         check(Procedures(reassign) == "sp_delete_operator" && Equals(ValueOf(reassign, "@c1_reassign_to_operator"), "Backup DBA") && AgentSql.LintObjectBatch(reassign.Text).Count == 0,
@@ -177,6 +180,7 @@ internal static class AgentObjectChecks
             ("a duty without all its times", OperatorSave(new(PagerDays: 1))), ("a duty time of 25:00", OperatorSave(new(PagerDays: 1, WeekdayStart: 250000, WeekdayEnd: 0, SaturdayStart: 0, SaturdayEnd: 0, SundayStart: 0, SundayEnd: 0))),
             ("an address too long", OperatorSave(new(Email: new string('e', 101)))), ("New Operator without a name", OperatorSave(new(Email: "a@b.test"), AgentNode)),
             ("a delete without its id", Args("delete", Alert) with { CloseConnections = false, DeleteHistory = false }), ("an alert's delete with reassign", Args("delete", Alert) with { CloseConnections = false, DeleteHistory = false, AgentObjectId = 7, ReassignTo = "x" }),
+            ("an alert renamed to its own name", AlertSave(new(Name: Alert.Name))), ("an operator renamed to its own name", OperatorSave(new(Name: Operator.Name))),
             ("a reassign to itself", Args("delete", Operator) with { CloseConnections = false, DeleteHistory = false, AgentObjectId = 9, ReassignTo = Operator.Name }),
             ("a delete deleting history", Args("delete", Alert) with { CloseConnections = false, DeleteHistory = true, AgentObjectId = 7 }), ("a rename with an id", Args("rename", Alert) with { NewName = "y", AgentObjectId = 7 }),
             ("an alert's start", Args("startJob", Alert)), ("a job identity on an alert", Args("disable", Alert) with { AgentIdentity = new(JobId) }),

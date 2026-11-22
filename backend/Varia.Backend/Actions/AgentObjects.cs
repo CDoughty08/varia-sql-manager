@@ -21,6 +21,7 @@ internal sealed partial class ActionService
     internal const string NotifyOperatorAction = "notifyOperator";
     internal const string AlertsUnsupportedMessage = "SQL Server Agent alerts are not available on Linux or Azure SQL Managed Instance.";
     internal const string AlertReadOnlyMessage = "Read-only. SQL Server Agent's roles may view alerts, not change them; only sysadmin can.";
+    internal const string NotificationsTruncatedMessage = "Read-only. The server has more notifications than Varia reads at once; change them in each alert or operator.";
     internal const string OperatorReadOnlyMessage = "Read-only. SQL Server Agent's roles may view operators, not change them; only sysadmin can.";
     internal const string NoAgentProfileMessage = "SQL Server Agent has no Database Mail profile, so it cannot send e-mail. Set one in SQL Server Agent Properties › Alert System.";
     internal const string TestMailSubject = "Varia test e-mail from SQL Server Agent";
@@ -67,8 +68,8 @@ internal sealed partial class ActionService
                     if (args.AgentObjectId is null && !script) throw Invalid("agentObjectId.");
                 }
                 if (args with { AgentAlert = null, AgentOperator = null, AgentObjectId = null } != bare) throw Invalid(args.Action + " takes only its save and the object's id.");
-                if (args.Action == "agentAlert") { if (args.AgentOperator is not null || args.AgentAlert is not { } alert || !AlertSaveValid(alert, create, names)) throw Invalid("agentAlert."); }
-                else if (args.AgentAlert is not null || args.AgentOperator is not { } saved || !OperatorSaveValid(saved, create, names)) throw Invalid("agentOperator.");
+                if (args.Action == "agentAlert") { if (args.AgentOperator is not null || args.AgentAlert is not { } alert || !AlertSaveValid(alert, create, names) || !create && alert.Name == args.Target?.Name) throw Invalid("agentAlert."); }
+                else if (args.AgentAlert is not null || args.AgentOperator is not { } saved || !OperatorSaveValid(saved, create, names) || !create && saved.Name == args.Target?.Name) throw Invalid("agentOperator.");
                 return target;
             }
             case AddRecommendedAlertsAction:
@@ -211,8 +212,9 @@ internal sealed partial class ActionService
         return create ? AgentSql.ObjectBatch(AgentObjectHead.None, calls) : AgentSql.ObjectBatch(AgentObjectHead.Alert, calls, target.Name, args.AgentObjectId ?? 0);
     }
 
-    /// <summary>The operator save's batch: New Operator's sp_add_operator or an existing operator's sp_update_operator with only the changed arguments,
-    /// then each notification change by the operator's name as saved.</summary>
+    /// <summary>The operator save's batch: New Operator's sp_add_operator then each notification change by its name; an existing operator's notification
+    /// changes by the name read, then its sp_update_operator with only the changed arguments last, since sp_update_operator rewrites the fail-safe
+    /// operator's registry values outside the transaction, so nothing after it may fail and roll its UPDATE back.</summary>
     internal static AgentObjectBatch OperatorSavePlan(ActionArgs args, ObjectRefDto target)
     {
         var save = args.AgentOperator!;
@@ -233,9 +235,9 @@ internal sealed partial class ActionService
         Set("@pager_days", save.PagerDays is { } days ? (byte)days : null);
         Set("@netsend_address", save.NetSend, skipEmpty: true);
         if (create) calls.Add(new("sp_add_operator", arguments));
-        else if (arguments.Count > 1) calls.Add(new("sp_update_operator", arguments));
-        var name = save.Name ?? target.Name!;
+        var name = create ? save.Name! : target.Name!;
         foreach (var change in save.Notifications ?? []) calls.Add(Notification(change, change.Name, name));
+        if (!create && arguments.Count > 1) calls.Add(new("sp_update_operator", arguments));
         return create ? AgentSql.ObjectBatch(AgentObjectHead.None, calls) : AgentSql.ObjectBatch(AgentObjectHead.Operator, calls, target.Name, args.AgentObjectId ?? 0);
     }
 
@@ -361,7 +363,7 @@ internal sealed partial class ActionService
         var (login, sysadmin, mail, failure) = await AgentObjectFactsAsync(reader, connection, token);
         if (failure is not null) return new(null, 0, failure);
         List<AgentStatement> reads = [AgentSql.OperatorRows, AgentSql.AlertJobs, AgentSql.AlertDatabases, AgentSql.Counters];
-        if (id is not null) reads.AddRange([AgentSql.AlertDocument, AgentSql.Notifications]);
+        if (id is not null) reads.AddRange([AgentSql.AlertDocument, AgentSql.AlertNotifications]);
         var (results, errors) = await reader.ReadAsync(connection, null, reads, (_, parameter) => parameter.Name == "@alert_id" ? id : null, token);
         bool Read(AgentStatement statement, out AgentResult result) => results.TryGetValue(statement.Id, out result!) && errors.All(error => error.Statement != statement.Id);
         if (id is not null && ReadFailure(errors.FirstOrDefault(error => error.Statement == AgentSql.AlertDocument.Id)) is { } alertFailure) return new(null, 0, alertFailure);
@@ -379,7 +381,7 @@ internal sealed partial class ActionService
                 Value("job_id") is Guid job && job != Guid.Empty ? job.ToString("D") : "", TextOf(Value("job_name")), IntOf(Value("delay_between_responses")), IntOf(Value("include_event_description")),
                 TextOf(Value("notification_message")), IntOf(Value("occurrence_count")), Stamp(Value("last_occurrence_date"), Value("last_occurrence_time")),
                 Stamp(Value("last_response_date"), Value("last_response_time")), Stamp(Value("count_reset_date"), Value("count_reset_time")));
-            if (Read(AgentSql.Notifications, out var notified) && operators is not null)
+            if (Read(AgentSql.AlertNotifications, out var notified) && operators is not null)
             {
                 var names = operators.ToDictionary(item => item.Id, item => item.Name);
                 notifications = [.. NotificationList(notified).Where(row => row.AlertId == id && row.Methods > 0 && names.ContainsKey(row.OperatorId)).Select(row => new AgentAlertNotifyDto(names[row.OperatorId], row.Methods))];
@@ -421,8 +423,8 @@ internal sealed partial class ActionService
         if (failure is not null) return new(null, 0, failure);
         var alertsOffered = AgentCatalog.Current.Offers("alerts", platform!);
         List<AgentStatement> reads = [AgentSql.OperatorRows, AgentSql.JobNotifications];
-        if (alertsOffered) reads.AddRange([AgentSql.AlertRows, AgentSql.Notifications]);
-        var (results, errors) = await reader.ReadAsync(connection, null, reads, (_, _) => null, token);
+        if (alertsOffered) reads.AddRange(id is null ? [AgentSql.AlertRows] : [AgentSql.AlertRows, AgentSql.OperatorNotifications]);
+        var (results, errors) = await reader.ReadAsync(connection, null, reads, (_, parameter) => parameter.Name == "@operator_id" ? id : null, token);
         bool Read(AgentStatement statement, out AgentResult result) => results.TryGetValue(statement.Id, out result!) && errors.All(error => error.Statement != statement.Id);
         if (ReadFailure(errors.FirstOrDefault(error => error.Statement == AgentSql.OperatorRows.Id)) is { } operatorFailure) return new(null, 0, operatorFailure);
         AgentOperatorRecordDto? record = null;
@@ -436,7 +438,7 @@ internal sealed partial class ActionService
         List<AgentAlertRowDto>? alerts = null;
         var alertsTruncated = false;
         if (alertsOffered && Read(AgentSql.AlertRows, out var alertRows)) { alerts = AlertRowList(alertRows); alertsTruncated = alertRows.Truncated; }
-        var notifications = alerts is not null && Read(AgentSql.Notifications, out var notified) ? NotificationList(notified).Where(row => row.OperatorId == id).ToList() : [];
+        var notifications = alerts is not null && id is not null && Read(AgentSql.OperatorNotifications, out var notified) ? NotificationList(notified).Where(row => row.OperatorId == id).ToList() : [];
         List<AgentJobNotifyRowDto>? jobs = record is not null && Read(AgentSql.JobNotifications, out var jobRows)
             ? [.. JobNotifyList(jobRows).Where(job => job.Email == record.Name || job.Page == record.Name || job.NetSend == record.Name)] : null;
         return new(null, 0, AgentOperatorDocument: new(record, login, sysadmin, platform!, notifications, mail, sysadmin ? null : OperatorReadOnlyMessage, alerts, alertsTruncated ? true : null, jobs));
@@ -462,8 +464,11 @@ internal sealed partial class ActionService
         var alertsTruncated = false;
         if (alertsOffered && Read(AgentSql.AlertRows, out var alertRows)) { alerts = AlertRowList(alertRows); alertsTruncated = alertRows.Truncated; }
         var notifications = alerts is not null && Read(AgentSql.Notifications, out var notified) ? NotificationList(notified) : [];
+        var notificationsTruncated = alerts is not null && results.TryGetValue(AgentSql.Notifications.Id, out var all) && all.Truncated;
         List<AgentJobNotifyRowDto>? jobs = Read(AgentSql.JobNotifications, out var jobRows) ? JobNotifyList(jobRows) : null;
-        return new(null, 0, AgentOperators: new(login, sysadmin, platform!, operators, notifications, mail, sysadmin ? null : OperatorReadOnlyMessage, operatorRows.Truncated ? true : null,
+        // A grid missing some notifications would re-add one msdb already has, so past the cap it only shows them.
+        var readOnly = !sysadmin ? OperatorReadOnlyMessage : notificationsTruncated ? NotificationsTruncatedMessage : null;
+        return new(null, 0, AgentOperators: new(login, sysadmin, platform!, operators, notifications, mail, readOnly, operatorRows.Truncated ? true : null,
             alerts, alertsTruncated ? true : null, jobs));
     }
 
@@ -477,11 +482,11 @@ internal sealed partial class ActionService
         if (id is null) return new(null, 0, ObjectGone(target));
         if (target.Kind == "agentAlert") return new(new DeleteTargetDto(target.Name!, "Alert", null, [], false, AgentObjectId: id), 0);
         var reader = new AgentReader();
-        var (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.OperatorRows, AgentSql.Notifications, AgentSql.JobNotifications], (_, _) => null, token);
+        var (results, errors) = await reader.ReadAsync(connection, null, [AgentSql.OperatorRows, AgentSql.OperatorNotifications, AgentSql.JobNotifications], (_, parameter) => parameter.Name == "@operator_id" ? id : null, token);
         bool Read(AgentStatement statement, out AgentResult result) => results.TryGetValue(statement.Id, out result!) && errors.All(error => error.Statement != statement.Id);
         List<string>? choices = Read(AgentSql.OperatorRows, out var rows)
             ? [.. rows.Rows.Select(row => TextOf(rows.Value(row, "name"))).Where(name => name.Length > 0 && !string.Equals(name, target.Name, StringComparison.Ordinal)).Order(StringComparer.CurrentCultureIgnoreCase)] : null;
-        var alerts = Read(AgentSql.Notifications, out var notified) ? NotificationList(notified).Count(row => row.OperatorId == id && row.Methods > 0) : 0;
+        var alerts = Read(AgentSql.OperatorNotifications, out var notified) ? NotificationList(notified).Count(row => row.OperatorId == id && row.Methods > 0) : 0;
         var jobs = Read(AgentSql.JobNotifications, out var jobRows) ? JobNotifyList(jobRows).Count(job => job.Email == target.Name || job.Page == target.Name || job.NetSend == target.Name) : 0;
         return new(new DeleteTargetDto(target.Name!, "Operator", null, [], false, AgentObjectId: id, ReassignChoices: choices, NotifiedBy: new(alerts, jobs)), 0);
     }

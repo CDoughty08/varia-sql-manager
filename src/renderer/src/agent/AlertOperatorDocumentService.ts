@@ -13,7 +13,7 @@ import {
 } from '../../../shared/actions/agent-alert.ts'
 import {
   agentOperatorChangeCount, agentOperatorProblems, agentOperatorSave, agentOperatorsTabName, agentOperatorTabName, agentOperatorText, initialAgentOperatorDraft,
-  matrixChangeCount, matrixChanges, notifyMatrix, type AgentNotifyMatrix, type AgentOperatorDocumentModel, type AgentOperatorDraft, type AgentOperatorsModel
+  matrixChangeCount, matrixChanges, matrixProblems, notifyMatrix, type AgentNotifyMatrix, type AgentOperatorDocumentModel, type AgentOperatorDraft, type AgentOperatorsModel
 } from '../../../shared/actions/agent-operator.ts'
 import type { ActionDescribeResult, ActionError, ActionExecuteRequest, ActionExecuteResult, ActionScriptRequest, DescribeId } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -163,7 +163,7 @@ export const operatorsSpec: AgentObjectSpec<AgentOperatorsModel, AgentNotifyMatr
   exists: () => true,
   initial: model => notifyMatrix(model),
   changes: (model, base, draft) => matrixChangeCount(model, base, draft),
-  problems: () => [],
+  problems: matrixProblems,
   committed: (model, base, draft, done) => {
     const next = new Map(base)
     for (const { alert } of matrixChanges(model, base, draft).slice(0, done)) next.set(alert.name, new Map(draft.get(alert.name) ?? []))

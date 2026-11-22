@@ -5,7 +5,7 @@ import {
 } from '../src/shared/actions/agent-alert'
 import {
   agentOperatorChangeCount, agentOperatorCommandEntries, agentOperatorProblems, agentOperatorSave, agentOperatorSaveSchema, initialAgentOperatorDraft, matrixChangeCount, matrixChanges,
-  notifyMatrix, operatorUses, withCell, type AgentOperatorDocumentModel, type AgentOperatorRecord, type AgentOperatorsModel
+  matrixProblems, notifyMatrix, operatorUses, withCell, type AgentOperatorDocumentModel, type AgentOperatorRecord, type AgentOperatorsModel
 } from '../src/shared/actions/agent-operator'
 import type { AgentJobOperator } from '../src/shared/actions/agent-job'
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
@@ -112,6 +112,22 @@ describe("the alert document's shared rules", () => {
 })
 
 describe("the operator document's and grid's shared rules", () => {
+  it('counts spaces around a name as no rename, since msdb would refuse renaming to the name it has', () => {
+    const alert = initialAgentAlertDraft(alertModel())
+    expect(agentAlertChangeCount(alert, { ...alert, name: `${alert.name} ` })).toBe(0)
+    const operator = initialAgentOperatorDraft(operatorModel())
+    expect(agentOperatorChangeCount(operator, { ...operator, name: ` ${operator.name}` })).toBe(0)
+  })
+  it('blocks a save with more notification changes than one request carries', () => {
+    const operators = Array.from({ length: agentLimits.notificationChanges + 1 }, (_, index) => operatorRecord(100 + index, `Op ${index}`))
+    const model = gridModel({ operators, notifications: [] })
+    const draft = operators.reduce((matrix, operator) => withCell(matrix, 'Severity 017', operator.name, notifyEmail), notifyMatrix(model))
+    expect(matrixProblems(model, draft)).toEqual([{ severity: 'error', message: expect.stringContaining('Severity 017') }])
+    expect(matrixProblems(model, withCell(notifyMatrix(model), 'Severity 017', 'Op 0', notifyEmail))).toEqual([])
+    const alert = alertModel({ operators: operators.map(operator => jobOperator(operator.name)) })
+    const many = { ...initialAgentAlertDraft(alert), notify: operators.map(operator => ({ operator: operator.name, methods: notifyEmail })) }
+    expect(agentAlertProblems(alert, many).some(problem => problem.field === 'notify' && problem.severity === 'error')).toBe(true)
+  })
   it('opens New Operator with SSMS defaults and saves only what changed', () => {
     expect(initialAgentOperatorDraft({ notifications: [] })).toMatchObject({ name: '', enabled: true, pagerDays: 127, weekday: { start: 80000, end: 180000 } })
     const model = operatorModel(), draft = initialAgentOperatorDraft(model)

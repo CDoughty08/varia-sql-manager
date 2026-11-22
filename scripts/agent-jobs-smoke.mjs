@@ -60,8 +60,8 @@ try {
   step = 'open'
   await expect(statusBar(page)).toContainText(/Ready/, { timeout: 30000 })
   await connect('server-a')
-  // Job Activity Monitor leads the Agent node's menu.
-  expect((await explorerMenuItems(page, 'server-a', 'SQL Server Agent')).names[0]).toBe('Job Activity Monitor')
+  // The Agent node's menu opens with SSMS's New submenu, then Job Activity Monitor.
+  expect((await explorerMenuItems(page, 'server-a', 'SQL Server Agent')).names.slice(0, 2)).toEqual(['New', 'Job Activity Monitor'])
   await page.keyboard.press('Escape')
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')

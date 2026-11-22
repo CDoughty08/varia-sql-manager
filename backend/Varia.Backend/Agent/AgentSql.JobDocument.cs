@@ -97,6 +97,7 @@ internal static partial class AgentSql
     [GeneratedRegex(@"^EXEC @rc = msdb\.dbo\.(?<proc>\w+) (?<arg>@\w+) = (?<value>@\w+)(?<out> OUTPUT)?(?:, (?<arg>@\w+) = (?<value>@\w+)(?<out> OUTPUT)?)*;$", RegexOptions.CultureInvariant)]
     private static partial Regex SaveCall();
     private static readonly HashSet<string> SaveProcedures = new(["sp_update_job", "sp_update_alert", "sp_add_job", "sp_add_jobserver"], StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> JobAlertArguments = new HashSet<string>(["@name", "@job_id"], StringComparer.Ordinal);
     /// <summary>The procedures only a job save calls, in its own shape: the one-call write lints refuse them (New Job's id is an OUTPUT, and a
     /// detach needs its alert guard).</summary>
     internal static readonly IReadOnlySet<string> SaveOnly = new HashSet<string>(["sp_add_job", "sp_add_jobserver", "sp_update_alert"], StringComparer.Ordinal);
@@ -141,6 +142,8 @@ internal static partial class AgentSql
             var procedure = match.Groups["proc"].Value;
             procedures.Add(procedure);
             if (!SaveProcedures.Contains(procedure) || !catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which a job save does not call"); continue; }
+            // A job save only detaches alerts; sp_update_alert's other arguments are the alert document's (AG-7).
+            if (procedure == "sp_update_alert") allowed = JobAlertArguments;
             if (guarded != (procedure == "sp_update_alert")) problems.Add(guarded ? "guards a call that is not sp_update_alert" : "detaches an alert without its guard");
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < match.Groups["arg"].Captures.Count; i++)
