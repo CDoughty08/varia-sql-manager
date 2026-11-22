@@ -57,8 +57,13 @@ const lostText = 'These results are no longer available because the SQL backend 
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
-export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
-  const shown = `Only the first ${formatCount(o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
+export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
+  // A windowed BigQuery result keeps no rows here: what it can show is what the grid can read, capped by the rows-kept limit
+  // or, past that, by 32-bit row indexes.
+  const remote = o.residence === 'remote'
+  if (remote && !o.truncated) return undefined
+  if (remote && (o.rowsAvailable ?? 0) >= 2_147_483_647) return `Only the first ${formatCount(o.rowsAvailable ?? 0)} of ${formatCount(o.rowsRead)} rows can be shown: a grid reads at most ${formatCount(2_147_483_647)} rows of a result windowed in BigQuery.`
+  const shown = `Only the first ${formatCount(remote ? o.rowsAvailable ?? 0 : o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
   if (o.truncated === 'systemMemory') return `${shown} because the computer is low on memory. Execution continued.`
   if (o.truncated === 'queryBudget' || o.truncated === 'globalBudget') {
     // The figure the query stopped at when it did, not today's: the limit can change while the backend runs.
@@ -231,7 +236,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const setRootEl = useCallback((element: HTMLDivElement | null) => { rootEl.current = element }, [])
   const lost = snapshot.state === 'lost'
-  const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
+  const truncation = truncationText({ ...snapshot, budget })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   // A comparison's strip says what it found, with what its highlights say after it; its notices are under its toolbar.
   const compareNote = compared ? [compareText(compared, sources), highlightText(marked, { comparison: true })].filter(Boolean).join(' ') : undefined
@@ -239,7 +244,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
-  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
+  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot', snapshot.residence === 'remote') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).

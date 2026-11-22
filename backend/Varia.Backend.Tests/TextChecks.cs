@@ -17,6 +17,7 @@ internal static class TextChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         await Goldens(check);
+        BinaryExportChunks(check);
         PageViews(check);
         await Estimates(check);
         await CopyStream(check);
@@ -25,6 +26,28 @@ internal static class TextChecks
         XmlCells(check);
         Descriptors(check);
         Allocation(check);
+    }
+
+    private static void BinaryExportChunks(Action<bool, string> check)
+    {
+        var bytes = new byte[32_766];
+        new Random(1).NextBytes(bytes);
+        var builder = new PageBuilder(1, [WireKind.Binary]);
+        builder.BeginRow();
+        builder.AppendBinary(bytes);
+        builder.CommitRow();
+        var page = PageView.Parse(builder.Seal(), 1);
+        foreach (var size in new[] { 3, 127, 4096, 65_536 })
+        {
+            var buffer = new ChunkedBuffer(size);
+            var writer = new ResultTextWriter(buffer, TextOptions.Copy(false, false), [new("value", "varbinary(max)", "binary")]);
+            writer.Row(page, 0, [0]);
+            buffer.Seal();
+            var output = new List<byte>();
+            while (buffer.TryTake(out var chunk)) output.AddRange(chunk);
+            check(Encoding.ASCII.GetString([.. output]) == "0x" + Convert.ToHexString(bytes) && writer.Bytes == output.Count,
+                $"binary cells write every uppercase hex pair across {size}-byte chunks");
+        }
     }
 
     internal static WireKind WireOf(ResultColumn column) => column.Wire == "binary" ? WireKind.Binary : WireKind.Text;

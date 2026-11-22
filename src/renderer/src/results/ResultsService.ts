@@ -443,6 +443,9 @@ const unavailable = 'These results are no longer available because the SQL backe
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
+// Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
+const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
+const windowedCopy = 'Could not copy the results: This result is windowed in BigQuery: its rows are not in memory, so they cannot be copied yet.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -548,6 +551,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private scheduled = false
   private disposed = false
   private announcedCount = 0
+  /** Residence switches said by tab whose announcement has not been read out yet: the run's end, within the live region's
+   *  delay, would replace it, so it says them too. */
+  /** The other sentence waiting in the debounce with unheard switches (announce). */
+  private readonly unheardSentence = new Map<string, string>()
+  private readonly unheardSwitches = new Map<string, string[]>()
   private minted = 0
 
   constructor(o: {
@@ -582,6 +590,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  result), so its strip moves to the new run. */
   begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean } = {}): void {
     if (this.disposed) return
+    // A switch of the run this replaces is not said with the new one's end.
+    this.unheardSwitches.delete(tabId)
+    this.unheardSentence.delete(tabId)
     // The focus follows a group by its ordinal into the next run, as names and highlights do; nothing derived is rebuilt,
     // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
     // A run that ended before it returned that group passes the wish on.
@@ -619,8 +630,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.subscription?.dispose()
     run.subscription = undefined
     const { summary } = end
+    // Switches the summary carried, and those whose own announcement the run's end now replaces, said with the run's end
+    // (one announcement replaces another).
+    let switchNotes: string[] = this.unheardSwitches.get(tabId) ?? []
+    this.unheardSwitches.delete(tabId)
     if (summary) {
+      // A summary that overtook a set's residence event (which now arrives after the run, and is ignored) switches it here.
+      const switched = summary.resultSets.filter(descriptor => {
+        const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
+        return entry !== undefined && (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
+      })
       this.client.applySummary(summary)
+      switchNotes = [...switchNotes, ...switched.map(descriptor => this.switched(tabId, run, descriptor, false))]
       for (const descriptor of summary.resultSets) {
         this.opened(run, descriptor)
         this.settle(run, descriptor)
@@ -652,7 +673,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A screen reader hears why there are no sets, as the Results view's notice shows it; focus does not move there.
     const discarded = discardedSets(run)
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run))
-      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : ''))
+      + (discarded ? ` ${formatCount(discarded)} ${plural(discarded, 'result set')} ${discarded === 1 ? 'was' : 'were'} read and not kept: Discard results after execution is on.` : '')
+      + switchNotes.map(note => ' ' + note).join(''))
     let retaining: Promise<void> | undefined
     if (end.planContext && this.retainedPlans) {
       const sources: SnapshotSource[] = []
@@ -702,6 +724,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const timer = this.announcements.get(tabId)
     if (timer !== undefined) this.timers.clearTimeout(timer)
     this.announcements.delete(tabId)
+    this.unheardSwitches.delete(tabId)
+    this.unheardSentence.delete(tabId)
     if (!Object.hasOwn(this.getSnapshot(), tabId)) return
     const next = { ...this.getSnapshot() }
     delete next[tabId]
@@ -995,6 +1019,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
+    // Refused before it cancels the copy running (another grid's, perhaps): the backend would refuse it anyway.
+    if (set.handle.getSnapshot().residence === 'remote') return windowedCopy
     // A grid drawn transposed copies as drawn: the selection it shows, written turned.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     const parts = (turned ? transposedCopyPlan : copyPlan)(selection, set.descriptor.columns.length)
@@ -1034,6 +1060,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set) return undefined
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
+    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence). Before the
+    // loading check: waiting would not help.
+    if (snapshot.residence === 'remote') return windowedSave
     if (snapshot.state !== 'complete') return stillLoading
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.
@@ -1391,11 +1420,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The live region's sentence, after the 300 ms debounce; a copy's or save's outcome is read out again when repeated. */
-  announce(tabId: string, text: string): void {
+  announce(tabId: string, sentence: string, fromSwitch = false): void {
+    // Switches not read out yet are said first, then the other sentence waiting (a selection, a copy): neither kind replaces
+    // the other inside the debounce, while a later sentence of the same kind replaces an earlier one.
+    if (!fromSwitch) this.unheardSentence.set(tabId, sentence)
+    const text = [...this.unheardSwitches.get(tabId) ?? [], this.unheardSentence.get(tabId) ?? ''].filter(Boolean).join(' ')
     const previous = this.announcements.get(tabId)
     if (previous !== undefined) this.timers.clearTimeout(previous)
     this.announcements.set(tabId, this.timers.setTimeout(() => {
       this.announcements.delete(tabId)
+      this.unheardSwitches.delete(tabId)
+      this.unheardSentence.delete(tabId)
       const run = this.runs.get(tabId)
       if (!run) return
       // The same sentence again must still be read out: a zero-width space makes it a change.
@@ -1435,6 +1470,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
+        break
+      case 'resultSet.residence':
+        this.switched(tabId, run, event.descriptor)
         break
       case 'progress':
         run.completedBatches = event.completedBatches
@@ -1479,7 +1517,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const key = setKey(descriptor)
     if (descriptor.state !== 'complete' || !run.setKeys.has(key) || run.settled.has(key)) return
     if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
-    run.settled.set(key, { rows: descriptor.rowsStored, strip: descriptor.incomplete || descriptor.truncated !== undefined })
+    // A windowed result stores no rows here: the stack sizes it by the rows its grid can read.
+    const rows = descriptor.residence === 'remote' ? descriptor.rowsAvailable : descriptor.rowsStored
+    run.settled.set(key, { rows, strip: descriptor.incomplete || descriptor.truncated !== undefined })
   }
 
   /** An error, PRINT or RAISERROR output opens the strip, unless the user opened or closed it in this run. SQL Server's other
@@ -1622,6 +1662,47 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (keys.length) this.applySort(tabId, run, key, keys)
     if (sort?.filters.length) this.notify(tabId, `${distinctName(entry, run.sets)} was built again, so its filters were removed.`)
     return key
+  }
+
+  /** A BigQuery result switched residence under a new revision (its event, or a summary that overtook it): the rows the grid
+   *  showed are from an older revision, so its selection goes (the grid keeps its scroll), and the status bar and live
+   *  region say what changed. */
+  private switched(tabId: string, run: Run, descriptor: ResultDescriptor, announce = true): string {
+    const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
+    const grid = entry ? this.views.get(tabId)?.grids.get(entry.key) : undefined
+    if (entry && grid?.selection) { grid.selection = undefined; this.controllers.get(entry.key)?.repaint(); this.selectionChanged() }
+    // Its sort and filters went with the old pages (the backend dropped their views): the grid shows the result again.
+    const sort = entry ? run.sorts.get(entry.key) : undefined
+    if (entry) {
+      run.sorting.get(entry.key)?.abort()
+      run.sorting.delete(entry.key)
+      run.held.delete(entry.key)
+    }
+    if (entry && sort) {
+      for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+      const sorts = new Map(run.sorts)
+      sorts.delete(entry.key)
+      run.sorts = sorts
+    }
+    // The stack sized it by the older revision's rows: it settles again from this one (a load, once it completes).
+    const settledKey = setKey(descriptor)
+    if (run.settled.has(settledKey)) {
+      if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+      run.settled.delete(settledKey)
+    }
+    this.settle(run, descriptor)
+    const removed = sort && (sort.keys.length > 0 || sort.filters.length > 0) ? ' Its sort and filters were removed.' : ''
+    // Among several results the sentence names which one switched.
+    const subject = entry && run.sets.length > 1 ? distinctName(entry, run.sets) : 'The result'
+    const text = (descriptor.residence === 'remote'
+      ? `${subject} is now windowed in BigQuery: rows are read as you scroll.`
+      : `${subject} is loading into memory.`) + removed
+    if (announce) {
+      // Said with any switch not yet read out (several results of a script switching at once): one replaces another.
+      this.unheardSwitches.set(tabId, [...this.unheardSwitches.get(tabId) ?? [], text])
+      this.announce(tabId, text, true)
+    }
+    return text
   }
 
   /**
@@ -2209,8 +2290,11 @@ const headerable = (set: ResultSetEntry, column: number): boolean => Number.isIn
 export const beyondCapText = (row: number): string =>
   `The match is in row ${formatCount(row + 1)}, and a transposed grid draws only the first ${formatCount(wire.transpose.maxRows)} rows. Filter the rows, or turn Transposed off, to see it.`
 /** A transposed grid's strip when the view has more rows than it draws as columns. */
-export const capStripText = (rows: number, pivot: boolean): string =>
-  `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns. Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`
+export const capStripText = (rows: number, pivot: boolean, windowed = false): string =>
+  `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns.${windowed
+    // A windowed result refuses filters (REMOTE_RESULT): the strip offers no way to the rest that cannot work.
+    ? ' A result windowed in BigQuery cannot be filtered yet.'
+    : ` Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`}`
 
 /** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
 export function lengthSortable(column: ResultColumn): boolean {

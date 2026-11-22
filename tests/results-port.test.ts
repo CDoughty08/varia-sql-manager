@@ -8,7 +8,7 @@ import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from
 import { buildLiveSchemas } from '../src/shared/live/schema'
 import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../src/shared/live/schema'
-import { summaryOf } from './fixtures/results'
+import { descriptor as fullDescriptor, summaryOf } from './fixtures/results'
 
 const MiB = 1024 * 1024
 
@@ -206,6 +206,29 @@ describe('ResultsPortHost', () => {
     expect(port().posted.filter(message => message.t === 'backend').map(message => message.t === 'backend' && [message.generation, message.status])).toEqual([[1, 'ready'], [1, 'restarting'], [2, 'starting']])
   })
 
+  it('keeps a result a residence event names readable with its viewer, only in its generation, and never opens one by it', () => {
+    const { host, read, reads, port } = fixture()
+    // A result switched by resultSet.residence (Load into memory, a misestimate) stays readable; one main does not own (closed
+    // while the event was on its way) is not owned by it.
+    const switched = fullDescriptor(9, { residence: 'remote', rowsTotal: 5_000_000, revision: 1, rowsStored: 0, rowsAvailable: 5_000_000 })
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: switched })
+    expect(host.owns(1, 9)).toBe(false)
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.opened', descriptor: { ...switched, residence: 'memory', revision: 0 } })
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: switched })
+    expect(host.owns(1, 9)).toBe(true)
+    expect(host.owns(2, 9)).toBe(false)
+    expect(host.owns(1, 10)).toBe(false)
+    read(1, 9, { viewer: 3, firstRow: 1_000_000 })
+    read(2, 10, { viewer: 3 })
+    expect(reads.map(item => item.params)).toEqual([{ resultId: 9, firstRow: 1_000_000, maxRows: 100, viewer: 3 }])
+    expect(port().ends().map(end => [end.rid, !end.ok && end.code])).toEqual([[2, 'RESULT_UNAVAILABLE']])
+    expect(port().posted.filter(message => message.t === 'query').map(message => message.t === 'query' && message.event.type)).toEqual(['resultSet.residence', 'resultSet.opened', 'resultSet.residence'])
+    // A viewer id is a positive 31-bit number.
+    read(3, 9, { viewer: 0 })
+    read(4, 9, { viewer: 2 ** 31 })
+    expect(port().ends().slice(1).map(end => [end.rid, !end.ok && end.code])).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST']])
+  })
+
   it('forwards pages as exact-size ArrayBuffers in sequence, then the end', async () => {
     const { host, read, reads, port } = fixture()
     host.own([descriptor(7)])
@@ -340,6 +363,48 @@ describe('ResultsPortHost', () => {
     host.memory('results', { usedBytes: 60, globalBytes: 200, generation: 1, seq: 4 })
     host.open(frame)
     expect(port().posted).toEqual([{ t: 'backend', generation: 2, status: 'starting' }])
+  })
+
+  it('does not own a closed result again when a load summary names it released', async () => {
+    const { host, backend, port, reads } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'close', rid: 1, generation: 1, resultIds: [7] })
+    await settle()
+    expect(backend.close).toHaveBeenCalledWith(1, [7])
+    expect(host.owns(1, 7)).toBe(false)
+    // The load stopped by the close answers a summary whose set is released (RemoteQueryAsync's finally/return).
+    host.querySummary(summaryOf([fullDescriptor(7, { state: 'released', residence: 'remote', revision: 2 })]))
+    const afterSummary = host.owns(1, 7)
+    port().send({ t: 'read', rid: 2, generation: 1, resultId: 7, firstRow: 0, maxRows: 100, credit: 4 * MiB })
+    expect({ afterSummary, forwarded: reads.length }).toEqual({ afterSummary: false, forwarded: 0 })
+  })
+
+  it('does not own a closed result again when a residence event names it released', async () => {
+    const { host, backend, port, reads } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'close', rid: 1, generation: 1, resultIds: [7] })
+    await settle()
+    expect(backend.close).toHaveBeenCalledWith(1, [7])
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: fullDescriptor(7, { state: 'released', residence: 'remote', revision: 2 }) })
+    const afterEvent = host.owns(1, 7)
+    port().send({ t: 'read', rid: 2, generation: 1, resultId: 7, firstRow: 0, maxRows: 100, credit: 4 * MiB })
+    expect({ afterEvent, forwarded: reads.length }).toEqual({ afterEvent: false, forwarded: 0 })
+    // One still owned that the backend released (Close Results from elsewhere) is disowned by the event.
+    host.own([descriptor(8)])
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: fullDescriptor(8, { state: 'released', residence: 'remote', revision: 2 }) })
+    expect(host.owns(1, 8)).toBe(false)
+  })
+
+  it('does not own a closed result again when a residence event sent before the close arrives', async () => {
+    const { host, backend, port, reads } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'close', rid: 1, generation: 1, resultIds: [7] })
+    await settle()
+    expect(backend.close).toHaveBeenCalledWith(1, [7])
+    host.queryEvent(crypto.randomUUID(), { type: 'resultSet.residence', descriptor: fullDescriptor(7, { state: 'open', residence: 'remote', revision: 2 }) })
+    const afterEvent = host.owns(1, 7)
+    port().send({ t: 'read', rid: 2, generation: 1, resultId: 7, firstRow: 0, maxRows: 100, credit: 4 * MiB })
+    expect({ afterEvent, forwarded: reads.length }).toEqual({ afterEvent: false, forwarded: 0 })
   })
 
   it('closes only owned results of the current generation', async () => {

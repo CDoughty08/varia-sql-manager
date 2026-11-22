@@ -103,8 +103,11 @@ const viewFilters = (view: ResultView): string => {
 }
 export const profiledRows = (snapshot: ResultSnapshot | undefined, view: ResultView | undefined): ProfiledRows => ({
   filters: view ? viewFilters(view) : '',
-  settled: !snapshot ? '' : view ? (view.complete ? 'complete:' : 'partial:') + view.baseRows : snapshot.state === 'complete' ? 'complete:' + snapshot.rowsAvailable : snapshot.state
+  // Led by the result's revision: a BigQuery residence switch discards the rows the figures came from.
+  settled: !snapshot ? '' : `${snapshot.revision ?? 0}|` + (view ? (view.complete ? 'complete:' : 'partial:') + view.baseRows : snapshot.state === 'complete' ? 'complete:' + snapshot.rowsAvailable : snapshot.state)
 })
+/** The revision part of `ProfiledRows.settled`: figures carry over to more rows of the same revision only. */
+export const profiledRevision = (settled: string): string => settled.slice(0, settled.indexOf('|') + 1)
 
 export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { tabId: string; tab: TabResults; shown?: EntryKey }) {
   const { results, commands, settings, profilePeek, gestures, compare } = useWorkbench()
@@ -149,7 +152,7 @@ export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { 
     const abort = new AbortController()
     const of: ProfiledRows = { filters, settled }
     // The same filters over more rows (the set completed): the cards stay until their new figures arrive.
-    const previous = latest.current?.base === base && latest.current.of.filters === filters ? latest.current : undefined
+    const previous = latest.current?.base === base && latest.current.of.filters === filters && profiledRevision(latest.current.of.settled) === profiledRevision(settled) ? latest.current : undefined
     let current: Profiles = previous ? { ...previous, of, loading: true, error: undefined, failed: undefined } : { base, of, columns: new Map(), loading: true }
     setProfiles(current)
     // The grid may sort again while this reads its view: the view stays open until the profile is done with it.

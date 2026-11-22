@@ -8,7 +8,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { emptyDraft } from '../src/renderer/src/results/pivot'
 import PivotPanel from '../src/renderer/src/results/PivotPanel'
-import type { PivotTab } from '../src/renderer/src/results/PivotService'
+import { windowedPivotText, type PivotTab } from '../src/renderer/src/results/PivotService'
 import type { TabResults } from '../src/renderer/src/results/ResultsService'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -50,6 +50,24 @@ describe('pivot builder', () => {
     set({ sourceName: 'Totals' })
     expect(container.querySelector('.pivot-source')!.textContent).toBe('Totals')
     expect(container.textContent).toContain('Building again replaces Pivot of Totals (Result 1) once the new one is built.')
+    act(() => { root.unmount() })
+  })
+  it.each([
+    ['remote', 'complete', 'rows', windowedPivotText],
+    ['memory', 'complete', 'plan', 'This result cannot be pivoted.'],
+    ['memory', 'open', 'rows', 'Pivot this result after it finishes loading.']
+  ])('says why a result held %s, %s, of %s cannot be pivoted, rather than offering to build it', (residence, state, kind, note) => {
+    const snapshot = { tabs: { t: { open: true, source: 'e1', sourceName: 'Result 1', draft: emptyDraft, running: false } as PivotTab }, info: new Map() }
+    const pivot = { subscribe: () => () => {}, getSnapshot: () => snapshot, canPivot: () => false, cancel: vi.fn(), close: vi.fn(), run: vi.fn(), setDraft: vi.fn() }
+    const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined }
+    const handle = { getSnapshot: () => ({ state, residence }) }
+    const descriptor = { kind, rowsStored: 0, columns: [{ name: 'Region', dataType: 'STRING', wire: 'text', nullable: true }] }
+    const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle, label: 'Result 1' }] } as unknown as TabResults
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    act(() => { root.render(createElement(WorkbenchProvider, { workbench: { pivot, results } as unknown as Workbench, children: createElement(PivotPanel, { tabId: 't', tab }) })) })
+    expect(container.textContent).toContain(note)
+    if (note !== windowedPivotText) expect(container.textContent).not.toContain(windowedPivotText)
     act(() => { root.unmount() })
   })
 })

@@ -58,9 +58,9 @@ const resultOf = (key: ResultKey): string => key.view === undefined ? `${key.gen
 /** The result a cache key belongs to, without its view. */
 const baseOf = (result: string): string => { const at = result.indexOf('#'); return at < 0 ? result : result.slice(0, at) }
 
-/** A page's firstRow from its header (array(7) of uints: version, resultId, firstRow, …), or undefined when the
- *  header is not in that canonical form; decodePage validates everything properly. */
-function pageFirstRow(body: ArrayBuffer): number | undefined {
+/** A page's firstRow and rowCount from its header (array(7) of uints: version, resultId, firstRow, rowCount, …), or
+ *  undefined when the header is not in that canonical form; decodePage validates everything properly. */
+function pageRows(body: ArrayBuffer): { firstRow: number; rowCount: number } | undefined {
   const bytes = new Uint8Array(body, 0, Math.min(body.byteLength, 32))
   let at = 1
   const uint = (): number | undefined => {
@@ -77,7 +77,8 @@ function pageFirstRow(body: ArrayBuffer): number | undefined {
   if (bytes[0] !== 0x97) return undefined
   uint()
   uint()
-  return uint()
+  const firstRow = uint(), rowCount = uint()
+  return firstRow === undefined || rowCount === undefined ? undefined : { firstRow, rowCount }
 }
 
 /**
@@ -184,6 +185,7 @@ export class ResultsWorkerCore {
       case 'liveUpdate': return this.liveUpdate(request)
       case 'liveAck': return this.liveAck(request.id, request.bytes)
       case 'forget': return this.forgetResults(request.generation, request.resultIds)
+      case 'revise': return this.revise(request.key)
     }
   }
 
@@ -242,7 +244,7 @@ export class ResultsWorkerCore {
       const rows = this.covered(resultOf(request.key), bounded.first, count)
       const { text, flags } = this.build(bounded, rows)
       this.post({ type: 'window', id: request.id, first: bounded.first, count: rows, colStart, colEnd, text, flags }, [flags.buffer])
-    })
+    }, request.viewer)
   }
 
   /** The widest display text per column over the rows asked for (those cached once the reads end), in monospace
@@ -281,9 +283,12 @@ export class ResultsWorkerCore {
   }
 
   /** A whole stored value. Formatting runs here, off the UI thread; a value stored as a prefix is never formatted. */
-  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat): void {
+  private cell(id: number, key: ResultKey, wires: readonly WireKind[], row: number, col: number, format?: ValueFormat, again = true): void {
     this.wait(id, key, wires, row, 1, () => {
       const page = this.pageAt(resultOf(key), row)
+      // Its read ended without the row: a new revision dropped the pages (resultSet.residence), or a windowed read answered
+      // short. The same rows read once more, before saying the row is not available.
+      if (!page && again && col >= 0 && col < wires.length) return this.cell(id, key, wires, row, col, format, false)
       if (!page || col < 0 || col >= wires.length) return this.error(id, 'RESULT_UNAVAILABLE', 'That row is not available.')
       this.touch(page)
       const flags = cellFlags(page.view, col, row - page.firstRow)
@@ -298,7 +303,7 @@ export class ResultsWorkerCore {
     this.wait(undefined, key, wires, Math.max(0, first), Math.max(0, Math.min(count, this.limits.readRows)), () => {})
   }
 
-  private wait(id: number | undefined, key: ResultKey, wires: readonly WireKind[], first: number, count: number, answer: () => void): void {
+  private wait(id: number | undefined, key: ResultKey, wires: readonly WireKind[], first: number, count: number, answer: () => void, viewer?: number): void {
     if (this.stale(key)) return this.error(id, 'RESULT_UNAVAILABLE', resultUnavailable)
     const result = resultOf(key)
     const waiter: Waiter = { id, key, result, wires, first, count, reads: new Set(), settle: () => { this.forget(waiter); answer() } }
@@ -321,7 +326,7 @@ export class ResultsWorkerCore {
         }
         const next = flying.find(item => item.firstRow > from)
         const to = Math.min(end, from + this.limits.readRows, next ? next.firstRow : end)
-        const read = this.read(key, wires, from, to)
+        const read = this.read(key, wires, from, to, viewer)
         read.waiters.add(waiter)
         waiter.reads.add(read)
         from = to
@@ -336,11 +341,11 @@ export class ResultsWorkerCore {
     waiter.reads.clear()
   }
 
-  private read(key: ResultKey, wires: readonly WireKind[], firstRow: number, end: number): Read {
+  private read(key: ResultKey, wires: readonly WireKind[], firstRow: number, end: number, viewer?: number): Read {
     const rid = this.allocate()
     const read: Read = { rid, key, result: resultOf(key), wires, firstRow, end, waiters: new Set(), cancelled: false }
     this.reads.set(rid, read)
-    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit, ...(key.view === undefined ? {} : { viewId: key.view }) })
+    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit, ...(key.view === undefined ? {} : { viewId: key.view }), ...(viewer === undefined ? {} : { viewer }) })
     return read
   }
 
@@ -580,6 +585,22 @@ export class ResultsWorkerCore {
     }
   }
 
+  /** A new revision of a result (resultSet.residence): its pages go, and its reads in flight end without an error, so their
+   *  windows answer with the rows still cached (none) and the grid reads them again from the new revision. */
+  private revise(key: ResultKey): void {
+    const result = resultOf(key)
+    const settled = new Set<Waiter>()
+    for (const read of [...this.reads.values()]) {
+      if (read.cancelled || baseOf(read.result) !== result) continue
+      this.reads.delete(read.rid)
+      read.cancelled = true
+      this.send({ t: 'cancel', rid: read.rid })
+      for (const waiter of read.waiters) { waiter.reads.delete(read); if (waiter.reads.size === 0) settled.add(waiter) }
+    }
+    this.dropAll(result)
+    for (const waiter of settled) waiter.settle()
+  }
+
   /** Results the backend already released: their pages go, and reads still bringing rows of them end, since main would
    *  refuse to read them again. No results.close is sent. */
   private forgetResults(generation: number, resultIds: readonly number[]): void {
@@ -591,9 +612,11 @@ export class ResultsWorkerCore {
   private page(rid: number, body: ArrayBuffer): void {
     const read = this.reads.get(rid)
     if (!read || read.cancelled) return
-    // A page another read already brought is credited but not decoded again.
-    const firstRow = pageFirstRow(body)
-    if (firstRow !== undefined && this.cache.has(`${read.result}:${firstRow}`)) {
+    // A page another read already brought is credited but not decoded again: the same rows from the same row. A windowed
+    // result's block fetched again may break its pages elsewhere (a longer page from the same row): that one is kept.
+    const rows = pageRows(body)
+    const cached = rows && this.cache.get(`${read.result}:${rows.firstRow}`)
+    if (rows && cached && cached.rowCount >= rows.rowCount) {
       this.send({ t: 'credit', rid, bytes: body.byteLength })
       return
     }
@@ -798,15 +821,20 @@ export class ResultsWorkerCore {
   private store(read: Read, view: PageView, bytes: number): void {
     if (read.key.generation !== this.generation && this.generation !== 0) return
     const id = `${read.result}:${view.firstRow}`
-    if (this.cache.has(id)) return
+    // A windowed result's block fetched again may break its pages elsewhere, so pages of a result can overlap (lookups allow
+    // it): a page whose rows a cached one already holds is not kept, and cached pages it holds whole go.
+    const end = view.firstRow + view.rowCount
+    const index = this.indexes.get(read.result) ?? []
+    if (index.some(other => other.firstRow <= view.firstRow && other.firstRow + other.rowCount >= end)) return
+    for (const other of [...index]) if (other.firstRow >= view.firstRow && other.firstRow + other.rowCount <= end) this.remove(other)
     const page: CachedPage = { id, result: read.result, firstRow: view.firstRow, rowCount: view.rowCount, view, bytes }
     this.cache.set(id, page)
     this.cacheBytes += bytes
-    const index = this.indexes.get(read.result) ?? []
-    let at = index.length
-    while (at > 0 && index[at - 1].firstRow > page.firstRow) at--
-    index.splice(at, 0, page)
-    this.indexes.set(read.result, index)
+    const pages = this.indexes.get(read.result) ?? []
+    let at = pages.length
+    while (at > 0 && pages[at - 1].firstRow > page.firstRow) at--
+    pages.splice(at, 0, page)
+    this.indexes.set(read.result, pages)
     this.evict()
   }
 
@@ -853,19 +881,23 @@ export class ResultsWorkerCore {
     this.cache.set(page.id, page)
   }
 
-  /** The cached page holding `row`. */
+  /** The cached page holding `row` that reaches furthest (a windowed result's pages may overlap). */
   private pageAt(result: string, row: number): CachedPage | undefined {
     const index = this.indexes.get(result)
     if (!index) return undefined
+    // The last page starting at or before the row, then back through earlier ones that may hold it too.
     let low = 0, high = index.length - 1
     while (low <= high) {
       const middle = (low + high) >>> 1
-      const page = index[middle]
-      if (row < page.firstRow) high = middle - 1
-      else if (row >= page.firstRow + page.rowCount) low = middle + 1
-      else return page
+      if (index[middle].firstRow <= row) low = middle + 1
+      else high = middle - 1
     }
-    return undefined
+    let best: CachedPage | undefined
+    for (let at = high; at >= 0; at--) {
+      const page = index[at]
+      if (page.firstRow + page.rowCount > row && (!best || page.firstRow + page.rowCount > best.firstRow + best.rowCount)) best = page
+    }
+    return best
   }
 
   /** Row ranges in [first, end) that no cached page holds. */

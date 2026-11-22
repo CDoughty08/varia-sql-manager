@@ -1260,7 +1260,8 @@ export class GridView {
     if (slot?.header && slot.header.column >= 0) title = this.rotated ? this.rowTitle(slot.header.column, slot.header.label) : this.headerTitle(slot.header.column)
     else if (slot?.cell) {
       const bits = slot.cell.bits
-      if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
+      if (bits & LOAD) title = ''
+      else if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
       else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column)}.`
       else if (bits & LINK) title = 'Open in a new tab (Enter)'
     } else if (this.rotated && slot?.row && slot.row.row >= 0) title = this.headerTitle(slot.row.row)
@@ -1439,9 +1440,10 @@ export class GridView {
     if (this.rotated) { this.measureShared(rows); return }
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.measuredEnd()).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
         this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), withPrevious(widths[column] ?? 0, widths[this.previousOf(column)] ?? 0), this.charWidth))
@@ -1452,11 +1454,20 @@ export class GridView {
       this.measuring = false
       if (this.disposed) return
       // A full results port has room again shortly.
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       // The type hints stay; a released or lost result is shown as such by its shell.
       state.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
+  }
+
+  /** First measures that read no rows so far (bounded by g.measureRetries). */
+  private measureShort = 0
+  /** Measures again shortly: the results port was full, or a windowed result's rows were not read yet (the measure
+   *  answered none), and sizing from headers alone would stay for good. */
+  private measureShortly(): void {
+    this.measureAfter = performance.now() + g.busyRetryMs
+    this.later(() => this.schedule())
   }
 
   /** A one-row comparison's previous-value column of a pair that has changes, else -1. */
@@ -1476,9 +1487,10 @@ export class GridView {
     const kept = this.o.state.transposed!
     if (kept.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ rows: measured, widths }) => {
       this.measuring = false
       if (this.disposed || kept.sized) return
+      if (measured <= 0 && this.measureShort++ < g.measureRetries) { this.measureShortly(); return }
       let chars = 0
       for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
       this.uniform!.setShared(this.sharedWidth(chars))
@@ -1487,7 +1499,7 @@ export class GridView {
     }, error => {
       this.measuring = false
       if (this.disposed) return
-      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; this.later(() => this.schedule()); return }
+      if (portBusy(error)) { this.measureShortly(); return }
       kept.sized = true
       if ((error as Error)?.name !== 'AbortError') this.schedule()
     })
@@ -1742,7 +1754,7 @@ export class GridView {
       // 4980.00", in two rows "Price, old value 5120.00" on the − half and "Price, new value 4980.00" on the + half.
       const changedName = bits & CHG && active ? this.changedName(activeCell, active.row, active.column) : undefined
       const diff = changedName ? '' : bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
-      const label = bits & LOAD ? 'Loading' : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
+      const label = bits & LOAD ? (bits & ERR ? 'Not loaded, use Retry to read these rows again' : 'Loading') : (changedName ?? displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : ''))
         + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned && !changedName ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
@@ -1987,7 +1999,11 @@ export class GridView {
     // The cell's place in the result: its text, link and marks are read there; the selection and the active cell are as drawn.
     const sourceRow = this.rotated ? column : row, sourceColumn = this.rotated ? row : column
     const window = tile(sourceRow, sourceColumn)
-    if (!window || sourceRow - window.first >= window.count) bits = LOAD
+    if (!window || sourceRow - window.first >= window.count) {
+      bits = LOAD
+      // A tile whose read failed (the strip offers Retry) is not loading: LOAD with ERR names it as not loaded.
+      if (this.data.failed(tileKey(Math.floor(sourceRow / this.tiles.rows), Math.floor(sourceColumn / this.tiles.columns)))) bits |= ERR
+    }
     else {
       const index = (sourceRow - window.first) * (window.colEnd - window.colStart) + sourceColumn - window.colStart
       const flags = window.flags[index]

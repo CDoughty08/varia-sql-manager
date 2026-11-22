@@ -1,7 +1,8 @@
 import type { ResultHandle } from '../results/ResultClient'
+import { browserTimers, type Timers } from '../core/timers'
 
 /** Rows one results.rowBytes asks for, blocks kept at most, blocks asked at once, and how long a failed block waits. */
-export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000 } as const
+export const rowSizeLimits = { blockRows: 256, blocks: 64, inflight: 2, retryMs: 2000, unchangedWakes: 3 } as const
 
 /** A row's size as the row-size bar draws it: its share of the largest row (0 – 1), whether it is over half of it, and
  *  its exact bytes, `estimated` when an estimated cell took part. */
@@ -28,8 +29,18 @@ export class RowSizes {
   private profileMax = 0
   private readMax = 0
   private disposed = false
+  /** The result's revision the blocks were read under: a residence switch reads them again. */
+  private revision: number | undefined
+  /** One repaint once a windowed short block has waited: nothing else paints a grid whose cells have all arrived. */
+  private wakeTimer: unknown
+  /** When the wake is due: the earliest block wake still to come. */
+  private wakeDue = 0
+  /** Each windowed short block's most rows answered, how often since it answered no more, and when it is next asked: a block
+   *  still fetching waits twice as long each time, a few times, so one that never fits the cache (or whose rows come and go)
+   *  stops asking rather than polling. */
+  private readonly woken = new Map<number, { rows: number; unchanged: number; due: number }>()
 
-  constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void) {}
+  constructor(private readonly handle: Pick<ResultHandle, 'getSnapshot' | 'rowBytes' | 'profile'>, private readonly changed: () => void, private readonly timers: Timers = browserTimers) {}
 
   /** The bytes scaling the bars: the largest row known. */
   get max(): number { return Math.max(this.profileMax, this.readMax) }
@@ -39,10 +50,19 @@ export class RowSizes {
     if (this.disposed) return
     const snapshot = this.handle.getSnapshot()
     if (snapshot.state === 'released' || snapshot.state === 'lost' || snapshot.rowsAvailable <= 0) return
+    if (snapshot.revision !== this.revision) {
+      this.revision = snapshot.revision
+      for (const controller of this.pending.values()) controller.abort()
+      this.pending.clear()
+      this.blocks.clear()
+      this.failed.clear()
+      this.woken.clear()
+    }
     // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
     // rows again for every page, and compete with the reads that paint its first rows.
     const waited = this.profileFailedAt === undefined || performance.now() - this.profileFailedAt >= rowSizeLimits.retryMs
-    if (!this.profiled && waited && snapshot.state === 'complete') this.profile()
+    // A windowed BigQuery result has no profile (REMOTE_RESULT) until it is loaded into memory.
+    if (!this.profiled && waited && snapshot.state === 'complete' && snapshot.residence !== 'remote') this.profile()
     const end = Math.min(last, snapshot.rowsAvailable - 1)
     for (let block = Math.floor(Math.max(0, first) / rowSizeLimits.blockRows); block * rowSizeLimits.blockRows <= end; block++) {
       const held = this.blocks.get(block)
@@ -51,7 +71,9 @@ export class RowSizes {
       if (held && !short) { this.blocks.delete(block); this.blocks.set(block, held); continue }
       if (this.pending.has(block) || this.pending.size >= rowSizeLimits.inflight) continue
       const failedAt = this.failed.get(block)
-      if (failedAt !== undefined && performance.now() - failedAt < rowSizeLimits.retryMs) continue
+      // A windowed short block waits its own backoff; any other failed block the plain wait.
+      const wait = rowSizeLimits.retryMs * 2 ** (this.woken.get(block)?.unchanged ?? 0)
+      if (failedAt !== undefined && performance.now() - failedAt < wait) continue
       this.read(block)
     }
   }
@@ -68,6 +90,8 @@ export class RowSizes {
 
   dispose(): void {
     this.disposed = true
+    if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+    this.wakeTimer = undefined
     this.abort.abort()
     this.pending.clear()
     this.blocks.clear()
@@ -79,14 +103,33 @@ export class RowSizes {
     this.abort.signal.addEventListener('abort', stop)
     this.pending.set(block, controller)
     const first = block * rowSizeLimits.blockRows
+    const revision = this.revision
     this.handle.rowBytes(first, rowSizeLimits.blockRows, controller.signal).then(result => {
-      if (this.disposed) return
+      if (this.disposed || revision !== this.revision) return
       const estimated = new Set(result.estimated)
       this.blocks.set(block, { bytes: result.bytes, estimated })
       while (this.blocks.size > rowSizeLimits.blocks) this.blocks.delete(this.blocks.keys().next().value!)
       for (const bytes of result.bytes) if (bytes > this.readMax) this.readMax = bytes
-      this.failed.delete(block)
-      this.changed()
+      // A windowed result answers only the rows its block cache holds: a short block is asked again once it has waited, as a
+      // failed one is, not on every paint (its rows may be fetching, or never fit the cache).
+      const short = result.bytes.length < rowSizeLimits.blockRows && first + result.bytes.length < this.handle.getSnapshot().rowsAvailable
+      if (short && this.handle.getSnapshot().residence === 'remote') {
+        this.failed.set(block, performance.now())
+        // Its rows likely land meanwhile and the grid stops painting: one wake makes the next paint ask again. A block
+        // that grew waits the wait; one that did not (still fetching, or never fits) waits twice as long each time, a few
+        // times only.
+        const last = this.woken.get(block)
+        const unchanged = last === undefined || result.bytes.length > last.rows ? 0 : last.unchanged + 1
+        const rows = Math.max(last?.rows ?? 0, result.bytes.length)
+        if (unchanged <= rowSizeLimits.unchangedWakes) {
+          this.woken.set(block, { rows, unchanged, due: performance.now() + rowSizeLimits.retryMs * 2 ** unchanged + 1 })
+          this.wake()
+        } else this.woken.set(block, { rows, unchanged: rowSizeLimits.unchangedWakes, due: 0 })
+      } else {
+        this.failed.delete(block)
+        this.woken.delete(block)
+      }
+      if (result.bytes.length > 0) this.changed()
     }, () => {
       // A failed read leaves the block's bars empty; the grid asks again as it scrolls, once the block has waited.
       if (!this.disposed && !controller.signal.aborted) this.failed.set(block, performance.now())
@@ -94,6 +137,24 @@ export class RowSizes {
       this.abort.signal.removeEventListener('abort', stop)
       if (this.pending.get(block) === controller) this.pending.delete(block)
     })
+  }
+
+  /** Arms the one wake for the earliest block wake still to come; when it fires it paints, then arms for the next. */
+  private wake(): void {
+    const now = performance.now()
+    let due = Infinity
+    for (const entry of this.woken.values()) if (entry.due > now && entry.due < due) due = entry.due
+    if (this.wakeTimer !== undefined && this.wakeDue === due) return
+    if (this.wakeTimer !== undefined) this.timers.clearTimeout(this.wakeTimer)
+    this.wakeTimer = undefined
+    if (due === Infinity) return
+    this.wakeDue = due
+    this.wakeTimer = this.timers.setTimeout(() => {
+      this.wakeTimer = undefined
+      if (this.disposed) return
+      this.changed()
+      this.wake()
+    }, due - now)
   }
 
   private profile(): void {

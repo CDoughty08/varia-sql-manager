@@ -47,6 +47,8 @@ export interface WindowRequest {
   readonly textBudget: number
   /** Grid text: line breaks and tabs become spaces, other control characters U+FFFD (cells.ts displayText). */
   readonly display?: boolean
+  /** The grid asking (a windowed BigQuery result reads ahead per grid, following its scrolling). */
+  readonly viewer?: number
 }
 /** The widest display text of each column [colStart, colEnd) over rows [first, first + count), in monospace columns. */
 export interface MeasureRequest {
@@ -106,6 +108,9 @@ export type WorkerRequest =
   /** Results the backend already released (retired by a tick, or ended with their subscription): their pages go, and no
    *  results.close is sent. */
   | { readonly type: 'forget'; readonly generation: number; readonly resultIds: readonly number[] }
+  /** A BigQuery result switched residence under a new revision (resultSet.residence): its cached pages are stale and go, and
+   *  reads in flight end, so waiting windows answer short and the grid reads the rows again. */
+  | { readonly type: 'revise'; readonly key: ResultKey }
 
 /** Worker → UI. A window's `flags` buffer and a measure's `widths` buffer are transferred. */
 export type WorkerResponse =

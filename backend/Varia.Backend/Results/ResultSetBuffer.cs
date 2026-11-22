@@ -118,6 +118,19 @@ internal sealed class ResultSetBuffer
     private DiffIndex? diffIndex;
     /// <summary>The allowance the replace that wrote this set holds (<see cref="ResultStore.Allow"/>), let go when it is freed.</summary>
     private AllowanceHold? allowanceHold;
+    /// <summary>The column metadata's bytes, which a switch to windowed keeps (<see cref="Demote"/>).</summary>
+    private readonly long metadataBytes;
+    private readonly int sealBytes;
+    /// <summary>A windowed BigQuery result's rows in BigQuery and its block cache (docs/bigquery.md, Residence); null
+    /// while the rows are stored here.</summary>
+    private RemoteResult? remote;
+    /// <summary>A BigQuery result's residence ("memory" or "remote"), its row count in BigQuery and its revision; null, -1
+    /// and 0 for every other result, whose descriptors leave them out.</summary>
+    private string? residence;
+    private long rowsTotal = -1;
+    private int revision;
+    /// <summary>Bytes a switch to windowed freed while a pin or lease held the pages: returned when the last one ends.</summary>
+    private long dropPending;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
@@ -126,6 +139,8 @@ internal sealed class ResultSetBuffer
         Lengths = lengths ?? [.. wires.Select(wire => wire == WireKind.Binary ? ColumnLength.Binary : ColumnLength.Utf16)];
         this.store = store;
         charged = metadata;
+        metadataBytes = metadata;
+        this.sealBytes = sealBytes;
         Budget = budget;
         ResultId = resultId;
         Index = index;
@@ -199,6 +214,117 @@ internal sealed class ResultSetBuffer
     /// <summary>Never packed at seal (<see cref="ResultStore.PackAtSeal"/>): set by the synthesize test hook, before its first
     /// row, so a check or benchmark that asks for a raw result gets one.</summary>
     internal bool SealRaw { get; set; }
+
+    /// <summary>An Automatic in-memory BigQuery read (docs/bigquery.md, Residence: Deciding): a refusal (the budget, low
+    /// system memory) neither stops the query nor truncates the set; its reader switches it to windowed instead
+    /// (<see cref="ResultStore.Demote"/>), so a refusal ends only this set's storing, as a derived set's does.</summary>
+    public bool SwitchesOnRefusal { get; set; }
+
+    /// <summary>The refusal that last switched this set to windowed (SqlService.SwitchToWindowed), as it was then: the switch
+    /// frees the pages, so the memory load read afterwards would no longer tell why.</summary>
+    public TruncationReason SwitchedFor { get; set; }
+
+    /// <summary>Why the budget refused this set's last row when that stopped only this set (a derived set, or one that
+    /// switches on a refusal); None otherwise.</summary>
+    public TruncationReason Refusal { get { lock (gate) return refused; } }
+
+    /// <summary>The windowed result's rows in BigQuery and its block cache; null while the rows are stored here.</summary>
+    public RemoteResult? Remote => Volatile.Read(ref remote);
+    public bool IsRemote => Volatile.Read(ref remote) is not null;
+    public string? Residence { get { lock (gate) return residence; } }
+    public int Revision { get { lock (gate) return revision; } }
+
+    /// <summary>Marks a BigQuery result read into memory, with BigQuery's row count (the descriptor's residence and rowsTotal).</summary>
+    public void InMemory(long totalRows)
+    {
+        lock (gate)
+        {
+            residence = "memory";
+            rowsTotal = totalRows;
+        }
+    }
+
+    /// <summary>Switches the set to windowed (docs/bigquery.md, Residence: Misestimate): its stored pages go, with their budget (when
+    /// the last pin or lease ends, if one holds them), and it becomes a complete remote result read through
+    /// <paramref name="windowed"/>, under a new revision. An operation over its rows ends at once. Called only through
+    /// <see cref="ResultStore.Demote"/>, which drops its views, snapshots and identities. False once it was released.</summary>
+    internal bool Demote(RemoteResult windowed, long totalRows, bool bump = true)
+    {
+        CancellationTokenSource? stop;
+        long returned = 0;
+        lock (gate)
+        {
+            if (state == 2) return false;
+            builder?.AbortRow();
+            builder = null;
+            pages.Clear();
+            // Nothing is left to pack at seal: the queued pages are gone with the rest.
+            DropSealQueueLocked();
+            sealQueued = 0;
+            cache.Clear();
+            Volatile.Write(ref searchMemo, null);
+            Volatile.Write(ref diffIndex, null);
+            store.Held(-packedBytes, -packedLogical, -cacheBytes);
+            packedBytes = packedLogical = cacheBytes = 0;
+            var bytes = charged - metadataBytes - dropPending;
+            if (pins > 0 || leases > 0) dropPending += bytes;
+            else
+            {
+                ReturnLocked(bytes);
+                returned = bytes;
+            }
+            slack = working = pending = 0;
+            Volatile.Write(ref remote, windowed);
+            residence = "remote";
+            rowsTotal = totalRows;
+            // A set windowed before anyone saw its rows (the residence decided after the first page) keeps revision 0.
+            if (bump) revision++;
+            state = 1;
+            refused = TruncationReason.None;
+            Volatile.Write(ref truncated, (int)(windowed.Capped ? TruncationReason.RowLimit : TruncationReason.None));
+            Interlocked.Exchange(ref rowsRead, totalRows);
+            rowsStored = 0;
+            rowsAvailable = windowed.Rows;
+            bytesStored = 0;
+            truncatedCells = 0;
+            incomplete = false;
+            Volatile.Write(ref sealedPages, 0);
+            packDone = false;
+            stop = released;
+            released = null;
+            touchedAt = store.Now;
+        }
+        // An operation over the stored rows ends at once (UntilReleased answers REMOTE_RESULT): its pages are gone.
+        stop?.Cancel();
+        store.Freed(returned);
+        return true;
+    }
+
+    /// <summary>Switches a windowed set back to memory (Load into memory): its cache goes, and it is an open set again, empty,
+    /// under a new revision, for the reader to store the rows into and complete. False once released.</summary>
+    internal bool Promote(long totalRows)
+    {
+        RemoteResult? old;
+        lock (gate)
+        {
+            if (state == 2 || remote is null) return false;
+            old = remote;
+            Volatile.Write(ref remote, null);
+            residence = "memory";
+            rowsTotal = totalRows;
+            revision++;
+            state = 0;
+            builder = new PageBuilder(ResultId, Wires, sealBytes: sealBytes);
+            Interlocked.Exchange(ref rowsRead, 0);
+            rowsStored = rowsAvailable = bytesStored = truncatedCells = 0;
+            Volatile.Write(ref truncated, 0);
+            refused = TruncationReason.None;
+            incomplete = false;
+            touchedAt = store.Now;
+        }
+        old.Dispose();
+        return true;
+    }
 
     /// <summary>The builder for the next row, or null when this set stores nothing more: released, its query stopped, or,
     /// for a derived set, a row the budget refused or a page sealed under low system memory.</summary>
@@ -309,7 +435,9 @@ internal sealed class ResultSetBuffer
         // last seal sees pressure (the seal inside Complete, or its last row filling a page) asks for no row after it, so
         // it is whole and not truncated.
         if (!store.IsSystemMemoryLow()) return;
-        if (Derived) refused = TruncationReason.SystemMemory;
+        // An Automatic query's read stops here too rather than switch to windowed: low memory is no misestimate, and its block
+        // cache could not fill either (ResultStore.TryReserveCache). A load into memory switches back, its rows still windowed.
+        if (Derived || (SwitchesOnRefusal && Budget.Loading)) refused = TruncationReason.SystemMemory;
         else Budget.Stop(TruncationReason.SystemMemory);
     }
 
@@ -332,7 +460,7 @@ internal sealed class ResultSetBuffer
         Skip(reason);
         // The first refusal ends the set, as it ends a query's: a later, smaller row must not be stored past the gap,
         // because stored rows are a prefix of the rows read. A derived set ends only itself.
-        if (Derived) refused = reason;
+        if (Derived || SwitchesOnRefusal) refused = reason;
         else Budget.Stop(reason);
         return false;
     }
@@ -362,12 +490,14 @@ internal sealed class ResultSetBuffer
     {
         CancellationTokenSource? stop;
         long freed;
+        RemoteResult? windowed;
         lock (gate)
         {
             state = 2;
             builder = null;
             DropSealQueueLocked();
             stop = released;
+            windowed = remote;
             if (leases > 0 || pins > 0)
             {
                 freePending = true;
@@ -377,17 +507,19 @@ internal sealed class ResultSetBuffer
         }
         // Outside the lock: cancelling runs the operations' registrations inline.
         stop?.Cancel();
+        // A windowed result's block cache goes with it, and its fetches stop.
+        windowed?.Dispose();
         return freed;
     }
 
-    /// <summary>Cancelled when the set is released (already cancelled once it has been), so an operation over the whole
-    /// result (a sort, profile, diff or pivot) stops at once rather than keeping the pages it pins, and their budget,
-    /// until it finishes.</summary>
+    /// <summary>Cancelled when the set is released or switched to windowed (already cancelled once it has been), so an
+    /// operation over the whole result (a sort, profile, diff or pivot) stops at once rather than keeping the pages it pins,
+    /// and their budget, until it finishes, or reading the pages a switch took away.</summary>
     public CancellationToken Released
     {
         get
         {
-            lock (gate) return state == 2 ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
+            lock (gate) return state == 2 || remote is not null ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
         }
     }
 
@@ -408,13 +540,14 @@ internal sealed class ResultSetBuffer
     /// <summary>Ends a lease. The last one frees a set that was released while it was held.</summary>
     public void ReleaseLease()
     {
-        long bytes;
+        long bytes, dropped = 0;
         bool repack = false, settled = false;
         lock (gate)
         {
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
             touchedAt = store.Now;
             if (--leases > 0 || pins > 0) return;
+            dropped = TakeDropped();
             StartSealedLocked();
             if (!freePending)
             {
@@ -425,12 +558,23 @@ internal sealed class ResultSetBuffer
             }
             else bytes = FreeLocked();
         }
+        store.Freed(dropped);
         if (repack) Pack();
         else if (settled) store.Settle();
         else store.Freed(bytes, Budget.Live is not null);
     }
 
     public int Leases { get { lock (gate) return leases; } }
+
+    /// <summary>Bytes a switch to windowed left to the last pin or lease (<see cref="Demote"/>), returned now.</summary>
+    private long TakeDropped()
+    {
+        var bytes = dropPending;
+        if (bytes == 0 || freePending) return 0;
+        ReturnLocked(bytes);
+        dropPending = 0;
+        return bytes;
+    }
 
     /// <summary>Pins the set while a request reads its pages: a release meanwhile ends the request's reads at their next
     /// check (<see cref="IsReleased"/>, or <see cref="Released"/> for an operation over the whole result), but frees the pages and their budget only when the last pin ends, as for a lease.
@@ -463,13 +607,14 @@ internal sealed class ResultSetBuffer
 
     internal void Unpin()
     {
-        long bytes;
+        long bytes, dropped = 0;
         bool repack = false, settled = false;
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
             touchedAt = store.Now;
             if (--pins > 0 || leases > 0) return;
+            dropped = TakeDropped();
             StartSealedLocked();
             if (!freePending)
             {
@@ -480,6 +625,7 @@ internal sealed class ResultSetBuffer
             }
             else bytes = FreeLocked();
         }
+        store.Freed(dropped);
         if (repack) Pack();
         else if (settled) store.Settle();
         else store.Freed(bytes, Budget.Live is not null);
@@ -629,8 +775,8 @@ internal sealed class ResultSetBuffer
 
     private void CacheLocked(StoredPage page, byte[] body)
     {
-        // A freed set keeps no charge; a page unpacked meanwhile needs no copy.
-        if (gone || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
+        // A freed or windowed set keeps no charge (a switch cleared its cache); a page unpacked meanwhile needs no copy.
+        if (gone || remote is not null || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
         // The oldest page makes way first, so a full budget still keeps the newest read.
         if (cache.Count >= CachePages) DropCachedLocked(cache.Count - 1);
         if (!store.TryReserveSpare(Budget, body.Length, false)) return;
@@ -1102,6 +1248,7 @@ internal sealed class ResultSetBuffer
     private long FreeLocked()
     {
         freePending = false;
+        dropPending = 0;
         gone = true;
         pages.Clear();
         cache.Clear();
@@ -1150,7 +1297,8 @@ internal sealed class ResultSetBuffer
     /// the list stays valid while more are sealed.</summary>
     public StoredPage[] SealedSnapshot()
     {
-        lock (gate) return [.. pages];
+        // Under the lock Demote takes: a set switched to windowed since its reader's check is refused, never read as empty.
+        lock (gate) return remote is null ? [.. pages] : throw SqlService.RemoteRefused();
     }
 
     /// <summary>The bytes (sum of DATALENGTH) of up to <paramref name="count"/> rows from <paramref name="firstRow"/>, as far
@@ -1197,7 +1345,8 @@ internal sealed class ResultSetBuffer
         {
             var reason = Truncated;
             return new ResultDescriptor(ResultId, Index, BatchNumber, Iteration, Kind, Columns, RowsRead, rowsStored, rowsAvailable, bytesStored, truncatedCells,
-                state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete, ResultName);
+                state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete, ResultName,
+                residence, residence is null || rowsTotal < 0 ? null : rowsTotal, residence is null ? null : revision);
         }
     }
 
