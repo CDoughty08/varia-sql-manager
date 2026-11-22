@@ -88,6 +88,7 @@ internal sealed class ResultSetBuffer
     /// <summary>Bytes a row commit is waiting for packing to make room for (<see cref="RoomWanted"/>), or 0.</summary>
     private long roomWanted;
     private CancellationTokenSource? released;
+    private CancellationTokenSource? closed;
     private bool freePending, gone;
     /// <summary>Packed pages' bytes, their bytes as sealed, and the unpacked cache's bytes (all under the lock).</summary>
     private long packedBytes, packedLogical, cacheBytes;
@@ -211,6 +212,9 @@ internal sealed class ResultSetBuffer
     /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
     /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }
+    /// <summary>A BigQuery value list (results.remoteQuery, kind distinct): its rows are a windowed result's distinct values,
+    /// read whole into memory, and results.distinct lists them with their counts rather than grouping them again.</summary>
+    internal BigQuery.RemoteValueList? ValueList { get; set; }
     /// <summary>Never packed at seal (<see cref="ResultStore.PackAtSeal"/>): set by the synthesize test hook, before its first
     /// row, so a check or benchmark that asks for a raw result gets one.</summary>
     internal bool SealRaw { get; set; }
@@ -489,6 +493,7 @@ internal sealed class ResultSetBuffer
     internal long Release()
     {
         CancellationTokenSource? stop;
+        CancellationTokenSource? ended;
         long freed;
         RemoteResult? windowed;
         lock (gate)
@@ -497,6 +502,7 @@ internal sealed class ResultSetBuffer
             builder = null;
             DropSealQueueLocked();
             stop = released;
+            ended = closed;
             windowed = remote;
             if (leases > 0 || pins > 0)
             {
@@ -507,6 +513,7 @@ internal sealed class ResultSetBuffer
         }
         // Outside the lock: cancelling runs the operations' registrations inline.
         stop?.Cancel();
+        ended?.Cancel();
         // A windowed result's block cache goes with it, and its fetches stop.
         windowed?.Dispose();
         return freed;
@@ -520,6 +527,16 @@ internal sealed class ResultSetBuffer
         get
         {
             lock (gate) return state == 2 || remote is not null ? new CancellationToken(true) : (released ??= new CancellationTokenSource()).Token;
+        }
+    }
+
+    /// <summary>Cancelled only when the set is released (already cancelled once it has been), never by a switch to windowed:
+    /// what a query over a windowed result (results.remoteQuery) waits on, since its pages were never in memory.</summary>
+    public CancellationToken Closed
+    {
+        get
+        {
+            lock (gate) return state == 2 ? new CancellationToken(true) : (closed ??= new CancellationTokenSource()).Token;
         }
     }
 

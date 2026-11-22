@@ -33,6 +33,7 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultVisibilityService } from '../results/ResultVisibilityService'
 import { ResultsService } from '../results/ResultsService'
+import { RemoteViews } from '../results/remote-views'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
 import { PivotService } from '../results/PivotService'
@@ -361,7 +362,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
   })
   const retainedPlans = new RetainedPlansService()
+  // Sorts, filters and value lists of results windowed in BigQuery, each after its estimate and the cost prompts (the cost
+  // service is built further down; the closure reads it when one runs).
+  const remoteViews = new RemoteViews({ api, client: resultClient, estimate: (tabId, remote, signal) => bigQueryCost.beforeRemote(tabId, remote, signal),
+    messages: (tabId, messages) => results.remoteMessages(tabId, messages) })
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'), memory: () => resultMemory.getSnapshot(),
+    remote: remoteViews,
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)

@@ -240,7 +240,7 @@ noted where it matters.
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
-| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`. Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
+| `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`, or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `language.status`, `language.close` | invoke | unary | control | 10 s |
@@ -1165,6 +1165,25 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
   `RESULT_RELEASED`; one whose table expired fails with `REMOTE_EXPIRED`, as a read does. Only a windowed result loads (`INVALID_PARAMS` otherwise, as for a second load of one already
   loading; `BUDGET_STOPPED` once the budget has stopped). Main answers `RESULT_UNAVAILABLE` for a result its renderer no
   longer owns, so the backend's `RESULT_RELEASED` reaches only a close that raced past that check.
+- **`results.remoteQuery` kinds `view` and `distinct`** ([BigQuery's Sort and filter in BigQuery](bigquery.md#sort-and-filter-in-bigquery))
+  run a billed query over the windowed result's table and answer a derived result of its own (under the source's budget,
+  released with it, windowed when large), opened and closed by its EVENTs like any set. `view { sort?: [{ column,
+  descending }] ≤ 16, filters? ≤ 16 }` (at least one, sort keys distinct) sorts and filters; `distinct { column, filters?,
+  kept? }` lists the column's values (`value, n, r, k`: up to 100,000 by count, ranked `r` in value order) into a result
+  read whole as a value list: `results.distinct` on its column 0 answers its snapshot without grouping in memory, `kept`
+  ticking the values those filters keep (every one without). A filter is `{ op: 'in' | 'notIn', column, list?, rows ≤ 2,
+  nulls? }`, `{ op: 'between', column, list, rows: [low, high] }` or `{ op: 'groups', column, list, snapshotId }`: `list` is
+  a value list of that column of this result, and `rows` are its rows, which the backend names in BigQuery by rank (an
+  `INT64` array parameter; no value is sent). Main checks that its renderer owns the source and every list in that
+  generation. Refusals: a column BigQuery cannot order or group (`INVALID_PARAMS`), the query that made the result still
+  running (`BUSY`), a list that is not this column's or this result's or a row past it (`INVALID_PARAMS`), a list or
+  snapshot gone (`VIEW_NOT_FOUND`), the source's table or a list's table expired (`REMOTE_EXPIRED`). `fallback: true`
+  (emulator mode only, when the dry run answered `fallback`) runs the original query again around the view instead of
+  reading the expired table. A failure, Stop, the timeout or the source's release keeps nothing.
+- **`bigquery.dryRun { connectionId, remote }`** estimates a `view` or `distinct` request (`remote` holds `resultId`,
+  `generation` and the kind's fields, no query ID or fallback) with the query's parameters, on the result's own connection;
+  main checks ownership as for `results.remoteQuery`. It answers `fallback: true` when the source's table is gone and
+  emulator mode can run the original query again.
 
 ## Cell lengths and row sizes
 
@@ -2509,7 +2528,7 @@ terminal for live probes. Display login text is never identity proof.
 | Code | Sentence |
 | --- | --- |
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
-| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped while a result was loading into memory. The load was not re-run, and the result is gone with the backend." |
+| `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |
 | `CONNECTION_LOST` | "This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone." |

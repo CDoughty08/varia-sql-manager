@@ -468,10 +468,14 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
       chosen = outcome.condition
     } else if (condition === 'null' || condition === 'notNull') chosen = { kind: condition }
     else if (!first || (condition === 'between' && !second)) return setError(condition === 'between' ? 'Choose the lowest and the highest value.' : 'Choose a value.')
-    else chosen = condition === 'between' ? { kind: 'between', rows: [first.row, second!.row] } : { kind: condition, row: first.row }
+    else {
+      // A BigQuery value list's rows are its own: the filter keeps the list, which names its values in BigQuery.
+      const named = list?.source ? { list } : {}
+      chosen = condition === 'between' ? { kind: 'between', rows: [first.row, second!.row], ...named } : { kind: condition, row: first.row, ...named }
+    }
     const applied = source.apply(column, chosen)
     if (applied !== true) { if (typeof applied === 'string') setError(applied); return }
-    if (chosen.kind === 'list') handed.current = true
+    if (chosen.kind === 'list' || ('list' in chosen && chosen.list)) handed.current = true
     onClose()
   }
   const clear = () => { if (source.apply(column, { kind: 'clear' }) === true) onClose() }
