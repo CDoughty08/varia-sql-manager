@@ -229,9 +229,10 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
 - **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
   transaction as they do for SQL Server, with BigQuery's own "not checked" note. Commit runs `COMMIT TRANSACTION` in the
   session; every close then ends the session with `CALL BQ.ABORT_SESSION(@session_id)` outside it, which rolls back
-  what is still open. A close never aborts a session while one of its jobs runs: a commit or rollback answers
-  `JOB_RUNNING` and the tab stays (a plain close stops the query first, as SQL Server's does). A job Varia stopped is
-  waited for (20 s, 25 s for a commit) so the abort never races it.
+  what is still open. A close never aborts a session while one of its jobs runs or is left running: a commit or rollback
+  answers `JOB_RUNNING` and the tab stays, and a plain close leaves the job and its session (the workbench stops the
+  query first when you choose Cancel Query and Close). A job Varia stopped is waited for (20 s, 25 s for a commit) so the
+  abort never races it.
 - **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
   session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
   quit, where the window stays open. A refusal BigQuery may lift (`backendError`, `rateLimitExceeded`) keeps the tab, and
@@ -252,6 +253,39 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
   in a new one (the refused job ran nothing), and Messages says its temp tables, variables and any open transaction are
   gone. Closing an expired session succeeds at once, with `sessionExpired` when a transaction was tracked; a commit
   answers `SESSION_LOST`, saying nothing was committed.
+
+### Re-attaching to jobs
+
+Stopping or restarting the backend never cancels a BigQuery job; only Stop and a close that asks to cancel the job do. The
+backend side of re-attaching:
+
+- **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
+  top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
+  is auxiliary or left running, and the session's transaction state as it started. No SQL text and no secrets. The file
+  has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; a running job's record
+  never does), is written atomically on every change and quarantined when unreadable, and records expire 24 hours after
+  their job was created. A finished job's records go once its summary reached the tab; a job still running when the
+  backend was lost, or left running, keeps its record. A job re-attached under another key moves to it.
+- **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
+  that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
+  it; `AUTH_IDENTITY` otherwise, and the job is left alone). A running job shows "Re-attached to BigQuery job … started N
+  ago" and Stop cancels it; a finished one reads its result table (free) by the usual residence rule; a script's children
+  are listed again. `adoptSession` takes over the session the job ran in, with the record's transaction state. Results
+  gone answer `REMOTE_EXPIRED`. `detached` only holds the session's queue until the job is DONE and reads no results. One
+  attachment per job: a second `query.attach` takes over and the first answers `superseded`.
+- **Leave it running.** `query.cancel` with `detach` makes a running request answer `detached`; the job holds the tab's
+  session, the backend polls it with backoff until DONE (`query.session.state` answers `job: 'running'` meanwhile), and the
+  next Execute waits for it. A network failure mid-job holds the job the same way.
+- **Idle sessions end with their connection.** A session holding no running or left-running job is ended
+  (`ABORT_SESSION`) on Disconnect (`connections.disconnect` answers `failedAborts`) and before every backend stop main makes
+  (`bigquery.endIdleSessions`, 10 s), which leaves a kept tab's finished-job session with an open or unknown transaction
+  (`keepJobKeys`). A failed abort is retried once the next time the handle reaches BigQuery.
+- **`bigquery.cancelJobs`** (main only) cancels a saved profile's jobs without a connection handle, waits for DONE, and ends
+  their sessions, answering `committedBeforeCancel`, `outcomeUnknown` or `abortFailed` per job.
+- The restart, reload and crash prompts say BigQuery jobs carry on and re-attach.
+
+The workbench side (the Cancel the job / Leave it running prompt, its setting, re-attaching restored tabs, the records
+dialog and Close Results while a job runs) comes in a later update.
 
 ### Storage Read
 

@@ -237,9 +237,11 @@ noted where it matters.
 | `connections.databases` | invoke; `cancelConnectionRequests` | unary | metadata | 45 s, + 180 s for Entra MFA. Sensitive. Failed open carries `details`. BigQuery: the project's datasets with `location?` ([BigQuery](bigquery.md#datasets)); main adds `credential`. |
 | `connections.discover` | invoke | unary | metadata | 45 s |
 | `connections.preview` | invoke | unary | metadata | 10 s. Sensitive. |
-| `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend |
+| `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend. A BigQuery handle ends its idle sessions and answers `failedAborts?` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
+| `bigquery.endIdleSessions` | main only | unary | control | 10 s. Before every backend stop main makes: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
+| `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
 | `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024 }`. Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
 | `databases.list` | invoke | unary | metadata | 45 s; for a BigQuery handle, the billing project's datasets |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend stops its own query after 30 s, answering with an envelope error (`TIMEOUT`, or `SQL_ERROR` when SqlClient reports the cancel), not a result `error` value. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
@@ -250,10 +252,11 @@ noted where it matters.
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
-| `query.cancel` | invoke | unary | control | 10 s |
+| `query.cancel` | invoke | unary | control | 10 s. `detach: true` (BigQuery) leaves the job running: the request answers status `detached` and the job holds the tab's session; SQL Server refuses it with `UNSUPPORTED_PROVIDER` |
+| `query.attach` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only. Re-attaches a tab to a job by reference ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)); events, summary, session map and stamping as `query.execute`'s; Stop is `query.cancel` |
 | `results.remoteQuery` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only; Stop is `query.cancel` ([Remote results](#remote-results)) |
 | `query.session.close` | invoke | unary | control | 30 s, 60 s with `transaction: 'commit'` (a BigQuery close waits for a stopped job and ends the session within them); answered locally `{ closed: false }` for an ended generation or with no backend |
-| `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend |
+| `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for an ended generation or with no backend. BigQuery adds `job: 'running' \| 'none'` |
 | `results.visibility` | invoke (`ResultVisibilityService`) | unary | control | 10 s (note 1 below) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
@@ -835,12 +838,16 @@ it then asks about: a kept session then sees `@@ROWCOUNT` 1, `@@ERROR` 0, and ot
 its most recent SQL (`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`). A cancel does not roll
 back; an `XACT_ABORT`-doomed transaction ends by the batch's end (3998).
 
-**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit? }` answers
+**Ending a session.** `query.session.close { sessionId, transaction?, abortOnRefusedCommit?, keepJob?, cancelJob? }` answers
 `{ closed, note? }`. `abortOnRefusedCommit` (default true) and `note` are BigQuery's ([BigQuery's
 Sessions](bigquery.md#sessions)): a commit refused on an unchecked session ends the session with a note unless quitting
 sent false; `note` is `{ code, message? (≤ 2,000 characters), jobId? }`, `code` one of `commitNotApplied`,
 `committedBeforeCancel`, `outcomeUnknown`, `abortFailed` and `sessionExpired`. A BigQuery commit or rollback close on a
-session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. Main checks the
+session whose job is still running or still being cancelled answers `JOB_RUNNING`, and the session stays. `keepJob: true` and
+`cancelJob: true` are BigQuery's answers for a tab holding a job (never with `transaction` or each other, `INVALID_PARAMS`;
+SQL Server refuses them with `UNSUPPORTED_PROVIDER`): `keepJob` leaves the job and its session (`JOB_FINISHED` when the job
+finished meanwhile with its transaction open or unknown), `cancelJob` cancels the job, waits for DONE and ends the session; a
+plain close of a session holding a job leaves it too. Main checks the
 answer (`sessionCloseResultSchema`). For SQL Server: Without `transaction`, or with `'rollback'`, it
 cancels any running script and closes the session; SQL Server rolls back, unwaited. `'commit'` reads `@@TRANCOUNT`
 (if no row, or a plan, came back, it turns SHOWPLAN, `NOEXEC`, `PARSEONLY` and `FMTONLY` off, then reads again), then,
