@@ -1294,6 +1294,10 @@ and Properties can move to 0.11 without hurting the core experience.
   endpoint in the UI.
 - Table actions (delete, copy, expiration, labels), dataset creation, the external-account `executable` source behind
   an explicit opt-in.
+- Move Commas to Front and to End in GoogleSQL queries. They are SQL Server only today because `moveCommaEdits` and
+  `statementAt` read T-SQL tokens. A GoogleSQL version reads `shared/googlesql/lexer.ts` tokens instead: `#`, `--` and
+  non-nesting `/* */` comments, backtick names, raw and triple-quoted strings. Statements end only at semicolons and
+  blank lines (no `GO` or SQLCMD lines). The tests need a `#`-comment case.
 - From the 2026-11-16 mock review (ideas, not yet scoped):
   - A permissions page for datasets, tables and views: who has which role, from the IAM policy, with grant and revoke.
   - An authorized views manager: which views, routines and datasets a dataset authorizes, shown from both sides, with
