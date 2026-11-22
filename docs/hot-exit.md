@@ -37,7 +37,9 @@ default. While off, pinned tabs still reopen, and a close asks about unsaved cha
   before replacing newer disk contents. Kept buffers without a fingerprint also ask before replacing an existing file.
 - The tab's name, rename and line ending. Each query keeps its exact connection target, its database and whether it wants
   to attach after that target reconnects; a query deliberately disconnected keeps its context without attaching.
-  A BigQuery query keeps its engine too, so it reopens as GoogleSQL before it reconnects (docs/googlesql.md).
+  A BigQuery query keeps its engine too, so it reopens as GoogleSQL before it reconnects (docs/googlesql.md), and its job
+  key, so it re-attaches to the jobs it ran (docs/bigquery.md, Re-attaching to jobs); AutoRecover's copies keep the key too.
+  Quitting leaves a kept tab's BigQuery jobs running without asking.
 - Connection targets keep their order, name, color, environment, Explorer membership, sanitized settings, expected
   account and reconnect intent. A remembered credential is an opaque reference with a revision, so changing a saved
   profile or password cannot silently redirect an older query.

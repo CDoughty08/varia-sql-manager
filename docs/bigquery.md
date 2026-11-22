@@ -258,7 +258,7 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
 ### Re-attaching to jobs
 
 Stopping or restarting the backend never cancels a BigQuery job; only Stop and a close that asks to cancel the job do. The
-backend side of re-attaching:
+backend and main:
 
 - **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
   top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
@@ -285,8 +285,39 @@ backend side of re-attaching:
   their sessions, answering `committedBeforeCancel`, `outcomeUnknown` or `abortFailed` per job.
 - The restart, reload and crash prompts say BigQuery jobs carry on and re-attach.
 
-The workbench side (the Cancel the job / Leave it running prompt, its setting, re-attaching restored tabs, the records
-dialog and Close Results while a job runs) comes in a later update.
+In the workbench:
+
+- **Tabs keep their jobs.** A BigQuery tab gets a job key at its first run and keeps it through hot exit and AutoRecover.
+  A restored or recovered tab gets its running and finished jobs back from the records. Once it is connected it re-attaches
+  to the newest, adopting its session, and to older running ones only to hold the session's queue. While it is not connected,
+  Messages says the job carries on. A job cut off by a lost backend or network stays with the tab and re-attaches on the
+  next connection. Each job is tried once per connection.
+- **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that holds
+  a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never asks
+  about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
+  "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running). Beside
+  executing SQL Server queries the box keeps SQL Server's buttons, and the BigQuery choice is its "Leave BigQuery jobs
+  running" checkbox. Cancel the job waits for the job to stop, then ends the session. A tab not connected has its jobs
+  cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
+  records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
+  asking.
+- **Quitting Varia leaves jobs running.** Tabs hot exit keeps are not asked about, their records stay, and their
+  sessions stay open while a transaction may be open. Tabs that will not be restored are asked as above, and the box
+  lists their job ids.
+- **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is the
+  default). Cancel the job stops it as Stop does. Leave it running sends `query.cancel` with `detach`: the results close,
+  the job keeps the tab's session, the next Execute waits for it (Stop cancels it), and closing the tab asks about it
+  again while it runs.
+- **Jobs without a tab.** After every start, running jobs whose tab is gone (a crash, a tab whose copy was discarded) are
+  asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished
+  ones are dropped silently.
+- **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
+  default). Varia cannot cancel them once the connection is gone.
+- **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart. Varia
+  retries them the next time the connection reaches BigQuery.
+
+Jobs that cannot be cancelled without a connection (one from an unsaved connection, or one whose saved connection was
+deleted) are listed by id, to cancel in BigQuery's job history.
 
 ### Storage Read
 
