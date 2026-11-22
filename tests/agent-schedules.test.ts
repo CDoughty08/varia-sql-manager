@@ -606,6 +606,36 @@ describe('the Schedules document', () => {
     expect(schedules.get(id)?.busy).toBeUndefined()
     expect(executes()).toHaveLength(1)
   })
+  it("attaches and detaches the login's own jobs on another login's schedule, as msdb allows, but changes none of its settings", async () => {
+    const { schedules, executes } = schedulesWorkbench(schedulesModel({ sysadmin: false, login: 'sa', links: undefined }))
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '3')
+    await settled()
+    const theirs = schedules.record(id, '3')
+    expect(schedules.readOnly(id, theirs)).toBe(schedulesText.readOnly('dana'))
+    expect(schedules.canChangeJobsOf(id, theirs)).toBe(true)
+    schedules.toggleJob(id, jobA.id, true)
+    expect(schedules.canSave(id)).toBe(true)
+    expect(await schedules.save(id)).toBe(true)
+    expect(executes()[0]).toMatchObject({ agentSchedule: { op: 'update', schedule: { id: 3 }, jobs: [{ jobId: jobA.id, attach: true }] } })
+    expect(executes()[0]).not.toHaveProperty('agentSchedule.name')
+    // A schedule whose version could not be read takes no job change.
+    expect(schedules.canChangeJobsOf(id, { ...theirs!, version: undefined })).toBe(false)
+  })
+  it("marks a schedule's jobs read the connection's loss dropped as failed, so it is read again", async () => {
+    const { schedules, api, connections } = schedulesWorkbench(schedulesModel({ sysadmin: false, links: undefined }))
+    const id = schedules.open('c1')
+    await settled()
+    let answer: (value: ApiResult<ActionDescribeResult>) => void = () => {}
+    api.describeObject.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    schedules.select(id, '2')
+    expect(schedules.get(id)?.scheduleJobs?.[2]?.state).toBe('loading')
+    connections.markLostBefore(2)
+    answer({ ok: true, value: { agentSchedules: { ...schedulesModel(), schedules: [], scheduleJobs: [jobA] }, elapsedMs: 1 } })
+    await settled()
+    expect(schedules.get(id)?.scheduleJobs?.[2]?.state).toBe('failed')
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

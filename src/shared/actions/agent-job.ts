@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import { agentGateOpen, agentLimits, notifyLevels, type AgentPlatform } from '../agent/catalog.ts'
 import { ident } from '../explorer/schema.ts'
-import { initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, jobSchedulesValue, momentOfText, ownsSchedule, rebaseJobSchedules,
+import { initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, jobSchedulesValue, momentOfText, rebaseJobSchedules,
   type AgentJobSchedulesSave, type AgentScheduleRecord, type JobScheduleEntry } from './agent-schedule.ts'
 
 /** sp_help_job's notify and delete levels: 0 never, 1 on success, 2 on failure, 3 on completion. */
@@ -461,8 +461,9 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
 export function copiedAgentJobDraft(source: AgentJobDocumentModel, login: string, sysadmin: boolean): AgentJobDraft {
   const from = initialAgentJobDraft(source)
   const name = `Copy of ${from.name}`.slice(0, agentLimits.nameChars)
-  // Create from… shares the source's schedules (the owner's 2026-11-18 decision) where the login may attach them; others are copied as new.
-  const schedules = (source.schedules ?? []).map((record, index): JobScheduleEntry => sysadmin || ownsSchedule(record, login)
+  // Create from… shares the source's schedules (the owner's 2026-11-18 decision) where the login can attach them: msdb asks only for the
+  // job's owner, so any schedule whose version was read (the view lists it to the login) is shared; others are copied as new.
+  const schedules = (source.schedules ?? []).map((record, index): JobScheduleEntry => record.version !== undefined && !!record.modified
     ? { key: `s:${record.id}`, id: record.id, attached: true, base: record, fields: from.schedules[index]?.fields ?? record }
     : { key: `n:copy:${record.id}`, fields: from.schedules[index]?.fields ?? record })
   return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [], schedules }

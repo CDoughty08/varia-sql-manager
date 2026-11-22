@@ -46,12 +46,12 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {
           const change = pending.get(job.id.toLowerCase())
           return <li key={job.id}><Icon name="agent-job" />{job.name}{change === true && <span className="agent-schedule-tag"> · attached on save</span>}
-            <button type="button" className="agent-schedules-link" disabled={!!readOnly || busy || !service.canChangeJob(state.id, job)} aria-label={change === true ? `Undo attach ${job.name}` : `Detach ${job.name}`}
+            <button type="button" className="agent-schedules-link" disabled={!service.canChangeJobsOf(state.id, record) || busy || !service.canChangeJob(state.id, job)} aria-label={change === true ? `Undo attach ${job.name}` : `Detach ${job.name}`}
               onClick={() => service.toggleJob(state.id, job.id, false)}>{change === true ? 'Undo' : 'Detach'}</button></li>
         })}</ul> : <p className="field-note">{read?.state === 'loading' ? 'Reading…' : read?.state === 'failed' ? 'Which jobs use it could not be read.' : record?.jobCount ? 'Only your own jobs are listed.' : 'No job uses it.'}</p>}
         {draft.jobs.filter(job => !job.attach).map(job => <p key={job.jobId} className="field-note">{state.model?.jobs?.find(item => item.id.toLowerCase() === job.jobId.toLowerCase())?.name ?? 'A job'} is detached on save.
           <button type="button" className="agent-schedules-link" disabled={busy} onClick={() => service.toggleJob(state.id, job.jobId, false)}>Undo</button></p>)}
-        {!readOnly && attachable.length > 0 && <div className="agent-schedules-attach">
+        {service.canChangeJobsOf(state.id, record) && attachable.length > 0 && <div className="agent-schedules-attach">
           <select className="property-input" aria-label="Attach a job" value={attaching} disabled={busy} onChange={event => setAttaching(event.target.value)}>
             <option value="">Attach a job…</option>
             {attachable.slice(0, agentLimits.listRows).map(job => <option key={job.id} value={job.id}>{job.name}</option>)}

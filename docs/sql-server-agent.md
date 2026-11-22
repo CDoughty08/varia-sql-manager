@@ -105,7 +105,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   successful runs from `sp_help_jobhistory`, or a minute when it has none; a run is at least a second, so two starting together clash), against the runs of every other enabled job's
   schedules lasting theirs. A schedule shared with other jobs names them and says a change moves them too, with **Copy for this
   job only** (detach the shared one as read, add a copy that keeps the edits); one the login neither owns nor may change
-  (below sysadmin) is read-only with Copy. **Add** searches the shared schedules by name or by when they run ("night", "every
+  (below sysadmin) is read-only with Copy. **Add** searches the shared schedules the login can see (any owner's: msdb's `sp_attach_schedule` asks only for the job's owner) by name or by when they run ("night", "every
   15 minutes", "sunday"); a match shows a preview (sentence, owner, next runs, the jobs that use it) with Attach, and New
   schedule starts from SSMS's defaults, named from the search. **Remove** marks the job's schedule removed with Undo and a
   choice: detach it and keep the schedule, or (its owner and sysadmin) detach it and delete it when no job uses it. Nothing
@@ -120,7 +120,7 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
   jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
   beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
-  job (only jobs the login owns, or any for sysadmin, as msdb allows), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
+  job (only jobs the login owns, or any for sysadmin, as msdb allows, on any schedule the login can see; another login's schedule takes only these job changes), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
   user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
   Create adds; Delete asks inline and never forces, so msdb refuses one a job uses (`IN_USE`, 14372), saying how many jobs.

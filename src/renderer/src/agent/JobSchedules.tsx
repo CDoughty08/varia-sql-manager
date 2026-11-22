@@ -164,7 +164,7 @@ export default function JobSchedules(props: Props) {
   useEffect(() => { if (selectedId !== undefined && sharedState?.state === 'ready') service.ensureScheduleJobs(state.id, selectedId) }, [service, state.id, selectedId, sharedState?.state])
   const search = state.scheduleSearch ?? ''
   const onJob = new Set(draft.schedules.filter(item => !item.remove && item.id !== undefined).map(item => item.id!))
-  const usable = (sharedState?.model?.schedules ?? []).filter(item => !onJob.has(item.id) && (model.sysadmin || ownsSchedule(item, model.login)))
+  const usable = (sharedState?.model?.schedules ?? []).filter(item => !onJob.has(item.id) && item.version !== undefined && !!item.modified)
   const matches = search.trim() ? usable.filter(item => scheduleMatches(item, search)) : []
   const picked = selected?.startsWith('pick:') ? usable.find(item => item.id === Number(selected.slice(5))) ?? sharedState?.model?.schedules.find(item => item.id === Number(selected.slice(5))) : undefined
   const allProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules, { platform: model.platform })

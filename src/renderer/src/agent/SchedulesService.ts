@@ -70,7 +70,7 @@ export const schedulesText = {
   savedUnread: 'Saved, but the schedules could not be read again:',
   inUse: (count: number) => `${count === 1 ? 'A job uses' : `${count} jobs use`} it: detach ${count === 1 ? 'it' : 'them'} first, or keep the schedule. Varia never forces a delete.`,
   deleteConfirm: (name: string) => `Delete the schedule ${name}? It cannot be undone.`,
-  readOnly: (owner: string | undefined) => `Owned by ${owner ?? 'another login'}: only its owner and sysadmin can change it.`,
+  readOnly: (owner: string | undefined) => `Owned by ${owner ?? 'another login'}: only its owner and sysadmin can change its settings. You can still attach and detach your own jobs.`,
   unchangeable: 'Varia could not read this schedule\'s version, so it cannot change it.',
   truncated: `Only the first ${agentLimits.listRows} schedules are listed.`,
   unusedNote: 'Unused counts every job, including jobs you cannot see.',
@@ -218,7 +218,9 @@ ${scheduleId}`, pending = this.jobReads.get(key)
     const generation = this.generations.get(id) ?? 0
     const done = this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId })).then(result => {
       const current = this.get(id)
-      if (!current || !result || (this.generations.get(id) ?? 0) !== generation) return
+      if (!current || (this.generations.get(id) ?? 0) !== generation) return
+      // A read the connection's loss dropped is marked failed, so selecting the schedule again reads it again instead of "Reading…".
+      if (!result) { this.patch(id, { scheduleJobs: { ...current.scheduleJobs, [scheduleId]: { state: 'failed' } } }); return }
       const jobs = result.ok && !result.value.error ? result.value.agentSchedules?.scheduleJobs : undefined
       this.patch(id, { scheduleJobs: { ...current.scheduleJobs, [scheduleId]: jobs ? { state: 'ready', jobs } : { state: 'failed' } } })
     }).finally(() => { if (this.jobReads.get(key) === done) this.jobReads.delete(key) })
@@ -242,6 +244,11 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   record(id: string, key: string | undefined): AgentScheduleRecord | undefined {
     if (!key || key === newScheduleKey) return undefined
     return this.get(id)?.model?.schedules.find(record => String(record.id) === key)
+  }
+  /** Whether jobs may be attached to or detached from a schedule: any whose version was read (sysschedules_localserver_view lists it
+   *  to the login), whoever owns it; each job still needs canChangeJob. A new schedule takes jobs too. */
+  canChangeJobsOf(id: string, record: AgentScheduleRecord | undefined): boolean {
+    return !!this.get(id)?.model && (!record || (record.version !== undefined && !!record.modified))
   }
   /** Why the login cannot change a schedule (not its owner and not sysadmin, or no version read), or undefined. */
   readOnly(id: string, record: AgentScheduleRecord | undefined): string | undefined {
@@ -309,7 +316,11 @@ ${scheduleId}`, pending = this.jobReads.get(key)
   canSave(id: string): boolean {
     const state = this.get(id), save = this.pendingSave(id), draft = this.draft(id)
     if (!state || !save || !draft || state.busy || !this.live(id) || state.phase !== 'ready') return false
-    if (save.op !== 'create' && this.readOnly(id, this.record(id, state.selected))) return false
+    if (save.op !== 'create') {
+      // msdb's sp_attach_schedule and sp_detach_schedule ask only for the job's owner: another login's schedule takes job changes alone.
+      const record = this.record(id, state.selected)
+      if (!this.canChangeJobsOf(id, record) || (this.readOnly(id, record) && (save.name !== undefined || save.enabled !== undefined || save.timing !== undefined))) return false
+    }
     return scheduleSavable(scheduleProblems(draft.fields, this.now(id), this.server(id))) && scheduleSaveProblems(save).length === 0
   }
   /** File › Save and the palette's Save Schedule: any changed draft, whichever is selected. */

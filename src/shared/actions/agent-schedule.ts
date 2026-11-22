@@ -155,7 +155,7 @@ export const jobScheduleText = {
   removeOwnerOnly: 'Only the schedule\'s owner and sysadmin may delete it, so this offers detach only.',
   undoHint: 'No confirmation dialog: the choice sits on the removed schedule, and Undo restores it until the job is saved.',
   searchHint: 'Name or when it runs, for example “night” or “every 15 minutes”.',
-  pickHint: 'Matches names and when they run. Schedules already on this job are left out; only ones you may use are listed.',
+  pickHint: 'Matches names and when they run. Schedules already on this job are left out; only ones you can see are listed.',
   noMatch: 'No shared schedule matches.',
   tooMany: `Varia adds schedules to a job only while it holds at most ${agentLimits.schedulesPerJob}.`,
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
