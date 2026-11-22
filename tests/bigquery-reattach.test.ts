@@ -579,6 +579,15 @@ describe('the prompt beside a cost gate and held jobs', () => {
     // query.session.state answers job 'none' (the fixture's default): the job was never in this session.
     await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_d'])
+    // Cancel the job cancels it through main: the tab's session does not hold it.
+    const cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [{ jobId: 'job_d', cancelled: true }], uncancellable: [] } }))
+    const g = fixture()
+    Object.assign(g.queryApi, { cancelRestoredJobs, dropJobRecords: vi.fn(async () => ({ ok: true, value: undefined })) })
+    g.queryApi.attach.mockResolvedValueOnce({ ok: true, value: output({ status: 'failed', error: { code: 'PERMISSION_DENIED', message: 'No jobs.list.', batchNumber: 1, iteration: 1 } }) })
+    g.queries.restoreJobs(g.tab.id, [job('job_d', { detached: true })])
+    await settle(); await settle()
+    g.queries.sessionClosed(g.tab.id, 'cancelJob')
+    expect(cancelRestoredJobs).toHaveBeenCalledOnce()
     // Nor does a later run in the tab, whose session never waited behind it.
     await f.queries.execute(f.tab.id); await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => [item.jobId, !!item.detached])).toEqual([['job_d', true]])

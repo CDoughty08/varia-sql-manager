@@ -181,6 +181,8 @@ describe('BigQuery job prompts', () => {
     // One tab holding several jobs is asked about them in the plural.
     const several = sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1', 'job_2'] })] })!
     expect([several.message, several.buttons[0].label]).toEqual(['a.sql holds BigQuery jobs that are still running.', 'Cancel the Jobs'])
+    expect(several.detail).toContain('Cancel the jobs stops them in BigQuery and rolls back any transaction in their sessions')
+    expect(several.detail).toContain('Leave it running lets the jobs finish')
     expect(sessionPrompt({ action: 'close', tabs: [job('a.sql', { jobIds: ['job_1'] })] })!.detail).not.toContain('job_1')
   })
   it("keeps SQL Server's buttons beside executing SQL Server queries, with Leave BigQuery jobs running as the checkbox", () => {

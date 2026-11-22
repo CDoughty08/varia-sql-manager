@@ -211,7 +211,8 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
   return {
     title: one ? 'BigQuery job running' : 'BigQuery jobs running',
     message: one ? `${jobs[0].name} holds a BigQuery job that is still running.` : jobs.length === 1 ? `${jobs[0].name} holds BigQuery jobs that are still running.` : `${queries(jobs.length)} hold BigQuery jobs that are still running.`,
-    detail: [listed(jobs, jobNote(action, prices)), cancelNote, action === 'disconnect' ? disconnectNote : '', leaveNote, quitNote].filter(Boolean).join('\n\n'),
+    detail: [listed(jobs, jobNote(action, prices)), one ? cancelNote : cancelNote.replace('Cancel the job stops it', 'Cancel the jobs stops them').replace('in its session', 'in their sessions'),
+      action === 'disconnect' ? disconnectNote : '', one ? leaveNote : leaveNote.replace('Leave it running lets the job finish', 'Leave it running lets the jobs finish'), quitNote].filter(Boolean).join('\n\n'),
     defaultId: 2, cancelId: 2,
     buttons: [{ label: one ? 'Cancel the Job' : 'Cancel the Jobs', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: dont[action], answer: 'cancel' }],
     // A quit always asks (rememberedJobAnswer), so its box remembers nothing.

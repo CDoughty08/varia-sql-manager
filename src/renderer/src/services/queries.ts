@@ -300,10 +300,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const key = this.documents.get(tabId)?.jobKey ?? this.jobKeys.get(tabId)
     const name = this.documents.get(tabId)?.name ?? 'A query'
     // Jobs the tab holds without running them (a restored tab not connected, or an older job not re-attached): the
-    // backend's session knows none of them, so main cancels them from their records first. A job left running on a
-    // connected tab is the session's own, which the backend cancels with the session; so is the running request's.
-    const connected = this.connected(tabId)
-    const targets = (state?.jobs ?? []).filter(job => job.jobId !== state?.running?.jobId && (!connected || !job.detached)).map(job => job.jobId)
+    // backend's session knows none of them, so main cancels them from their records first. A job this backend's session
+    // left running on a connected tab is the session's own, which the backend cancels with the session; so is the running
+    // request's. A restored detached job whose re-attach failed is in no session here: main cancels it too.
+    const connected = this.connected(tabId), connectionId = this.documents.get(tabId)?.connectionId, connection = connectionId ? this.getConnection(connectionId) : undefined
+    const here = this.detachedHere.get(tabId)
+    const sessionOwn = (job: TabJob) => connected && !!connection && job.detached && !!here?.has(this.attachKey(job, connection))
+    const targets = (state?.jobs ?? []).filter(job => job.jobId !== state?.running?.jobId && !sessionOwn(job)).map(job => job.jobId)
     if (entry === 'cancelJob' && targets.length && key && this.api.cancelRestoredJobs) {
       const cancelling = this.cancelRestored(name, key, targets)
       this.restoredCancels.add(cancelling)
