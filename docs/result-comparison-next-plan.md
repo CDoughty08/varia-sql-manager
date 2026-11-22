@@ -506,10 +506,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Wiring: the document registry, `icons.ts`, `start.tsx`'s reviewed imports for the diff editor (regenerate
     `monaco-keybindings`), and Close and Close Others.
 - **Catalogues:**
-  - commands `output.compareChangeDetails` ("Show Change Details", `mod+i` when `(outputGridFocus ||
-    comparisonDetailsFocus) && resultsGridComparison`; the submenu with `when: outputGridComparison`, More results
-    tools' `6_compareactions`, the palette) and `output.compareValuesInTab` ("Compare Values in Tab", C5b, in the same
-    places);
+  - commands `output.compareChangeDetails` ("Show Change Details", `mod+i` when `(outputGridFocus &&
+    activePanel == 'output' || comparisonDetailsFocus) && resultsGridComparison`, since a Peek card's grid also sets
+    `outputGridFocus` and Escape could not reach a card opened from there; the submenu with `when:
+    outputGridComparison`, More results tools' `6_compareactions`, the palette) and `output.compareValuesInTab`
+    ("Compare Values in Tab", C5b, in the same places);
   - Alt+F5 and Alt+Shift+F5's `when` gains `|| comparisonDetailsFocus`;
   - context key `comparisonDetailsFocus`. Whether hover opens a card is read from the tone by the grid, not a context
     key, since the command itself works on any comparison cell;
@@ -604,9 +605,17 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 
 - **Protocol** (no new method):
   - `results.copy` gains `format?: 'tsv' | 'diff'` (default `tsv`), and `results.export`'s `format` gains `'diff'` (Q1).
+  - With `diff`, both also take `names: { left, right }`, required: the sides' display names ("Result 1", "Totals
+    (Result 2)"), which only the renderer knows (`entryNumber`), each 1–260 characters, bounded in zod and C#. The
+    writer escapes them as it escapes values, so a name holding a line break cannot forge a diff line.
+  - The rest of the header comes from the diff set, which records it beside `DiffInputs` in `DiffWritten`: the match
+    used (`DiffMatch`, its mode and key pairs), the ignored pairs, and, for a side read as shown (C6), its rows shown
+    and its rows. Today it records only `DiffInputs`, so C3 adds the match and ignored pairs, and C6 the counts. The
+    match text, "lines start with row numbers" under a match without key columns, and the `# Result 1 shows 120 of
+    5,000 rows` line are written from them.
   - They change in `resultsCopyRequestSchema` and `resultsSaveRequestSchema` (`src/main/validation.ts`), the preload
-    signatures (`copyResults`, `saveResults`), the params `results-jobs.ts` builds (`ResultsCopyParams` and the export's)
-    and the C# records.
+    signatures (`copyResults`, `saveResults`), the params `results-jobs.ts` builds (`ResultsCopyParams` and the export's),
+    the fake backend and the C# records, each with `names`.
   - `ResultsFormat` gains `diff`, so `exportDefaults.nullText`, `extensions`, `filters` and the local-save types gain
     entries; a local table refuses it.
   - Save as Diff… asks main's save job for format `diff`. Its dialog offers only "Diff text (\*.txt)" and All Files, and
@@ -640,6 +649,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - gap and skip lines, cut rows;
     - NULL against the text `NULL`, escapes;
     - ignored columns, forced key columns, row-number prefixes without keys, CRLF and LF;
+    - the header from the diff set's recorded match and ignored pairs, and side names holding a line break, escaped;
     - a changed entry whose copied columns are unchanged, written as one unchanged line;
   - the refusal on a non-comparison, and a `DiffChecks` case: a sorted Two rows copy on a low budget is refused, not
     cut;
@@ -716,9 +726,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       unticked: … their changes …"), each clause only while its statement is ticked and naming only the columns it
       would write (an ignored column only in the INSERT clause). Columns the target fills itself
       (rowversion, computed, an identity left out) have their own lines instead.
-    - A data column without a name, whose name the result repeats, or whose name holds a line break starts unticked
-      and locked ("No name", "Name repeated", "Name has a line break"), since an INSERT could not name it: a query
-      window normalizes line breaks in a bracketed name too.
+    - A data column without a name, whose name the result repeats, or whose name holds a control character, U+2028 or
+      U+2029 (the target parts' rule) starts unticked and locked ("No name", "Name repeated", "Name has a control
+      character"), since an INSERT could not name it: a query window normalizes line breaks in a bracketed name too.
     - A line names pairs whose types differ ("amount is decimal(10,2) in Result 1 and decimal(12,2) in Result 3. Each
       value is written as its own result's type."). Each value is formatted by its own input's column type. A diff's
       data columns carry Result 3's types (`UnifiedDiff.Columns`) whichever result a value came from, and only One
@@ -801,7 +811,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
     xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
-  - a key column without a name, whose name the result repeats, or whose name holds a line break: "Result 3 has 2
+  - a key column without a name, whose name the result repeats, or whose name holds a control character: "Result 3 has 2
     columns named id, so a statement could not name its key. Give each column its own name in the query.";
   - rows not matched by key columns the user chose (before the as-shown refusal when both apply):
     - Row position, Whole rows, or Automatic that fell back to whole rows: "Rows are not matched by key columns, so a
@@ -889,7 +899,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
     characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query
-    document's database, so it is always sent), direction: 'toNew' | 'toOld', columns: number[], identity?: number,
+    document's database, so it is always sent), names: { left, right, document, server } (each 1–260 characters, for
+    the header, which writes each through the comment escape), direction: 'toNew' | 'toOld', columns: number[],
+    identity?: number,
     statements: { delete, update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds
     distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#).
     `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both): only
@@ -906,14 +918,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     characters, estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are
     `INVALID_PARAMS` with the sentences above. The backend itself refuses a comparison whose match is not a `columns`
     match, so Automatic's choice can never be scripted by accident (Use updated_at as key columns replaces the
-    comparison with that `columns` match first), and a comparison of rows as shown (the diff set records whether a side
-    was read as shown).
+    comparison with that `columns` match first), and a comparison of rows as shown. Both read the diff set's records
+    (C3's match and C6's as-shown flags), and the WHERE clauses take the recorded key pairs, so the params carry no key
+    columns.
 - **Backend `Results/DiffScript.cs`:** literals by the column's `dataType`, precision and scale:
 
   | Type | Literal |
   | --- | --- |
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
-  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written `CAST(<that> AS real)`: a bare literal is a float, and comparing it with a real column widens the real, which then differs, so a real key or Q11's guard would find no row |
+  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written as its value widened to double, in that double's round-trip text (0.1 as `1.0000000149011612E-1`): a literal is a float, and comparing it with a real column widens the real, so the shorter `1E-1` would find no row as a key or in Q11's guard, while the widened value is exact both compared and assigned, with no decimal → double → real double rounding |
   | bit | 0 or 1 |
   | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
@@ -959,7 +972,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
-      real compared through its cast, both directions; the INSERT check with NULL and composite keys;
+      real key and guard compared exactly, both directions; the INSERT check with NULL and composite keys;
     - identity insert, an identity column never SET, collation-only values left out under Exact text off;
     - float values whose text does not read back, datetime in the `T` form, char values as `N'…'`;
     - the refusals, a match that is not `columns`, and a comparison of rows as shown;
@@ -977,7 +990,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - floats with 17 significant digits and none after the point, written with an exponent;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and control-character
-    text, a value with 10,000 line breaks, an xml value stored with style 1, and 17-digit floats, included), compare
+    text, a value with 10,000 line breaks, an xml value stored with style 1, 17-digit floats and a real key column,
+    included), compare
     their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
     non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only
@@ -1144,8 +1158,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     a row of the input), reserved where it is read, as `ResultSearcher.ByPages` reserves its own, and pinned the same
     way, by a refusal check (`FusedReadChecks`'s pattern) rather than the lint.
   - The model's row numbers stay stored rows, so the gutter, identity and highlights are unchanged.
-  - The diff set records its input result ids, as now, and whether either side was read as shown, which C4's refusal
-    reads. It keeps no view.
+  - The diff set records its input result ids, as now, and, beside the match C3 records, whether each side was read
+    as shown, with its rows shown and its rows, which C4's refusal and Copy as Diff's header read. It keeps no view.
 - **Renderer:**
   - `CompareService` passes the inputs' current view ids (`run.sorts`), through `worker-core.ts`'s member-by-member
     rebuild as every results-path step. It keeps `inputs: 'whole' | 'shown'` in the
