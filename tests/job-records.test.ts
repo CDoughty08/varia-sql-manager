@@ -165,10 +165,17 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain("handle('varia:jobs-without-tab', async value => {\n    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)")
     // A copy AutoRecover may still reopen keeps its jobs; a store that cannot be read asks about nothing.
     expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept])')
+    // A box a reload, crash or close took away (pageDialog's fallback) drops nothing.
+    expect(source).toMatch(/\{ response: -1, checkboxChecked: false \}, true\)\n    \/\/ A box a reload[^\n]*\n    if \(response < 0\) return null/)
+    // Connect's chosen entry wins over a twin with the same settings.
+    expect(source).toContain('const profile = matching.find(item => item.id === selected) ?? matching[0]')
+    // A new window (macOS) holds no earlier quit's keys.
+    expect(source).toMatch(/closeIntent = undefined\n  \/\/ A macOS window close[^\n]*\n  releaseQuitJobs\(\)/)
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
     expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
     expect(source).toContain("if (failed.length) throw new Error(`The connection was kept")
+    expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
     // Credentials are the saved profile's, per project, at most jobLimits.cancel per call.
     expect(source).toContain('for (let next = 0; next < group.length; next += jobLimits.cancel)')
     expect(source).toContain("handle('varia:confirm-running-job', async value => {\n    const request = runningJobRequestSchema.parse(value)")

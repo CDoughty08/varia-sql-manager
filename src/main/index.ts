@@ -72,7 +72,7 @@ import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import { rememberedJobAnswer, runningJobPrompt, runningJobRequestSchema, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
+import { jobPromptAnswer, rememberedJobAnswer, runningJobPrompt, runningJobRequestSchema, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
@@ -232,9 +232,12 @@ let pendingFailedAborts = 0
 // Each BigQuery connection's saved profile, so its jobs' records can be cancelled after a restart without a connection.
 const connectionProfiles = new Map<string, string>()
 /** Remembers the saved BigQuery profile a new connection was opened from (matched by its identity, as the library does). */
-async function rememberConnectionProfile(connectionId: string, options: ProviderConnectionOptions): Promise<void> {
+async function rememberConnectionProfile(connectionId: string, options: ProviderConnectionOptions, context: unknown): Promise<void> {
   if (options.provider !== 'bigquery' || !bigQueryStore) return
-  const key = connectionKey(options), profile = (await bigQueryStore.load()).library.profiles.find(item => connectionKey(item.options) === key)
+  // The entry Connect chose wins over another saved with the same settings (the library allows twins).
+  const selected = z.object({ selectedProfileId: z.uuid() }).safeParse(context).data?.selectedProfileId
+  const key = connectionKey(options), matching = (await bigQueryStore.load()).library.profiles.filter(item => connectionKey(item.options) === key)
+  const profile = matching.find(item => item.id === selected) ?? matching[0]
   if (!profile) return
   connectionProfiles.set(connectionId, profile.id)
   // Bounded: the oldest handles go first.
@@ -696,6 +699,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   closeApproved = false
   closePending = false
   closeIntent = undefined
+  // A macOS window close kept its tabs' records through the backend stop; the next window's page settles them itself.
+  releaseQuitJobs()
   windowActive = true
   rendererLoaded = false
   rendererReady = false
@@ -1108,7 +1113,7 @@ app.whenReady().then(async () => {
       }), { response: 1, checkboxChecked: false }, true)
       if (response !== 0) throw new Error('The connection was kept: its BigQuery jobs are still running.')
       const cancel = await cancelRecordedJobs(running)
-      const failed = cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)
+      const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]
       if (failed.length) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.`)
       jobRecords.dropJobs(running.map(record => record.jobId))
     }
@@ -1224,7 +1229,7 @@ app.whenReady().then(async () => {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         // Either engine: BigQuery's credential material is added when the owner sends it (withBigQueryCredential).
         const outcome = await connectionOpen.connect(validated as ProviderConnectionOptions, context)
-        if (outcome.ok) await rememberConnectionProfile((outcome.value as { id: string }).id, validated as ProviderConnectionOptions).catch(() => {})
+        if (outcome.ok) await rememberConnectionProfile((outcome.value as { id: string }).id, validated as ProviderConnectionOptions, context).catch(() => {})
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }
@@ -1496,7 +1501,9 @@ app.whenReady().then(async () => {
       type: 'question', title: 'BigQuery jobs without a tab', message: one ? '1 BigQuery job from the last session has no tab.' : `${running.length} BigQuery jobs from the last session have no tab.`,
       detail: `${shown.join('\n')}\n\nCancel Jobs stops ${one ? 'it' : 'them'} in BigQuery. Keep leaves ${one ? 'it' : 'them'} running; BigQuery's job history lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`,
       buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1, noLink: true, signal
-    }), { response: 1, checkboxChecked: false }, true)
+    }), { response: -1, checkboxChecked: false }, true)
+    // A box a reload, crash or close took away decided nothing: the records stay for the next page's review.
+    if (response < 0) return null
     const jobIds = running.map(record => record.jobId)
     if (response !== 0) { jobRecords.dropJobs(jobIds); return { answer: 'keep' as const, jobIds } }
     const cancel = await cancelRecordedJobs(running)
@@ -1539,11 +1546,9 @@ app.whenReady().then(async () => {
     if (!prompt) return 'proceed'
     const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
       ...prompt.checkbox ? { checkboxLabel: prompt.checkbox.label, checkboxChecked: prompt.checkbox.checked } : {} }), { response: prompt.cancelId, checkboxChecked: false }, true)
-    const answer = prompt.buttons[response]?.answer ?? 'cancel'
-    if (!prompt.checkbox || !checkboxChecked || (answer !== 'proceed' && answer !== 'leave')) return answer
-    // "Remember my choice" sets the option; a mixed box's "Leave BigQuery jobs running" turns its Cancel into Leave for BigQuery.
-    if (prompt.checkbox.remembers) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': answer === 'proceed' ? 'cancel' : 'leave' }).catch(() => {})
-    return answer === 'proceed' && !prompt.checkbox.remembers ? 'leave' : answer
+    const { answer, remember } = jobPromptAnswer(prompt, response, checkboxChecked)
+    if (remember) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': remember }).catch(() => {})
+    return answer
   })
   // Close Results while a BigQuery job runs: the same three choices and remembered setting, but the tab's session stays.
   handle('varia:confirm-running-job', async value => {
@@ -1553,8 +1558,8 @@ app.whenReady().then(async () => {
     const prompt = runningJobPrompt(request)
     const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
       checkboxLabel: prompt.checkbox!.label, checkboxChecked: false }), { response: prompt.cancelId, checkboxChecked: false }, true)
-    const answer = prompt.buttons[response]?.answer ?? 'cancel'
-    if (checkboxChecked && (answer === 'proceed' || answer === 'leave')) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': answer === 'proceed' ? 'cancel' : 'leave' }).catch(() => {})
+    const { answer, remember } = jobPromptAnswer(prompt, response, checkboxChecked)
+    if (remember) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': remember }).catch(() => {})
     return answer
   })
   // An object action's confirmation (Rename Database's Open Connections, Disable Login): main writes the box from the

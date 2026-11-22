@@ -285,6 +285,31 @@ describe('Close Results while a BigQuery job runs', () => {
     await expect(closing).resolves.toBe(true)
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
   })
+  it('names the estimate the run started with, and a restored job as not re-attached yet', async () => {
+    const f = fixture()
+    f.queries.estimateOf = () => 3 * 2 ** 30
+    const confirmRunningJob = vi.fn<VariaApi['confirmRunningJob']>(async () => ({ ok: true, value: 'cancel' }))
+    Object.assign(f.queryApi, { confirmRunningJob })
+    const pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    void f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    f.queries.estimateOf = () => 1
+    await f.queries.closeRunningJob(f.tab.id)
+    expect(confirmRunningJob.mock.calls[0][0].job).toMatchObject({ estimateBytes: 3 * 2 ** 30 })
+    await f.queries.prepareSessions('close', [f.tab.id])
+    expect(f.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ estimateBytes: 3 * 2 ** 30 })
+    pending.resolve({ ok: true, value: output() })
+    // A restored job whose re-attach failed (kept, not tried again on this connection).
+    const restored = fixture()
+    restored.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Not connected.', code: 'NOT_CONNECTED' })
+    restored.queries.restoreJobs(restored.tab.id, [job('job_2')])
+    await settle(); await settle()
+    await restored.queries.prepareSessions('close', [restored.tab.id])
+    expect(restored.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ unattached: true })
+    expect(restored.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).not.toHaveProperty('detached')
+  })
   it('keeps the results when the job could not be left running', async () => {
     const f = await running(), notify = vi.fn()
     f.queries.notify = notify

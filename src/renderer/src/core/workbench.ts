@@ -404,6 +404,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   let costChoiceChanged = () => {}
   const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
+  queries.estimateOf = id => { const estimate = bigQueryCost.getSnapshot().get(id); return estimate?.phase === 'estimate' ? estimate.bytes : undefined }
   queries.setCostGate((tabId, sql, origin, signal) => bigQueryCost.beforeExecute(tabId, sql, origin, signal))
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()

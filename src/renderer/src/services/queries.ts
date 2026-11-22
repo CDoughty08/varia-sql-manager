@@ -16,7 +16,7 @@ import type { PlanExecutionContext, RetainedPlansService } from '../plans/Retain
 import { isLiveConnection, type ConnectionAvailability } from './connection-availability'
 
 /** `attach`: a re-attach to a BigQuery job (query.attach), which Stop cancels as it would the query. */
-export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string }
+export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string; /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */ readonly estimateBytes?: number }
 /** A BigQuery job the tab holds but does not follow (docs/bigquery.md, Re-attaching to jobs): handed back by a restore, kept
  *  when the backend was lost mid-job, or left running (`detached`, Leave it running on Close Results). */
 export type TabJob = RestoredJob
@@ -123,6 +123,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly forgotten = new Set<string>()
   /** Shows that BigQuery jobs were left running, with their ids to copy (no tab follows them any more). Set by the workbench. */
   notifyJobs?: (text: string, jobIds: readonly string[]) => void
+  /** BigQuery: the tab's current dry-run estimate in bytes (BigQueryCostService), kept with a run for the job prompt. */
+  estimateOf?: (tabId: string) => number | undefined
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
     private results: Pick<ResultsService, 'begin' | 'finish'> & Partial<Pick<ResultsService, 'addMessage'>>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
@@ -517,7 +519,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // a re-attach takes its own job over.
     const held = before?.jobs?.filter(job => job.jobId !== attach?.jobId)
     const reported = new Map<string, TabJob>()
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
+    const estimateBytes = bigQuery && !attach && !preview ? this.estimateOf?.(tabId) : undefined
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
     // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
@@ -615,7 +618,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const name = this.documents.get(tabId)?.name ?? 'Query'
     let answer
     try {
-      const response = await this.api.confirmRunningJob!({ name: name.slice(0, sessionPromptLimits.name), job: { elapsedMs: Math.max(0, this.now() - running.startedAt), jobIds: this.heldJobIds(tabId).slice(0, sessionPromptLimits.jobIds) } })
+      const response = await this.api.confirmRunningJob!({ name: name.slice(0, sessionPromptLimits.name), job: { elapsedMs: Math.max(0, this.now() - running.startedAt), ...running.estimateBytes !== undefined ? { estimateBytes: running.estimateBytes } : {}, jobIds: this.heldJobIds(tabId).slice(0, sessionPromptLimits.jobIds) } })
       if (!response.ok) throw new Error(response.error)
       answer = response.value
     } catch (error) { this.notify?.(`Close Results: ${errorText(error)}`); return false }
@@ -690,7 +693,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     for (const tab of candidates.filter(candidate => candidate.holding)) {
       const state = this.getSnapshot()[tab.id], jobIds = this.heldJobIds(tab.id).slice(0, sessionPromptLimits.jobIds)
-      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...!tab.running || !state?.running ? { detached: true as const } : {}, ...jobIds.length ? { jobIds } : {} }
+      // A job it does not run is one left running (detached), or a restored one not re-attached yet.
+      const following = tab.running && !!state?.running, estimateBytes = following ? state.running!.estimateBytes : undefined
+      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.length && state.jobs.every(job => job.detached) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {} }
       // Its session is asked about only through its job: Cancel the job rolls a transaction back, Leave it running keeps it.
       tab.state = nothingOpen
     }

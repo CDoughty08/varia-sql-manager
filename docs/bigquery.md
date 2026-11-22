@@ -295,17 +295,18 @@ In the workbench:
 - **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that holds
   a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never asks
   about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
-  "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running). Beside
+  "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
+  then answers without asking, except at a quit. Beside
   executing SQL Server queries the box keeps SQL Server's buttons, and the BigQuery choice is its "Leave BigQuery jobs
   running" checkbox. Cancel the job waits for the job to stop, then ends the session. A tab not connected has its jobs
   cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
   records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
   asking.
 - **Quitting Varia leaves jobs running.** Tabs hot exit keeps are not asked about, their records stay, and their
-  sessions stay open while a transaction may be open. Tabs that will not be restored are asked as above, and the box
-  lists their job ids.
+  sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
+  remembered choice, and the box lists their job ids.
 - **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is the
-  default). Cancel the job stops it as Stop does. Leave it running sends `query.cancel` with `detach`: the results close,
+  default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends `query.cancel` with `detach`: the results close,
   the job keeps the tab's session, the next Execute waits for it (Stop cancels it), and closing the tab asks about it
   again while it runs.
 - **Jobs without a tab.** After every start, running jobs whose tab is gone (a crash, a tab whose copy was discarded) are

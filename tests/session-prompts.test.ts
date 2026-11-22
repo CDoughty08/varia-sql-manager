@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bigQueryCommitTimeout, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
+import { bigQueryCommitTimeout, jobPromptAnswer, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
 
 const open = (name: string, transactions = 1): SessionTab => ({ name, transactions, running: false })
 const running = (name: string, transactions = 0): SessionTab => ({ name, transactions, running: true })
@@ -176,6 +176,24 @@ describe('BigQuery job prompts', () => {
     expect(rememberedJobAnswer(only, 'cancel')).toBe('proceed')
     expect(rememberedJobAnswer(only, 'leave')).toBe('leave')
     expect(rememberedJobAnswer({ action: 'close', tabs: [running('s.sql'), job('b.sql')] }, 'leave')).toBeUndefined()
+    // A quit always asks: its box lists the job ids nothing holds afterwards.
+    expect(rememberedJobAnswer({ action: 'exit', tabs: [job('a.sql')] }, 'leave')).toBeUndefined()
+  })
+  it("maps the box's button and checkbox: Remember sets the option, a mixed box's checkbox turns Cancel into Leave", () => {
+    const only = sessionPrompt({ action: 'close', tabs: [job('a.sql')] })!, mixed = sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!
+    expect(jobPromptAnswer(only, 0, true)).toEqual({ answer: 'proceed', remember: 'cancel' })
+    expect(jobPromptAnswer(only, 1, true)).toEqual({ answer: 'leave', remember: 'leave' })
+    expect(jobPromptAnswer(only, 1, false)).toEqual({ answer: 'leave' })
+    expect(jobPromptAnswer(only, 2, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(only, -1, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(mixed, 0, true)).toEqual({ answer: 'leave' })
+    expect(jobPromptAnswer(mixed, 0, false)).toEqual({ answer: 'proceed' })
+    expect(jobPromptAnswer(mixed, 1, true)).toEqual({ answer: 'cancel' })
+    expect(jobPromptAnswer(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }), 0, true)).toEqual({ answer: 'proceed', remember: 'cancel' })
+  })
+  it("says a restored job was not re-attached yet, and keeps Disconnect's warning in a mixed box", () => {
+    expect(sessionPrompt({ action: 'close', tabs: [{ ...job('a.sql', { unattached: true }), running: false }] })!.detail).toContain('• a.sql (not re-attached yet)')
+    expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain('disconnect stops with every tab open')
   })
   it('accepts a job only on a BigQuery query, bounded', () => {
     expect(sessionPromptRequestSchema.safeParse({ action: 'close', tabs: [{ ...job('a.sql'), running: false }] }).success).toBe(true)

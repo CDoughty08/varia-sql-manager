@@ -15,7 +15,7 @@ export type SessionAction = typeof sessionActions[number]
 export interface SessionTab { readonly name: string; readonly transactions: number; readonly running: boolean; readonly unchecked?: true; readonly provider?: SessionProvider; readonly job?: SessionJob }
 /** A BigQuery query holding a job (docs/bigquery.md, The prompt): how long it has run, its estimate, whether it is detached
  *  (left running, or not yet re-attached) rather than followed, and its job ids, which a quit lists since no tab keeps them. */
-export interface SessionJob { readonly elapsedMs: number; readonly estimateBytes?: number; readonly detached?: true; readonly jobIds?: readonly string[] }
+export interface SessionJob { readonly elapsedMs: number; readonly estimateBytes?: number; /** `detached`: left running; `unattached`: a restored job not re-attached yet. */ readonly detached?: true; readonly unattached?: true; readonly jobIds?: readonly string[] }
 /** queryExecution.bigQuery.closeRunningJob: what a BigQuery-only job prompt answers without asking ("Remember my choice"). */
 export type CloseRunningJob = 'ask' | 'cancel' | 'leave'
 /** The engine a query's session is on, which picks the "not checked" note's causes. */
@@ -60,7 +60,7 @@ export interface SessionPrompt {
 export const sessionPromptLimits = { tabs: 1024, name: 512, listed: 10, jobIds: 8 } as const
 const jobSchema = z.object({
   elapsedMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), estimateBytes: z.number().min(0).max(Number.MAX_SAFE_INTEGER).optional(), detached: z.literal(true).optional(),
-  jobIds: z.array(jobIdSchema).max(sessionPromptLimits.jobIds).optional()
+  unattached: z.literal(true).optional(), jobIds: z.array(jobIdSchema).max(sessionPromptLimits.jobIds).optional()
 }).strict()
 const tabSchema = z.object({
   name: z.string().min(1).max(sessionPromptLimits.name), transactions: z.number().int().min(0).max(2 ** 31 - 1), running: z.boolean(), unchecked: z.literal(true).optional(),
@@ -165,13 +165,14 @@ const minutes = (ms: number) => { const total = Math.floor(ms / 60_000); return 
 const bytesText = (bytes: number) => { const units = ['bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']; let value = bytes, unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ } return unit ? `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}` : `${bytes} bytes` }
 /** How a job tab is named in the box: how long it ran and its estimate, or that it is detached; a quit adds its job ids. */
 const jobNote = (action: SessionAction) => (tab: SessionTab) => {
-  const job = tab.job!, parts = [job.detached ? 'left running' : `running ${minutes(job.elapsedMs)}`, ...job.estimateBytes !== undefined ? [`estimated ${bytesText(job.estimateBytes)}`] : []]
+  const job = tab.job!, parts = [job.detached ? 'left running' : job.unattached ? 'not re-attached yet' : `running ${minutes(job.elapsedMs)}`, ...job.estimateBytes !== undefined ? [`estimated ${bytesText(job.estimateBytes)}`] : []]
   return ` (${parts.join(', ')})${action === 'exit' && job.jobIds?.length ? `: ${job.jobIds.join(', ')}` : ''}`
 }
 const leaveNote = 'Leave it running lets the job finish in BigQuery, where its job history lists it; Varia stops following it. If a transaction is open in its session, it stays open until the session ends, and other transactions that modify its tables fail meanwhile (reads, appends and DML outside transactions still run). The session ends after 24 hours idle, and its temporary tables are billed as storage until then.'
 /** A remembered answer (queryExecution.bigQuery.closeRunningJob) for a box that would ask only about BigQuery jobs. */
-export function rememberedJobAnswer({ tabs, location }: SessionPromptRequest, closeRunningJob: CloseRunningJob): SessionAnswer | undefined {
-  if (location || closeRunningJob === 'ask' || !tabs.length || !tabs.every(tab => tab.job)) return undefined
+export function rememberedJobAnswer({ action, tabs, location }: SessionPromptRequest, closeRunningJob: CloseRunningJob): SessionAnswer | undefined {
+  // A quit always asks: its box lists the job ids, which no tab or record holds afterwards.
+  if (action === 'exit' || location || closeRunningJob === 'ask' || !tabs.length || !tabs.every(tab => tab.job)) return undefined
   return closeRunningJob === 'cancel' ? 'proceed' : 'leave'
 }
 /**
@@ -187,7 +188,7 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
     return {
       title: 'Query executing', message: `${queries(all.length)} are still executing.`,
       detail: [listed(all, tab => tab.job ? jobNote(action)(tab) : ''), action === 'disconnect'
-        ? 'Cancel them and disconnect the server? Cancellation does not undo work already committed.'
+        ? 'Cancel them and disconnect the server? Cancellation does not undo work already committed. If completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open.'
         : `Cancel them and close ${closes(action)}? Anything they left uncommitted is rolled back.`,
       `With "Leave BigQuery jobs running" checked, the BigQuery jobs carry on instead. ${leaveNote}`, quitNote].filter(Boolean).join('\n\n'),
       defaultId: 1, cancelId: 1,
@@ -207,6 +208,17 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
   }
 }
 
+/**
+ * What main does with a session or Close Results box's answer (`response`, the button) and its checkbox: "Remember my
+ * choice" checked with Cancel the job or Leave it running sets queryExecution.bigQuery.closeRunningJob (`remember`); a mixed
+ * box's "Leave BigQuery jobs running" checked turns its Cancel into `leave`, which still cancels the SQL Server queries.
+ */
+export function jobPromptAnswer(prompt: SessionPrompt, response: number, checked: boolean): { readonly answer: SessionAnswer; readonly remember?: Exclude<CloseRunningJob, 'ask'> } {
+  const answer = prompt.buttons[response]?.answer ?? 'cancel'
+  if (!prompt.checkbox || !checked || (answer !== 'proceed' && answer !== 'leave')) return { answer }
+  if (prompt.checkbox.remembers) return { answer, remember: answer === 'proceed' ? 'cancel' : 'leave' }
+  return { answer: 'leave' }
+}
 /** varia:confirm-running-job, from the renderer: Close Results on a BigQuery tab whose job runs (not a session action: the
  *  tab and its session stay). */
 export const runningJobRequestSchema = z.object({ name: z.string().min(1).max(sessionPromptLimits.name), job: jobSchema }).strict()
