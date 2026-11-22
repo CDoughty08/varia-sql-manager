@@ -250,7 +250,14 @@ async function rememberConnectionProfile(connectionId: string, options: Provider
  */
 async function cancelRecordedJobs(records: readonly JobRecord[]): Promise<RecordedJobsCancel> {
   const jobs: RecordedJobsCancel['jobs'][number][] = [], uncancellable: string[] = []
-  const profiles = bigQueryStore ? (await bigQueryStore.load()).library.profiles : []
+  let profiles: Awaited<ReturnType<NonNullable<typeof bigQueryStore>['load']>>['library']['profiles']
+  try {
+    profiles = bigQueryStore ? (await bigQueryStore.load()).library.profiles : []
+  } catch (error) {
+    // Profiles unread: every job is listed as not cancelled, with why, rather than the answer failing without a word.
+    const message = error instanceof Error ? error.message.slice(0, 1000) : 'The saved BigQuery connections could not be read.'
+    return { jobs: records.map(record => ({ jobId: record.jobId, cancelled: false, error: message })), uncancellable: [] }
+  }
   const groups = new Map<string, { profile: typeof profiles[number]; project: string; records: JobRecord[] }>()
   for (const record of records) {
     const profile = record.profileId ? profiles.find(item => item.id === record.profileId) : undefined
@@ -1513,7 +1520,10 @@ app.whenReady().then(async () => {
     const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
     // Only jobs from before this review: one a tab started meanwhile has a tab the page's list did not have yet.
     const asked = Date.now(), generation = rendererGeneration
-    await jobRecords.load().catch(() => {})
+    // Records unread decide nothing: a Keep dropped from memory alone would come back with the file at the next write.
+    if (!(await jobRecords.load().then(() => true, () => false))) return null
+    // Nothing to ask without a running job no open tab names: the recovery copies are not read for nothing.
+    if (!jobRecords.withoutTab(keys).some(record => record.state === 'running' && !record.auxiliary && record.createdAt < asked)) return null
     // A query AutoRecover kept (offered, or left for a later start) may still reopen and re-attach: its jobs are not asked about.
     const kept = await recovery.jobKeys().catch(() => undefined)
     if (!kept) return null

@@ -1,6 +1,6 @@
 import { isQueryDocument, type QueryDocument } from '../documents'
 import type { ConnectionService } from './connections'
-import { isLiveConnection } from './connection-availability'
+import { isBigQueryConnection, isLiveConnection } from './connection-availability'
 import type { DocumentService } from './documents'
 import { unfinished, type FileService } from './files'
 import type { QueryService } from './queries'
@@ -64,7 +64,7 @@ export class TargetService {
     const targetId = next ? this.targetForConnection(next.id) : document.targetId
     const database = next && (!targetId || targetId !== document.targetId) ? next.database : document.database
     await this.runDocumentTask(async () => {
-      const plan = await this.queries.confirmSessions(next ? 'changeConnection' : 'disconnectQuery', [tabId])
+      const plan = await this.queries.confirmSessions(next ? 'changeConnection' : 'disconnectQuery', [tabId], next ? { bigQuery: isBigQueryConnection(next) } : undefined)
       if (!plan) return
       const note = await this.documents.endSession(tabId, plan.get(tabId))
       if (note) this.queries.sessionNote?.(tabId, note)

@@ -165,8 +165,8 @@ const minutes = (ms: number) => { const total = Math.floor(ms / 60_000); return 
 const bytesText = (bytes: number) => { const units = ['bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']; let value = bytes, unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ } return unit ? `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}` : `${bytes} bytes` }
 /** How a job tab is named in the box: how long it ran and its estimate, or that it is detached; a quit adds its job ids. */
 const jobNote = (action: SessionAction) => (tab: SessionTab) => {
-  const job = tab.job!, parts = [job.detached ? 'left running' : job.unattached ? 'not re-attached yet' : `running ${minutes(job.elapsedMs)}`, ...job.estimateBytes !== undefined ? [`estimated ${bytesText(job.estimateBytes)}`] : []]
-  return ` (${parts.join(', ')})${action === 'exit' && job.jobIds?.length ? `: ${job.jobIds.join(', ')}` : ''}`
+  const job = tab.job!, parts = [job.detached ? 'left running' : job.unattached ? 'not re-attached' : `running ${minutes(job.elapsedMs)}`, ...job.estimateBytes !== undefined ? [`estimated ${bytesText(job.estimateBytes)}`] : []]
+  return ` (${parts.join(', ')})${action !== 'exit' ? '' : job.jobIds?.length ? `: ${job.jobIds.join(', ')}` : ': no job id reported yet'}`
 }
 const leaveNote = 'Leave it running lets the job finish in BigQuery, where its job history lists it; Varia stops following it. If a transaction is open in its session, it stays open until the session ends, and other transactions that modify its tables fail meanwhile (reads, appends and DML outside transactions still run). The session ends after 24 hours idle, and its temporary tables are billed as storage until then.'
 /** A remembered answer (queryExecution.bigQuery.closeRunningJob) for a box that would ask only about BigQuery jobs. */
@@ -190,7 +190,7 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
       detail: [listed(all, tab => tab.job ? jobNote(action)(tab) : ''), action === 'disconnect'
         ? 'Cancel them and disconnect the server? Cancellation does not undo work already committed. If completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open.'
         : `Cancel them and close ${closes(action)}? Anything they left uncommitted is rolled back.`,
-      `With "Leave BigQuery jobs running" checked, the BigQuery jobs carry on instead. ${leaveNote}`, quitNote].filter(Boolean).join('\n\n'),
+      `With "Leave BigQuery jobs running" checked, the BigQuery jobs carry on instead. ${leaveNote.replace(/^Leave it running lets the job/, 'Each job can then')}`, quitNote].filter(Boolean).join('\n\n'),
       defaultId: 1, cancelId: 1,
       buttons: [{ label: action === 'disconnect' ? 'Cancel Queries and Disconnect' : action === 'switchLocation' ? 'Cancel Queries and Switch' : one ? 'Cancel Query and Close' : 'Cancel Queries and Close', answer: 'proceed' },
         { label: action === 'switchLocation' ? "Don't Switch" : 'Keep Running', answer: 'cancel' }],
@@ -269,7 +269,8 @@ export function sessionCloseNoteText(name: string, note: SessionCloseNote): stri
 /** What became of jobs cancelled without a connection (bigquery.cancelJobs): a commit that happened before the cancel, an
  *  outcome not learnt, or a session that could not be ended, as the close notes say them. */
 export function cancelNotesText(name: string, jobs: readonly { readonly jobId: string; readonly note?: SessionCloseNote }[]): string[] {
-  return jobs.flatMap(job => job.note ? [sessionCloseNoteText(name, { ...job.note, jobId: job.note.jobId ?? job.jobId })] : [])
+  // A note that names no job (a session not ended) reads the same for each: said once.
+  return [...new Set(jobs.flatMap(job => job.note ? [sessionCloseNoteText(name, { ...job.note, jobId: job.note.jobId ?? job.jobId })] : []))]
 }
 /** Notes a quit stops for, since it could not show them once the window closes; quitting again proceeds. */
 export const quitStoppingNotes: ReadonlySet<SessionCloseNoteCode> = new Set(['outcomeUnknown', 'committedBeforeCancel', 'abortFailed'])

@@ -104,6 +104,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly runs = new Map<string, Promise<void>>()
   // Per tab, older jobs left as references beside a newer one re-attached: never attached on a later connection either.
   private readonly passedOver = new Map<string, Set<string>>()
+  // Per tab, jobs a lost connection kept while this backend's session held them (by attach key): the next run on that
+  // connection waits for them, so its summary means they finished.
+  private readonly heldBySession = new Map<string, Map<string, string>>()
   private readonly executionVersions = new Map<string, number>()
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
@@ -138,7 +141,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         const key = this.jobKeys.get(event.tabId)
         this.jobKeys.delete(event.tabId)
         if (key) void this.api.dropJobRecords?.(key).catch(() => {})
-        this.attachTried.delete(event.tabId); this.passedOver.delete(event.tabId); this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId); this.locations.delete(event.tabId) }
+        this.attachTried.delete(event.tabId); this.passedOver.delete(event.tabId); this.heldBySession.delete(event.tabId); this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId); this.locations.delete(event.tabId) }
       if (event.type === 'query.outputSelected') {
         const state = this.getSnapshot()[event.tabId]
         if (state?.estimated && state.estimated.view !== event.view)
@@ -625,7 +628,16 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const forgotten = this.forgotten.delete(queryId)
     // Left running or cancelled through the prompt: a job reported after that answer is not the tab's either.
     if (forgotten && jobKey) void this.api.dropJobRecords?.(jobKey).catch(() => {})
-    const jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], summary, code)
+    const sessionHeld = this.heldBySession.get(tabId)
+    let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], summary, code)
+    if (summary && !attach && summary.status !== 'detached' && summary.status !== 'superseded' && sessionHeld?.size) {
+      jobs = jobs.filter(job => job.detached || sessionHeld.get(job.jobId) !== this.attachKey(job, connection))
+      this.heldBySession.delete(tabId)
+    }
+    if (code === 'CONNECTION_LOST' && bigQuery) {
+      const kept = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
+      if (kept.length) this.heldBySession.set(tabId, new Map([...[...sessionHeld ?? []].slice(-sessionPromptLimits.jobIds * 8), ...kept.map(job => [job.jobId, this.attachKey(job, connection)] as const)]))
+    }
     this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {}, ...jobs.length ? { jobs } : {} })
     // A job that carries on in BigQuery is never unseen: the tab says so, and re-attaches once its connection is back.
     const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
@@ -695,14 +707,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    * to how each session ends, or to undefined when the user chose Cancel or Keep Running; with nothing to ask, to an empty
    * plan. An executing query is never committed: the prompt says that what it left open is rolled back.
    */
-  async confirmSessions(action: SessionAction, tabIds: readonly string[]): Promise<SessionPlan | undefined> {
-    const prepared = await this.prepareSessions(action, tabIds)
+  async confirmSessions(action: SessionAction, tabIds: readonly string[], connectingTo?: { readonly bigQuery: boolean }): Promise<SessionPlan | undefined> {
+    const prepared = await this.prepareSessions(action, tabIds, connectingTo)
     if (!prepared) return undefined
     await this.cancelPreparedSessions(prepared, false)
     return prepared.plan
   }
   /** Read and ask only: a later cancelled save or prompt cannot have already cancelled another tab's execution. */
-  async prepareSessions(action: SessionAction, tabIds: readonly string[]): Promise<PreparedSessions | undefined> {
+  async prepareSessions(action: SessionAction, tabIds: readonly string[], connectingTo?: { readonly bigQuery: boolean }): Promise<PreparedSessions | undefined> {
     const candidates = tabIds.flatMap(id => {
       const document = this.documents.get(id), operation = this.getSnapshot()[id]?.running
       const estimating = operation?.kind === 'estimate' && operation.estimateMode !== 'session', running = !!operation && !estimating
@@ -712,7 +724,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // A BigQuery query holding a job is asked only about it, in the first box (docs/bigquery.md, The prompt): its query
       // runs, or it holds jobs it does not follow, which holdsJob confirms below.
       const bigQuery = connection ? connection.providerId === 'bigquery' : isQueryDocument(document) && document?.provider === 'bigquery'
-      const holding = bigQuery && (running || !!this.getSnapshot()[id]?.jobs?.length)
+      // Connecting a tab with no live connection to BigQuery (a recovered tab, Change Connection) is how its jobs re-attach:
+      // they go with it to the new connection and are not asked about. A SQL Server connection would re-attach nothing.
+      const connecting = action === 'changeConnection' && !!connectingTo?.bigQuery && !running && !this.connected(id)
+      const holding = bigQuery && (running || (!connecting && !!this.getSnapshot()[id]?.jobs?.length))
       return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation, bigQuery, holding, job: undefined as SessionJob | undefined,
         connectionId: document.connectionId, generation: connection?.generation, version: this.executionVersions.get(id),
         state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []

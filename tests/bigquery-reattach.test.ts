@@ -478,6 +478,36 @@ describe('the prompt beside a cost gate and held jobs', () => {
     await run
     expect(dropJobRecords.mock.calls.length).toBe(drops + 1)
   })
+  it('connects a recovered tab without asking about its jobs, so they re-attach on the new connection', async () => {
+    const f = fixture({ connected: false })
+    // A recovered tab keeps its provider without a connection (DocumentService restores it).
+    f.documents.update(f.tab.id, { provider: 'bigquery' } as Parameters<typeof f.documents.update>[1])
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    // A remembered Cancel would otherwise cancel the job the user is connecting to get back.
+    const prepared = await f.queries.prepareSessions('changeConnection', [f.tab.id], { bigQuery: true })
+    expect(f.queryApi.confirmSessions).not.toHaveBeenCalled()
+    expect(prepared?.plan.get(f.tab.id)).not.toBe('cancelJob')
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toEqual([job('job_1')])
+    // Closing it, or moving it to SQL Server (where nothing re-attaches), still asks.
+    await f.queries.prepareSessions('changeConnection', [f.tab.id], { bigQuery: false })
+    await f.queries.prepareSessions('close', [f.tab.id])
+    expect(f.queryApi.confirmSessions).toHaveBeenCalledTimes(2)
+  })
+  it('settles a job a lost connection held once a later run on that connection, which waited for it, finishes', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockResolvedValue({ ok: false, error: 'Network.', code: 'CONNECTION_LOST' })
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: false, error: 'Network lost.', code: 'CONNECTION_LOST' })
+    await run; await settle(); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    // The network is back on the same handle: the backend ran this only after job_1 finished.
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+  })
   it('names how long a re-attached job has run since it was created', async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
     f.queryApi.attach.mockReturnValueOnce(pending.promise)

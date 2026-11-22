@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bigQueryCommitTimeout, jobPromptAnswer, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
+import { bigQueryCommitTimeout, cancelNotesText, jobPromptAnswer, needsSessionPrompt, rememberedJobAnswer, quitStoppingNotes, runningJobPrompt, runningJobRequestSchema, sessionActions, sessionCloseNoteText, sessionPrompt, sessionPromptLimits, sessionPromptRequestSchema, type SessionAction, type SessionCloseNoteCode, type SessionTab } from '../src/shared/sessions'
 
 const open = (name: string, transactions = 1): SessionTab => ({ name, transactions, running: false })
 const running = (name: string, transactions = 0): SessionTab => ({ name, transactions, running: true })
@@ -190,9 +190,14 @@ describe('BigQuery job prompts', () => {
     expect(jobPromptAnswer(mixed, 0, false)).toEqual({ answer: 'proceed' })
     expect(jobPromptAnswer(mixed, 1, true)).toEqual({ answer: 'cancel' })
     expect(jobPromptAnswer(runningJobPrompt({ name: 'a.sql', job: { elapsedMs: 0 } }), 0, true)).toEqual({ answer: 'proceed', remember: 'cancel' })
+    // A note naming no job is said once.
+    expect(cancelNotesText('BigQuery', [{ jobId: 'job_1', note: { code: 'abortFailed' } }, { jobId: 'job_2', note: { code: 'abortFailed' } }, { jobId: 'job_3' }])).toHaveLength(1)
   })
-  it("says a restored job was not re-attached yet, and keeps Disconnect's warning in a mixed box", () => {
-    expect(sessionPrompt({ action: 'close', tabs: [{ ...job('a.sql', { unattached: true }), running: false }] })!.detail).toContain('• a.sql (not re-attached yet)')
+  it("says a restored job was not re-attached, and keeps Disconnect's warning in a mixed box", () => {
+    expect(sessionPrompt({ action: 'close', tabs: [{ ...job('a.sql', { unattached: true }), running: false }] })!.detail).toContain('• a.sql (not re-attached)')
+    // A quit names a job whose id has not arrived yet; the mixed box names its checkbox, not a button it lacks.
+    expect(sessionPrompt({ action: 'exit', tabs: [job('a.sql')] })!.detail).toContain('• a.sql (running 12 minutes): no job id reported yet')
+    expect(sessionPrompt({ action: 'close', tabs: [running('s.sql'), job('b.sql')] })!.detail).not.toContain('Leave it running lets')
     expect(sessionPrompt({ action: 'disconnect', tabs: [running('s.sql'), job('b.sql')] })!.detail).toContain('disconnect stops with every tab open')
   })
   it('accepts a job only on a BigQuery query, bounded', () => {

@@ -287,39 +287,41 @@ backend and main:
 
 In the workbench:
 
-- **Tabs keep their jobs.** A BigQuery tab gets a job key at its first run and keeps it through hot exit and AutoRecover.
-  A restored or recovered tab gets its running and finished jobs back from the records. Once it is connected it re-attaches
-  to the newest, adopting its session. Older finished jobs are dropped, and older running ones stay with the tab, which
-  asks about them on close, without re-attaching (an attach would replace the newest's results). While it is not connected,
-  Messages says the job carries on. A finished job's reference only waits for its results: the prompt does not ask about it. A job cut off by a lost backend or network stays with the tab and re-attaches on the
+- **Tabs keep their jobs.** A BigQuery tab gets a job key at its first run and keeps it through hot exit and
+  AutoRecover. A restored or recovered tab gets its running and finished jobs back from the records. Once it is
+  connected (reconnecting by itself, or connected to BigQuery with Connect or Change Connection, which then does not ask
+  about its jobs) it re-attaches to the newest, adopting its session. Older finished jobs are dropped, and older running ones stay
+  with the tab, which asks about them on close, without re-attaching (an attach would replace the newest's results).
+  While it is not connected, Messages says the job carries on. A finished job's reference only waits for its results:
+  the prompt does not ask about it. A job cut off by a lost backend or network stays with the tab and re-attaches on the
   next connection. Each job is tried once per connection.
-- **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that holds
-  a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never asks
-  about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
+- **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that
+  holds a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never
+  asks about that tab's transaction: Cancel the job rolls it back, and Leave it running keeps it open in the session.
   "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
-  then answers without asking, except at a quit. Beside
-  other executing queries (SQL Server, or a BigQuery run without a job such as Preview Rows) the box keeps their buttons, and the BigQuery choice is its "Leave BigQuery jobs
-  running" checkbox. Cancel the job waits for the job to stop, then ends the session; a commit before the cancel, an unknown outcome or a session
-  that could not be ended is shown in the tab's Messages, or as a notification once the tab is gone. A tab not connected has its jobs
-  cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
-  records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
-  asking.
+  then answers without asking, except at a quit. Beside other executing queries (SQL Server, or a BigQuery run without a
+  job such as Preview Rows) the box keeps their buttons, and the BigQuery choice is its "Leave BigQuery jobs running"
+  checkbox. Cancel the job waits for the job to stop, then ends the session; a commit before the cancel, an unknown
+  outcome or a session that could not be ended is shown in the tab's Messages, or as a notification once the tab is
+  gone. A tab not connected has its jobs cancelled through its saved connection's credentials
+  (`session.cancelRestoredJobs`). Leave it running drops the tab's records and shows the job ids with Copy Job IDs.
+  Close All and Disconnect All keep tabs that hold jobs open without asking.
 - **Quitting Varia leaves jobs running.** Kept tabs that hold a job are not asked about, their records stay, and their
   sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
   remembered choice, and the box lists their job ids (up to 8 per tab, for the first 10 tabs).
-- **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is the
-  default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends `query.cancel` with `detach`: the results close,
-  the job keeps the tab's session, the next Execute waits for it (Stop cancels it), and closing the tab asks about it
-  again while it runs.
-- **Jobs without a tab.** After every start, running jobs whose tab is gone (a crash, a tab whose copy was discarded) are
-  asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it. Finished
-  ones are dropped silently.
+- **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is
+  the default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends
+  `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop
+  cancels it), and closing the tab asks about it again while it runs.
+- **Jobs without a tab.** After every start, running jobs whose tab is gone (a crash, a tab whose copy was discarded)
+  are asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it.
+  Finished ones are dropped silently.
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the
-  default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a job
-  that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection whose
-  job records cannot be read.
-- **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart. Varia
-  retries them the next time the connection reaches BigQuery.
+  default). Varia cannot cancel them once the connection is gone. Jobs that cannot be cancelled (broken credentials, a
+  job that finished long ago) ask again, with Delete Anyway leaving them to BigQuery's job history; so does a connection
+  whose job records cannot be read.
+- **Idle sessions whose end failed.** They are shown as a notification after Disconnect, Reload or a backend restart.
+  Varia retries them the next time the connection reaches BigQuery.
 
 Jobs that cannot be cancelled without a connection (one from an unsaved connection, or one whose saved connection was
 deleted) are listed by id, to cancel in BigQuery's job history.

@@ -191,6 +191,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
     // A review from a page replaced while it read asks nothing; its successor asks.
     expect(source).toMatch(/if \(generation !== rendererGeneration\) return null\n    const orphans/)
+    // Records unread decide nothing (a Keep would come back with the file); no running orphan reads no recovery copy.
+    expect(source).toMatch(/if \(!\(await jobRecords\.load\(\)\.then\(\(\) => true, \(\) => false\)\)\) return null\n[^\n]*\n    if \(!jobRecords\.withoutTab\(keys\)\.some\([^\n]*\) return null\n[^\n]*\n    const kept = await recovery\.jobKeys\(\)/)
+    // Profiles that cannot be read list every job as not cancelled, with why, instead of failing the answer silently.
+    expect(source).toMatch(/profiles = bigQueryStore \? \(await bigQueryStore\.load\(\)\)\.library\.profiles : \[\]\n  \} catch \(error\) \{[\s\S]{0,300}return \{ jobs: records\.map\(record => \(\{ jobId: record\.jobId, cancelled: false, error: message \}\)\), uncancellable: \[\] \}/)
     // A SQL Server delete never fails with BigQuery's file.
     expect(source).toContain('(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
     // The review runs only after a restore that worked.
