@@ -38,6 +38,8 @@ internal static class RestoreChecks
         // 64 devices and two parameters per move stay under SQL Server's 2,100 parameters, with room for @db, @file, @standby, @stopat and the tail's two.
         check(Restore.Limit("backupDevices") + 2 * Restore.Limit("restoreMoves") + 6 <= 2_100, "a restore statement's parameters stay under SQL Server's 2,100");
 
+        check(new[] { RestoreSql.Facts, RestoreSql.Preflight }.All(sql => sql.Contains("HAS_PERMS_BY_NAME(N'master', N'DATABASE', N'CREATE DATABASE') = 1", StringComparison.Ordinal)),
+            "describing and running a restore recognize an effective database-level CREATE DATABASE grant in master");
         var lint = RestoreSql.Lint(Restore).ToList();
         var problems = lint.SelectMany(item => item.Problems.Select(problem => item.Name + ": " + problem)).ToList();
         // 13 catalog reads (the run's file and log chain reads among them), LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
