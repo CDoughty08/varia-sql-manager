@@ -820,7 +820,7 @@ internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled
 /// <summary>A step as sp_help_jobstep reads it: AG-6a's id, name and type, and AG-6b's whole content.</summary>
 internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem, string? Command = null, int? Flags = null, int? CmdexecSuccessCode = null, int? OnSuccessAction = null,
     int? OnSuccessStepId = null, int? OnFailAction = null, int? OnFailStepId = null, string? Server = null, string? DatabaseName = null, string? DatabaseUserName = null,
-    int? RetryAttempts = null, int? RetryInterval = null, int? OsRunPriority = null, string? OutputFileName = null, int? ProxyId = null);
+    int? RetryAttempts = null, int? RetryInterval = null, int? OsRunPriority = null, string? OutputFileName = null, int? ProxyId = null, bool? CommandTruncated = null);
 internal sealed record AgentDutyHoursDto(int Start, int End);
 internal sealed record AgentJobOperatorDto(string Name, bool Enabled, bool Email, bool Pager, bool NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday, AgentDutyHoursDto Sunday);
 internal sealed record AgentJobAlertDto(int Id, string Name, bool Enabled, int Severity, int MessageId);

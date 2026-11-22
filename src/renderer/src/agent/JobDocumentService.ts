@@ -28,7 +28,7 @@ import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
-import { addStep, agentStepProblems, deleteStep, moveStep, newStepDraft, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepDeletion } from '../../../shared/agent/steps.ts'
+import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, newStepDraft, newStepKey, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepDeletion } from '../../../shared/agent/steps.ts'
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
@@ -258,7 +258,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.model || !state.draft) return []
     const ssis = this.ssisProblems(state)
-    return agentStepProblems(state.draft.steps, { sysadmin: state.model.sysadmin, ...state.model.proxies ? { proxies: state.model.proxies } : {}, ...ssis ? { ssis } : {} })
+    return agentStepProblems(state.draft.steps, { sysadmin: state.model.sysadmin, ...state.model.proxies ? { proxies: state.model.proxies } : {}, ...ssis ? { ssis } : {}, ...state.model.job ? { original: initialStepsDraft(state.model.steps, state.model.job.startStepId) } : {} })
   }
   /** Each SSIS step's required parameters without a value, for the steps whose project and package the picker has read. */
   private ssisProblems(state: JobDocumentState): ReadonlyMap<string, readonly string[]> | undefined {
@@ -309,11 +309,13 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.draft?.steps.steps.some(step => step.key === key) || state.step === key) return
     this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {} })
   }
-  /** Add step: a new step of `subsystem` after the last, selected; T-SQL in the database the job's connection has open (master by default). */
+  /** Add step: a new step of `subsystem` after the last, selected; T-SQL in master. Its key is never the pending delete's, so Undo still
+   *  finds the deleted step missing and puts it back. */
   addStepOf(id: string, subsystem = 'TSQL'): void {
     const state = this.get(id)
     if (!state?.draft || !this.canEdit(id)) return
-    const step = newStepDraft(state.draft.steps.steps, subsystem)
+    const steps = state.draft.steps.steps
+    const step = { ...newStepDraft(steps, subsystem), key: newStepKey(state.deletion ? [...steps, state.deletion.deleted] : steps) }
     this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
     this.patch(id, { step: step.key, parse: undefined })
   }

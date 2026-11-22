@@ -385,7 +385,7 @@ export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDr
   check('netSend', draft.netSendLevel, draft.netSendOperator)
   if (draft.emailLevel !== 0) { const mail = mailProblem(model.mail, model.platform); if (mail) problems.push({ field: 'email', severity: 'warning', message: mail }) }
   // Each step's problem, named by its position, on the Steps section (which shows them on their fields).
-  for (const problem of agentStepProblems(draft.steps, { sysadmin: model.sysadmin, ...model.proxies ? { proxies: model.proxies } : {}, ...ssis ? { ssis } : {} })) {
+  for (const problem of agentStepProblems(draft.steps, { sysadmin: model.sysadmin, ...model.proxies ? { proxies: model.proxies } : {}, ...ssis ? { ssis } : {}, ...model.job ? { original: initialStepsDraft(model.steps, model.job.startStepId) } : {} })) {
     const at = draft.steps.steps.findIndex(step => step.key === problem.key)
     problems.push({ field: 'steps', severity: problem.severity, message: at >= 0 ? `Step ${at + 1} '${draft.steps.steps[at]!.name}': ${problem.message}` : problem.message })
   }

@@ -33,6 +33,8 @@ export interface AgentJobStepRecord {
   readonly outputFileName?: string
   /** 0: SQL Server Agent Service Account (no proxy). */
   readonly proxyId?: number
+  /** The describe cut the command at stepCommandChars (or the job's stepCommandTotalChars): the steps cannot be saved from here. */
+  readonly commandTruncated?: boolean
 }
 
 /** A proxy the Run as picker offers, with the step types it is active for (sp_help_proxy @subsystem_name; below sysadmin only the proxies
@@ -51,6 +53,8 @@ export interface AgentJobProxy {
 export interface AgentStepDraft {
   readonly key: string
   readonly from?: number
+  /** The command as read was cut (AgentJobStepRecord.commandTruncated). */
+  readonly truncated?: boolean
   readonly name: string
   readonly subsystem: string
   readonly command: string
@@ -87,7 +91,8 @@ export function stepDraftOf(step: AgentJobStepRecord): AgentStepDraft {
     onSuccess, ...onSuccess === 4 && step.onSuccessStepId ? { onSuccessTarget: keyOf(step.onSuccessStepId) } : {},
     onFail, ...onFail === 4 && step.onFailStepId ? { onFailTarget: keyOf(step.onFailStepId) } : {},
     retryAttempts: step.retryAttempts ?? 0, retryInterval: step.retryInterval ?? 0, outputFileName: step.outputFileName ?? '', flags: step.flags ?? 0,
-    cmdexecSuccessCode: step.cmdexecSuccessCode ?? 0, proxyId: step.proxyId ?? 0, server: step.server ?? '', osRunPriority: step.osRunPriority ?? 0
+    cmdexecSuccessCode: step.cmdexecSuccessCode ?? 0, proxyId: step.proxyId ?? 0, server: step.server ?? '', osRunPriority: step.osRunPriority ?? 0,
+    ...step.commandTruncated ? { truncated: true } : {}
   }
 }
 /** The described steps as the draft opens with them; the Start step is the job's start_step_id when it names a step, else the first. */
@@ -257,6 +262,8 @@ export const stepText = {
   proxyInactive: (name: string, type: string) => `${name} is not active for ${type}.`,
   tableLogMoves: "This step logs to a table, whose rows stay with the step's position: after the move they belong to the step now in that position.",
   outputSysadmin: 'Only sysadmin can set an output file; msdb refuses to save this step for other logins.',
+  truncated: `This command is longer than Varia reads (${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so only its start is shown. Edit it in SSMS.`,
+  truncatedSave: `This command was cut when it was read (over ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters a step), so the steps cannot be saved from here. Undo the step changes to save the rest, and edit the steps in SSMS.`,
   runAsUserSysadmin: 'Only sysadmin can set Run as user; msdb ignores it for other logins.',
   unmodelled: 'Varia cannot lay this command out field by field, so it is kept as text.',
   parseOk: 'Commands completed successfully. (Parsed only; nothing ran.)',
@@ -274,6 +281,9 @@ export interface AgentStepContext {
   readonly proxies?: readonly AgentJobProxy[]
   /** Problems the SSIS section found (a required parameter without a value), by step key. */
   readonly ssis?: ReadonlyMap<string, readonly string[]>
+  /** The steps as the job was read (absent for New Job). While the draft's steps equal them, Save sends no step, so limits on what a save
+   *  writes do not apply to them. */
+  readonly original?: AgentStepsDraft
 }
 /** The steps' problems. Errors (Save cannot send them): a missing, duplicate or reserved name, a go-to to itself, a too long command or path.
  *  Warnings: a target that no longer exists, a proxy not active for the type, an output file or run-as user only sysadmin may set, SSIS. */
@@ -282,6 +292,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
   const names = new Map<string, number>()
   for (const step of draft.steps) names.set(step.name.trim().toLowerCase(), (names.get(step.name.trim().toLowerCase()) ?? 0) + 1)
   const keys = new Set(draft.steps.map(step => step.key))
+  const saved = !context.original || stepsValue(context.original) !== stepsValue(draft)
   let commandChars = 0
   for (const step of draft.steps) {
     const push = (field: AgentStepField, severity: 'error' | 'warning', message: string) => problems.push({ key: step.key, field, severity, message })
@@ -296,7 +307,8 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
       if (target === step.key) push(which, 'error', 'A step cannot go to itself.')
       else if (!target || !keys.has(target)) push(which, 'warning', `It goes to step ${target ? describedId(target) ?? '?' : '?'}, which no longer exists: choose where it goes.`)
     }
-    if (step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
+    if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
+    else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
     commandChars += step.command.length
     if (step.outputFileName.length > agentLimits.stepOutputChars) push('output', 'error', `An output file path holds at most ${agentLimits.stepOutputChars} characters.`)
     if (step.outputFileName.trim() && !context.sysadmin) push('output', 'warning', stepText.outputSysadmin)
@@ -308,7 +320,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     if (!step.proxyId && !context.sysadmin && step.subsystem !== 'TSQL') push('runAs', 'warning', stepText.serviceAccountSysadmin)
     for (const message of context.ssis?.get(step.key) ?? []) push('package', 'warning', message)
   }
-  if (commandChars > agentLimits.stepCommandTotalChars) problems.push({ key: draft.steps[0]?.key ?? '', field: 'command', severity: 'error', message: `The steps' commands hold at most ${agentLimits.stepCommandTotalChars.toLocaleString('en-US')} characters together.` })
+  if (saved && commandChars > agentLimits.stepCommandTotalChars) problems.push({ key: draft.steps[0]?.key ?? '', field: 'command', severity: 'error', message: `The steps' commands hold at most ${agentLimits.stepCommandTotalChars.toLocaleString('en-US')} characters together.` })
   return problems
 }
 
@@ -352,17 +364,21 @@ export interface AgentStepsSave {
   readonly startStepId?: number
 }
 
-/** Step `step`'s content at final id `id`, its targets resolved to final ids (a dangling target keeps the id it named). */
+/** Step `step`'s content at final id `id`, its targets resolved to final ids. A dangling target keeps the id it named while that id is still
+ *  past the last step (as msdb holds it); once a step has that id it would go there instead, so it quits reporting failure. */
 function writeOf(draft: AgentStepsDraft, step: AgentStepDraft, id: number): AgentStepWrite {
-  const target = (code: StepAction, key: string | undefined) => {
-    if (code !== 4 || !key) return 0
+  const resolve = (code: StepAction, key: string | undefined): [StepAction, number] => {
+    if (code !== 4 || !key) return [code, 0]
     const at = draft.steps.findIndex(item => item.key === key)
-    return at >= 0 ? at + 1 : describedId(key) ?? 0
+    if (at >= 0) return [4, at + 1]
+    const dangling = describedId(key) ?? 0
+    return dangling > draft.steps.length ? [4, dangling] : [2, 0]
   }
+  const [onSuccessAction, onSuccessStepId] = resolve(step.onSuccess, step.onSuccessTarget), [onFailAction, onFailStepId] = resolve(step.onFail, step.onFailTarget)
   return {
     id, name: step.name.trim(), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : step.databaseName.trim(),
-    databaseUserName: step.subsystem === 'TSQL' ? step.databaseUserName.trim() : '', onSuccessAction: step.onSuccess, onSuccessStepId: target(step.onSuccess, step.onSuccessTarget),
-    onFailAction: step.onFail, onFailStepId: target(step.onFail, step.onFailTarget), retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
+    databaseUserName: step.subsystem === 'TSQL' ? step.databaseUserName.trim() : '', onSuccessAction, onSuccessStepId,
+    onFailAction, onFailStepId, retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
     outputFileName: step.outputFileName.trim(), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.proxyId, server: step.server, osRunPriority: step.osRunPriority
   }
 }

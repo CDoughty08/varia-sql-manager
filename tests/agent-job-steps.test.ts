@@ -168,6 +168,30 @@ describe('the steps draft', () => {
     expect(stepOptionsSummary({ ...draft.steps[0]!, retryAttempts: 2, retryInterval: 5, outputFileName: 'D:\\AgentLogs\\x.txt', flags: 2 | 4, databaseUserName: 'dbo' }))
       .toBe('Retry 2 times, 5 minutes apart · output to D:\\AgentLogs\\x.txt (append) · include step output in history · run as dbo')
   })
+  it('holds limits on what a save writes only when the steps are saved, and never saves a command the describe cut', () => {
+    const long = 'x'.repeat(agentLimits.stepCommandChars + 1)
+    const read = [...described.slice(0, 3), step(4, 'Notify', { command: long.slice(0, agentLimits.stepCommandChars), commandTruncated: true })]
+    const original = initialStepsDraft(read, 1)
+    expect(original.steps[3]).toMatchObject({ truncated: true })
+    // Untouched, the cut step only warns, so the job's other settings still save.
+    expect(agentStepProblems(original, { sysadmin: true, original }).map(problem => [problem.key, problem.severity])).toEqual([['s4', 'warning']])
+    const edited = { ...original, steps: original.steps.map(item => item.key === 's1' ? { ...item, command: 'SELECT 9;' } : item) }
+    expect(agentStepProblems(edited, { sysadmin: true, original }).filter(problem => problem.severity === 'error').map(problem => [problem.key, problem.message]))
+      .toEqual([['s4', stepText.truncatedSave]])
+    // A step over stepCommandChars written in SSMS blocks only a save that sends the steps.
+    const big = initialStepsDraft([...described.slice(0, 3), step(4, 'Notify', { command: long })], 1)
+    expect(agentStepProblems(big, { sysadmin: true, original: big })).toEqual([])
+    expect(agentStepProblems({ ...big, startKey: 's2' }, { sysadmin: true, original: big }).map(problem => problem.field)).toEqual(['command'])
+  })
+  it('writes a dangling go-to by its id only while no step has that id', () => {
+    const read = [step(1, 'A', { onFailAction: 4, onFailStepId: 3 }), step(2, 'B')]
+    const dangling = initialStepsDraft(read, 1)
+    expect(planAgentSteps(read, dangling, 1, guid)).toBeUndefined()
+    const grown = addStep(dangling, newStepDraft(dangling.steps))
+    expect(planAgentSteps(read, grown, 1, guid)!.writes?.[0]).toMatchObject({ onFailAction: 2, onFailStepId: 0 })
+    const moved = moveStep(dangling, 's2', 0)
+    expect(planAgentSteps(read, moved, 1, guid)!.writes?.[1]).toMatchObject({ onFailAction: 4, onFailStepId: 3 })
+  })
   it('flags what msdb refuses as errors and what will not work as warnings', () => {
     const draft = opened()
     const broken: AgentStepsDraft = { ...draft, steps: draft.steps.map(item => item.key === 's2' ? { ...item, name: 'Check integrity', onSuccess: 4, onSuccessTarget: 's2' } : item.key === 's3' ? { ...item, onFailTarget: 's9' } : item) }

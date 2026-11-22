@@ -49,11 +49,14 @@ function FieldMessages({ text, id }: { readonly text: { error?: string; note?: s
 
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
-function StepCommandEditor({ stepKey, value, subsystem, connectionId, database, readOnly, label, onChange }: {
-  readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
+/** `epoch` changes each time the job is read: a save renumbers steps, so `s1` may then be another step, and a model (with its undo stack)
+ *  is never carried from one read to the next. */
+function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange }: {
+  readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
   readonly label: string; readonly onChange: (value: string) => void
 }) {
   const workbench = useWorkbench()
+  const stepKey = `${epoch}|${key}`
   const host = useRef<HTMLDivElement>(null)
   const instance = useRef<QueryEditorInstance | undefined>(undefined)
   const models = useRef(new Map<string, { model: editor.ITextModel; documentId: string }>())
@@ -72,6 +75,7 @@ function StepCommandEditor({ stepKey, value, subsystem, connectionId, database, 
     const view = instance.current
     if (!view) return
     let entry = models.current.get(stepKey)
+    for (const [cached, stale] of models.current) if (!cached.startsWith(`${epoch}|`)) { stale.model.dispose(); models.current.delete(cached) }
     if (!entry || entry.model.isDisposed()) {
       const documentId = crypto.randomUUID()
       const model = workbench.monaco.editor.createModel(value, stepLanguage(subsystem), workbench.monaco.Uri.parse(`varia-sql://step/${documentId}`))
@@ -362,7 +366,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
           {step.subsystem === 'TSQL' && <button type="button" onClick={() => service.openStepInQuery(state.id, step.key)}><Icon name="link-external" />Open in query window</button>}
         </span>
       </div>
-      <StepCommandEditor stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
+      <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
         readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} />
       <FieldMessages text={command} id={`${id}-command`} />
       {parse && <div className="agent-step-parse" role="status">

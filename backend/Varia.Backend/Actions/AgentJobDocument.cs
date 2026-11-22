@@ -209,13 +209,20 @@ internal sealed partial class ActionService
                 IntOf(Value("notify_level_netsend")), Operator("notify_level_netsend", "notify_netsend_operator"), IntOf(Value("notify_level_eventlog")), IntOf(Value("delete_level")),
                 row.Created, modified, IntOf(Value("version_number")), IntOf(Value("start_step_id"), 1), RunStamp(IntOf(Value("last_run_date")), IntOf(Value("last_run_time"))), outcome);
             var stepRows = results[AgentSql.JobDocumentSteps.Id];
+            // Commands are nvarchar(max): each is bounded by stepCommandChars and all of them by stepCommandTotalChars, so the describe stays
+            // far below the response limit; a cut command is marked, and the document never writes it back.
+            var commandRoom = catalogue.Limit("stepCommandTotalChars");
             steps = [.. stepRows.Rows.Select(item =>
             {
                 object? Value(string column) => stepRows.Value(item, column);
-                return new AgentJobStepRowDto(IntOf(Value("step_id")), TextOf(Value("step_name")), TextOf(Value("subsystem")), TextOf(Value("command")), IntOf(Value("flags")),
+                var whole = TextOf(Value("command"));
+                var room = (int)Math.Max(0, Math.Min(catalogue.Limit("stepCommandChars"), commandRoom));
+                var command = whole.Length > room ? whole[..room] : whole;
+                commandRoom -= command.Length;
+                return new AgentJobStepRowDto(IntOf(Value("step_id")), TextOf(Value("step_name")), TextOf(Value("subsystem")), command, IntOf(Value("flags")),
                     IntOf(Value("cmdexec_success_code")), IntOf(Value("on_success_action"), 1), IntOf(Value("on_success_step_id")), IntOf(Value("on_fail_action"), 2), IntOf(Value("on_fail_step_id")),
                     TextOf(Value("server")), TextOf(Value("database_name")), TextOf(Value("database_user_name")), IntOf(Value("retry_attempts")), IntOf(Value("retry_interval")),
-                    IntOf(Value("os_run_priority")), TextOf(Value("output_file_name")), IntOf(Value("proxy_id")));
+                    IntOf(Value("os_run_priority")), TextOf(Value("output_file_name")), IntOf(Value("proxy_id")), command.Length < whole.Length ? true : null);
             })];
         }
 

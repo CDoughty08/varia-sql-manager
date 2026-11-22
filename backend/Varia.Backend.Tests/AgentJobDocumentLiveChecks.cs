@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Varia.Backend;
+using Varia.Backend.Agent;
 
 namespace Varia.Backend.Tests;
 
@@ -150,5 +151,12 @@ internal static class AgentJobDocumentLiveChecks
         var deletedRows = await Rows();
         check(deleted?.Error is null && deletedRows == "1:First:2/0:8:master:1",
             "a job document save deletes a step, retargeting the step that went to it: " + (deleted is null ? "no job" : Said(deleted)) + " " + deletedRows);
+
+        // A command longer than stepCommandChars (written outside Varia) is cut in the describe and marked, so the document never saves it back.
+        var limit = (int)AgentCatalog.Current.Limit("stepCommandChars");
+        await sql("UPDATE s SET command = REPLICATE(CONVERT(nvarchar(max), N'x'), " + (limit + 10) + ") FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " AND s.step_id = 1;", "msdb");
+        var cut = (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument?.Steps;
+        check(cut is [{ CommandTruncated: true } only] && only.Command?.Length == limit,
+            "the job document's describe cuts a step command over stepCommandChars and marks it: " + (cut is null ? "no steps" : string.Join(",", cut.Select(item => item.Command?.Length + "/" + item.CommandTruncated))));
     }
 }
