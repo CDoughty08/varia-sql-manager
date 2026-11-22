@@ -317,6 +317,45 @@ internal static partial class BigQuerySessionChecks
         check(firstAnswer is { Status: "superseded" } && secondAnswer is { Status: "completed" } && !bq.Cancels.Contains(raceJob),
             $"a second attach supersedes the first, which leaves the job alone: {firstAnswer?.Status} {secondAnswer?.Status}");
 
+        // A re-attach that follows a job in another tab's session (the tab has a session of its own) leaves that job running when
+        // the tab closes, even with Leave it running: the job belongs to the other session.
+        var holderTab = Tab();
+        await harness.Execute(holderTab, "SELECT 1");
+        var (holderArgs, holderRun, holderJob) = await HeldAsync(harness, holderTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = holderArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await holderRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Jobs[holderJob].Hold = true;
+        var foreignTab = Tab();
+        await harness.Execute(foreignTab, "SELECT 1");
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var foreignRun = harness.Call("query.attach", AttachArgs(harness, foreignTab, holderJob));
+        await Task.WhenAny(bq.Polling.Task, foreignRun).WaitAsync(TimeSpan.FromSeconds(30));
+        var foreignClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = foreignTab, ["keepJob"] = true });
+        var foreignAnswer = (await foreignRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        check(bq.Polling.Task.IsCompleted && foreignClose.Code == "ok" && foreignAnswer is { Status: "detached" } && !bq.Cancels.Contains(holderJob) && !Says(foreignAnswer, "holds this tab"),
+            $"closing a tab that follows another session's job leaves the job running: {foreignClose.Code} {foreignAnswer?.Status} cancels {string.Join(",", bq.Cancels)}");
+        bq.Release(bq.Jobs[holderJob]);
+
+        // Leave it running on a re-attach that only reads a DONE job's rows is a stop: nothing is left running.
+        var readTab = Tab();
+        await harness.Execute(readTab, "SELECT 1");
+        var readJob = JobOf(bq.UserInserts.Last());
+        var readHung = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (!request.Url.Contains("/queries/" + readJob, StringComparison.Ordinal)) return false;
+            readHung.TrySetResult();
+            return true;
+        };
+        var readArgs = AttachArgs(harness, Tab(), readJob, args => args["adoptSession"] = false);
+        var readRun = harness.Call("query.attach", readArgs);
+        await Task.WhenAny(readHung.Task, readRun).WaitAsync(TimeSpan.FromSeconds(30));
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = readArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        var readAnswer = (await readRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        bq.AlsoHang = null;
+        check(readHung.Task.IsCompleted && readAnswer is { Status: "cancelled" } && !Says(readAnswer, "keeps running"),
+            $"Leave it running on a DONE job being read stops the read: {readAnswer?.Status} {Texts(readAnswer?.Messages ?? [])}");
+
         // The tab's own held job: a re-attach follows it at once (no wait for DONE), and when a later attach supersedes it and
         // then fails its identity check, the session still holds the job, so no close or idle end aborts it.
         var ownTab = Tab();

@@ -1449,8 +1449,9 @@ app.on('will-quit', event => {
   event.preventDefault()
   // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
   app.releaseSingleInstanceLock()
-  // The window's last place is written by then too (its close started the write), within a bound of its own.
-  void Promise.all([backend.stop(), windowTracker.flush()]).finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
+  // The window's last place is written by then too (its close started the write), within a bound of its own; so are the
+  // BigQuery job records, whose last events can arrive while the stop ends idle sessions.
+  void Promise.all([backend.stop().then(() => jobRecords.flush()), windowTracker.flush()]).finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
 })
 
 /** Main's record of a release that could not be staged or swapped in (update-staging.ts), in the profile. */

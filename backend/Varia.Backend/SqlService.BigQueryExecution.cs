@@ -153,6 +153,8 @@ internal sealed partial class SqlService
         var sent = false;
         var created = false;
         var complete = false;
+        // A re-attached job already DONE: only its rows are read, so there is nothing to leave running.
+        var attachedDone = false;
         var queued = false;
         // The job ran in a session (it carried the id, or created the session), so its statements count for the transaction.
         var sessionJob = false;
@@ -306,7 +308,11 @@ internal sealed partial class SqlService
                 }
                 // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
                 // tab's own session holds it.
-                session.ActiveJob = sessionJob && own.Status?.State != "DONE";
+                attachedDone = own.Status?.State == "DONE";
+                session.ActiveJob = sessionJob && !attachedDone;
+                // A running job outside the tab's session (another tab holds it, or the tab has a session of its own): a close
+                // stops following it, never cancels it.
+                session.FollowsJob = !sessionJob && !attachedDone;
                 if (following) session.Tail = null;
                 startState = session.Transaction;
                 var since = own.Statistics?.CreationTime is { } createdAt and > 0 ? DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(createdAt) : (TimeSpan?)null;
@@ -394,6 +400,7 @@ internal sealed partial class SqlService
                 catch (BigQueryJobException error) { jobFailed = error; }
                 complete = true;
                 session.ActiveJob = false;
+                session.FollowsJob = false;
                 var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
                 BigQueryService.CaptureSession(session, finished, location);
                 summary = JobSummary(project, location, jobId, finished);
@@ -521,12 +528,13 @@ internal sealed partial class SqlService
             else if (sessionJob && complete && !tracked)
                 session.Transaction = BigQueryTransaction.Unknown;
             // Whatever a cancelled call threw, the run was stopped.
-            if (token.IsCancellationRequested && running.LeavesJob && (sent || running.Superseded))
+            // Leave it running once the job is DONE (reading its rows) is a stop: nothing is left running.
+            if (token.IsCancellationRequested && running.LeavesJob && (sent && !complete && !attachedDone || running.Superseded))
             {
                 status = running.Superseded ? "superseded" : "detached";
                 messages.Add(!running.Superseded
                     ? "Varia stopped following BigQuery job " + JobName(project, location, jobId) + ", which keeps running in BigQuery"
-                        + (session.Id is null ? "." : " and holds this tab's BigQuery session: the next Execute waits for it, and Stop cancels it.")
+                        + (session.Id is null || !sessionJob ? "." : " and holds this tab's BigQuery session: the next Execute waits for it, and Stop cancels it.")
                     : "Another re-attach to BigQuery job " + JobName(project, location, jobId) + " took it over.");
             }
             else if (token.IsCancellationRequested)
@@ -573,6 +581,7 @@ internal sealed partial class SqlService
                 session.StopActive = null;
                 session.DetachActive = null;
                 session.ActiveJob = false;
+                session.FollowsJob = false;
                 session.ActiveCancelled = false;
                 session.Queue.Release();
             }

@@ -139,6 +139,8 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain("if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }")
     // Read after SessionStore's purge, which deletes interrupted writes in the same folder.
     expect(source).toContain('void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load())')
+    // A quit waits for the records written while the stop ends idle sessions.
+    expect(source).toContain('backend.stop().then(() => jobRecords.flush())')
   })
 
   it('defers drops for the keys a quit keeps, and applies them when the quit stops', async () => {

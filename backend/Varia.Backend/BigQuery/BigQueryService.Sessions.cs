@@ -57,6 +57,9 @@ internal sealed class BigQueryTabSession(string tabId, BigQueryConnection connec
     /// <summary>Whether the execution holding the queue has a job running in BigQuery: inserted or re-attached and not yet
     /// DONE. Before its insert, or while it reads a finished job's rows, there is nothing to leave running.</summary>
     public volatile bool ActiveJob;
+    /// <summary>Whether the execution holding the queue follows a running job in another BigQuery session (a re-attach that
+    /// did not adopt it): a close leaves that job running, as it belongs to that session.</summary>
+    public volatile bool FollowsJob;
     public bool Active => StopActive is not null;
     /// <summary>The job key of the tab's last execution or attach, so bigquery.endIdleSessions can keep a kept tab's session.</summary>
     public string? LastJobKey { get; set; }
@@ -440,7 +443,11 @@ internal sealed partial class BigQueryService
             // Nothing running in BigQuery (before the insert, or reading a finished job's rows) and no held job it waits behind:
             // the execution stops and the close goes on as usual, so a transaction the job left is asked about (JOB_FINISHED for
             // keepJob), never leaked.
-            else if (!session.ActiveJob && session.Tail is not { Holds: true }) session.StopActive?.Invoke();
+            else if (!session.ActiveJob && session.Tail is not { Holds: true })
+            {
+                if (session.FollowsJob) session.DetachActive?.Invoke();
+                else session.StopActive?.Invoke();
+            }
             else
             {
                 // The safety net: a plain close or Leave it running never aborts a session holding a job. The execution ends
