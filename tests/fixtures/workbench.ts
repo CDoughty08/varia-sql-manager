@@ -93,7 +93,10 @@ import { JobActivityService } from '../../src/renderer/src/agent/JobActivityServ
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
+import { ProxyDocumentService } from '../../src/renderer/src/agent/ProxyDocumentService'
+import { CredentialDocumentService } from '../../src/renderer/src/agent/CredentialDocumentService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
+import { agentProxyContribution } from '../../src/renderer/src/contributions/agent-proxy'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
@@ -447,6 +450,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
@@ -582,6 +587,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     logViewer,
     agentJobs,
     jobDocuments,
+    proxyDocuments,
+    credentialDocuments,
     objectSearch
   }
   const contributions = [
@@ -614,6 +621,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -635,6 +643,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     disconnectPrompts.dispose()
     actionProgress.dispose()
     jobDocuments.dispose()
+    proxyDocuments.dispose()
+    credentialDocuments.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -730,6 +740,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     operations,
     jobActivity,
     jobDocuments,
+    proxyDocuments,
+    credentialDocuments,
     logViewer,
     agentJobs,
     objectSearch,

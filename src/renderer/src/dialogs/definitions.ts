@@ -199,6 +199,8 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
       const jobId = draft.listed ?? model.agentIdentity?.jobId
       return { action: 'delete', target, closeConnections: false, deleteHistory: true, deleteUnusedSchedule: true, ...(jobId ? { agentIdentity: { jobId } } : {}) }
     }
+    // A SQL Server Agent proxy (AG-8b): sp_delete_proxy under the proxy_id the dialog read, so a proxy that took the name since is refused NOT_FOUND.
+    if (target.kind === 'agentProxy') return { action: 'delete', target, closeConnections: false, deleteHistory: false, ...(model.proxyId ? { proxyId: model.proxyId } : {}) }
     // The login or database the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
     if (target.kind === 'login' && model.login)
       return { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
@@ -448,8 +450,9 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
   initialFocus: loginPropertiesFocus
 }
 
-/** The dialogs this module defines: New Database, Table Properties and the Agent job document are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts, src/renderer/src/agent/JobDocumentService.ts). */
-export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties' | 'agentJob'>
+/** The dialogs this module defines: New Database, Table Properties and the Agent job document are documents with services of their own (src/renderer/src/new-database, src/renderer/src/properties/TablePropertiesService.ts, src/renderer/src/agent/JobDocumentService.ts),
+ *  as are the proxy and credential documents (AG-8b, src/renderer/src/agent/ProxyDocumentService.ts and CredentialDocumentService.ts). */
+export type DefinedDialogId = Exclude<DialogId, 'newDatabase' | 'tableProperties' | 'agentJob' | 'agentProxy' | 'credential'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel

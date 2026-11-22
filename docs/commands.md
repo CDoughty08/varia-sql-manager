@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (387)
+## Commands (394)
 
 ### File
 
@@ -292,6 +292,9 @@ keys it uses are listed below.
 | New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
+| New Credential… | `agent.newCredential` | — | — | — | `agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' \|\| explorerSelectionKind == 'credential')` | Object Explorer context menu › New Credential… |
+| Save Credential | `credential.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
+| Reload Credential | `credential.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsCredential` | — |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
 | Script as CREATE to Clipboard (not in the palette) | `explorer.scriptCreateToClipboard` | — | — | — | `backendReady && explorerScriptCreate == 'enabled'` | Object Explorer context menu › Script … as › CREATE To › Clipboard |
@@ -445,6 +448,10 @@ keys it uses are listed below.
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentJob` | — |
+| New Proxy… | `agent.newProxy` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › New Proxy… |
+| Proxy… (not in the palette) | `agent.newProxyOnAgent` | — | — | — | `agentEnabled && backendReady && explorerSelectionKind == 'agent'` | Object Explorer context menu › New › Proxy… |
+| Save Proxy | `agentProxy.save` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
+| Reload Proxy | `agentProxy.reload` | — | — | — | `agentEnabled && backendReady && activeDocumentIsAgentProxy` | — |
 | View History | `agent.viewHistory` | — | — | — | `agentEnabled && backendReady && hasConnection` | Object Explorer context menu › View History |
 | Refresh History | `agent.refreshHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
 | Delete History… | `agent.deleteHistory` | — | — | — | `agentEnabled && backendReady && activeDocumentIsLogViewer` | — |
@@ -733,10 +740,12 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| (explorerNode == 'agent' && !explorerServerLost)` |
+| `0_new` | **N**ew Credential… | `agent.newCredential` | `agentEnabled && ((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Job… | `agent.newJob` | `((explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **N**ew Proxy… | `agent.newProxy` | `((explorerNode == 'folder' && (explorerFolder == 'agentProxies' \|\| explorerFolder == 'agentUnassignedProxies')) \|\| explorerNode == 'agentProxySubsystem' \|\| explorerNode == 'agentProxy') && !explorerServerLost` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
@@ -787,6 +796,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | --- | --- | --- | --- |
 | `1_security` | **L**ogin… | `explorer.newLoginOnSecurity` | `explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `1_table` | **T**able… | `explorer.newTable` | `explorerFolder == 'tables'` |
+| `2_agent` | **P**roxy… | `agent.newProxyOnAgent` | `explorerNode == 'agent' && explorerServerEngine == 'box'` |
 
 #### Object Explorer context menu › Tasks
 
@@ -1137,7 +1147,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (185)
+## Context keys (187)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1181,6 +1191,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
+| `activeDocumentIsAgentProxy` | boolean | state | The active document is a SQL Server Agent proxy (Proxy Account Properties, or New Proxy). |
+| `activeDocumentIsCredential` | boolean | state | The active document is a credential (Credential Properties, or New Credential). |
 | `activeDocumentIsLogViewer` | boolean | state | The active document is SQL Server Agent's Log File Viewer (job history). |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |

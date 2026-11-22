@@ -23,7 +23,9 @@
     {"action":"loginProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"login","title":"Login Properties","verb":"properties"},
     {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"},
     {"action":"agentProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"SQL Server Agent Properties","verb":"properties"},
-    {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"}
+    {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"},
+    {"action":"agentProxy","class":"dialog","cleanupMs":10000,"engines":["box"],"kind":"agentProxy","title":"Proxy Account Properties","verb":"properties"},
+    {"action":"credential","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"credential","title":"Credential Properties","verb":"properties"}
   ],
   "compatibilityLevels": [100,110,120,130,140,150,160,170],
   "databaseOptions": [
@@ -106,7 +108,9 @@
     {"action":"stopAgent","dialog":"stopAgent","pages":["general"]},
     {"action":"restartAgent","dialog":"restartAgent","pages":["general"]},
     {"action":"agentProperties","dialog":"agentProperties","pages":["general","history"]},
-    {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]}
+    {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]},
+    {"action":"agentProxy","dialog":"agentProxy","pages":["general","subsystems","principals","references"]},
+    {"action":"credential","dialog":"credential","pages":["general","usedBy"]}
   ],
   "errors": [
     {"code":"NOT_FOUND","retryable":false},
@@ -163,6 +167,7 @@
     {"disabled":[],"enabled":["rename","delete","properties","enable"],"kind":"login","status":"disabled","subtype":"asymmetricKeyMapped"},
     {"disabled":["rename"],"enabled":["delete","properties","enable"],"kind":"login","status":"disabled","subtype":"externalUser"},
     {"disabled":["rename"],"enabled":["delete","properties","enable"],"kind":"login","status":"disabled","subtype":"externalGroup"},
+    {"disabled":[],"enabled":["properties"],"kind":"credential","subtype":""},
     {"disabled":[],"enabled":["rename","delete","properties","takeOffline","bringOnline","detach","restore","restoreFiles"],"kind":"database","subtype":""},
     {"disabled":["rename","delete","takeOffline","bringOnline","detach","restore","restoreFiles"],"enabled":["properties"],"kind":"database","subtype":"system"},
     {"disabled":["rename"],"enabled":["delete","properties"],"kind":"database","subtype":"snapshot"},
@@ -197,7 +202,8 @@
     {"disabled":["delete"],"enabled":["rename"],"kind":"function","subtype":"aggregate"},
     {"disabled":[],"enabled":["properties","startAgent","stopAgent","restartAgent"],"kind":"agent","subtype":""},
     {"disabled":[],"enabled":["rename","delete","properties","disable","startJob","stopJob"],"kind":"agentJob","subtype":""},
-    {"disabled":[],"enabled":["rename","delete","properties","enable","startJob","stopJob"],"kind":"agentJob","status":"disabled","subtype":""}
+    {"disabled":[],"enabled":["rename","delete","properties","enable","startJob","stopJob"],"kind":"agentJob","status":"disabled","subtype":""},
+    {"disabled":[],"enabled":["rename","delete","properties"],"kind":"agentProxy","subtype":""}
   ],
   "scopedConfigurations": [
     {"control":"choice","key":"legacyCardinalityEstimation","label":"Legacy Cardinality Estimation","refusedReadOnly":true,"settable":true,"since":13,"smoOrder":50,"sql":{"kind":"scoped","name":"LEGACY_CARDINALITY_ESTIMATION","secondary":false,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["ON","OFF"]},
