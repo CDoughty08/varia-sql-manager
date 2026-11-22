@@ -880,7 +880,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', welcomeQueryText, 'master') }
   if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), restoredJobs: (tabId, jobs) => queries.restoreJobs(tabId, jobs), otherwise: welcome })
-    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) { void recovery.start(); void queries.reviewJobsWithoutTab(api) } })
+    .then(() => true, () => false).then(restored => {
+      connectionRestored()
+      if (disposed) return
+      void recovery.start()
+      // A session that could not be restored may still reopen its tabs (previous.json): their jobs are not asked about.
+      if (restored) void queries.reviewJobsWithoutTab(api)
+    })
   else { welcome(); connectionRestored(); void recovery.start(); void queries.reviewJobsWithoutTab(api) }
   return workbench
 }

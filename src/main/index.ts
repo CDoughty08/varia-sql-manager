@@ -384,13 +384,13 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   })
 }
 
-/** End the old page's sessions. A replacement page can still retry an unacknowledged restore. */
 /** A quit that stopped or whose page was replaced keeps no tab's job records any more: the drops it held apply. */
 function releaseQuitJobs(apply = true): void {
   quitKeepJobKeys = undefined
   jobRecords.releaseHolds(apply)
 }
 
+/** End the old page's sessions. A replacement page can still retry an unacknowledged restore. */
 function resetRendererState({ relaunch = true, replacePage = false } = {}): void {
   // A quit abandoned by a crash or reload: its kept keys belong to a page that is gone.
   if (!closeApproved) releaseQuitJobs()
@@ -1105,7 +1105,8 @@ app.whenReady().then(async () => {
     const id = z.uuid().parse(value)
     const unread = await jobRecords.load().then(() => false, () => true)
     // Records that cannot be read now may name this connection's jobs: a BigQuery connection asks before it goes.
-    if (unread && bigQueryStore && (await bigQueryStore.load()).library.profiles.some(profile => profile.id === id)) {
+    // Only a BigQuery profile asks; a SQL Server delete never waits on BigQuery's file (nor fails with it).
+    if (unread && bigQueryStore && (await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)) {
       const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
         type: 'warning', title: 'Delete connection', message: 'Varia could not read its BigQuery job records.',
         detail: 'Jobs run on this connection may still be running, and once it is deleted Varia cannot cancel them. Delete it anyway?',
@@ -1137,7 +1138,7 @@ app.whenReady().then(async () => {
       }
       // A commit before the cancel, an unknown outcome or a session not ended: said before the connection goes.
       const notes = cancelNotesText('BigQuery', cancel.jobs)
-      if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'The BigQuery jobs were cancelled.', detail: notes.slice(0, 10).join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
+      if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'What became of the cancelled BigQuery jobs:', detail: notes.slice(0, 10).join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
       jobRecords.dropJobs(running.map(record => record.jobId))
     }
     return library.remove(id)
@@ -1511,11 +1512,13 @@ app.whenReady().then(async () => {
   handle('varia:jobs-without-tab', async value => {
     const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
     // Only jobs from before this review: one a tab started meanwhile has a tab the page's list did not have yet.
-    const asked = Date.now()
+    const asked = Date.now(), generation = rendererGeneration
     await jobRecords.load().catch(() => {})
     // A query AutoRecover kept (offered, or left for a later start) may still reopen and re-attach: its jobs are not asked about.
     const kept = await recovery.jobKeys().catch(() => undefined)
     if (!kept) return null
+    // A page replaced meanwhile asks again itself, with its own tabs.
+    if (generation !== rendererGeneration) return null
     const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)
     // A finished job without a tab has nothing to decide: its result table expires by itself.
     jobRecords.dropJobs(orphans.filter(record => record.state !== 'running' || record.auxiliary).map(record => record.jobId))

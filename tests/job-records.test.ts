@@ -188,6 +188,13 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Records that cannot be read ask before a BigQuery connection goes; reads leave out expired records.
     expect(source).toContain('const unread = await jobRecords.load().then(() => false, () => true)')
     expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
+    // A review from a page replaced while it read asks nothing; its successor asks.
+    expect(source).toMatch(/if \(generation !== rendererGeneration\) return null\n    const orphans/)
+    // A SQL Server delete never fails with BigQuery's file.
+    expect(source).toContain('(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
+    // The review runs only after a restore that worked.
+    const workbench = await readFile(join(__dirname, '..', 'src', 'renderer', 'src', 'core', 'workbench.ts'), 'utf8')
+    expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api)')
     // What the cancels noted is said before the connection goes.
     expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")
     // Credentials are the saved profile's, per project, at most jobLimits.cancel per call.
