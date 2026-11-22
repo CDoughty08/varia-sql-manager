@@ -173,6 +173,13 @@ export function ssisProblems(rows: readonly SsisParameterRow[]): string[] {
   return rows.filter(row => row.required && row.source === 'none').map(row => `${row.name} is required and has no value.`)
 }
 /** The step's command with `name` set to `value` (undefined: the step no longer sets it, so the catalog's or the default applies). */
+/** The command with another package picked: another project starts with no values and no environment; another package of the same project
+ *  keeps only the project's parameter values, since the catalog refuses a value for a parameter or connection manager the package lacks. */
+export function withSsisPackage(command: SsisStepCommand, folder: string, project: string, packageName: string): SsisStepCommand {
+  if (command.folder !== folder || command.project !== project) return { ...command, folder, project, package: packageName, parameters: [], environmentReference: undefined }
+  if (command.package === packageName) return command
+  return { ...command, package: packageName, parameters: command.parameters.filter(item => item.scope === 'project') }
+}
 export function withSsisParameter(command: SsisStepCommand, scope: 'project' | 'package', name: string, value: string | undefined, dataType?: string): SsisStepCommand {
   const others = command.parameters.filter(item => !(item.scope === scope && item.name.toLowerCase() === name.toLowerCase()))
   const type = dataType ? ssisParameterType(dataType) : undefined

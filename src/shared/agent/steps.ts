@@ -405,10 +405,10 @@ function writeOf(draft: AgentStepsDraft, step: AgentStepDraft, id: number): Agen
   }
   const [onSuccessAction, onSuccessStepId] = resolve(step.onSuccess, step.onSuccessTarget), [onFailAction, onFailStepId] = resolve(step.onFail, step.onFailTarget)
   return {
-    id, name: msdbTrim(step.name), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : step.databaseName.trim(),
-    databaseUserName: step.subsystem === 'TSQL' ? step.databaseUserName.trim() : '', onSuccessAction, onSuccessStepId,
+    id, name: msdbTrim(step.name), subsystem: step.subsystem, command: step.command, databaseName: step.subsystem === 'CmdExec' ? '' : msdbTrim(step.databaseName),
+    databaseUserName: step.subsystem === 'TSQL' ? msdbTrim(step.databaseUserName) : '', onSuccessAction, onSuccessStepId,
     onFailAction, onFailStepId, retryAttempts: step.retryAttempts, retryInterval: step.retryInterval,
-    outputFileName: step.outputFileName.trim(), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.subsystem === 'TSQL' ? 0 : step.proxyId, server: step.server, osRunPriority: step.osRunPriority
+    outputFileName: msdbTrim(step.outputFileName), flags: step.flags, cmdexecSuccessCode: step.cmdexecSuccessCode, proxyId: step.subsystem === 'TSQL' ? 0 : step.proxyId, server: step.server, osRunPriority: step.osRunPriority
   }
 }
 const sameWrite = (a: AgentStepWrite, b: AgentStepWrite) => JSON.stringify(a) === JSON.stringify(b)

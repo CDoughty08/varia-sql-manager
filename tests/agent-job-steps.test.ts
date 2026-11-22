@@ -6,7 +6,7 @@ import {
   stepOptionsSummary, stepTargetShort, stepText, temporaryStepPrefix, undoStepDeletion, withSubsystem, type AgentJobStepRecord, type AgentStepDraft, type AgentStepsDraft, type AgentStepsSave, type AgentStepWrite
 } from '../src/shared/agent/steps'
 import {
-  buildSsisCommand, newSsisCommand, parseSsisCommand, ssisAdvancedSummary, ssisParameterRows, ssisProblems, withSsisParameter
+  buildSsisCommand, newSsisCommand, parseSsisCommand, ssisAdvancedSummary, ssisParameterRows, ssisProblems, withSsisPackage, withSsisParameter
 } from '../src/shared/agent/ssis-step'
 import type { SsisParameter } from '../src/shared/ssis/schema'
 
@@ -352,6 +352,21 @@ describe('the SSIS step', () => {
     expect(buildSsisCommand(parseSsisCommand(local)!)).toBe(local)
     const quoted = withSsisParameter(parseSsisCommand(ssms)!, 'package', 'Odd"Name', 'v')
     expect(parseSsisCommand(buildSsisCommand(quoted))?.parameters.find(item => item.name === 'Odd"Name')?.value).toBe('v')
+  })
+  it('keeps only the project\'s values when another package of the same project is picked, and none in another project', () => {
+    const command = parseSsisCommand(ssms.replace(' /X86', ' /Par "\\"Batch\\"";5 /Par "\\"CM.Src.ConnectionString\\"";x /X86'))!
+    expect(command.parameters.map(item => item.scope)).toEqual(['project', 'package', 'package', 'connection'])
+    const other = withSsisPackage(command, command.folder, command.project, 'B.dtsx')
+    expect(other).toMatchObject({ package: 'B.dtsx', environmentReference: command.environmentReference })
+    expect(other.parameters.map(item => item.name)).toEqual(['TargetSchema'])
+    expect(withSsisPackage(command, command.folder, command.project, command.package)).toBe(command)
+    expect(withSsisPackage(command, command.folder, 'Other', 'A.dtsx')).toMatchObject({ parameters: [], environmentReference: undefined })
+  })
+  it('trims a step\'s database, user and output path of spaces only, as msdb does', () => {
+    const stored = [step(1, 'One', { databaseName: 'Sales\u00a0', outputFileName: 'C:\out.txt\t' }), step(2, 'Two')]
+    guidAt = 0
+    const save = planAgentSteps(stored, moveStep(initialStepsDraft(stored, 1), 's2', 0), 1, guid)!
+    expect(save.writes?.find(write => write.name === 'One')).toMatchObject({ databaseName: 'Sales\u00a0', outputFileName: 'C:\out.txt\t' })
   })
   it('keeps a command it cannot lay out as text', () => {
     expect(parseSsisCommand('/FILE "\\"D:\\pkg.dtsx\\"" /CHECKPOINTING OFF /REPORTING E')).toBeUndefined()

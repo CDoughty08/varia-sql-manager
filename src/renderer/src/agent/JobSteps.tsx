@@ -10,7 +10,7 @@ import {
   type AgentStepProblem, type StepAction
 } from '../../../shared/agent/steps.ts'
 import {
-  buildSsisCommand, newSsisCommand, parseSsisCommand, ssisAdvancedSummary, ssisLoggingLevels, ssisPackagePath, ssisParameterRows, ssisSourceLabel, withSsisParameter,
+  buildSsisCommand, newSsisCommand, parseSsisCommand, ssisAdvancedSummary, ssisLoggingLevels, ssisPackagePath, ssisParameterRows, ssisSourceLabel, withSsisPackage, withSsisParameter,
   type SsisStepCommand
 } from '../../../shared/agent/ssis-step.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
@@ -218,9 +218,7 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
   useEffect(() => { void service.loadSsisFolders(state.id) }, [service, state.id])
   useEffect(() => { if (parsed) void service.loadSsisPackage(state.id, parsed.folder, parsed.project, parsed.package) }, [service, state.id, parsed?.folder, parsed?.project, parsed?.package])
   const write = (command: SsisStepCommand) => update({ command: buildSsisCommand(command) })
-  const choose = (folder: string, project: string, packageName: string) => write(parsed
-    ? { ...parsed, folder, project, package: packageName, ...parsed.folder === folder && parsed.project === project ? {} : { parameters: [], environmentReference: undefined } }
-    : newSsisCommand(state.server, folder, project, packageName))
+  const choose = (folder: string, project: string, packageName: string) => write(parsed ? withSsisPackage(parsed, folder, project, packageName) : newSsisCommand(state.server, folder, project, packageName))
   const projectModel = parsed ? picker?.projectModels[`${parsed.folder}\\${parsed.project}`] : undefined
   const packageModel = parsed ? picker?.packageModels[`${parsed.folder}\\${parsed.project}\\${parsed.package}`] : undefined
   const openProject = picker?.open ?? (parsed ? `${parsed.folder}\\${parsed.project}` : undefined)
