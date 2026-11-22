@@ -325,6 +325,12 @@ internal static partial class BigQueryExecutionChecks
             var (badKind, _, _) = await harness.Call("bigquery.dryRun", DryRun(harness, id, kind: "load"));
             check(dry == "ok" && estimate is BigQueryDryRunResult { Faked: true, Fallback: null } && both == "INVALID_PARAMS" && badKind == "INVALID_PARAMS" && harness.Jobs.InsertedIds.Count == 1,
                 $"a remote estimate runs no job and is checked like the query: {dry} {dryMessage} {estimate} {both} {badKind}");
+            // A request the backend refuses asks nothing of BigQuery: not even the free probe of its table.
+            var reads = harness.Jobs.TableReads.Count;
+            var badColumn = DryRun(harness, id);
+            badColumn["remote"]!["sort"] = new JsonArray(Key(99));
+            var (refused, _, _) = await harness.Call("bigquery.dryRun", badColumn);
+            check(refused == "INVALID_PARAMS" && harness.Jobs.TableReads.Count == reads, $"a refused remote estimate probes no table: {refused} {harness.Jobs.TableReads.Count - reads}");
         }
         // An ORDER BY BigQuery had no resources for says to filter first.
         {

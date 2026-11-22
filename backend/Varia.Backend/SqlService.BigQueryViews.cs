@@ -157,12 +157,17 @@ internal sealed partial class SqlService
         var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
         if (window.Connection != connection) throw new RequestException("INVALID_PARAMS", "The result is not this connection's.");
-        var fallback = await TableGoneAsync(connection, window.Table, token);
-        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, fallback);
+        // The request is checked whole before anything is asked of BigQuery.
+        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, false);
+        if (await TableGoneAsync(connection, window.Table, token)) plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true);
         BigQueryEstimate estimate;
         try { estimate = await bigQuery.EstimateAsync(connection, plan.Sql, token, plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : null, plan.Parameters, window.Location); }
-        // The result table is there (checked above), so a table that is not is a value list's.
-        catch (RequestException error) when (error.Code is "SQL_ERROR" or "NOT_FOUND" && error.Message.StartsWith("Not found: Table", StringComparison.Ordinal)) { throw ValueListExpired(); }
+        // A table that is not there is a value list's, unless the result's own expired since the check above.
+        catch (RequestException error) when (error.Code is "SQL_ERROR" or "NOT_FOUND" && error.Message.StartsWith("Not found: Table", StringComparison.Ordinal))
+        {
+            if (!plan.Fallback && await TableGoneAsync(connection, window.Table, token)) throw Expired();
+            throw ValueListExpired();
+        }
         return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked, plan.Fallback ? true : null);
     }
 

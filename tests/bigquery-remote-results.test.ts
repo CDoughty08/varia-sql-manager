@@ -216,7 +216,9 @@ describe('the user-facing text about windowed results', () => {
     // CHANGELOG names every feature a windowed result waits for, as the guide does.
     const changelog = readFileSync(join(__dirname, '..', 'CHANGELOG.md'), 'utf8')
     const entry = changelog.slice(changelog.indexOf('- **BigQuery results larger than memory:**'), changelog.indexOf('\n', changelog.indexOf('- **BigQuery results larger than memory:**')))
-    for (const feature of ['Sorting', 'filtering', 'searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
+    for (const feature of ['Searching', 'profiles', 'Pivot', 'Compare', 'Copy', 'Save']) expect(entry).toContain(feature)
+    // Sorts and filters run in BigQuery (docs/bigquery.md, Sort and filter in BigQuery): no longer among what waits.
+    expect(entry).not.toMatch(/Sorting|filtering/)
     // docs/architecture.md states the invariant's exception, naming code that exists; the Results area doc says what a
     // windowed result refuses.
     const architecture = readFileSync(join(__dirname, '..', 'docs', 'architecture.md'), 'utf8')

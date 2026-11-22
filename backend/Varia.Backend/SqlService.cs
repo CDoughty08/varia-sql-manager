@@ -2240,10 +2240,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var progress = ProgressOf(context);
         if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
             throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
-        var found = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         // A BigQuery value list is already grouped (SqlService.BigQueryViews.cs).
-        if (found.ValueList is { } valueList) return ValueListSnapshot(found, valueList, args);
-        var set = Stored(found);
+        if (set.ValueList is { } valueList) return ValueListSnapshot(set, valueList, args);
         if (!Shown(set, args.Column))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
