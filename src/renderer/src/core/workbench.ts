@@ -113,7 +113,9 @@ import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { JobActivityService } from '../agent/JobActivityService'
+import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
+import { JobDocumentService } from '../agent/JobDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
@@ -273,8 +275,10 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService
+  readonly logViewer: LogViewerService
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
+  readonly jobDocuments: JobDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -509,10 +513,22 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
+  // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
+  const jobDocuments = new JobDocumentService({
+    api, documents, files, connections, live, targetIdOf,
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    })
+  })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
+  })
+  const logViewer = new LogViewerService({
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
@@ -701,7 +717,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     activity,
     operations,
     jobActivity,
+    logViewer,
     agentJobs,
+    jobDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -754,7 +772,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       objectSearch.dispose()
       operations.dispose()
       jobActivity.dispose()
+      logViewer.dispose()
       agentJobs.dispose()
+      jobDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.

@@ -39,8 +39,8 @@ export interface TextColumn { readonly name: string; readonly dataType: string; 
 /** Inclusive [first, last] ranges of rows and of columns. */
 export interface TextPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly (readonly [number, number])[] }
 export interface ResolvedPart { readonly rows: readonly (readonly [number, number])[]; readonly columns: readonly number[] }
-/** A decoded page holding a row, with where it starts. */
-export type PageAt = (row: number) => PageView
+/** The decoded page containing a row. Row-wise writers also supply the end of the range and its selected columns. */
+export type PageAt = (row: number, last?: number, selected?: readonly number[]) => PageView
 
 /** Copy: tab-separated, NULL as NULL, the platform's end of line between lines and none after the last, NUL as a space. */
 export const copyOptions = (headers: boolean, crlf: boolean): TextOptions => ({ format: 'tsv', headers, nullAsEmpty: false, crlf, trailingEol: false, bom: false, clipboard: true })
@@ -360,7 +360,7 @@ export function resolvePart(part: unknown, columnCount: number, available: numbe
  */
 export async function writeRows(writer: TextWriter, pageAt: PageAt, selected: readonly number[], first: number, last: number, afterPage: () => Promise<void> = async () => {}): Promise<void> {
   for (let row = first; row <= last;) {
-    const page = pageAt(row)
+    const page = pageAt(row, last, selected)
     const end = Math.min(last, page.firstRow + page.rowCount - 1)
     for (let r = row; r <= end; r++) writer.row(page, r - page.firstRow, selected)
     row = end + 1

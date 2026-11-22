@@ -184,7 +184,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
   INTERVAL in canonical form (`1-2 3 4:05:06.5`), TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
-  (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
+  (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind. Timestamp sorting,
+  grouping, profile distinct counts and profile minimum and maximum values use the UTC instant down to its microsecond.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
   a DDL statement's completion, and the job's statistics: bytes processed and billed with their price, slot time and
   cache hit. The summary's `job` carries the same figures, and the Results status shows the bytes processed beside the
@@ -423,7 +424,7 @@ does not offer it (Script As › SELECT queries them, billed). A table with row 
 Script As serves BigQuery's tables, snapshots, views, materialized views, external tables and routines.
 
 - SELECT, INSERT, UPDATE, DELETE and DROP are local templates from `tables.get` (a routine's DROP from `routines.get`, which
-  picks PROCEDURE, TABLE FUNCTION, AGGREGATE FUNCTION or FUNCTION), free. SELECT lists the top-level columns, ends with
+  uses DROP PROCEDURE for procedures, DROP TABLE FUNCTION for table functions and DROP FUNCTION for scalar and aggregate functions), free. SELECT lists the top-level columns, ends with
   `LIMIT 1000` and says that LIMIT does not lower the bytes billed. INSERT, UPDATE and DELETE are offered for tables only (a
   snapshot's rows cannot change) and use SSMS's `<name, type,>` placeholders.
 - CREATE reads the object's own DDL from `INFORMATION_SCHEMA.TABLES` or `ROUTINES` (the `ddl` column), a query BigQuery

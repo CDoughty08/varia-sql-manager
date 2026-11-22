@@ -60,7 +60,8 @@ export type CreateAction = typeof createActions[number]
 export const kindDialogActions = [
   'loginProperties',
   'tableProperties',
-  'agentProperties'
+  'agentProperties',
+  'agentJob'
 ] as const
 export type KindDialogAction = typeof kindDialogActions[number]
 export interface KindDialogActionSpec {
@@ -98,7 +99,8 @@ export const dialogIds = [
   'startAgent',
   'stopAgent',
   'restartAgent',
-  'agentProperties'
+  'agentProperties',
+  'agentJob'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -184,7 +186,7 @@ const actionSpecData = {
   // A SQL Server Agent job (AG-2): SSMS's job menu has Start Job at Step… and Stop Job after New Job…; its access keys are
   // recalled, and T and O are free in a job's menu.
   startJob: { title: 'Start Job at Step…', mnemonic: 't', group: '2_job', order: 1, class: 'dialog', dialog: 'startJobAtStep', command: 'explorer.startJob', engines: onServers },
-  stopJob: { title: 'Stop Job', mnemonic: 'p', group: '2_job', order: 2, class: 'inline', command: 'explorer.stopJob', engines: onServers },
+  stopJob: { title: 'Stop Job', mnemonic: 'j', group: '2_job', order: 2, class: 'inline', command: 'explorer.stopJob', engines: onServers },
   // The SQL Server Agent node's Start, Stop and Restart (AG-2): the server machine's Service Control Manager, as the Windows user
   // Varia runs as (AgentServiceControl), behind a confirmation, with a progress dialog. Each is long: it takes the long gate and a
   // closing backend waits for it (a sent Start or Stop finishes). Its cleanup budget is the statement, the wait and the read after it.
@@ -333,9 +335,11 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   // A SQL Server Agent job (AG-2): a disabled job offers Enable in place of Disable, as a login does. msdb refuses what the login may not
   // do (another owner's job below SQLAgentOperatorRole) as a value.
   agentJob: {
-    row: { startJob: 'enabled', stopJob: 'enabled', disable: 'enabled', rename: 'enabled', delete: 'enabled' },
+    row: { startJob: 'enabled', stopJob: 'enabled', disable: 'enabled', rename: 'enabled', delete: 'enabled', properties: 'enabled' },
     statuses: { disabled: { disable: '', enable: 'enabled' } },
-    titles: { enable: 'Enable Job', disable: 'Disable Job', rename: 'Rename Job', delete: 'Delete Job' }
+    titles: { enable: 'Enable Job', disable: 'Disable Job', rename: 'Rename Job', delete: 'Delete Job' },
+    // Properties opens the job document (AG-6a); another owner's job opens read-only, as the describe says.
+    dialogs: { properties: 'agentJob' }
   },
   // The SQL Server Agent node: Start, Stop and Restart of its service, narrowed by agentServiceRules.
   // Its Properties (AG-8a) opens SQL Server Agent Properties for every login msdb lets read them; the describe says when it is read-only.
@@ -828,7 +832,12 @@ export const pageIds = [
   'storage',
   'securityPredicates',
   'extendedProperties',
-  'history'
+  'history',
+  'steps',
+  'schedules',
+  'notifications',
+  'targets',
+  'alerts'
 ] as const
 export type PageId = typeof pageIds[number]
 export interface DialogPageSpec {
@@ -917,7 +926,15 @@ const dialogSpecData = {
   restartAgent: { title: 'Restart SQL Server Agent', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'restartAgent', pages: [page('general', 'General')], steps: true },
   // SSMS's "SQL Server Agent Properties - server" (AG-8a): it stays a dialog (docs/agent-ui-rethink.md); General and History only, the
   // other pages are later. OK saves the changed settings; History's Delete old history now runs apart from OK, after its own confirmation.
-  agentProperties: { title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties', pages: [page('general', 'General'), page('history', 'History', { icon: 'history' })] }
+  agentProperties: { title: 'SQL Server Agent Properties', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'agentProperties', pages: [page('general', 'General'), page('history', 'History', { icon: 'history' })] },
+  // The job document (AG-6a, docs/agent-ui-rethink.md › rx-job-*): Job Properties as a document tab, and New Job on the Agent node. Steps,
+  // Schedules and History are later lanes (AG-6b, AG-6c, AG-6d) and stay hidden until they land; Alerts is hidden where the login or the
+  // platform has none. Save runs its changes in one transaction under the STALE guard.
+  agentJob: {
+    title: 'Job Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentJob',
+    pages: [page('general', 'General'), page('steps', 'Steps'), page('schedules', 'Schedules'), page('notifications', 'Notifications'), page('targets', 'Targets'), page('alerts', 'Alerts'),
+      page('history', 'History', { icon: 'history' })]
+  }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -1005,7 +1022,9 @@ export const actionErrorRetryable = {
   // SQL Server Agent refused a job's start or stop for the job's state (22022 after a re-read): already running, or not running.
   JOB_STATE: false,
   // The server machine or its Service Control Manager could not be reached for a start or stop of SQL Server Agent (RPC errors).
-  SERVICE_UNREACHABLE: false
+  SERVICE_UNREACHABLE: false,
+  // A job save's guard found the job changed since its document read it (50011): the same save always fails again; Reload is the remedy.
+  STALE: false
 } as const satisfies Record<string, boolean>
 export type ActionErrorCode = keyof typeof actionErrorRetryable
 export const actionErrorCodes = Object.keys(actionErrorRetryable) as ActionErrorCode[]
@@ -1065,7 +1084,9 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   // Table Properties runs where Properties does; its statements are SQL Server's on Managed Instance too.
   tableProperties: { title: 'Table Properties', dialog: 'tableProperties', kind: 'table', verb: 'properties', engines: onServers },
   // SQL Server Agent Properties opens on Managed Instance too, read-only there (agentPlatformGates.agentPropertiesWrite).
-  agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers }
+  agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers },
+  // The job document's Save (AG-6a): an existing job's changes, or New Job (target the Agent node). Agent runs on SQL Server and Managed Instance.
+  agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers }
 }
 export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
 /** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */
