@@ -390,8 +390,8 @@ internal sealed class SearchMatcher
         catch (NotSupportedException) { return (null, "Regular expressions here cannot use lookarounds, backreferences, atomic groups or conditionals."); }
         // Checking each first match's neighbours would miss a longer whole-word match from the same start (Order.*?Id in
         // OrderIdArchiveId), so the separators go in the pattern. The pattern was checked alone above, so its offsets in any
-        // error are the user's and the group cannot close early. \A, \z and \Z cannot hold after a consumed separator, and a
-        // (?x) comment can swallow the group's end: those keep the neighbour check.
+        // error are the user's and the group cannot close early. \A, \z and \Z (and ^ or $ under (?-m)) cannot hold after a
+        // consumed separator, and a (?x) comment can swallow the group's end: those keep the neighbour check.
         if (wholeWord && !TextAnchored(text))
         {
             try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(Separator + "(?:" + text + ")" + Separator, options, timeout), false, true), null); }
@@ -404,11 +404,22 @@ internal sealed class SearchMatcher
     /// <summary>One character that is not an identifier character, compared exactly whatever the case option.</summary>
     private const string Separator = @"(?-i:[^\p{L}\p{Nd}_@#$])";
 
-    /// <summary>Whether a pattern uses \A, \z, \Z or \G, which name the ends of the whole input rather than of a line.</summary>
+    /// <summary>Whether a pattern can name the ends of the whole input rather than of a line: \A, \z, \Z or \G, or an inline
+    /// option that turns Multiline off, after which ^ and $ do. A false positive only keeps the neighbour check.</summary>
     internal static bool TextAnchored(string pattern)
     {
         for (var at = 0; at + 1 < pattern.Length; at++)
         {
+            if (pattern[at] == '(' && pattern[at + 1] == '?')
+            {
+                var off = false;
+                for (var option = at + 2; option < pattern.Length && pattern[option] is 'i' or 'm' or 'n' or 's' or 'x' or '-'; option++)
+                {
+                    if (pattern[option] == '-') off = true;
+                    else if (off && pattern[option] == 'm') return true;
+                }
+                continue;
+            }
             if (pattern[at] != '\\') continue;
             if (pattern[at + 1] is 'A' or 'z' or 'Z' or 'G') return true;
             at++;

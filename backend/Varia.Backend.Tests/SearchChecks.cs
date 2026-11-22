@@ -107,6 +107,10 @@ internal static class SearchChecks
         check(Make("\\AOrder", wholeWord: true, regex: true).Find("Order x", 0, out at, out length) && at == 0 && length == 5
             && SearchMatcher.TextAnchored("\\Ax") && !SearchMatcher.TextAnchored("a\\\\A") && Make("(?x) order # note", wholeWord: true, regex: true).Find("an order", 0, out at, out _) && at == 3,
             "a whole-word regular expression with \\A or a (?x) comment still matches");
+        check(Make("(?-m)^Order", wholeWord: true, regex: true).Find("Order x", 0, out at, out length) && at == 0 && length == 5
+            && Make("(?i-m:Id$)", wholeWord: true, regex: true).Find("x Id\n", 0, out at, out length) && at == 2 && length == 2
+            && SearchMatcher.TextAnchored("(?s-m)a") && !SearchMatcher.TextAnchored("(?m-i)a") && !SearchMatcher.TextAnchored("\\(?-m)"),
+            "a whole-word regular expression with Multiline turned off keeps ^ and $ at the ends of the text");
         check(SearchMatcher.Create("a(b", false, true, true, TimeSpan.FromSeconds(1)).Problem == SearchMatcher.Create("a(b", false, false, true, TimeSpan.FromSeconds(1)).Problem
             && SearchMatcher.Create("a)|(b", false, true, true, TimeSpan.FromSeconds(1)).Problem is not null,
             "Whole Word reports a regular expression's errors at the user's offsets and cannot close its group early");
