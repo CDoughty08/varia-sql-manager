@@ -7,7 +7,7 @@ The comparison rework left eight features out of scope. This plan gives each a v
 sketch and a recommendation. It builds on:
 - [results-tools.md § Comparisons](results-tools.md#comparisons) for shipped behaviour, including difference navigation
   and the overview strip (the difference navigation work, branch `claude/compare-navigation`, which every lane waits for);
-- [ipc.md § Result diffs](ipc.md) for the stored shape and limits;
+- [ipc.md § Result diffs](ipc.md#result-diffs) for the stored shape and limits;
 - [architecture.md](architecture.md) for the invariants: the "Rows are compared only in the backend", Comparisons and
   Derived sets bullets.
 
@@ -196,8 +196,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - The strip adds "1 column ignored".
 - **States:** a change shows the results toolbar's progress and Cancel. A failure leaves the comparison as it was, with
   the reason on its strip.
-- **Narrow panes:** Ignore folds into More results tools just before Match. The fold order becomes Exact text, Layout,
-  Rows, Ignore, Match, the sides, Profile, Save.
+- **Narrow panes:** Ignore folds into More results tools just before Match. The fold order (`comparisonFolds`,
+  `ComparisonToolbar.tsx`) becomes the chips, Exact text, Layout, Rows, Ignore, Match, the sides, Profile, Save.
 - **Interactions:**
   - Rows (Changes only) and the chips follow the new counts. A chip whose kind is left with no rows is released.
   - Exact text does not apply to ignored columns.
@@ -250,7 +250,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     static and state keys (`catalog.ts`, checked by `tests/command-catalog.test.ts`), so both are state keys, as the
     navigation work's `comparisonRowHasPartner` is: `core/contextkeys.ts` computes them for the focused grid's active
     cell, and in the grid menu `argsFor` (`menus/targets.ts`) overrides them with the column the menu opened on. The
-    second is Ignore This Column's `precondition`. Its handler's `unavailable()` gives the reason for the case at hand
+    second is Ignore This Column's `precondition`, true on a column already ignored so the checkbox can be unticked.
+    Its handler's `unavailable()` gives the reason for the case at hand
     (the key column or the last compared column), so `unavailableHint` is only the fallback;
   - icon `eye-closed` in `src/shared/icons.ts`.
 
@@ -270,7 +271,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - the toggle's `when`, notice text and Dismiss;
     - sort keys and chips kept, and value filters removed with "Value filters were removed.", across Ignore and Stop
       ignoring, in the announcement's order; the lost-column notice and its plural;
-    - the fold order (`results-toolbar-fold`), the submenu in `command-catalog`.
+    - the fold order: no test pins `comparisonFolds` today (`results-toolbar-fold.test.ts` pins `toolbarFolds` and the
+      `output.tools` list), so C2 adds that assertion; the submenu in `command-catalog`.
   - The fake backend implements `ignore`. Smoke (`results-smoke.mjs`): ignore `updated_at` from the toolbar, check the
     counts and the header's name by role, then Stop ignoring. The suite's steps that click the grid menu's top-level Go
     to Next Difference and Go to Possible Match open the Comparison submenu instead.
@@ -431,10 +433,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - One row, soft cell: no old value is stored. It is read from the old input's cell (its stored row from the gutter's
       `leftRow`, through the input's own handle) while the input is open. Otherwise the card gives the closed-input
       state above.
-    - Two rows: the other half. A sort or filter can separate the halves, so the card identifies the comparison's rows
-      once (`results.identify` with `row`, cheap for a diff since the identity is its `leftRow`/`rightRow` columns), then
-      asks `results.rowIds` for the active row's entry identity and `results.findRows` on the comparison's base result
-      for both halves' stored positions, and reads them through the base handle.
+    - Two rows, soft cell: an entry whose only differences are soft is `same`, stored as one row
+      (`UnifiedDiff.StoredRows`), so there is no other half. It takes One row's soft path: the old input's cell at
+      `leftRow`, or the closed-input state.
+    - Two rows, changed cell: the other half. A sort or filter can separate the halves, so the card identifies the
+      comparison's rows once (`results.identify` with `row`, cheap for a diff since the identity is its
+      `leftRow`/`rightRow` columns), then asks `results.rowIds` for the active row's entry identity and
+      `results.findRows` on the comparison's base result for both halves' stored positions, and reads them through the
+      base handle.
   - A look-alike card reads the partner through `results.diffSeek { partnerOf }`. Its answer gains `differing?:
     number[]` (the pair indexes whose values differ, ascending, each below the pair count) and `compared?: number` (the
     compared pairs other than the match's key columns). Today `LookAlikes` returns only the partners, and `DiffIndex`
@@ -499,7 +505,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       for edits past 4,000 characters;
     - the card: follow mode, its end conditions, Escape (by key and on hover) and focus return, the opening announcement,
       the combined live message, the key-only states reached from the menu, the look-alike card;
-    - old-value sources: One row changed, One row soft (input open or closed), Two rows sorted apart (identified first);
+    - old-value sources: One row changed, One row soft (input open or closed), Two rows soft (the same path), Two rows
+      sorted apart (identified first);
     - the look-alike card from `differing`, and its hidden partner;
     - the hover debounce, no hover card while the focus is outside the grid and card, and the key's `when`.
   - `DiffChecks`: `partnerOf` answers `differing` and `compared`, skipping ignored pairs; `BytesFor` charges the
@@ -682,16 +689,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       index ("Computed"), CLR types, sql_variant and vector ("Cannot be written as a literal"). Unscriptable wins over
       ignored: "row_ver (ignored): Not insertable".
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
-    - A data column without a name, or whose name the result repeats, starts unticked and locked ("No name", "Name
-      repeated"), since an INSERT could not name it.
+    - A data column without a name, whose name the result repeats, or whose name holds a line break starts unticked
+      and locked ("No name", "Name repeated", "Name has a line break"), since an INSERT could not name it: a query
+      window normalizes line breaks in a bracketed name too.
     - A line names pairs whose types differ ("amount is decimal(10,2) in Result 1 and decimal(12,2) in Result 3. Each
       value is written as its own result's type."). Each value is formatted by its own input's column type. A diff's
-      data columns carry Result 3's types (`ResultDiffer.Columns`), and only One row's previous-value columns carry
-      Result 1's, so the diff set also records Result 1's column type per pair: a Two rows script then formats removed
-      values by it, even while Result 1 is closed.
+      data columns carry Result 3's types (`UnifiedDiff.Columns`) whichever result a value came from, and only One
+      row's previous-value columns carry Result 1's, so the diff set also records Result 1's column type per pair. Every
+      Result 1 value is formatted by it, even while Result 1 is closed: removed rows in both layouts, Two rows'
+      `changedOld` halves (the values a toOld UPDATE SETs), and the WHERE keys taken from them.
     - Identity: when the index says a ticked column is the target's identity, **SET IDENTITY_INSERT** is offered, ticked.
       An identity column is never SET, since SQL Server refuses that: when one that is not a key changed, a line says
-      "id is an identity column, so its changes are not scripted".
+      "id is an identity column, so its changes are not scripted". With SET IDENTITY_INSERT unticked, INSERTs leave the
+      identity column out, and a line says "Inserted rows get new id values from the target."; when the identity column
+      is a key column, it cannot be unticked, since the inserted rows would no longer match their keys.
     - With Exact text off, values that differ only by collation are equal to the comparison, so they are not scripted. A
       line says so when there are any: "12 values differ only by collation and are not scripted. Turn on Exact text to
       include them."
@@ -710,8 +721,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
       them, or a refusal known on opening); the rest are found on Script.
     - The counts and the summary are entries by kind in the chosen rows, read from the change index (cheap at any
-      size). An UPDATE whose changed columns are all unticked is skipped, so the counts said after Script, which are
-      the script's own, can be lower.
+      size), whatever the Statements ticks. Every preview answer carries them, a refused one included, so the counts
+      and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns are all unticked is skipped,
+      so the counts said after Script, which are the script's own, can be lower.
 - **The script:**
   - A header comment names the comparison, the match, the server and database, the direction and the time, and says
     "Review it before you run it. Varia does not run it for you."
@@ -720,9 +732,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
     - An UPDATE SETs only changed, compared, ticked columns, never an identity column.
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
-      once.', 1;`, with the key text cut to 200 characters. THROW takes only a literal or a variable, so the key text
-      there is one plain literal: quotes doubled, and backslash, tab, CR, LF and other control characters written as
-      Copy as Diff writes them (`\\`, `\t`, `\r`, `\n`, `\u2028`), never as `NCHAR` joins.
+      once.', 1;`. THROW takes only a literal or a variable, so the key text there is one plain literal: the raw key
+      text is cut to 200 code points first (never inside a surrogate pair), then escaped, with quotes doubled and
+      backslash, tab, CR, LF and other control characters written as Copy as Diff writes them (`\\`, `\t`, `\r`, `\n`,
+      `\u2028`), never as `NCHAR` joins. Escaping after the cut means a doubled quote or an escape is never split.
   - `COMMIT TRANSACTION;`.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the dialog shows progress. Cancel then stops generating and keeps the window open with its draft; the
@@ -738,8 +751,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
     xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
-  - a key column without a name, or whose name the result repeats: "Result 3 has 2 columns named id, so a statement
-    could not name its key. Give each column its own name in the query.";
+  - a key column without a name, whose name the result repeats, or whose name holds a line break: "Result 3 has 2
+    columns named id, so a statement could not name its key. Give each column its own name in the query.";
   - rows not matched by key columns the user chose:
     - Row position, Whole rows, or Automatic that fell back to whole rows: "Rows are not matched by key columns, so a
       statement could not find its row. Choose key columns to script differences.", with **Choose key columns…**;
@@ -817,11 +830,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds distinct pair indexes, at
     most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
     names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
-    Objects. `DiffScript` leaves it out of every SET, and wraps the INSERTs in `SET IDENTITY_INSERT` when
-    `identityInsert` is on.
+    Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
+    IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
+    that column is a key.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
-  - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more. It
+  - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
+    and always the counts by kind for the chosen rows, even when it refuses (the refusal then comes back as the answer's
+    `refusal` sentence, not an error). It
     reads only the rows those lines need, and skips the size estimate.
   - **Answer:** `{ text (≤ 1,000,000 characters), deletes, updates, inserts, complete }`. Past 1,000,000 characters,
     estimated first, it answers `TOO_LARGE`, well inside the 16 MiB response limit. Other refusals are `INVALID_PARAMS` with the sentences
@@ -873,7 +889,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - a lone surrogate read through `PageBuilder`, and a `_UTF8` value SqlClient could not decode, each reaching the
       U+FFFD refusal;
     - a value with CR, LF, NUL and U+2028, and one over 4,000 characters with line breaks, written with `NCHAR` joins and
-      the `nvarchar(max)` cast; a key with those characters in its THROW message;
+      the `nvarchar(max)` cast; a key with those characters in its THROW message, and one with a quote straddling the
+      200-point cut;
+    - Result 1 values by Result 1's types in both layouts (a float pair against decimal, datetime against date);
+    - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and control-character
@@ -1025,8 +1044,10 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
 - **Protocol:** `results.diff` gains `leftView?: number` and `rightView?: number`, view ids as in `results.pivot`'s
   `viewId`, on every step of the results path. The answer gains `leftRead` and `rightRead`, the rows read. They are not
   named `leftRows`, which `CompareInfo` already uses for stored rows.
-  - The diff holds both views' orders for its whole run, so a view replaced or closed meanwhile leaves a running diff
-    alone.
+  - Closing a view returns its charge at once (`ResultStore.CloseViews`, and `AddView`'s eviction), so the diff does not
+    keep a closed view's order uncharged. As search, profile, distinct and pivot do, it checks `store.HasView` again
+    after its read and answers `VIEW_NOT_FOUND` when a view closed meanwhile, which the renderer's one re-ask below
+    covers.
   - A view of another result, or a closed one, answers `VIEW_NOT_FOUND`. A result keeps at most 8 views, so a view
     closed meanwhile is re-asked by the renderer, once; a second `VIEW_NOT_FOUND` is the comparison's failure.
   - A remote view answers `REMOTE_RESULT`, BQ-3c-1's case.
@@ -1053,7 +1074,7 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   `6_compareactions` and the palette. No setting (Q9).
 - **Tests:**
   - `DiffChecks`: view reads (filtered, sorted, Row position over view order, packed inputs through the inverse), stored
-    row numbers, refusals, working memory counted.
+    row numbers, refusals, working memory counted, and a view closed mid-run answering `VIEW_NOT_FOUND`.
   - vitest: the popover choice and counts, memory, `comparisonOutOfDate` (filters changed, same filters, sort only under
     key and under Row position, Keep Selected Rows), Update dropping "(as shown)", other changes updating an
     out-of-date comparison and saying so.
