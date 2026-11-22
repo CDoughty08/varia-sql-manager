@@ -510,6 +510,28 @@ describe('the Schedules document', () => {
     await settled()
     expect(schedules.get(id)?.model?.schedules.map(item => item.name)).not.toContain('Stale')
   })
+  it('stays busy until the read after a save lands, so neither a toggle nor an edit starts from the schedules as they were', async () => {
+    const { schedules, api, executes } = schedulesWorkbench()
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '1')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Renamed' })
+    let read: (value: ApiResult<ActionDescribeResult>) => void = () => {}
+    api.describeObject.mockImplementationOnce(() => new Promise(resolve => { read = resolve }))
+    const saving = schedules.saveSelected(id)
+    await settled()
+    expect(executes()).toHaveLength(1)
+    expect(schedules.get(id)?.busy).toBe('saving')
+    await schedules.setEnabled(id, 2, false)
+    schedules.update(id, { ...schedules.draft(id)!.fields, activeStartTime: 40000 })
+    expect(executes()).toHaveLength(1)
+    expect(schedules.get(id)?.drafts['1']).toBeUndefined()
+    read({ ok: true, value: { agentSchedules: schedulesModel({ schedules: [record(1, { name: 'Renamed', version: 4 }), record(2, { name: 'Unused', jobCount: 0 })] }), elapsedMs: 1 } })
+    expect(await saving).toBe(true)
+    expect(schedules.get(id)).toMatchObject({ notice: schedulesText.saved('Renamed') })
+    expect(schedules.get(id)?.busy).toBeUndefined()
+    expect(schedules.canClose(id)).toBeUndefined()
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

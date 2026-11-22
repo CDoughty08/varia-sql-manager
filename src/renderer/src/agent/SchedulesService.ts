@@ -403,7 +403,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.patch(id, { drafts })
     this.dirtyChanged(id)
     // A created schedule is selected once read: the newest of that name (sp_add_schedule allows duplicates).
-    await this.describe(id, save.op === 'create' ? schedulesText.created(name) : schedulesText.saved(name), save.op === 'create' ? undefined : key)
+    await this.readAfter(id, 'saving', save.op === 'create' ? schedulesText.created(name) : schedulesText.saved(name), save.op === 'create' ? undefined : key)
     if (save.op === 'create') {
       const created = this.get(id)?.model?.schedules.filter(record => record.name === name).sort((a, b) => b.id - a.id)[0]
       if (created) this.select(id, String(created.id))
@@ -416,7 +416,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     if (!state || !record || state.busy || !this.live(id) || this.readOnly(id, record) || record.enabled === enabled) return
     const save: AgentScheduleSave = { op: enabled ? 'enable' : 'disable', schedule: { id: record.id, version: record.version!, modified: record.modified! } }
     if (!await this.execute(id, 'toggling', save)) return
-    await this.describe(id, schedulesText.enabled(record.name, enabled))
+    await this.readAfter(id, 'toggling', schedulesText.enabled(record.name, enabled))
     // The draft's own Enabled follows, so the toggle is not undone by the next Save, and a draft begun from the schedule as toggled
     // moves onto it: this toggle is not someone else's change.
     const current = this.get(id), key = String(scheduleId), draft = current?.drafts[key], now = this.record(id, key)
@@ -429,7 +429,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
    *  each job change guarded by the job's version as read now. The next Save is the user's. */
   private async keepStale(id: string, key: string): Promise<void> {
     const error = this.get(id)?.error
-    await this.describe(id)
+    await this.readAfter(id, 'saving')
     const current = this.get(id), draft = current?.drafts[key], record = this.record(id, key)
     if (!current || !error) return
     const jobs = draft?.jobs.map(change => ({ ...change, version: this.job(id, change.jobId)?.version ?? change.version })) ?? []
@@ -453,8 +453,14 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const { [String(record.id)]: _gone, ...drafts } = current.drafts
     this.patch(id, { drafts, selected: undefined })
     this.dirtyChanged(id)
-    await this.describe(id, schedulesText.deleted(record.name))
+    await this.readAfter(id, 'deleting', schedulesText.deleted(record.name))
     return true
+  }
+  /** The read after a save, toggle, delete or STALE, with the document still busy: neither an edit begun from the schedules as they
+   *  were nor another toggle (whose read would drop this one) can start until it lands. */
+  private async readAfter(id: string, busy: NonNullable<SchedulesState['busy']>, notice?: string, select?: string): Promise<void> {
+    this.patch(id, { busy })
+    try { await this.describe(id, notice, select) } finally { this.patch(id, { busy: undefined }) }
   }
   private async execute(id: string, busy: NonNullable<SchedulesState['busy']>, save: AgentScheduleSave): Promise<boolean> {
     const connectionId = this.connectionOf(id)
