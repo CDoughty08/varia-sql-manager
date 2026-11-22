@@ -91,6 +91,7 @@
 - **Dropping a server below the last one:** Dragging a server in Object Explorer past the last server and releasing it there now moves it to the end, instead of cancelling the move. The drop line always shows where the server lands: below the tree's last row, and above an expanded server rather than under its name, and it no longer lingers over loading and error rows.
 - **Search Objects marks all of a long definition match:** A definition match longer than its preview now has every character the preview shows marked, instead of only a few at the preview's end.
 - **Closing a query tab while it starts a command no longer leaves its connection open:** Closing a query tab, or disconnecting its server, just as an execute, commit, estimated plan or transaction check started on it could leave the tab's SQL Server connection open instead of closing it. It is now always closed.
+- **Comparing very wide results no longer stalls:** For results with thousands of columns, the Compare menu and toolbar no longer freeze, and a comparison no longer spends seconds, while working out which columns pair\.
 
 ## [0.9.1] - 2026-11-16
 
