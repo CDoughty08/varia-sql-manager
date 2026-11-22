@@ -80,6 +80,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     now += jobLimits.lifetimeMs
     expect(later.forKeys([keyB])).toEqual([])
     expect(later.withoutTab([])).toEqual([])
+    await later.flush()
   })
 
   it('drops the oldest finished records past the per-key and total limits, never a running one', async () => {
