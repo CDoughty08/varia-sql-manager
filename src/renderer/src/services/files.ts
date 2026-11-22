@@ -37,7 +37,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private checking: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote' | 'holdsJob'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote' | 'holdsJob' | 'restoredCancelsSettled'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
@@ -408,7 +408,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
         throw error
       }
+      // Cancel the job for jobs the backend does not follow goes through main: the quit waits for it, and stays open when it
+      // reported something (a commit before the cancel, a job not cancelled) that a closing app could not show.
+      const cancelSaid = await this.queries.restoredCancelsSettled?.()
       if (this.disposed) return
+      if (cancelSaid && !stopping.length) throw new Error('Varia SQL Manager stayed open so you can read what became of the cancelled BigQuery jobs; close it again to quit.')
       if (stopping.length) {
         for (const [id, note] of stopping) this.queries.sessionNote?.(id, note)
         throw new Error(`Varia SQL Manager stayed open so you can read this; close it again to quit. ${stopping.map(([id, note]) => sessionCloseNoteText(this.documents.get(id)?.name ?? 'A query', note)).join(' ')}`)

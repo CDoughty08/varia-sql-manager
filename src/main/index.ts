@@ -1112,7 +1112,7 @@ app.whenReady().then(async () => {
     const id = z.uuid().parse(value)
     const unread = await jobRecords.load().then(() => false, () => true)
     // Records that cannot be read now may name this connection's jobs: a BigQuery connection asks before it goes.
-    // Only a BigQuery profile asks; a SQL Server delete never waits on BigQuery's file (nor fails with it).
+    // Only a BigQuery profile asks; a SQL Server delete never fails with BigQuery's files.
     if (unread && bigQueryStore && (await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)) {
       const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
         type: 'warning', title: 'Delete connection', message: 'Varia could not read its BigQuery job records.',

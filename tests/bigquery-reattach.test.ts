@@ -4,6 +4,7 @@ import { failedAbortsText, heldAfter, jobStillRunning, QueryService, restoredJob
 import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { deferred, documentFixture } from './fixtures/documents'
 import { defaultSettings } from '../src/shared/settings/catalog'
+import type { RecordedJobsCancel } from '../src/shared/bigquery/jobs'
 
 const output = (patch: Partial<QueryResult> = {}): QueryResult => ({
   status: 'completed', resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'sales', messagesTruncated: false,
@@ -492,6 +493,39 @@ describe('the prompt beside a cost gate and held jobs', () => {
     await f.queries.prepareSessions('changeConnection', [f.tab.id], { bigQuery: false })
     await f.queries.prepareSessions('close', [f.tab.id])
     expect(f.queryApi.confirmSessions).toHaveBeenCalledTimes(2)
+  })
+  it("keeps a job the backend reports cut off by the network in a failed summary (its real shape), and re-attaches to it", async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockResolvedValue({ ok: false, error: 'Network.', code: 'CONNECTION_LOST' })
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'CONNECTION_LOST', message: 'Network lost.', batchNumber: 1, iteration: 1 } }) })
+    await run; await settle(); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, jobStillRunning(['job_1']), 'info')
+    expect(f.queryApi.attach).toHaveBeenCalled()
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+    // The next run on that connection waited for it: its summary settles the job.
+    await f.queries.execute(f.tab.id); await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+  it('waits at a quit for Cancel the job carried out through main, and says whether it reported anything', async () => {
+    const f = fixture({ connected: false }), cancel = deferred<ApiResult<RecordedJobsCancel>>()
+    Object.assign(f.queryApi, { cancelRestoredJobs: vi.fn(() => cancel.promise), dropJobRecords: vi.fn(async () => ({ ok: true, value: undefined })) })
+    f.queries.notifyJobs = vi.fn()
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    f.queries.sessionClosed(f.tab.id, 'cancelJob')
+    let settled: boolean | undefined
+    void f.queries.restoredCancelsSettled().then(value => { settled = value })
+    await settle()
+    expect(settled).toBeUndefined()
+    cancel.resolve({ ok: true, value: { jobs: [{ jobId: 'job_1', cancelled: false, error: 'Access denied.' }], uncancellable: [] } })
+    await settle(); await settle()
+    expect(settled).toBe(true)
+    await expect(f.queries.restoredCancelsSettled()).resolves.toBe(false)
   })
   it('settles a job a lost connection held once a later run on that connection, which waited for it, finishes', async () => {
     const f = fixture(), pending = deferred<ApiResult<QueryResult>>()

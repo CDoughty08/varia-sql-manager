@@ -104,6 +104,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly runs = new Map<string, Promise<void>>()
   // Per tab, older jobs left as references beside a newer one re-attached: never attached on a later connection either.
   private readonly passedOver = new Map<string, Set<string>>()
+  // Cancel the job answers carried out through main (tabs whose jobs the backend does not follow): a quit waits for them.
+  private readonly restoredCancels = new Set<Promise<boolean>>()
   // Per tab, jobs a lost connection kept while this backend's session held them (by attach key): the next run on that
   // connection waits for them, so its summary means they finished.
   private readonly heldBySession = new Map<string, Map<string, string>>()
@@ -292,7 +294,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const connected = this.connected(tabId)
     const targets = (state?.jobs ?? []).filter(job => job.jobId !== state?.running?.jobId && (!connected || !job.detached)).map(job => job.jobId)
     if (entry === 'cancelJob' && targets.length && key && this.api.cancelRestoredJobs) {
-      void this.cancelRestored(name, key, targets)
+      const cancelling = this.cancelRestored(name, key, targets)
+      this.restoredCancels.add(cancelling)
+      void cancelling.finally(() => this.restoredCancels.delete(cancelling))
       return
     }
     if (key) void this.api.dropJobRecords?.(key).catch(() => {})
@@ -302,18 +306,24 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
   }
   /** Cancels a tab's recorded jobs through main, then forgets its records; what could not be cancelled is shown by id. */
-  private async cancelRestored(name: string, key: string, targets: readonly string[]): Promise<void> {
-    let failed: string[]
+  /** Cancels through main still under way settled; whether any said something (a quit stops so it can be read). */
+  async restoredCancelsSettled(): Promise<boolean> {
+    return (await Promise.all([...this.restoredCancels])).some(Boolean)
+  }
+  private async cancelRestored(name: string, key: string, targets: readonly string[]): Promise<boolean> {
+    let failed: string[], said = false
     try {
       const response = await this.api.cancelRestoredJobs!([key])
       // Main cancels every running record under the key; only the jobs the backend did not cancel itself are reported.
       failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)].filter(id => targets.includes(id)) : []
       // A commit before the cancel, an unknown outcome or a session not ended: never unseen.
-      if (response.ok && !this.disposed) for (const text of cancelNotesText(name, response.value.jobs.filter(job => targets.includes(job.jobId)))) this.notify?.(text)
-      if (!response.ok) this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`)
+      if (response.ok && !this.disposed) for (const text of cancelNotesText(name, response.value.jobs.filter(job => targets.includes(job.jobId)))) { this.notify?.(text); said = true }
+      if (!response.ok && !this.disposed) { this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`); said = true }
     } catch { failed = [] }
     await this.api.dropJobRecords?.(key).catch(() => {})
+    if (failed.length) said = true
     if (failed.length && !this.disposed) this.notifyJobs?.(`${name}: ${failed.length === 1 ? `BigQuery job ${failed[0]} could not be cancelled` : `BigQuery jobs ${failed.join(', ')} could not be cancelled`}. Cancel ${failed.length === 1 ? 'it' : 'them'} in BigQuery's job history.`, failed)
+    return said
   }
   /**
    * After a restore: running jobs no open tab (or AutoRecover copy) will re-attach to are asked about once, in main's box.
@@ -629,12 +639,17 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Left running or cancelled through the prompt: a job reported after that answer is not the tab's either.
     if (forgotten && jobKey) void this.api.dropJobRecords?.(jobKey).catch(() => {})
     const sessionHeld = this.heldBySession.get(tabId)
-    let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], summary, code)
-    if (summary && !attach && summary.status !== 'detached' && summary.status !== 'superseded' && sessionHeld?.size) {
+    // The backend reports a network failure mid-job as a failed summary (it holds the job in the session), not as an error.
+    const lostInSummary = summary?.status === 'failed' && backendGone.has(summary.error?.code as ErrorCode | undefined)
+    const lostCode = lostInSummary ? summary!.error!.code as ErrorCode : code
+    // Preview Rows reads without a job and never waits behind the session's held jobs: its summary settles none.
+    const settledBy = lostInSummary || preview ? undefined : summary
+    let jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], settledBy, lostCode)
+    if (settledBy && !attach && settledBy.status !== 'detached' && settledBy.status !== 'superseded' && sessionHeld?.size) {
       jobs = jobs.filter(job => job.detached || sessionHeld.get(job.jobId) !== this.attachKey(job, connection))
       this.heldBySession.delete(tabId)
     }
-    if (code === 'CONNECTION_LOST' && bigQuery) {
+    if (lostCode === 'CONNECTION_LOST' && bigQuery) {
       const kept = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
       if (kept.length) this.heldBySession.set(tabId, new Map([...[...sessionHeld ?? []].slice(-sessionPromptLimits.jobIds * 8), ...kept.map(job => [job.jobId, this.attachKey(job, connection)] as const)]))
     }

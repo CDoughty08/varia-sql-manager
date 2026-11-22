@@ -228,11 +228,12 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
   `{ transactionCount: 1, checked: true }`, unknown or a stopped job not yet DONE is `checked: false`, and a running query
   answers `SESSION_BUSY`.
 - **Closing.** Close, Change Connection, Disconnect and quitting ask Commit or Roll Back for an open or unchecked
-  transaction as they do for SQL Server, with BigQuery's own "not checked" note. Commit runs `COMMIT TRANSACTION` in the
+  transaction as they do for SQL Server, with BigQuery's own "not checked" note; a tab holding a job is asked about the
+  job instead ([Re-attaching to jobs](#re-attaching-to-jobs)). Commit runs `COMMIT TRANSACTION` in the
   session; every close then ends the session with `CALL BQ.ABORT_SESSION(@session_id)` outside it, which rolls back
   what is still open. A close never aborts a session while one of its jobs runs or is left running: a commit or rollback
-  answers `JOB_RUNNING` and the tab stays, and a plain close leaves the job and its session (the workbench stops the
-  query first when you choose Cancel Query and Close). A job Varia stopped is waited for (20 s, 25 s for a commit) so the
+  answers `JOB_RUNNING` and the tab stays, and a plain close leaves the job and its session (the workbench cancels the
+  job first when you choose Cancel the job). A job Varia stopped is waited for (20 s, 25 s for a commit) so the
   abort never races it.
 - **Commit outcomes.** A commit BigQuery refuses keeps the tab on a session known to be in a transaction. On an unchecked
   session the refusal may only mean nothing was open, so the session is ended with the note `commitNotApplied`, except at
@@ -309,11 +310,11 @@ In the workbench:
 - **Quitting Varia leaves jobs running.** Kept tabs that hold a job are not asked about, their records stay, and their
   sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
   remembered choice, and the box lists their job ids (up to 8 per tab, for the first 10 tabs).
-- **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is
+- **Close Results while a job runs.** It is available once a BigQuery job has started and asks the same three choices (Don't Close is
   the default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends
   `query.cancel` with `detach`: the results close, the job keeps the tab's session, the next Execute waits for it (Stop
   cancels it), and closing the tab asks about it again while it runs.
-- **Jobs without a tab.** After every start, running jobs whose tab is gone (a crash, a tab whose copy was discarded)
+- **Jobs without a tab.** After a start whose tabs were restored (or with nothing to restore), running jobs whose tab is gone (a crash, a tab whose copy was discarded)
   are asked about once: Cancel Jobs or Keep (the default). Jobs an AutoRecover copy may still reopen are left for it.
   Finished ones are dropped silently.
 - **Deleting a saved connection.** One whose jobs still run asks first: Cancel Jobs and Delete, or Keep Connection (the

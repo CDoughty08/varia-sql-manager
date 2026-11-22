@@ -223,6 +223,18 @@ describe('hot exit', () => {
     expect(kept).toEqual([{ activeIndex: -1, documents: [expect.objectContaining({ name: 'SQLQuery2.sql', text: 'SELECT 1' })] }])
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
+  it('stays open after Cancel the job went through main and reported something, and waits for it before closing', async () => {
+    const { documents, api, files, queries } = fixture()
+    documents.create('SQLQuery2.sql', '', 'master')
+    let said = true
+    Object.assign(queries, { restoredCancelsSettled: vi.fn(async () => said) })
+    await files.closeWindow(async () => {})
+    expect(files.getSnapshot().error).toContain('stayed open so you can read what became of the cancelled BigQuery jobs')
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    said = false
+    await files.closeWindow(async () => {})
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
   it('closes without asking about unsaved queries, keeping them, and still asks about open transactions', async () => {
     const { documents, model, api, files, kept, queries } = fixture()
     const tab = documents.create('SQLQuery2.sql', '', 'master')
