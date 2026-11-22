@@ -266,6 +266,11 @@ export function sessionCloseNoteText(name: string, note: SessionCloseNote): stri
     case 'sessionExpired': return `${name}: the BigQuery session had expired (24 hours idle or 7 days), so BigQuery rolled back its open transaction.`
   }
 }
+/** What became of jobs cancelled without a connection (bigquery.cancelJobs): a commit that happened before the cancel, an
+ *  outcome not learnt, or a session that could not be ended, as the close notes say them. */
+export function cancelNotesText(name: string, jobs: readonly { readonly jobId: string; readonly note?: SessionCloseNote }[]): string[] {
+  return jobs.flatMap(job => job.note ? [sessionCloseNoteText(name, { ...job.note, jobId: job.note.jobId ?? job.jobId })] : [])
+}
 /** Notes a quit stops for, since it could not show them once the window closes; quitting again proceeds. */
 export const quitStoppingNotes: ReadonlySet<SessionCloseNoteCode> = new Set(['outcomeUnknown', 'committedBeforeCancel', 'abortFailed'])
 /** Main's commit deadline won for a BigQuery query: the COMMIT may still run, and the session ends once it finishes. */

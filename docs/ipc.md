@@ -884,7 +884,8 @@ and that its previous transaction was rolled back, unless the query moves to ano
 script or a BigQuery job). `provider` (`sqlserver` or `bigquery`) picks the "not checked" note's causes. `job` (BigQuery
 only: `{ elapsedMs, estimateBytes?, detached?, unattached?, jobIds? ≤ 8 }`) asks about the tab's job instead of its transaction, and
 the answer may be `leave` ([The prompt](bigquery.md#re-attaching-to-jobs)); a box that would ask only about jobs is
-answered from `queryExecution.bigQuery.closeRunningJob` when that remembers a choice. `varia:confirm-running-job { name,
+answered from `queryExecution.bigQuery.closeRunningJob` when that remembers a choice, except at a quit (`exit`), which
+always asks. `varia:confirm-running-job { name,
 job }` answers Close Results for one tab, whose session stays: `proceed` (Cancel the job), `leave` or `cancel`, asked
 unless the setting remembers a choice. A BigQuery tab switching to a
 dataset in another location first sends `location: { dataset, from, to }` with that one tab, which asks "Switch this tab

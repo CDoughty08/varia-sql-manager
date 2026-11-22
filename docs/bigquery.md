@@ -291,7 +291,7 @@ In the workbench:
   A restored or recovered tab gets its running and finished jobs back from the records. Once it is connected it re-attaches
   to the newest, adopting its session. Older finished jobs are dropped, and older running ones stay with the tab, which
   asks about them on close, without re-attaching (an attach would replace the newest's results). While it is not connected,
-  Messages says the job carries on. A job cut off by a lost backend or network stays with the tab and re-attaches on the
+  Messages says the job carries on. A finished job's reference only waits for its results: the prompt does not ask about it. A job cut off by a lost backend or network stays with the tab and re-attaches on the
   next connection. Each job is tried once per connection.
 - **The prompt.** Closing a tab, Change Connection, Disconnect, a location switch or quitting asks about a tab that holds
   a job it runs, follows or left running: Cancel the job, Leave it running, or Don't close (the default). It never asks
@@ -299,7 +299,8 @@ In the workbench:
   "Remember my choice" sets `queryExecution.bigQuery.closeRunningJob` (Ask, Cancel the job, Leave it running), which
   then answers without asking, except at a quit. Beside
   executing SQL Server queries the box keeps SQL Server's buttons, and the BigQuery choice is its "Leave BigQuery jobs
-  running" checkbox. Cancel the job waits for the job to stop, then ends the session. A tab not connected has its jobs
+  running" checkbox. Cancel the job waits for the job to stop, then ends the session; a commit before the cancel, an unknown outcome or a session
+  that could not be ended is shown as a notification. A tab not connected has its jobs
   cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
   records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
   asking.

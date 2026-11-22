@@ -40,7 +40,7 @@ export const bigQuerySettings = [
     key: 'queryExecution.bigQuery.closeRunningJob', page: 'queryExecution.bigQuery.sessions', label: 'When a closing query holds a running job', type: 'enum', default: 'ask', varia: true,
     values: [{ value: 'ask', label: 'Ask' }, { value: 'cancel', label: 'Cancel the job' }, { value: 'leave', label: 'Leave it running' }],
     keywords: ['bigquery', 'job', 'close', 'cancel', 'leave running', 'detach', 'quit'],
-    description: 'What closing, disconnecting, switching location or Close Results does with a BigQuery query\'s running job. Ask offers Cancel the job, Leave it running or Don\'t close, and "Remember my choice" in that prompt sets this. Quitting always asks, listing the job ids. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists SQL Server queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running.'
+    description: 'What closing, Change Connection, disconnecting, switching location or Close Results does with a BigQuery query\'s running job. Ask offers Cancel the job, Leave it running or Don\'t close, and "Remember my choice" in that prompt sets this. Quitting always asks about tabs that will not be restored, listing the job ids; tabs hot exit keeps leave their jobs running. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists SQL Server queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running.'
   },
   {
     key: 'queryResults.bigQuery.residence', page: 'queryResults.bigQuery.results', label: 'Keep results', type: 'enum', default: 'automatic', varia: true,

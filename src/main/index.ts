@@ -72,7 +72,7 @@ import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import { jobPromptAnswer, rememberedJobAnswer, runningJobPrompt, runningJobRequestSchema, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
+import { cancelNotesText, jobPromptAnswer, rememberedJobAnswer, runningJobPrompt, runningJobRequestSchema, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
@@ -1116,6 +1116,9 @@ app.whenReady().then(async () => {
       const cancel = await cancelRecordedJobs(running)
       const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]
       if (failed.length) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.`)
+      // A commit before the cancel, an unknown outcome or a session not ended: said before the connection goes.
+      const notes = cancelNotesText('BigQuery', cancel.jobs)
+      if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'The BigQuery jobs were cancelled.', detail: notes.slice(0, 10).join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)
       jobRecords.dropJobs(running.map(record => record.jobId))
     }
     return library.remove(id)

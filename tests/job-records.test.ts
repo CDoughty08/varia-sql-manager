@@ -180,6 +180,8 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
     expect(source).toContain("if (failed.length) throw new Error(`The connection was kept")
     expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
+    // What the cancels noted is said before the connection goes.
+    expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")
     // Credentials are the saved profile's, per project, at most jobLimits.cancel per call.
     expect(source).toContain('for (let next = 0; next < group.length; next += jobLimits.cancel)')
     expect(source).toContain("handle('varia:confirm-running-job', async value => {\n    const request = runningJobRequestSchema.parse(value)")

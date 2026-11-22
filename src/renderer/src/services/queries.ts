@@ -3,7 +3,7 @@ import type { RestoredJob } from '../../../shared/bigquery/jobs'
 import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
-import { sessionCloseNoteText, sessionPromptLimits, type SessionAction, type SessionCloseNote, type SessionJob, type SessionLocationSwitch, type SessionPlanEntry } from '../../../shared/sessions'
+import { cancelNotesText, sessionCloseNoteText, sessionPromptLimits, type SessionAction, type SessionCloseNote, type SessionJob, type SessionLocationSwitch, type SessionPlanEntry } from '../../../shared/sessions'
 import { defaultSettings, type SettingsValues } from '../../../shared/settings/catalog'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -91,7 +91,7 @@ const jobList = (ids: readonly string[]) => ids.length === 1 ? `BigQuery job ${i
 /** A run whose backend or connection was lost while its job ran: the job carries on in BigQuery. */
 export const jobStillRunning = (ids: readonly string[]) => `${jobList(ids)} still running in BigQuery. Varia re-attaches to ${ids.length === 1 ? 'it' : 'them'} once this query's connection is back.`
 /** A restored tab that is not connected: its job from the last session runs on unseen otherwise. */
-export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 1 ? `BigQuery job ${ids[0]} from the last session is` : `BigQuery jobs ${ids.join(', ')} from the last session are`} still running: Reconnect to re-attach.`
+export const restoredJobRunning = (ids: readonly string[]) => `${ids.length === 1 ? `BigQuery job ${ids[0]} from the last session is` : `BigQuery jobs ${ids.join(', ')} from the last session are`} still running in BigQuery. The tab re-attaches once it is connected.`
 /** Idle BigQuery sessions whose ABORT_SESSION failed (a Disconnect, a Reload or a backend restart). */
 export const failedAbortsText = (count: number) => `Varia could not end ${count === 1 ? 'an idle BigQuery session' : `${count} idle BigQuery sessions`}. Any transaction in ${count === 1 ? 'it' : 'them'} stays open until ${count === 1 ? 'it expires' : 'they expire'}, other transactions on ${count === 1 ? 'its' : 'their'} tables fail meanwhile, and ${count === 1 ? 'its' : 'their'} temporary tables are billed as storage. Varia tries again the next time the connection reaches BigQuery.`
 /** BigQuery's estimate and prompts before a run: the text, where it starts in the document (a selection's line and
@@ -216,9 +216,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const state = this.getSnapshot()[tabId], known = new Set(state?.jobs?.map(job => job.jobId))
     this.update(tabId, { ...state, jobs: [...state?.jobs ?? [], ...jobs.filter(job => !known.has(job.jobId))] })
     const running = jobs.filter(job => job.state === 'running' && !job.detached)
-    // Only a tab that will not reconnect by itself is told to Reconnect: one that will re-attaches as it connects.
-    const document = this.documents.get(tabId)
-    if (running.length && !this.connected(tabId) && !(isQueryDocument(document) && document?.attachWanted)) this.addSessionMessage(tabId, restoredJobRunning(running.map(job => job.jobId)))
+    if (running.length && !this.connected(tabId)) this.addSessionMessage(tabId, restoredJobRunning(running.map(job => job.jobId)))
     this.reattach()
   }
   /**
@@ -266,7 +264,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** The ids of the BigQuery jobs the tab holds: its running request's, then those it holds without following. */
   private heldJobIds(tabId: string): string[] {
     const state = this.getSnapshot()[tabId]
-    return [...new Set([...state?.running?.jobId ? [state.running.jobId] : [], ...state?.jobs?.map(job => job.jobId) ?? []])]
+    return [...new Set([...state?.running?.jobId ? [state.running.jobId] : [], ...state?.jobs?.filter(job => job.state === 'running').map(job => job.jobId) ?? []])]
   }
   /**
    * A query's session ended as the prompt planned (DocumentService.endSession). A job left running is no tab's any more:
@@ -302,6 +300,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const response = await this.api.cancelRestoredJobs!([key])
       // Main cancels every running record under the key; only the jobs the backend did not cancel itself are reported.
       failed = response.ok ? [...response.value.uncancellable, ...response.value.jobs.filter(job => !job.cancelled).map(job => job.jobId)].filter(id => targets.includes(id)) : []
+      // A commit before the cancel, an unknown outcome or a session not ended: never unseen.
+      if (response.ok && !this.disposed) for (const text of cancelNotesText(name, response.value.jobs.filter(job => targets.includes(job.jobId)))) this.notify?.(text)
       if (!response.ok) this.notify?.(`${name}: its BigQuery jobs could not be cancelled. ${response.error}`)
     } catch { failed = [] }
     await this.api.dropJobRecords?.(key).catch(() => {})
@@ -317,6 +317,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     let review
     try { const response = await api.reviewJobsWithoutTab(keys); if (!response.ok) return; review = response.value } catch { return }
     if (!review || review.answer !== 'cancel' || !review.cancel || this.disposed) return
+    for (const text of cancelNotesText('BigQuery', review.cancel.jobs)) this.notify?.(text)
     const failed = [...review.cancel.uncancellable, ...review.cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]
     if (failed.length) this.notifyJobs?.(`${failed.length === 1 ? `BigQuery job ${failed[0]} could not be cancelled` : `BigQuery jobs ${failed.join(', ')} could not be cancelled`}. Cancel ${failed.length === 1 ? 'it' : 'them'} in BigQuery's job history.`, failed)
   }
@@ -331,7 +332,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const state = this.getSnapshot()[id]
     // A run still in its estimate or cost prompt sent nothing: the prompt stops it like any query.
     if (state?.running && state.running.kind !== 'estimate' && !this.isGated(id)) return true
-    const jobs = state?.jobs ?? []
+    // A finished job's reference waits only for its results: nothing to cancel or leave running.
+    const jobs = (state?.jobs ?? []).filter(job => job.state === 'running')
     if (!jobs.length) return false
     if (jobs.some(job => !job.detached) || !this.connected(id)) return true
     try {

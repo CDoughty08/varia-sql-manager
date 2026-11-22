@@ -235,7 +235,7 @@ Each BigQuery query tab runs in its own BigQuery session, created by its first e
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `queryExecution.bigQuery.closeRunningJob` | When a closing query holds a running job | One of `ask` (Ask), `cancel` (Cancel the job), `leave` (Leave it running) | Ask |  | All | At once | What closing, disconnecting, switching location or Close Results does with a BigQuery query's running job. Ask offers Cancel the job, Leave it running or Don't close, and "Remember my choice" in that prompt sets this. Quitting always asks, listing the job ids. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists SQL Server queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running. Not in SSMS. |
+| `queryExecution.bigQuery.closeRunningJob` | When a closing query holds a running job | One of `ask` (Ask), `cancel` (Cancel the job), `leave` (Leave it running) | Ask |  | All | At once | What closing, Change Connection, disconnecting, switching location or Close Results does with a BigQuery query's running job. Ask offers Cancel the job, Leave it running or Don't close, and "Remember my choice" in that prompt sets this. Quitting always asks about tabs that will not be restored, listing the job ids; tabs hot exit keeps leave their jobs running. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists SQL Server queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running. Not in SSMS. |
 
 ### Query Results › SQL Server › Results to Grid
 

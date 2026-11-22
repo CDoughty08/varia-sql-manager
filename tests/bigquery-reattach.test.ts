@@ -391,11 +391,30 @@ describe('the prompt beside a cost gate and held jobs', () => {
     expect(f.queries.isRunning(f.tab.id)).toBe(false)
     expect(f.queryApi.execute).toHaveBeenCalledTimes(1)
   })
-  it('tells a restored tab to Reconnect only when it will not reconnect by itself', () => {
+  it('says a restored job carries on even for a tab that means to reconnect, whose reconnect may fail', () => {
     const f = fixture({ connected: false })
     f.documents.update(f.tab.id, { attachWanted: true })
     f.queries.restoreJobs(f.tab.id, [job('job_1')])
-    expect(f.results.addMessage).not.toHaveBeenCalled()
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, restoredJobRunning(['job_1']), 'info')
+    expect(restoredJobRunning(['job_1'])).not.toContain('Reconnect')
+  })
+  it("never holds a finished job's reference for the prompt", async () => {
+    const f = fixture({ connected: false })
+    f.queries.restoreJobs(f.tab.id, [job('job_1', { state: 'done' })])
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+  })
+  it('shows what bigquery.cancelJobs noted for a cancelled job', async () => {
+    const f = fixture({ connected: false }), notify = vi.fn()
+    f.queries.notify = notify
+    Object.assign(f.queryApi, { dropJobRecords: vi.fn(async () => ({ ok: true, value: undefined })), cancelRestoredJobs: vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [{ jobId: 'job_1', cancelled: true, note: { code: 'committedBeforeCancel' } }], uncancellable: [] } })) })
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    f.queries.sessionClosed(f.tab.id, 'cancelJob')
+    await settle(); await settle()
+    expect(notify).toHaveBeenCalledWith('orders.sql: the stopped job job_1 committed a transaction before it stopped. Stopping does not undo work already committed.')
+    notify.mockClear()
+    await f.queries.reviewJobsWithoutTab({ reviewJobsWithoutTab: async () => ({ ok: true, value: { answer: 'cancel', jobIds: ['job_9'], cancel: { jobs: [{ jobId: 'job_9', cancelled: true, note: { code: 'abortFailed' } }], uncancellable: [] } } }) })
+    expect(notify.mock.calls[0][0]).toMatch(/^BigQuery: Varia could not end the BigQuery session/)
   })
   it("cancels from records only the jobs the backend does not know: never a connected tab's job left running, nor the running request's", async () => {
     const f = fixture(), cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [{ jobId: 'job_2', cancelled: false, error: 'x' }, { jobId: 'job_old', cancelled: true }], uncancellable: [] } }))
