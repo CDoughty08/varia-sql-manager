@@ -17,15 +17,17 @@ export function agentProxyContribution({ commands, documents, connections, explo
   const target = (args?: CommandArgs, selectionFirst = false): string | undefined => {
     const node = explorerNodeOf(args)
     if (node) return node.lost ? undefined : live(node.connectionId)
-    const selected = live(explorer.menuNode(explorer.getSnapshot().selected)?.connectionId)
-    // New Credential… from the palette needs a Credentials folder or a credential selected (its precondition): that is its server.
-    return selectionFirst ? selected ?? live(documents.active?.connectionId) : live(documents.active?.connectionId) ?? selected
+    const selectedNode = explorer.menuNode(explorer.getSnapshot().selected)
+    const selected = selectedNode && !selectedNode.lost ? live(selectedNode.connectionId) : undefined
+    // New Credential… from the palette needs a Credentials folder or a credential selected (its precondition): that node's server, or none.
+    if (selectionFirst && selectedNode) return selected
+    return live(documents.active?.connectionId) ?? selected
   }
   const report = (run: () => void, fallback: string) => { try { run() } catch (error) { commands.reportError(error instanceof Error ? error.message : fallback) } }
   const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void, selectionFirst = false) => {
     const connectionId = target(args, selectionFirst)
     if (connectionId) return then(connectionId)
-    if (explorerNodeOf(args)) { commands.reportError('Connect to the server first.'); return }
+    if (explorerNodeOf(args) || (selectionFirst && explorer.menuNode(explorer.getSnapshot().selected))) { commands.reportError('Connect to the server first.'); return }
     const choices = connections.liveSqlServer()
     if (choices.length === 1) return then(choices[0].id)
     if (!choices.length) { commands.reportError('Connect to a SQL Server first.'); return }

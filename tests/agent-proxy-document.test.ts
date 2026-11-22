@@ -314,5 +314,12 @@ describe('the release gate', () => {
     await settled()
     const opened_ = Object.values(credentialDocuments.getSnapshot().documents).at(-1)!
     expect(documents.get(opened_.id)?.connectionId).toBe('c2')
+    // On a lost server it opens nowhere else: it says to connect.
+    vi.spyOn(explorer, 'menuNode').mockReturnValue({ ...folder, lost: true })
+    const before = Object.keys(credentialDocuments.getSnapshot().documents).length
+    await commands.execute('agent.newCredential', { state: { explorerSelectionFolder: 'credentials' } }, 'palette')
+    await settled()
+    expect(Object.keys(credentialDocuments.getSnapshot().documents)).toHaveLength(before)
+    expect(commands.getSnapshot().error).toBe('Connect to the server first.')
   })
 })
