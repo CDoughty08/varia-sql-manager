@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  agentScheduleCommandEntries, initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobScheduleText, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, momentOfText,
+  agentScheduleCommandEntries, initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobScheduleText, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, jobSchedulesValue, momentOfText,
   rebaseJobSchedules, rebaseScheduleFields, refreshPickedSchedules, scheduleDraftSave, scheduleFieldsOf, scheduleSaveProblems, scheduleSaveSchema, timingProblem, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry
 } from '../src/shared/actions/agent-schedule'
 import { agentJobSave, initialAgentJobDraft, uncategorizedCategory, type AgentJobDocumentModel } from '../src/shared/actions/agent-job'
@@ -198,6 +198,14 @@ describe("the job document's schedule saves", () => {
     const many = initialJobSchedules(Array.from({ length: agentLimits.schedulesPerJob + 2 }, (_, at) => record(at + 1)))
     expect(jobScheduleProblems(many, now)).toEqual([])
     expect(jobScheduleProblems([...many, { key: 'n:1', fields: fields() }], now).map(item => item.problem.message)).toEqual([jobScheduleText.tooMany])
+    // One save changes at most schedulesPerJob of them, as zod and C# bound it: past that it is a field problem, not an IPC refusal.
+    const records = Array.from({ length: agentLimits.schedulesPerJob + 2 }, (_, at) => record(at + 1))
+    const edited = initialJobSchedules(records).map(entry => ({ ...entry, fields: { ...entry.fields, activeStartTime: 10000 } }))
+    expect(jobScheduleProblems(edited, now, records).map(item => item.problem.message)).toContain(jobScheduleText.tooManyUpdated)
+    expect(jobScheduleProblems(edited.slice(0, agentLimits.schedulesPerJob), now, records).map(item => item.problem.message)).not.toContain(jobScheduleText.tooManyUpdated)
+    // A name that differs only by spaces is no change, as the save would send none.
+    const plain = initialJobSchedules([record(1)])
+    expect(jobSchedulesValue([{ ...plain[0]!, fields: { ...plain[0]!.fields, name: `${plain[0]!.fields.name} ` } }])).toBe(jobSchedulesValue(plain))
     // One save removes at most schedulesPerJob of them, as zod and C# bound it.
     expect(jobScheduleProblems(many.map((entry, at) => at <= agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now).map(item => item.problem.message)).toEqual([jobScheduleText.tooManyRemoved])
     expect(jobScheduleProblems(many.map((entry, at) => at < agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now)).toEqual([])
@@ -792,6 +800,18 @@ describe("the job document's Schedules section", () => {
     expect(jobDocuments.canDetachSchedule(id, entry)).toBe(true)
     jobDocuments.removeSchedule(id, entry.key)
     expect(jobDocuments.get(id)!.draft!.schedules[0]?.remove).toBe('detach')
+  })
+  it('reads the shared schedules again when the search is typed after a failed read', async () => {
+    const { jobDocuments, api } = jobWorkbench()
+    const id = jobDocuments.openJob('c1', 'ETL')
+    await settled()
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, code: 'SQL_ERROR', error: 'Refused.' }))
+    jobDocuments.ensureShared(id)
+    await settled()
+    expect(jobDocuments.get(id)?.shared?.state).toBe('failed')
+    jobDocuments.setScheduleSearch(id, 'night')
+    await settled()
+    expect(jobDocuments.get(id)?.shared?.state).toBe('ready')
   })
   it('drops a shared read that answers after a save started the reads over', async () => {
     const { jobDocuments, api } = jobWorkbench()

@@ -80,9 +80,10 @@ export interface JobScheduleEntry {
 export const scheduleKey = (id: number) => `s:${id}`
 /** The job's schedules as read. */
 export const initialJobSchedules = (schedules: readonly AgentScheduleRecord[] = []): JobScheduleEntry[] => schedules.map(record => ({ key: scheduleKey(record.id), id: record.id, fields: scheduleFieldsOf(record) }))
-/** The entries as one comparable value (the draft's change detection). */
+/** The entries as one comparable value (the draft's change detection). The name is trimmed, as the save sends it, so a name that
+ *  differs only by spaces is no change (else Save would show a change and send nothing). */
 export const jobSchedulesValue = (entries: readonly JobScheduleEntry[]) =>
-  JSON.stringify(entries.map(entry => [entry.key, entry.id ?? null, entry.attached ?? false, entry.remove ?? '', entry.fields.name, entry.fields.enabled, ...timingKeys.map(key => normalizedTiming(entry.fields)[key])]))
+  JSON.stringify(entries.map(entry => [entry.key, entry.id ?? null, entry.attached ?? false, entry.remove ?? '', entry.fields.name.trim(), entry.fields.enabled, ...timingKeys.map(key => normalizedTiming(entry.fields)[key])]))
 
 /** A schedule the save names with what its describe read: the guard checks both, else STALE. */
 export interface AgentScheduleGuard { readonly id: number; readonly version: number; readonly modified: string }
@@ -158,9 +159,11 @@ export const jobScheduleText = {
   pickHint: 'Matches names and when they run. Schedules already on this job are left out; only ones you can see are listed.',
   noMatch: 'No shared schedule matches.',
   tooMany: `Varia adds schedules to a job only while it holds at most ${agentLimits.schedulesPerJob}.`,
+  tooManyUpdated: `One save changes at most ${agentLimits.schedulesPerJob} schedules: save, then change the rest.`,
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
   needsFix: 'needs a fix before Save',
+  unread: `Varia could not read this schedule's version, so it cannot change it here. Copy it for this job to change when this job runs.`,
   unseen: 'SQL Server Agent does not show you this schedule, so only its owner or a sysadmin can detach it from this job.',
   pickedGone: (count: number) => count === 1 ? 'A shared schedule you attached was deleted since, so it is no longer attached.' : `${count} shared schedules you attached were deleted since, so they are no longer attached.`,
   onlyYourJobs: 'Only your own jobs are listed.',
@@ -177,6 +180,7 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
   const kept = entries.filter(entry => !entry.remove)
   if (kept.length > agentLimits.schedulesPerJob && kept.some(entry => entry.id === undefined || entry.attached)) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooMany } })
   if (entries.filter(entry => entry.remove && entry.id !== undefined && !entry.attached).length > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyRemoved } })
+  if ((jobSchedulesSave(records, entries)?.update?.length ?? 0) > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyUpdated } })
   for (const entry of kept) {
     if (entry.attached && (!entry.base || !guardOf(entry.base))) out.push({ key: entry.key, problem: { field: 'name', severity: 'error', message: jobScheduleText.unguarded } })
     // One of the job's own schedules as read is the server's business (made in T-SQL, perhaps by another login): only a change is checked.

@@ -135,7 +135,9 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
   const others = record ? otherJobs(state, model, record.id) : undefined
   const sharedCount = record ? record.jobCount - (entry.attached ? 0 : 1) : 0
   const problems = scheduleProblems(entry.fields, now, { platform: model.platform, idleDefined: state.shared?.model?.idleDefined })
-  const readOnly = !changeable ? record?.owner ? jobScheduleText.readOnly(record.owner) : jobScheduleText.unknownOwner : undefined
+  // Without a version even its owner or sysadmin cannot save it (the guard needs it): say that, not who owns it.
+  const readOnly = !changeable ? record && (record.version === undefined || !record.modified) && model.sysadmin ? jobScheduleText.unread
+    : record?.owner ? jobScheduleText.readOnly(record.owner) : jobScheduleText.unknownOwner : undefined
   const aside = record && (sharedCount > 0 || readOnly) ? <section aria-label="Also used by">
     <h4>Also used by <span className="field-note">{sharedCount} {sharedCount === 1 ? 'job' : 'jobs'}</span></h4>
     {others?.length ? <ul className="agent-schedule-jobs">{others.map(job => <li key={job.id}><Icon name="agent-job" />{job.name}{job.enabled ? '' : <span className="field-note"> · job disabled</span>}</li>)}</ul>
@@ -186,7 +188,7 @@ export default function JobSchedules(props: Props) {
       {draft.schedules.filter(item => entryErrors.has(item.key)).map(item => <p key={item.key} className="property-field-error"><Icon name="error" />{item.fields.name || '(no name)'}: {entryErrors.get(item.key)}</p>)}
       <h4>Add</h4>
       <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} value={search}
-        disabled={!editable || sharedState?.state === 'failed'} onChange={event => service.setScheduleSearch(state.id, event.target.value)} />
+        disabled={!editable} onChange={event => service.setScheduleSearch(state.id, event.target.value)} />
       <p className="field-note">{sharedState?.state === 'failed' ? jobScheduleText.listFailed : sharedState?.state === 'loading' && search ? 'Reading the shared schedules…' : search ? jobScheduleText.pickHint : jobScheduleText.searchHint}</p>
       {search.trim() && sharedState?.state === 'ready' && (matches.length ? <ul aria-label="Shared schedules">
         {matches.slice(0, pickRows).map(item => <li key={item.id}>
