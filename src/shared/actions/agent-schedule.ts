@@ -186,7 +186,7 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
 
 /**
  * Reload and keep my changes for picked schedules: each takes the shared schedule as read now (`current`) as its guard, keeping the
- * user's edits, or the schedule's new values where they made none. Without this a picked schedule someone changed stays STALE after
+ * fields the user changed and the schedule's new values for the rest (name, Enabled and timing each on its own). Without this a picked schedule someone changed stays STALE after
  * every reload. One no longer listed keeps its old guard, so its save still reports it.
  */
 export function refreshPickedSchedules(entries: readonly JobScheduleEntry[], current: readonly AgentScheduleRecord[]): readonly JobScheduleEntry[] {
@@ -197,15 +197,14 @@ export function refreshPickedSchedules(entries: readonly JobScheduleEntry[], cur
     const record = current.find(item => item.id === entry.id)
     if (!record || (record.version === base.version && record.modified === base.modified)) return entry
     changed = true
-    const edited = Object.keys(scheduleValues(base, entry.fields)).length > 0
-    return { ...entry, base: record, fields: edited ? entry.fields : scheduleFieldsOf(record) }
+    return { ...entry, base: record, fields: rebaseScheduleFields(base, record, entry.fields) }
   })
   return changed ? out : entries
 }
 
 /**
- * Reload and keep my changes for the schedules: the job's schedules as read now, with the draft's own edits on top. An edited schedule
- * keeps the draft's fields; one the server changed and the draft did not takes the server's; one gone from the job since is dropped with
+ * Reload and keep my changes for the schedules: the job's schedules as read now, with the draft's own edits on top. Each schedule keeps
+ * what the draft changed (name, Enabled, timing) and takes the server's values for the rest; one gone from the job since is dropped with
  * its edit or removal; picked and new entries stay.
  */
 export function rebaseJobSchedules(opened: readonly AgentScheduleRecord[], current: readonly AgentScheduleRecord[], entries: readonly JobScheduleEntry[]): JobScheduleEntry[] {
@@ -214,8 +213,7 @@ export function rebaseJobSchedules(opened: readonly AgentScheduleRecord[], curre
     const mine = entries.find(entry => entry.id === record.id && !entry.attached)
     const before = opened.find(item => item.id === record.id)
     if (!mine || !before) { out.push(...initialJobSchedules([record])); continue }
-    const edited = Object.keys(scheduleValues(before, mine.fields)).length > 0
-    out.push({ ...mine, fields: edited ? mine.fields : scheduleFieldsOf(record) })
+    out.push({ ...mine, fields: rebaseScheduleFields(before, record, mine.fields) })
   }
   for (const entry of entries) if (entry.id === undefined || (entry.attached && !current.some(record => record.id === entry.id))) out.push(entry)
   return out

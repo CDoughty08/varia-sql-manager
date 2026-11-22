@@ -216,7 +216,11 @@ describe("the job document's schedule saves", () => {
     expect(refreshPickedSchedules(entries, [picked, record(8, { version: 1 })])).toBe(entries)
     const moved = refreshPickedSchedules(entries, [record(9, { name: 'Weekly (theirs)', version: 2 }), record(8, { version: 5, activeStartTime: 10000 })])
     expect(moved[0]).toMatchObject({ base: { version: 2 }, fields: { name: 'Weekly (theirs)' } })
-    expect(moved[1]).toMatchObject({ base: { version: 5 }, fields: { name: 'Mine' } })
+    // Only the name was the user's: the start time someone else changed is kept, not sent back as it was.
+    expect(moved[1]).toMatchObject({ base: { version: 5 }, fields: { name: 'Mine', activeStartTime: 10000 } })
+    // The job's own schedules rebase the same way on Reload and keep my changes.
+    const own = initialJobSchedules([record(8, { version: 1 })]).map(entry => ({ ...entry, fields: { ...entry.fields, name: 'Mine' } }))
+    expect(rebaseJobSchedules([record(8, { version: 1 })], [record(8, { version: 5, activeStartTime: 10000 })], own)[0]?.fields).toMatchObject({ name: 'Mine', activeStartTime: 10000 })
     expect(jobSchedulesSave([], moved)?.attach?.map(guard => guard.version)).toEqual([2, 5])
     // Keep my changes in the Schedules document: what the user changed stays, the rest takes the server's new values.
     expect(rebaseScheduleFields(record(1), record(1, { name: 'Theirs', activeStartTime: 10000, version: 4 }), { ...fields(), enabled: false })).toMatchObject({ name: 'Theirs', enabled: false, activeStartTime: 10000 })
