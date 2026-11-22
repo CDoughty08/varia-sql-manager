@@ -340,8 +340,10 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
 - **Refresh.** A rebuild lists everything again and reuses what an earlier read knew about an object whose creation time
   (and, for routines and models, last change) is unchanged, since `tables.list` reports no change time. Refresh on a
   project or dataset in Object Explorer re-reads that project or dataset whole, and on a node below a dataset, that dataset.
-  DDL run from a query tab (CREATE, ALTER or DROP, or a script) marks the datasets it changed, which are re-read once the
-  query ends. A refresh asked while a build runs waits for it.
+  DDL run from a query tab (CREATE, ALTER, DROP or UNDROP, or a script) marks the datasets it changed, which are re-read
+  whole once the query ends, or by a build already running when it reaches them; a query that failed re-reads whatever DDL
+  before the failure marked. A refresh asked while a build runs waits for it; after a rebuild fails, only another rebuild
+  runs.
 - **Failures.** A project whose datasets cannot be listed, or a dataset whose objects cannot, is skipped with BigQuery's
   reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …); a dataset whose objects' details could
   not all be read keeps their names and is counted as "details missing". Each metadata call has 30 s. A dataset dropped

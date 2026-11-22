@@ -88,7 +88,8 @@ const both = ['sqlserver', 'bigquery'] as const satisfies readonly ProviderId[]
 /** Search Objects' type filters, in the order the chips show: each names a set of kinds (and BigQuery subtype variants), and
  *  together they name every value `kinds` accepts exactly once (tests/object-search.test.ts). A chip shows when a server of one of
  *  its `providers` is searched: Tables, Views, Columns and Procedures serve both engines, the rest one. A search with none chosen
- *  searches every kind; with some, the kinds of those it names, sent to every server (another engine's kinds match nothing). */
+ *  searches every kind; with some, each server is sent the kinds of its own engine those name (providerSearchKinds), and a server
+ *  left with none answers no hits without being asked. */
 export const searchTypes = [
   { id: 'tables', label: 'Tables', kinds: ['table', 'bqTable'], providers: both },
   { id: 'views', label: 'Views', kinds: ['view', 'bqView'], providers: both },

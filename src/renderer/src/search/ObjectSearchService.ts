@@ -113,7 +113,7 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
 export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true } | { readonly full: true }
 /** Statement types whose job may have changed what a BigQuery index lists (SqlService.ChangesObjects), and a script, whose
  *  statements may have. */
-export const bigQueryChangesObjects = (statement: string | undefined): boolean => !!statement && (/^(CREATE|DROP|ALTER)_/.test(statement) || statement === 'SCRIPT')
+export const bigQueryChangesObjects = (statement: string | undefined): boolean => !!statement && (/^(CREATE|DROP|ALTER|UNDROP)_/.test(statement) || statement === 'SCRIPT')
 
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
@@ -242,10 +242,11 @@ export function hitServer(document: SearchDocumentState, index: number): string 
 export function mergeAnswers(answers: readonly ServerAnswer[]): ObjectSearchResult | undefined {
   const results = answers.flatMap(answer => answer.result ? [answer.result] : [])
   if (!results.length) return undefined
-  const problems = results.flatMap(result => result.problem ? [result.problem] : [])
+  const asked = results.filter(result => !unasked.has(result))
+  const problems = asked.flatMap(result => result.problem ? [result.problem] : [])
   return {
     hits: results.flatMap(result => result.hits), total: results.reduce((sum, result) => sum + result.total, 0), partial: results.some(result => result.partial),
-    elapsedMs: Math.max(...results.map(result => result.elapsedMs)), index: results[0]!.index, ...problems.length === results.length ? { problem: problems[0]! } : {}
+    elapsedMs: Math.max(...results.map(result => result.elapsedMs)), index: results[0]!.index, ...asked.length && problems.length === asked.length ? { problem: problems[0]! } : {}
   }
 }
 
@@ -285,8 +286,13 @@ const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord
 /** A connected server Search Objects indexes: SQL Server's catalogs, or BigQuery's projects through its REST API. */
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => isLiveConnection(connection)
 /** An index response with no hits, for a server none of a search's chosen types apply to (Models on a SQL Server). */
-const noHits = (index: ObjectIndexStatus | undefined): ObjectSearchResult =>
-  ({ hits: [], total: 0, partial: false, elapsedMs: 0, index: index ?? { state: 'none', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } })
+const noHits = (index: ObjectIndexStatus | undefined): ObjectSearchResult => {
+  const result = { hits: [], total: 0, partial: false, elapsedMs: 0, index: index ?? { state: 'none' as const, databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } }
+  unasked.add(result)
+  return result
+}
+/** The no-hits answers made up for servers that were not asked: they say nothing about whether the query itself is valid. */
+const unasked = new WeakSet<ObjectSearchResult>()
 
 /**
  * Search Objects: builds each connected server's object index in the backend (explorer.index: names, and module definitions
@@ -355,8 +361,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
         const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
-        // Stop (or a disconnect) ends the refreshes waiting behind the build too.
-        if (result.code === 'CANCELLED') this.refreshes.delete(connectionId)
+        // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
+        // they would otherwise hide.
+        if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
       }
       this.nextRefresh(connectionId)
     }, onUnexpectedError)
@@ -376,6 +383,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       if (!queued.some(item => JSON.stringify(item) === JSON.stringify(refresh))) this.refreshes.set(connectionId, [...queued, refresh])
       return
     }
+    // After a whole build failed, only another whole build clears its error: a partial one would hide it.
+    if (entry?.error && !('full' in refresh)) return
     if (entry?.status && entry.status.state !== 'none') this.build(connectionId, refresh)
   }
 

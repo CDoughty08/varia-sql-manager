@@ -141,6 +141,8 @@ internal static class BigQueryIndexChecks
         var select = SqlService.DdlDatasets(job, "SELECT", [new BigQueryChild("c", null, 0, true, "INSERT", null, null, null)], "varia-alpha", "sales").ToList();
         check(marked is [("varia-alpha", "staging")] && script is [("varia-alpha", "sales")] && select.Count == 0,
             "DDL marks its target's dataset, a script's DDL the tab's dataset, and DML or SELECT nothing");
+        var restored = new Google.Apis.Bigquery.v2.Data.Job { Statistics = new() { Query = new() { DdlTargetDataset = new() { ProjectId = "varia-alpha", DatasetId = "archive" } } } };
+        check(SqlService.DdlDatasets(restored, "UNDROP_SCHEMA", null, "varia-alpha", null).ToList() is [("varia-alpha", "archive")], "UNDROP SCHEMA marks the dataset it restored");
     }
 
     /// <summary>A dataset that does not fit with its columns is read again without them, and one that still does not fit is refused, giving back what it took.</summary>
@@ -294,7 +296,22 @@ internal static class BigQueryIndexChecks
         });
         await harness.Index();
         check(harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-alpha", "sales")), "a dataset marked stale while a build read it stays marked for the next stale-only build");
+        // DDL that lands after a build began but before it reached the dataset: the build reads the dataset whole and spends the mark.
+        harness.Fake.On("GET", Sales + "/tables", new BigQueryFake.Reply(200, recreated));
+        await harness.Index(more => more["stale"] = true);
+        BigQueryFake.Reply Datasets(BigQueryFake.Request request) => BigQueryFake.Fixture(request.Uri.Query.Contains("pageToken=page-2", StringComparison.Ordinal) ? "datasets-page-2" : "datasets");
+        harness.Fake.On("GET", Alpha + "/datasets", request =>
+        {
+            harness.Service.Search.MarkStale(harness.ConnectionId, "varia-alpha", "sales");
+            return Datasets(request);
+        });
+        daily = harness.Gets(Sales + "/tables/daily");
+        await harness.Index();
+        check(harness.Gets(Sales + "/tables/daily") == daily + 1 && !harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-alpha", "sales")),
+            "a dataset marked after a build began is read whole when the build reaches it, so the cleared mark loses no change");
+        harness.Fake.On("GET", Alpha + "/datasets", Datasets);
         // A stale-only build replaces its target's old skip: failing again lists it once, succeeding lists it no more.
+        harness.Service.Search.MarkStale(harness.ConnectionId, "varia-alpha", "sales");
         harness.Fake.On("GET", Sales + "/tables", BigQueryFake.Fixture("error-access-denied", 403));
         await harness.Index(more => more["stale"] = true);
         var failedTwice = await harness.Index(more => more["stale"] = true);

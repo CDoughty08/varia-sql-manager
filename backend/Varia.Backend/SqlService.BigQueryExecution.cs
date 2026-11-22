@@ -619,9 +619,11 @@ internal sealed partial class SqlService
     /// <summary><c>project:LOCATION.job_id</c>, the fully qualified id the console and bq show.</summary>
     internal static string JobName(string project, string? location, string jobId) => project + ":" + (location is null ? "" : location + ".") + jobId;
 
-    /// <summary>Whether a statement type is DDL that can change what an index lists (CREATE_TABLE, DROP_VIEW, ALTER_TABLE, CREATE_SCHEMA …).</summary>
+    /// <summary>Whether a statement type is DDL that can change what an index lists (CREATE_TABLE, DROP_VIEW, ALTER_TABLE, CREATE_SCHEMA,
+    /// UNDROP_SCHEMA …).</summary>
     internal static bool ChangesObjects(string? statement) =>
-        statement is not null && (statement.StartsWith("CREATE_", StringComparison.Ordinal) || statement.StartsWith("DROP_", StringComparison.Ordinal) || statement.StartsWith("ALTER_", StringComparison.Ordinal));
+        statement is not null && (statement.StartsWith("CREATE_", StringComparison.Ordinal) || statement.StartsWith("DROP_", StringComparison.Ordinal) || statement.StartsWith("ALTER_", StringComparison.Ordinal)
+            || statement.StartsWith("UNDROP_", StringComparison.Ordinal));
 
     /// <summary>
     /// The datasets a finished job's DDL changed: its target table's, routine's or dataset's, as the job's statistics name them. A

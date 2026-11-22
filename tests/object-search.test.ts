@@ -190,6 +190,12 @@ describe('main\'s index progress relay', () => {
     relay.event(event(1))
     expect(target.pushed).toHaveLength(0)
   })
+
+  it('carries the BigQuery pass to the window, so its status names datasets or objects', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(1), phase: 'details' })
+    expect(target.pushed[0]).toEqual({ requestId: 'r', done: 1, total: 10, objects: 100, phase: 'details' })
+  })
 })
 
 const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus => ({ state: 'ready', databases: 2, indexed: 2, objects: 40, modules: 5, cut: 0, skipped: [], definitions: true, ...overrides })
@@ -328,6 +334,13 @@ describe('ObjectSearchService', () => {
     await settle()
     const groups = serverGroups(service.getSnapshot().documents[id])
     expect(groups.map(group => [group.connectionId, group.result?.total])).toEqual([['bq', 1], ['a', 0]])
+    // The query's own problem (an invalid regular expression) is the merged answer's when every server asked has it: a server
+    // that was not asked says nothing about it.
+    service.setQuery(id, { text: '(' })
+    service.setQuery(id, { types: ['bqModels'], regex: true })
+    pendingSearch.at(-1)!({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 1, problem: 'Invalid regular expression.', index: status({ provider: 'bigquery' }) } })
+    await settle()
+    expect(service.getSnapshot().documents[id].result?.problem).toBe('Invalid regular expression.')
     // A database scope stays with SQL Server's search.
     const tab = service.open('bq', 'orders', false, 'Sales')!
     expect(calls.search.at(-1)).toMatchObject({ connectionId: 'bq', text: 'orders' })
@@ -375,6 +388,7 @@ describe('ObjectSearchService', () => {
     expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
     expect(bigQueryChangesObjects('DROP_VIEW')).toBe(true)
     expect(bigQueryChangesObjects('SCRIPT')).toBe(true)
+    expect(bigQueryChangesObjects('UNDROP_SCHEMA')).toBe(true)
     expect(bigQueryChangesObjects('INSERT')).toBe(false)
     expect(bigQueryChangesObjects(undefined)).toBe(false)
     // Two refreshes asked during a build each run once after it, in order, and the same one twice runs once.
@@ -441,11 +455,18 @@ describe('ObjectSearchService', () => {
     pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
     await settle()
     expect(calls.index).toHaveLength(cancelled)
-    // A whole build's failure is the index's.
+    // A whole build's failure is the index's, and neither a refresh waiting behind it nor a later one hides it; a full one may.
     service.build('bq')
+    service.refreshBigQuery('bq', { stale: true })
+    const failing = calls.index.length
     pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
     await settle()
     expect(service.getSnapshot().indexes.bq.error).toBe('slow')
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    expect(calls.index).toHaveLength(failing)
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
+    expect(calls.index.at(-1)).not.toHaveProperty('stale')
+    expect(calls.index).toHaveLength(failing + 1)
   })
 
   it('builds nothing until the user asks when Options turns indexing on connect off', () => {

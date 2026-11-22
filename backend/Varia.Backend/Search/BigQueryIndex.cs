@@ -50,8 +50,9 @@ internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? D
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
 /// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for the names' reserve), so a later build may reuse it.
+/// <c>Listed</c>: the listing's last change to the millisecond (routines and models), which the index's dates keep only to the second.
 internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null, string? Signature = null,
-    bool Whole = true, bool ColumnsCut = false);
+    bool Whole = true, bool ColumnsCut = false, long? Listed = null);
 
 /// <summary>
 /// A BigQuery read's facts beside its <see cref="ObjectTable"/> (by entry): creation times and whether details were read, rows, size,
@@ -161,7 +162,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 var partitioning = detail?.Partitioning is { } part ? Clip(part) : null;
                 var clustering = detail?.Clustering is { } cluster ? Clip(cluster) : null;
                 Charge(BigQueryFacts.ObjectBytes + Strings(signature, partitioning, clustering));
-                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true);
+                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true, Listed: entry.Modified);
                 if (entry.Shards is { } group)
                 {
                     Charge(BigQueryFacts.ShardBytes + Strings(group.Prefix, group.First, group.Last));
@@ -334,11 +335,17 @@ internal static partial class BigQueryEntries
             if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true, Whole: true } fact) continue;
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
-            known[(table.Kind(at), table.Name(at))] = (fact.Created, modified, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
+            known[(table.Kind(at), table.Name(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
                 fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at)));
         }
         return known;
     }
+
+    /// <summary>A listed object with the details an earlier read knows of it, when it has the same creation time and (for routines and
+    /// models) last change; otherwise the object as listed.</summary>
+    public static BigQueryEntry Reuse(Dictionary<(string Kind, string Name), (long Created, long? Modified, BigQueryDetail Detail)> known, BigQueryEntry item) =>
+        known.TryGetValue((item.Kind, item.Name), out var earlier) && earlier.Created == item.Created && (item.Modified is null || item.Modified == earlier.Modified)
+            ? item with { Detail = earlier.Detail } : item;
 
     /// <summary>pass 2's tables.get as a detail: columns flattened depth first (STRUCT fields below their column), layout and size.</summary>
     public static BigQueryDetail FromTable(Table table)

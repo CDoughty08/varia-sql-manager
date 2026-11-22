@@ -73,9 +73,10 @@ internal sealed partial class ObjectSearchService
             state.Skipped = new(MaxSkipped);
             for (var at = 0; at < kept.Count; at++) state.Skipped.Add(at, kept[at]);
         }
-        void Seen((string, string) target)
+        // Records the dataset's mark as its read begins: a marked dataset is read whole, even when marked after this build began.
+        bool Seen((string, string) target)
         {
-            lock (state.Gate) seen[target] = state.Stale.GetValueOrDefault(target);
+            lock (state.Gate) return (seen[target] = state.Stale.GetValueOrDefault(target)) != 0;
         }
         void Clear((string, string) target)
         {
@@ -118,7 +119,9 @@ internal sealed partial class ObjectSearchService
                     targets.AddRange(listed.Select(name => (project, name)));
                 }
             lock (state.Gate) state.Databases = targets.Count;
-            var pending = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), List<BigQueryEntry>>();
+            // Pass 2's datasets: their objects as listed, and how many to read. Details reused from an earlier read are found again in the
+            // read pass 1 held, so pass 1 keeps no expanded copies of them outside the budget.
+            var pending = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int Wanted)>();
             var progressed = Stopwatch.StartNew();
             var reported = TimeSpan.MinValue;
             var progressGate = new object();
@@ -137,7 +140,7 @@ internal sealed partial class ObjectSearchService
             await Parallel.ForEachAsync(targets, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, async (target, loop) =>
             {
                 var (project, dataset) = target;
-                Seen(target);
+                var marked = Seen(target);
                 BigQueryListing listing;
                 try { listing = await source.ObjectsAsync(args.ConnectionId, project, dataset, loop); }
                 catch (Exception error) when (!loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
@@ -150,11 +153,11 @@ internal sealed partial class ObjectSearchService
                     return;
                 }
                 var key = project + "\u0001" + dataset;
-                var force = scope is not null || stale.Contains(target);
+                var force = scope is not null || marked || stale.Contains(target);
                 var known = force ? [] : BigQueryEntries.Known(state.Index.Get(key), definitions);
-                var entries = BigQueryEntries.FromListing(listing).Select(item =>
-                    known.TryGetValue((item.Kind, item.Name), out var earlier) && earlier.Created == item.Created && (item.Modified is null || item.Modified == earlier.Modified)
-                        ? item with { Detail = earlier.Detail } : item).ToList();
+                var listed = BigQueryEntries.FromListing(listing);
+                var entries = listed.Select(item => BigQueryEntries.Reuse(known, item)).ToList();
+                known.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
                 var held = Hold(state, project, dataset, entries, definitions);
@@ -164,7 +167,8 @@ internal sealed partial class ObjectSearchService
                     lock (state.Gate) state.Indexed++;
                     if (held is not null) Skip(held);
                     if (listing.Cut) Skip(new(dataset, "TOO_LARGE", "The dataset has more objects than the index lists; it keeps the first ones.", Project: project));
-                    if (detailed.Contains(project) && entries.Any(item => item.Detail is null && BigQueryEntries.HasDetails(item))) pending[target] = entries;
+                    var wanted = detailed.Contains(project) ? entries.Count(item => item.Detail is null && BigQueryEntries.HasDetails(item)) : 0;
+                    if (wanted > 0) pending[target] = (listed, wanted);
                     else if (!listing.Cut) Clear(target);
                 }
                 Report(Interlocked.Increment(ref listedDone), targets.Count, "names", false);
@@ -172,7 +176,7 @@ internal sealed partial class ObjectSearchService
             Report(listedDone, targets.Count, "names", true);
             // Pass 2: each pending dataset's objects without details, then the dataset's read swapped in again.
             lock (state.Gate) state.Phase = "details";
-            var wanted = pending.Sum(pair => pair.Value.Count(item => item.Detail is null && BigQueryEntries.HasDetails(item)));
+            var wanted = pending.Sum(pair => pair.Value.Wanted);
             var detailsDone = 0;
             Report(0, wanted, "details", true);
             using var slots = new SemaphoreSlim(BigQueryIndexLimits.Details);
@@ -180,7 +184,9 @@ internal sealed partial class ObjectSearchService
                 new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, async (pair, loop) =>
             {
                 var (project, dataset) = pair.Key;
-                var entries = pair.Value.ToArray();
+                var reused = BigQueryEntries.Known(state.Index.Get(project + "\u0001" + dataset), definitions);
+                var entries = pair.Value.Listed.Select(item => BigQueryEntries.Reuse(reused, item)).ToArray();
+                reused.Clear();
                 ObjectIndexSkip? failed = null;
                 var failures = 0;
                 var tasks = new List<Task>();
