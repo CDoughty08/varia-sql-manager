@@ -306,6 +306,30 @@ describe('steps in the job save', () => {
     expect(rebased.steps.steps.map(item => item.command)).toEqual(['mine', 'theirs 2', '-- Statistics', '-- Notify'])
     expect(agentJobSave(current, rebased)!.steps).toEqual({ writes: [expect.objectContaining({ id: 1, command: 'mine' })] })
   })
+  it('rebases twice in a row: each step is compared with its own, the Start step follows its step, and the job order stands', () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const mine = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's1' ? { ...item, command: 'mine' } : item) } }
+    // Another session inserts a step first and moves the Start step to Check integrity (now 2).
+    const first = model({ job: { ...openedModel.job!, version: 9, startStepId: 2 }, steps: [step(1, 'Precheck'), step(2, 'Check integrity'), step(3, 'Rebuild', { onFailAction: 4, onFailStepId: 5 }), step(4, 'Statistics', { onSuccessAction: 1, onFailAction: 4, onFailStepId: 5 }), step(5, 'Notify', { subsystem: 'PowerShell', databaseName: '', onSuccessAction: 2 })] })
+    const once = rebaseAgentJobDraft(openedModel, first, mine)
+    expect(once.steps.steps.map(item => item.key)).toEqual(['s1', 's2', 's3', 's4', 's5'])
+    expect(once.steps.steps.map(item => item.from)).toEqual([1, 2, 3, 4, 5])
+    // Then it edits Rebuild (3) and reorders Statistics before Rebuild; the user's edit of Check integrity still lands on it.
+    const second = model({ job: { ...openedModel.job!, version: 10, startStepId: 2 }, steps: [step(1, 'Precheck'), step(2, 'Check integrity'), step(3, 'Statistics', { onSuccessAction: 1, onFailAction: 4, onFailStepId: 5 }), step(4, 'Rebuild', { command: 'theirs', onFailAction: 4, onFailStepId: 5 }), step(5, 'Notify', { subsystem: 'PowerShell', databaseName: '', onSuccessAction: 2 })] })
+    const twice = rebaseAgentJobDraft(first, second, once)
+    expect(twice.steps.steps.map(item => [item.name, item.command])).toEqual([['Precheck', '-- Precheck'], ['Check integrity', 'mine'], ['Statistics', '-- Statistics'], ['Rebuild', 'theirs'], ['Notify', '-- Notify']])
+    expect(twice.steps.steps.find(item => item.key === twice.steps.startKey)?.name).toBe('Check integrity')
+    expect(agentJobSave(second, twice)!.steps).toEqual({ writes: [expect.objectContaining({ id: 2, command: 'mine' })] })
+  })
+  it('keeps the user\'s order when they reordered, and calls a renamed step edited without marking the steps that go to it', () => {
+    const openedModel = model(), draft = initialAgentJobDraft(openedModel)
+    const moved = { ...draft, steps: moveStep(draft.steps, 's4', 0) }
+    const current = model({ job: { ...openedModel.job!, version: 9 }, steps: [described[0]!, step(2, 'Rebuild', { command: 'theirs', onFailAction: 4, onFailStepId: 4 }), described[2]!, described[3]!] })
+    expect(rebaseAgentJobDraft(openedModel, current, moved).steps.steps.map(item => item.name)).toEqual(['Notify', 'Check integrity', 'Rebuild', 'Statistics'])
+    const renamed = { ...draft, steps: { ...draft.steps, steps: draft.steps.steps.map(item => item.key === 's4' ? { ...item, name: 'Alert' } : item) } }
+    const rows = agentJobCompare(openedModel, current, renamed)
+    expect(rows.find(row => row.field === 'steps')?.yours).toBe('Edited Alert')
+  })
 })
 
 describe('the SSIS step', () => {
@@ -344,5 +368,23 @@ describe('the SSIS step', () => {
       ['TargetSchema', 'step', 'stg'], ['SourceConnection', 'none', undefined], ['Mode', 'environment', 'Mode'], ['BatchSize', 'step', '50000'], ['BatchDate', 'default', '1900-01-01']
     ])
     expect(ssisProblems(rows)).toEqual(['SourceConnection is required and has no value.'])
+  })
+})
+
+describe('the step problems of what msdb already holds', () => {
+  const context = (draft: AgentStepsDraft) => ({ sysadmin: true, original: draft })
+  it('warns of a duplicate or reserved name until a save writes the steps, then refuses it', () => {
+    const draft = initialStepsDraft([step(1, 'Same'), step(2, 'same'), step(3, `${temporaryStepPrefix}x`)], 1)
+    expect(agentStepProblems(draft, context(draft)).filter(item => item.field === 'name').map(item => item.severity)).toEqual(['warning', 'warning', 'warning'])
+    const edited = { ...draft, steps: draft.steps.map(item => item.key === 's1' ? { ...item, command: 'x' } : item) }
+    expect(agentStepProblems(edited, context(draft)).filter(item => item.field === 'name').map(item => item.severity)).toEqual(['error', 'error', 'error'])
+  })
+  it('refuses a save with a success exit code past int32 or a NUL character', () => {
+    const draft = initialStepsDraft([step(1, 'One')], 1)
+    const past = { ...draft, steps: [{ ...draft.steps[0]!, cmdexecSuccessCode: 2_147_483_648 }] }
+    expect(agentStepProblems(past, context(draft)).map(item => item.message)).toContain(stepText.exitCodePast)
+    const nul = { ...draft, steps: [{ ...draft.steps[0]!, command: 'SELECT 1\u0000' }] }
+    expect(agentStepProblems(nul, context(draft)).map(item => item.message)).toContain(stepText.nulCharacter)
+    expect(agentStepProblems(draft, context(draft))).toEqual([])
   })
 })

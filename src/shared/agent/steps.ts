@@ -270,6 +270,8 @@ export const stepText = {
   stepsTruncated: `This job has more than ${agentLimits.stepsPerJob} steps. Varia lists the first ${agentLimits.stepsPerJob} and does not change its steps; edit them in SSMS.`,
   targetPast: `It goes to a step past step ${agentLimits.stepsPerJob}, which a save from here cannot write: choose where it goes.`,
   unsavableOptions: 'This step has flags or a run priority Varia does not edit, so the steps cannot be saved from here. Edit them in SSMS.',
+  exitCodePast: 'The success exit code is a whole number from -2,147,483,648 to 2,147,483,647.',
+  nulCharacter: 'A step\'s name, command, output path, user, database or server cannot hold a NUL character.',
   retriesPast: `Retry attempts and the retry interval are at most ${agentLimits.stepRetries.toLocaleString('en-US')} each.`,
   parseOk: 'Commands completed successfully. (Parsed only; nothing ran.)',
   parseUnavailable: 'Parse is not available: the SQL backend is not running.'
@@ -305,8 +307,10 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     const name = step.name.trim()
     if (!name) push('name', 'error', 'The step needs a name.')
     else if (name.length > agentLimits.nameChars) push('name', 'error', `A step name holds at most ${agentLimits.nameChars} characters.`)
-    else if (name.toLowerCase().startsWith(temporaryStepPrefix)) push('name', 'error', `A step name cannot start with ${temporaryStepPrefix}: Save uses it while it renumbers.`)
-    else if ((names.get(name.toUpperCase()) ?? 0) > 1) push('name', 'error', `Another step is also named '${name}'; step names are unique within a job.`)
+    // What msdb already holds only blocks a save that writes the steps; until then it is a warning.
+    else if (name.toLowerCase().startsWith(temporaryStepPrefix)) push('name', saved ? 'error' : 'warning', `A step name cannot start with ${temporaryStepPrefix}: Save uses it while it renumbers.`)
+    else if ((names.get(name.toUpperCase()) ?? 0) > 1) push('name', saved ? 'error' : 'warning', `Another step is also named '${name}'; step names are unique within a job.`)
+    if (saved && [step.name, step.command, step.outputFileName, step.databaseUserName, step.databaseName, step.server].some(text => text.includes('\u0000'))) push('name', 'error', stepText.nulCharacter)
     for (const which of ['onSuccess', 'onFail'] as const) {
       const target = which === 'onSuccess' ? step.onSuccessTarget : step.onFailTarget
       if (step[which] !== 4) continue
@@ -316,6 +320,7 @@ export function agentStepProblems(draft: AgentStepsDraft, context: AgentStepCont
     }
     // Values msdb holds that a save cannot send back (the save's bounds, agentStepWriteSchema): only a save that writes the steps is refused.
     if (saved && (step.flags < 0 || step.flags > 114 || !stepRunPriorities.includes(step.osRunPriority))) push('type', 'error', stepText.unsavableOptions)
+    if (saved && (!Number.isInteger(step.cmdexecSuccessCode) || step.cmdexecSuccessCode < -2_147_483_648 || step.cmdexecSuccessCode > 2_147_483_647)) push('type', 'error', stepText.exitCodePast)
     if (saved && (step.retryAttempts > agentLimits.stepRetries || step.retryInterval > agentLimits.stepRetryMinutes)) push('output', 'error', stepText.retriesPast)
     if (step.truncated) push('command', saved ? 'error' : 'warning', saved ? stepText.truncatedSave : stepText.truncated)
     else if (saved && step.command.length > agentLimits.stepCommandChars) push('command', 'error', `A step's command holds at most ${agentLimits.stepCommandChars.toLocaleString('en-US')} characters.`)
@@ -458,26 +463,35 @@ export function stepsText(draft: AgentStepsDraft): string {
 export function stepsValue(draft: AgentStepsDraft): string {
   return JSON.stringify([draft.steps.map((step, at) => writeOf(draft, step, at + 1)), draft.startKey ? draft.steps.findIndex(step => step.key === draft.startKey) : -1])
 }
-/** A step's content with its go-tos as the names they reach, so the same step compares equal however the draft keys or orders it. */
-function stepContent(draft: AgentStepsDraft, step: AgentStepDraft): string {
-  const name = (key: string | undefined) => key === undefined ? undefined : draft.steps.find(item => item.key === key)?.name ?? key
+/** How a compare names the step a go-to reaches: `identity`, the described id it was read under (its key when new), within one read; `name`,
+ *  its name, across two reads whose ids differ. */
+type StepMatch = 'identity' | 'name'
+/** A step's content with its go-tos as the steps they reach, so the same step compares equal however the draft keys or orders it. */
+function stepContent(draft: AgentStepsDraft, step: AgentStepDraft, match: StepMatch): string {
+  const reached = (key: string | undefined) => {
+    if (key === undefined) return undefined
+    const to = draft.steps.find(item => item.key === key)
+    return !to ? key : match === 'name' ? foldName(to.name) : to.from !== undefined ? `#${to.from}` : to.key
+  }
   const { key: _key, from: _from, truncated: _truncated, onSuccessTarget, onFailTarget, ...rest } = step
-  const fields: Record<string, unknown> = { ...rest, onSuccessTarget: name(onSuccessTarget), onFailTarget: name(onFailTarget) }
+  const fields: Record<string, unknown> = { ...rest, onSuccessTarget: reached(onSuccessTarget), onFailTarget: reached(onFailTarget) }
   return JSON.stringify(Object.keys(fields).sort().map(field => [field, fields[field]]))
 }
 /** Names compare upper-cased, as msdb (and the backend's OrdinalIgnoreCase) treat step names. */
 const foldName = (name: string) => name.trim().toUpperCase()
 
 /**
- * Reload and keep my changes, step by step. Steps match by name (unique within a job), not by number, since another session may have
- * renumbered them. A step the user did not touch takes the job's version read now, or goes when the job no longer has it; an edited one keeps
- * the user's content at its current id, or becomes a new step when the job no longer has it, so the save never writes over another step by its
- * number. Steps another session added or renamed are kept where the job has them; a step the user deleted stays deleted. The Start step is the job's
- * now unless the user changed it. Go-tos of the server's steps are mapped to the draft's keys (to a step that is not kept: quit reporting failure).
+ * Reload and keep my changes, step by step. Steps match the job read now by name (unique within a job), not by number, since another session
+ * may have renumbered them. A step the user did not touch takes the job's version read now, or goes when the job no longer has it; an edited
+ * one keeps the user's content at its current id, or becomes a new step when the job no longer has it, so the save never writes over another
+ * step by its number. Steps another session added or renamed are kept where the job has them, and a step the user deleted stays deleted. The
+ * order is the job's now unless the user reordered steps, and the Start step the job's now unless the user changed it. The result is keyed
+ * `s<current id>` like a fresh read, so a later rebase compares each step with its own; a go-to whose step is not kept quits reporting failure,
+ * as msdb leaves a step that went to a deleted one.
  */
 export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: readonly AgentJobStepRecord[], draft: AgentStepsDraft, openedStart?: number, currentStart?: number): AgentStepsDraft {
   const read = initialStepsDraft(opened, openedStart)
-  const readByKey = new Map(read.steps.map(step => [step.key, step]))
+  const readByFrom = new Map(read.steps.map(step => [step.from!, step]))
   const openedById = new Map(opened.map(step => [step.id, step]))
   const currentByName = new Map(current.map(step => [foldName(step.name), step]))
   const openedNames = new Set(opened.map(step => foldName(step.name)))
@@ -487,52 +501,80 @@ export function rebaseSteps(opened: readonly AgentJobStepRecord[], current: read
   for (const step of draft.steps) {
     if (step.from === undefined) { steps.push(step); continue }
     const was = openedById.get(step.from), now = was ? currentByName.get(foldName(was.name)) : undefined
-    const before = readByKey.get(step.key)
-    if (before && stepContent(draft, step) === stepContent(read, before)) {
+    const before = readByFrom.get(step.from)
+    if (before && stepContent(draft, step, 'identity') === stepContent(read, before, 'identity')) {
       if (now) { steps.push({ ...stepDraftOf(now), key: step.key }); keyOfCurrent.set(now.id, step.key); fromServer.add(step.key) }
       continue
     }
     if (now) { steps.push({ ...step, from: now.id }); keyOfCurrent.set(now.id, step.key) }
     else { const { from: _from, ...rest } = step; steps.push(rest) }
   }
-  // Each step another session added goes where the job has it: after the step before it there (first when none), so the save does not reorder.
+  // Each step another session added goes where the job has it: after the step before it there (first when none).
   for (const now of [...current].sort((x, y) => x.id - y.id)) {
     if (openedNames.has(foldName(now.name))) continue
     const key = newStepKey(steps)
-    const before = [...current].filter(item => item.id < now.id && keyOfCurrent.has(item.id)).sort((x, y) => y.id - x.id)[0]
+    const before = current.filter(item => item.id < now.id && keyOfCurrent.has(item.id)).sort((x, y) => y.id - x.id)[0]
     const at = before ? steps.findIndex(step => step.key === keyOfCurrent.get(before.id)) + 1 : 0
     steps.splice(at, 0, { ...stepDraftOf(now), key }); keyOfCurrent.set(now.id, key); fromServer.add(key)
   }
   // The server's steps name their go-tos by the job's current ids (`s<id>` from stepDraftOf): map them to the draft's keys.
-  const mapped = steps.map(step => {
+  const targeted = steps.map(step => {
     if (!fromServer.has(step.key)) return step
+    const target = (key: string | undefined) => { const id = key === undefined ? undefined : describedId(key); return id === undefined ? undefined : keyOfCurrent.get(id) ?? `missing:${id}` }
+    return { ...step, ...step.onSuccessTarget ? { onSuccessTarget: target(step.onSuccessTarget) } : {}, ...step.onFailTarget ? { onFailTarget: target(step.onFailTarget) } : {} }
+  })
+  // The job's order unless the user reordered the steps both reads have; the user's new steps then follow the step before them in the draft.
+  const matched = draft.steps.filter(step => step.from !== undefined && readByFrom.has(step.from)).map(step => step.from!)
+  const readOrder = read.steps.map(step => step.from!).filter(from => matched.includes(from))
+  let ordered = targeted
+  if (matched.join(',') === readOrder.join(',')) {
+    ordered = targeted.filter(step => step.from !== undefined).sort((x, y) => x.from! - y.from!)
+    targeted.forEach((step, at) => {
+      if (step.from !== undefined) return
+      const previous = targeted.slice(0, at).reverse().find(item => ordered.includes(item))
+      ordered.splice(previous ? ordered.indexOf(previous) + 1 : 0, 0, step)
+    })
+  }
+  // Keyed like a fresh read: `s<current id>`, and `n<k>` for new steps (an old `s<id>` key of a step that became new is renamed).
+  const keyMap = new Map<string, string>()
+  const fresh: AgentStepDraft[] = []
+  for (const step of ordered) {
+    const key = step.from !== undefined ? `s${step.from}` : /^n[0-9]+$/.test(step.key) && !keyMap.has(step.key) ? step.key : newStepKey([...fresh, ...ordered.filter(item => /^n[0-9]+$/.test(item.key))])
+    keyMap.set(step.key, key)
+    fresh.push({ ...step, key })
+  }
+  const rekeyed = fresh.map(step => {
     const target = (code: StepAction, key: string | undefined): [StepAction, string | undefined] => {
       if (code !== 4 || !key) return [code, undefined]
-      const id = describedId(key), to = id === undefined ? undefined : keyOfCurrent.get(id)
-      return to ? [4, to] : id !== undefined && !current.some(item => item.id === id) ? [4, key] : [2, undefined]
+      const to = keyMap.get(key)
+      return to ? [4, to] : [2, undefined]
     }
     const [onSuccess, onSuccessTarget] = target(step.onSuccess, step.onSuccessTarget), [onFail, onFailTarget] = target(step.onFail, step.onFailTarget)
     const { onSuccessTarget: _s, onFailTarget: _f, ...rest } = step
     return { ...rest, onSuccess, onFail, ...onSuccessTarget ? { onSuccessTarget } : {}, ...onFailTarget ? { onFailTarget } : {} } as AgentStepDraft
   })
-  const keys = new Set(mapped.map(step => step.key))
-  const serverStart = currentStart === undefined ? undefined : keyOfCurrent.get(currentStart)
-  const startKey = draft.startKey !== read.startKey && draft.startKey && keys.has(draft.startKey) ? draft.startKey : serverStart ?? mapped[0]?.key
-  return { steps: mapped, ...startKey ? { startKey } : {} }
+  // The Start step: the user's when they changed it (by the step it names, not its key) and it is kept, else the job's now.
+  const mine = draft.steps.find(step => step.key === draft.startKey)
+  const changed = !!mine && (mine.from === undefined || mine.from !== read.steps.find(step => step.key === read.startKey)?.from)
+  const startKey = (changed ? keyMap.get(mine!.key) : undefined) ?? (currentStart === undefined ? undefined : keyMap.get(keyOfCurrent.get(currentStart) ?? '')) ?? rekeyed[0]?.key
+  return { steps: rekeyed, ...startKey ? { startKey } : {} }
 }
 
-/** What changed in the steps from `base` to `next`, by name, for the STALE compare: "Added Notify · edited Extract · reordered · Start step Load". */
-export function stepsChangesText(base: AgentStepsDraft, next: AgentStepsDraft): string {
-  const byName = (draft: AgentStepsDraft) => new Map(draft.steps.map(step => [foldName(step.name), step]))
-  const was = byName(base), now = byName(next)
-  const added = next.steps.filter(step => !was.has(foldName(step.name))).map(step => step.name)
-  const deleted = base.steps.filter(step => !now.has(foldName(step.name))).map(step => step.name)
-  const edited = next.steps.filter(step => { const before = was.get(foldName(step.name)); return before && stepContent(next, step) !== stepContent(base, before) }).map(step => step.name)
-  const common = (draft: AgentStepsDraft, other: Map<string, AgentStepDraft>) => draft.steps.filter(step => other.has(foldName(step.name))).map(step => foldName(step.name)).join('\n')
-  const startName = (draft: AgentStepsDraft) => draft.steps.find(step => step.key === draft.startKey)?.name
+/** What changed in the steps from `base` to `next`, for the STALE compare: "Added Notify · edited Extract · reordered · Start step Load".
+ *  `match`: `identity` for the user's draft against the read it came from (a rename is an edit), `name` for the job read now against it. */
+export function stepsChangesText(base: AgentStepsDraft, next: AgentStepsDraft, match: StepMatch = 'name'): string {
+  const id = (step: AgentStepDraft) => match === 'identity' && step.from !== undefined ? `#${step.from}` : match === 'identity' ? step.key : foldName(step.name)
+  const index = (draft: AgentStepsDraft) => new Map(draft.steps.map(step => [id(step), step]))
+  const was = index(base), now = index(next)
+  const added = next.steps.filter(step => !was.has(id(step))).map(step => step.name)
+  const deleted = base.steps.filter(step => !now.has(id(step))).map(step => step.name)
+  const edited = next.steps.filter(step => { const before = was.get(id(step)); return before && stepContent(next, step, match) !== stepContent(base, before, match) }).map(step => step.name)
+  const common = (draft: AgentStepsDraft, other: Map<string, AgentStepDraft>) => draft.steps.filter(step => other.has(id(step))).map(id).join('\n')
+  const start = (draft: AgentStepsDraft) => draft.steps.find(step => step.key === draft.startKey)
+  const startNext = start(next), startBase = start(base)
   const parts = [
     added.length ? `added ${added.join(', ')}` : '', deleted.length ? `deleted ${deleted.join(', ')}` : '', edited.length ? `edited ${edited.join(', ')}` : '',
-    common(base, now) !== common(next, was) ? 'reordered' : '', startName(base) !== startName(next) && startName(next) ? `Start step ${startName(next)}` : ''
+    common(base, now) !== common(next, was) ? 'reordered' : '', startNext && (!startBase || id(startBase) !== id(startNext)) ? `Start step ${startNext.name}` : ''
   ].filter(Boolean)
   if (!parts.length) return stepsText(next)
   const text = parts.join(' · ')

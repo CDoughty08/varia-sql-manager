@@ -441,7 +441,7 @@ export function agentJobCompare(opened: AgentJobDocumentModel, current: AgentJob
   const mine = new Set(changedAgentJobFields(base, draft)), theirs = new Set(changedAgentJobFields(base, server))
   const alerts = [...(opened.alerts ?? []), ...(current.alerts ?? [])]
   // Steps say what each side changed, by step, so two edits of the same names never read the same.
-  const text = (side: AgentJobDraft, field: AgentJobField) => field === 'steps' ? stepsChangesText(base.steps, side.steps) : agentJobFieldText(side, field, alerts)
+  const text = (side: AgentJobDraft, field: AgentJobField) => field === 'steps' ? stepsChangesText(base.steps, side.steps, side === draft ? 'identity' : 'name') : agentJobFieldText(side, field, alerts)
   const rows = agentJobFields.filter(field => mine.has(field) || theirs.has(field)).map((field): AgentJobCompareRow => ({
     field,
     ...(theirs.has(field) ? { server: text(server, field) } : {}),

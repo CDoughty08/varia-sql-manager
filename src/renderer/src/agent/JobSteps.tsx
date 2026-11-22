@@ -391,7 +391,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
         <label htmlFor={`${id}-exit`}>Success exit code</label>
         <span className="agent-step-inline">
           <input id={`${id}-exit`} className="property-input agent-step-short" type="number" value={step.cmdexecSuccessCode} disabled={!editable}
-            onChange={event => update({ cmdexecSuccessCode: Math.trunc(Number(event.target.value) || 0) })} />
+            onChange={event => update({ cmdexecSuccessCode: Math.max(-2_147_483_648, Math.min(2_147_483_647, Math.trunc(Number(event.target.value) || 0))) })} />
           <span className="field-note">{stepText.successCode}</span>
         </span>
       </div>}
