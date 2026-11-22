@@ -88,10 +88,14 @@ async function fixture() {
   let shown: ResultHandle = entry.handle
   const land = vi.fn<DiffGridControls['land']>()
   const tones = new Map<number, string>()
-  const grid: DiffGridControls = { active: () => active, handle: () => shown, land, tone: row => tones.get(row) }
+  // A row whose tone is not read yet answers toneWhenRead when the test reads it (readTone), as GridView does after a frame.
+  const waiting = new Map<number, (tone: string | null | undefined) => void>()
+  const toneWhenRead = vi.fn((row: number) => tones.has(row) ? Promise.resolve(tones.get(row)) : new Promise<string | null | undefined>(resolve => waiting.set(row, resolve)))
+  const grid: DiffGridControls = { active: () => active, handle: () => shown, land, tone: row => tones.get(row), toneWhenRead }
   results.registerGrid('t1', entry.key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, diff: grid })
   const said = () => compare.getSnapshot().announcements.get(entry.key)?.text
-  return { results, compare, entry, seek, land, said, tones, setActive: (value: typeof active) => { active = value }, show: (handle: ResultHandle) => { shown = handle } }
+  const readTone = (row: number, tone: string | null) => { tones.set(row, tone as string); if (active?.row === row) active = { ...active, tone }; waiting.get(row)?.(tone); waiting.delete(row) }
+  return { results, compare, entry, seek, land, said, tones, toneWhenRead, readTone, setActive: (value: typeof active) => { active = value }, show: (handle: ResultHandle) => { shown = handle } }
 }
 
 describe('moving between a comparison\'s differences', () => {
@@ -150,20 +154,38 @@ describe('moving between a comparison\'s differences', () => {
     expect(view.land).toHaveBeenCalledTimes(1)
   })
 
-  it('runs a quick repeat after the move in flight, from where that one landed', async () => {
+  it('runs a quick repeat after the move in flight, within the row it landed on once its tone is read', async () => {
     const view = await fixture()
     view.land.mockImplementation((row, first) => view.setActive({ row, column: first.column, whole: first.whole, tone: undefined }))
     let release: (value: ResultsDiffSeekResult) => void = () => {}
     view.seek.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     const first = view.compare.navigate('t1', view.entry.key, 'next')
-    view.seek.mockResolvedValueOnce({ row: 7, column: 0, index: 3, total: 9, rows: 12 })
+    // The repeat waits for the first, then for row 2's tone; the row's first unit numbers its second.
+    view.seek.mockResolvedValueOnce({ row: 2, column: 0, index: 1, total: 9, rows: 12 })
     const second = view.compare.navigate('t1', view.entry.key, 'next')
     await vi.waitFor(() => expect(view.seek).toHaveBeenCalledTimes(1))
     release({ row: 2, column: 0, index: 1, total: 9, rows: 12 })
-    await Promise.all([first, second])
-    expect(view.land.mock.calls.map(call => call[0])).toEqual([2, 7])
-    expect(view.seek).toHaveBeenLastCalledWith({ from: 2, direction: 'next' }, expect.any(AbortSignal))
-    expect(view.said()).toBe('Change 3 of 9')
+    await first
+    expect(view.said()).toBe('Change 1 of 9')
+    await vi.waitFor(() => expect(view.toneWhenRead).toHaveBeenCalledWith(2, expect.any(AbortSignal)))
+    view.readTone(2, 'changed 0 1')
+    await second
+    expect(view.land.mock.calls.map(call => [call[0], call[1]])).toEqual([[2, { column: 0, whole: false }], [2, { column: 1, whole: false }]])
+    expect(view.seek).toHaveBeenLastCalledWith({ from: 1, direction: 'next' }, expect.any(AbortSignal))
+    expect(view.said()).toBe('Change 2 of 9')
+  })
+
+  it('leaves a row whose tone cannot be read through the backend, and a failed move does not stop those queued', async () => {
+    const view = await fixture()
+    view.setActive({ row: 4, column: 0, whole: false, tone: undefined })
+    view.toneWhenRead.mockResolvedValueOnce(undefined)
+    view.seek.mockRejectedValueOnce(new Error('The backend stopped.'))
+    const first = view.compare.navigate('t1', view.entry.key, 'next')
+    view.toneWhenRead.mockResolvedValueOnce(undefined)
+    view.seek.mockResolvedValueOnce({ row: 6, column: 1, index: 4, total: 9, rows: 12 })
+    await Promise.all([first, view.compare.navigate('t1', view.entry.key, 'next')])
+    expect(view.seek).toHaveBeenLastCalledWith({ from: 4, direction: 'next' }, expect.any(AbortSignal))
+    expect(view.said()).toBe('Change 4 of 9')
   })
 
   it('says why a move failed, unless the comparison went', async () => {

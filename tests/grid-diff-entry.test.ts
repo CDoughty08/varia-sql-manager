@@ -253,6 +253,40 @@ describe('a comparison\'s grid', () => {
       view.dispose()
     })
 
+    it("answers a landed row's tone once its tile is read, and nothing once the active cell left it or the move was given up", async () => {
+      const many: Cell[][] = Array.from({ length: 400 }, (_, row) => [String(row), 'x', '1', row === 390 ? '~' : ' ', String(row + 1), String(row + 1), row === 390 ? 'changed 0 2' : null])
+      const { view, frame, state } = mount(columns, many)
+      await frame()
+      await frame()
+      expect(await view.toneWhenRead(0, new AbortController().signal)).toBeNull()
+      view.landDiff(390, { column: 0, whole: false }, () => ({ column: 0, whole: false }), false)
+      const read = view.toneWhenRead(390, new AbortController().signal)
+      for (let i = 0; i < 6 && view.diffTone(390) === undefined; i++) await frame()
+      await frame()
+      expect(await read).toBe('changed 0 2')
+      // The user moves away before row 150's tile is read: the wait ends with nothing.
+      view.landDiff(150, { column: 1, whole: false }, () => ({ column: 1, whole: false }), false)
+      const left = view.toneWhenRead(150, new AbortController().signal)
+      state.selection = { entry: 'e1', active: { row: 390, column: 1 }, blocks: [{ kind: 'cells', anchor: { row: 390, column: 1 }, focus: { row: 390, column: 1 } }] }
+      view.invalidate()
+      await frame()
+      expect(await left).toBeUndefined()
+      view.dispose()
+      // Given up, or the grid disposed, it ends at once.
+      const fresh = mount(columns, many)
+      await fresh.frame()
+      await fresh.frame()
+      expect(fresh.view.diffTone(390)).toBeUndefined()
+      expect(fresh.view.diffTone(300)).toBeUndefined()
+      const abort = new AbortController()
+      const given = fresh.view.toneWhenRead(390, abort.signal)
+      abort.abort()
+      expect(await given).toBeUndefined()
+      const disposed = fresh.view.toneWhenRead(300, new AbortController().signal)
+      fresh.view.dispose()
+      expect(await disposed).toBeUndefined()
+    })
+
     it('tells a menu whether the row it opened on has a possible match', async () => {
       const { view, frame, cellAt } = mount(columns, rows)
       await frame()

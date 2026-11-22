@@ -285,6 +285,8 @@ export class GridView {
   private landing: { readonly row: number; readonly selection: GridSelection; readonly settle: (tone: string | null) => DiffUnit } | undefined
   /** The active row and tone last told to `onDiffRow`. */
   private diffRowKey: string | undefined
+  /** Moves waiting for a row's tone (toneWhenRead), answered after a frame once it is read or can no longer come. */
+  private toneWaiters: { readonly row: number; readonly resolve: (tone: string | null | undefined) => void }[] = []
   /** A comparison's overview strip (setOverview), beside the scroll bar while it shows the comparison's own rows. */
   private overview: OverviewStrip | undefined
   private overviewShown = false
@@ -693,6 +695,33 @@ export class GridView {
     this.revealUnit(row, unit)
     this.landing = settle && tone === undefined ? { row, selection, settle } : undefined
   }
+  /**
+   * A comparison row's tone once its tile is read (a landing's row, whose tile the landing's scroll fetches), so a quick
+   * repeat steps within the row it landed on. Undefined when it cannot come: the active cell left the row, the tile's read
+   * failed, the grid went, or the move was given up.
+   */
+  toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined> {
+    const tone = this.diffTone(row)
+    if (tone !== undefined || this.disposed || !this.diff || signal.aborted) return Promise.resolve(tone)
+    return new Promise(resolve => {
+      const waiter = { row, resolve: (value: string | null | undefined) => { signal.removeEventListener('abort', abort); resolve(value) } }
+      const abort = () => { this.toneWaiters = this.toneWaiters.filter(item => item !== waiter); waiter.resolve(undefined) }
+      signal.addEventListener('abort', abort, { once: true })
+      this.toneWaiters.push(waiter)
+      this.schedule()
+    })
+  }
+  private answerToneWaiters(): void {
+    if (this.toneWaiters.length === 0) return
+    const diff = this.diff, active = this.diffActive()
+    this.toneWaiters = this.toneWaiters.filter(waiter => {
+      const tone = this.diffTone(waiter.row)
+      const gone = !diff || active?.row !== waiter.row || this.data.failed(tileKey(Math.floor(waiter.row / this.tiles.rows), Math.floor(diff.tone / this.tiles.columns)))
+      if (tone === undefined && !gone) return true
+      waiter.resolve(tone)
+      return false
+    })
+  }
   private unitSelection(row: number, unit: DiffUnit): GridSelection {
     const cell = { row, column: Math.min(Math.max(0, this.columns - 1), unit.whole ? 0 : unit.column) }
     return { entry: this.o.entry, blocks: [{ kind: unit.whole ? 'rows' : 'cells', anchor: cell, focus: cell }], active: cell }
@@ -718,6 +747,7 @@ export class GridView {
         }
       }
     }
+    this.answerToneWaiters()
     if (!this.o.onDiffRow) return
     const active = this.diffActive(), tone = active?.tone ?? null, key = active ? `${active.row}|${tone ?? ''}` : ''
     if (key === this.diffRowKey) return
@@ -806,6 +836,7 @@ export class GridView {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
     const alive = (GridView.alive.get(this.o.entry) ?? 1) - 1
     if (alive > 0) GridView.alive.set(this.o.entry, alive); else GridView.alive.delete(this.o.entry)
     this.fitting?.abort()

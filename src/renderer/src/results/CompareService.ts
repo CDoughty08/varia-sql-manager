@@ -877,7 +877,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     // A held key queues at most a few moves; past that, presses wait for the moves already queued.
     const queued = this.moves.get(key)
     if (queued && queued.waiting >= maxQueuedMoves) return queued.done
-    const done = (queued?.done ?? Promise.resolve()).then(() => this.move(tabId, key, direction, o))
+    // move() never rejects (its failures are said), and the chain catches anyway so one failure cannot stop those queued behind.
+    const done = (queued?.done ?? Promise.resolve()).then(() => this.move(tabId, key, direction, o)).catch(() => {})
     this.moves.set(key, { done, waiting: (queued?.waiting ?? 0) + 1 })
     void done.finally(() => {
       const now = this.moves.get(key)
@@ -890,8 +891,15 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const target = this.diffTarget(tabId, key)
     if (!target) return
     const { entry, grid, handle, info, abort } = target, columns = info.pairs
-    const active = grid.active(), shown = this.viewFiltered(tabId, key, entry, handle)
     try {
+      const shown = this.viewFiltered(tabId, key, entry, handle)
+      let active = grid.active()
+      // Just landed on a row whose tile is still loading (a quick repeat): its tone says whether the move stays in the row.
+      if (active && active.tone === undefined) {
+        await grid.toneWhenRead(active.row, abort.signal)
+        if (!this.stillShown(tabId, key, target)) return
+        active = grid.active()
+      }
       let landed: { readonly row: number; readonly first: DiffUnit; readonly settle?: (tone: string | null) => DiffUnit; readonly index: number; readonly total: number } | undefined
       if (active && active.tone !== undefined) {
         const units = rowUnits(active.tone, columns), step = stepWithin(units, active, direction)

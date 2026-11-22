@@ -373,6 +373,8 @@ export interface DiffGridControls {
   land(row: number, first: DiffUnit, settle: ((tone: string | null) => DiffUnit) | undefined, focus: boolean): void
   /** A row's tone, once its tile has loaded (undefined until then). */
   tone(row: number): string | null | undefined
+  /** A row's tone once its tile is read; undefined when it cannot come (GridView.toneWhenRead). */
+  toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined>
 }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }

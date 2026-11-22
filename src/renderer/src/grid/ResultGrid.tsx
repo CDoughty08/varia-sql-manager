@@ -176,7 +176,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       filterColumn: column => apiRef.current?.openFunnel(column),
       selectColumn: column => view.selectColumn(column),
       // Previous and Next Difference and Go to Possible Match move in what the grid shows: its view's positions, once swapped.
-      ...entry.descriptor.kind === 'diff' && !now.turnedView ? { diff: { active: () => view.diffActive(), handle: () => shownRef.current.handle, land: (row, first, settle, focus) => view.landDiff(row, first, settle, focus), tone: row => view.diffTone(row) } } : {}
+      ...entry.descriptor.kind === 'diff' && !now.turnedView ? { diff: { active: () => view.diffActive(), handle: () => shownRef.current.handle, land: (row, first, settle, focus) => view.landDiff(row, first, settle, focus), tone: row => view.diffTone(row), toneWhenRead: (row, signal) => view.toneWhenRead(row, signal) } } : {}
     })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.

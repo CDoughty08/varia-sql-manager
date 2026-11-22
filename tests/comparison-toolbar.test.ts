@@ -391,7 +391,7 @@ describe('a comparison\'s toolbar', () => {
     navigate.mockRestore()
     const entry = view.slot().entry
     vi.mocked(entry.handle.diffSeek).mockResolvedValueOnce({ row: 1, column: 0, index: 2, total: 2, rows: 3 })
-    view.results.registerGrid('t1', entry.key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, diff: { active: () => undefined, handle: () => entry.handle, land: () => {}, tone: () => undefined } })
+    view.results.registerGrid('t1', entry.key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, diff: { active: () => undefined, handle: () => entry.handle, land: () => {}, tone: () => undefined, toneWhenRead: async () => undefined } })
     await act(async () => { await view.compare.navigate('t1', entry.key, 'next') })
     expect(nav.textContent).toBe('Change 2 of 2')
     // No change: both are unavailable and say why; the controls stay in the toolbar.
