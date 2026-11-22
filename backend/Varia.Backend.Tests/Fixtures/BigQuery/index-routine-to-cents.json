@@ -1,0 +1,1 @@
+{"etag":"example","routineReference":{"projectId":"varia-alpha","datasetId":"sales","routineId":"to_cents"},"routineType":"SCALAR_FUNCTION","language":"SQL","creationTime":"1700000000000","lastModifiedTime":"1700000600000","definitionBody":"CAST(ROUND(dollars * 100) AS INT64)","arguments":[{"name":"dollars","dataType":{"typeKind":"NUMERIC"}}],"returnType":{"typeKind":"INT64"}}

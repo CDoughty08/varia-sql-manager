@@ -4,7 +4,7 @@ import { bigQueryPath } from '../../../shared/bigquery/names.ts'
 import { bigQueryPreviewRows } from '../../../shared/bigquery/objects'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf, filterable, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
+import { explorerNodeOf, filterable, objectNodeOf, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
 import { windows } from '../core/windows'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
@@ -16,8 +16,9 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
+  & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
@@ -32,11 +33,16 @@ export function explorerContribution({ commands, documents, connections, explore
     return node.kind === 'folder' ? explorer.insertText(node.id) : insertTextFor(node.ref)
   }
   // A BigQuery table (or snapshot, or clone): the rows tabledata.list can list.
-  const previewNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && node.ref.type === 'object' && node.ref.object.kind === 'bqTable' && !!queries ? node : undefined }
+  // A Search Objects result's menu previews its table too.
+  const previewNode = (args?: CommandArgs) => {
+    const node = args?.target?.kind === 'searchHit' ? objectNodeOf(args) : nodeOf(args)
+    return node && !node.lost && connections.isLive(node.connectionId) && node.ref.type === 'object' && node.ref.object.kind === 'bqTable' && !!queries ? node : undefined
+  }
   const filterNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && filterable(node) ? node : undefined }
   const registrations = [
     // Refresh also samples the server's live status at once, so its chips match the reloaded rows.
-    commands.register('explorer.refresh', { run: args => { const node = nodeOf(args); explorer.refresh(node?.id); explorerStatus?.refresh(node?.connectionId) } }),
+    // A BigQuery node's Refresh also re-reads its project or dataset in the Search Objects index.
+    commands.register('explorer.refresh', { run: args => { const node = nodeOf(args); explorer.refresh(node?.id); explorerStatus?.refresh(node?.connectionId); if (live(node)) objectSearch?.refreshNode(node.connectionId, node.ref) } }),
     commands.register('explorer.stop', { run: () => explorer.stop() }),
     commands.register('explorer.filter', { when: args => !!filterNode(args), run: args => { const node = filterNode(args); if (node) explorer.openFilter(node.id) } }),
     commands.register('explorer.removeFilter', {

@@ -5,7 +5,7 @@ import type { DatabaseInfo } from '../src/shared/contracts'
 import { databaseItems } from '../src/renderer/src/contributions/query'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
-import { seeAllObjects } from '../src/renderer/src/contributions/palette'
+import { objectRow, seeAllObjects } from '../src/renderer/src/contributions/palette'
 import { quickSearchHits, quickSearchId } from '../src/renderer/src/search/ObjectSearchService'
 import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import { quickInputKeyAction, resultStatus, type QuickInputKeyEvent } from '../src/renderer/src/quickinput/view-model'
@@ -752,6 +752,9 @@ describe('Search', () => {
     // The row shows what the search matched, not what the widget's own matcher would.
     expect(view().rows[3]).toMatchObject({ item: { icon: 'table', description: 'server-a.example › AppData' }, ranges: [[4, 10]] })
     expect(view().rows[4].item.description).toBe('Showing 1 of 75 objects')
+    // A BigQuery object's row names it as Search Objects does, without its dataset, which follows its project in the description.
+    const bigQuery: ObjectSearchHit = { object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }, folder: 'bqTables', label: 'sales.orders', range: [6, 6] }
+    expect(objectRow(bigQuery, 'BigQuery')).toEqual({ label: 'orders', description: 'BigQuery › varia-alpha › sales', ranges: [[0, 6]] })
     // New text takes the hits away at once: they answered the text before, and Enter must not reveal one of them.
     quickInput.filter('new query')
     expect(view().rows[0]).toMatchObject({ group: 'commands', item: { label: 'File: New Query' } })

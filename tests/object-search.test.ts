@@ -9,20 +9,22 @@ import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
   childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
+  bigQuerySearchKinds, bigQuerySearchVariants, providerSearchKinds, searchHitNames, searchKindFilters,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import type { WorkbenchEvent } from '../src/renderer/src/core/types'
+import { bigQueryChangesObjects, explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches, stopForKey } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
-import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
+import { searchFilterSummary, shownSearchTypes, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
 import ServerPicker, { allServersValue, serverOptionName, serverPickerOptions, typeAheadMatch } from '../src/renderer/src/search/ServerPicker'
 
@@ -39,6 +41,10 @@ describe('object search contracts', () => {
     expect(service).toContain(`public const int DefaultLimit = ${objectSearchLimits.defaultHits};`)
     expect(service).toContain(`public const int MaxSkipped = ${objectSearchLimits.skipped};`)
     expect(service).toContain(`Kinds = [${searchKinds.map(kind => `"${kind}"`).join(', ')}]`)
+    expect(csharp('ObjectSearchService.BigQuery.cs')).toContain(`BigQueryKinds = [${bigQuerySearchKinds.map(kind => `"${kind}"`).join(', ')}, .. SearchQuery.Variants]`)
+    expect(index).toContain(`Variants = [${bigQuerySearchVariants.map(kind => `"${kind}"`).join(', ')}]`)
+    const limits = readFileSync(new URL('../backend/Varia.Backend/Search/BigQueryIndex.cs', import.meta.url), 'utf8').replaceAll('_', '')
+    for (const [name, value] of Object.entries(objectSearchLimits.bigQuery)) expect(limits).toContain(`public const int ${name[0].toUpperCase() + name.slice(1)} = ${value};`)
     expect(service).toContain(`Unindexed = [${unindexedKinds.map(kind => `"${kind}"`).join(', ')}]`)
     expect(service).toContain(`public const int MaxKinds = ${objectSearchLimits.kinds};`)
     const fuzzy = csharp('FuzzyName.cs')
@@ -55,18 +61,34 @@ describe('object search contracts', () => {
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
-    // BigQuery's kinds join the index with its own lane (BQ-6a); Object Explorer lists them first (BQ-5).
     const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis') && !kindSpecs[kind].scope.startsWith('bq') && !(unindexedKinds as readonly string[]).includes(kind))
     expect([...searchKinds].sort()).toEqual([...listed].sort())
     expect(searchKinds.length).toBeLessThanOrEqual(objectSearchLimits.kinds)
-    // The type filters name every kind the index holds exactly once, so a kind can neither be unreachable nor in two chips.
+    // BigQuery: every kind Object Explorer lists but the project, which is the index's own unit.
+    const bigQuery = nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('bq') && kind !== 'bqProject')
+    expect([...bigQuerySearchKinds].sort()).toEqual([...bigQuery].sort())
+    // Each variant names a kind and one of its subtypes in the catalogue.
+    for (const variant of bigQuerySearchVariants) {
+      const [kind, subtype] = variant.split(':') as [keyof typeof kindSpecs, string]
+      expect((kindSpecs[kind].subtypes ?? []) as readonly string[], variant).toContain(subtype)
+    }
+    // Each engine's whole list fits one request.
+    expect(providerSearchKinds('sqlserver').length).toBeLessThanOrEqual(objectSearchLimits.kinds)
+    expect(providerSearchKinds('bigquery')).toEqual([...bigQuerySearchKinds, ...bigQuerySearchVariants])
+    // The type filters name every kind and variant exactly once, so a kind can neither be unreachable nor in two chips.
     const typed = searchTypes.flatMap(type => [...type.kinds])
-    expect([...typed].sort()).toEqual([...searchKinds].sort())
+    expect([...typed].sort()).toEqual([...searchKindFilters].sort())
     expect(new Set(searchTypes.map(type => type.id)).size).toBe(searchTypes.length)
+    // A chip's kinds are all of the engines it shows for.
+    for (const type of searchTypes)
+      for (const kind of type.kinds) expect(type.providers as readonly string[], `${type.id}: ${kind}`).toContain(kind.startsWith('bq') ? 'bigquery' : 'sqlserver')
   })
 
   it('gives every kind a one-letter badge in a tone the theme colours', () => {
     expect(searchKinds.map(kind => searchKindBadge(kind)).every(badge => /^[A-Z]$/.test(badge.letters) && searchKindTones.includes(badge.tone))).toBe(true)
+    // BigQuery's, as its mock draws them: one letter, but ML for a model.
+    expect(bigQuerySearchKinds.map(kind => searchKindBadge(kind).letters)).toEqual(['D', 'T', 'V', 'M', 'E', 'R', 'ML', 'C'])
+    expect(bigQuerySearchKinds.every(kind => searchKindTones.includes(searchKindBadge(kind).tone))).toBe(true)
     expect((['table', 'view', 'procedure', 'function', 'column', 'login', 'index', 'database', 'synonym'] as const).map(kind => Object.values(searchKindBadge(kind)).join(' ')))
       .toEqual(['T table', 'V view', 'P procedure', 'F function', 'C column', 'L security', 'I key', 'D database', 'S other'])
     // A kind this build does not know (a newer backend's, or one missing from the type filters) still renders, as '?'.
@@ -103,13 +125,25 @@ describe('object search contracts', () => {
     expect(ok({ match: true })).toBe(false)
     for (const bad of [{ text: '' }, { text: 'a\u0000' }, { in: 'columns' }, { kinds: [] }, { kinds: ['ssisPackage'] }, { kinds: Array(objectSearchLimits.kinds + 1).fill('table') }, { limit: 0 }, { limit: objectSearchLimits.hits + 1 }, { database: 'd'.repeat(129) }, { columns: true }])
       expect(ok(bad), JSON.stringify(bad)).toBe(false)
+    // BigQuery's: a project and dataset (a dataset needs its project, and neither goes with a database), and the kinds' variants.
+    expect(ok({ project: 'varia-alpha', dataset: 'sales', kinds: ['bqTable:clone', 'bqColumn'] })).toBe(true)
+    expect(ok({ kinds: providerSearchKinds('bigquery') })).toBe(true)
+    for (const bad of [{ dataset: 'sales' }, { project: 'varia-alpha', database: 'Sales' }, { project: 'Bad Project' }, { project: 'varia-alpha', dataset: 'bad-name' }, { kinds: ['bqTable:view'] }, { kinds: ['bqProject'] }])
+      expect(ok(bad), JSON.stringify(bad)).toBe(false)
+    const index = (params: object) => objectIndexParamsSchema.safeParse({ ...ids, ...params }).success
+    expect(index({ extraDetails: true, scope: { project: 'varia-alpha', dataset: 'sales' } })).toBe(true)
+    expect(index({ scope: { project: 'varia-alpha' } })).toBe(true)
+    expect(index({ stale: true })).toBe(true)
+    for (const bad of [{ scope: { project: 'varia-alpha' }, stale: true }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } }, { extraDetails: 'yes' }])
+      expect(index(bad), JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.index']).toBe(objectIndexParamsSchema)
     expect(requestSchemas['explorer.search']).toBe(objectSearchParamsSchema)
   })
 
   it('runs both methods on the explorer lane, cancellable through varia:explorer-cancel', () => {
-    expect(methodPolicies['explorer.index']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 0 })
-    expect(methodPolicies['explorer.search']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 15_000 })
+    // Both engines: BigQuery's connections are indexed and searched through the same methods.
+    expect(methodPolicies['explorer.index']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 0, providers: ['sqlserver', 'bigquery'] })
+    expect(methodPolicies['explorer.search']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 15_000, providers: ['sqlserver', 'bigquery'] })
     const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' }
     expect(cancellableRequests('explorer.index', channels)).toBe('explorer')
     expect(cancellableRequests('explorer.search', channels)).toBe('explorer')
@@ -117,7 +151,8 @@ describe('object search contracts', () => {
 
   it('accepts only well-formed progress EVENTs', () => {
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30 }).success).toBe(true)
-    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }])
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30, phase: 'details' }).success).toBe(true)
+    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }, { done: 1, total: 2, objects: 0, phase: 'columns' }])
       expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', ...bad }).success).toBe(false)
   })
 })
@@ -155,6 +190,12 @@ describe('main\'s index progress relay', () => {
     relay.event(event(1))
     expect(target.pushed).toHaveLength(0)
   })
+
+  it('carries the BigQuery pass to the window, so its status names datasets or objects', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(1), phase: 'details' })
+    expect(target.pushed[0]).toEqual({ requestId: 'r', done: 1, total: 10, objects: 100, phase: 'details' })
+  })
 })
 
 const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus => ({ state: 'ready', databases: 2, indexed: 2, objects: 40, modules: 5, cut: 0, skipped: [], definitions: true, ...overrides })
@@ -166,7 +207,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; agentEnabled?: boolean } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; agentEnabled?: boolean; extraProjects?: boolean } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -186,7 +227,10 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; ag
   } as unknown as ObjectSearchOptions['documents']
   const connections = new Connections([])
   // Read from `settings` each time, so a test can change one as Options would.
-  const values: Record<string, boolean> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true } }
+  const values: Record<string, boolean> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true },
+    get 'objectExplorer.search.bigQueryExtraProjects'() { return settings.extraProjects ?? false } }
+  const listeners = new Set<(event: WorkbenchEvent) => void>()
+  const events = { subscribe: (listener: (event: WorkbenchEvent) => void) => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }, emit: (event: WorkbenchEvent) => listeners.forEach(listener => listener(event)) }
   const timers: Timers & { run(): void } = (() => {
     const queue = new Map<number, () => void>()
     let next = 0
@@ -194,10 +238,12 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; ag
       run: () => { const callbacks = [...queue.values()]; queue.clear(); callbacks.forEach(callback => callback()) } }
   })()
   let ids = 0
-  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids, agentEnabled: settings.agentEnabled ?? true })
-  return { service, api, calls, pendingIndex, pendingSearch, connections, timers, registered, emit: (value: ObjectIndexProgress) => progress?.(value), hasListener: () => !!progress }
+  const service = new ObjectSearchService({ api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, timers, newId: () => 'req' + ++ids, agentEnabled: settings.agentEnabled ?? true, events })
+  return { service, api, calls, pendingIndex, pendingSearch, connections, timers, registered, documents, events, emit: (value: ObjectIndexProgress) => progress?.(value), hasListener: () => !!progress }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const bigQueryConnection = (id: string) => ({ ...connection(id), providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } }) as unknown as LiveConnection
+const bigQueryHit: ObjectSearchHit = { object: { kind: 'bqModel', project: 'varia-alpha', dataset: 'sales', name: 'orders_forecast' }, folder: 'bqModels', label: 'sales.orders_forecast', range: [6, 6] }
 
 describe('ObjectSearchService', () => {
   it('carries a database scope through searches and rebuilds, clears it explicitly, and drops it when the server changes', async () => {
@@ -252,12 +298,175 @@ describe('ObjectSearchService', () => {
     expect(Object.keys(service.getSnapshot().indexes)).toEqual(['b'])
   })
 
-  it('leaves BigQuery connections out: no index on connect, and none in the live servers a search spans', () => {
-    const { service, calls, connections } = harness()
-    const bigQuery = { ...connection('bq'), providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } } as unknown as LiveConnection
-    connections.set([bigQuery, connection('a')])
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
-    expect(Object.keys(service.getSnapshot().indexes)).toEqual(['a'])
+  it('indexes BigQuery connections on connect, reading the extra projects\' details only as Options says', async () => {
+    const { service, calls, connections, pendingIndex } = harness({ extraProjects: true })
+    connections.set([bigQueryConnection('bq'), connection('a')])
+    expect(calls.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: true }, { connectionId: 'a', requestId: 'req2', definitions: true }])
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(Object.keys(service.getSnapshot().indexes).sort()).toEqual(['a', 'bq'])
+    // All servers spans it too.
+    const id = service.open(undefined, 'orders', true)!
+    expect(calls.search.filter(call => call.text === 'orders').map(call => call.connectionId).sort()).toEqual(['a', 'bq'])
+    expect(service.getSnapshot().documents[id].allServers).toBe(true)
+    const off = harness()
+    off.connections.set([bigQueryConnection('bq')])
+    expect(off.calls.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+  })
+
+  it('sends each engine only its own kinds, and a database scope only to SQL Server', async () => {
+    const { service, calls, connections, pendingSearch } = harness({ agentEnabled: false })
+    connections.set([bigQueryConnection('bq'), connection('a')])
+    const id = service.open(undefined, 'orders', true)!
+    const byServer = () => Object.fromEntries(calls.search.slice(-2).map(call => [call.connectionId, call]))
+    // Every kind: BigQuery's search names none (its index holds only its own), SQL Server's all of its own but Agent's.
+    expect(byServer().bq).not.toHaveProperty('kinds')
+    expect(byServer().a.kinds).toEqual(searchKinds.filter(kind => !(agentSearchKinds as readonly string[]).includes(kind)))
+    service.setQuery(id, { types: ['tables', 'columns'] })
+    expect(byServer().bq.kinds).toEqual(['bqTable', 'bqColumn'])
+    expect(byServer().a.kinds).toEqual(['table', 'column'])
+    // A type only the other engine has: that server answers no hits without being asked.
+    const before = calls.search.length
+    service.setQuery(id, { types: ['bqModels'] })
+    expect(calls.search.slice(before).map(call => call.connectionId)).toEqual(['bq'])
+    expect(calls.search.at(-1)!.kinds).toEqual(['bqModel'])
+    pendingSearch.at(-1)!({ ok: true, value: { hits: [bigQueryHit], total: 1, partial: false, elapsedMs: 3, index: status({ provider: 'bigquery' }) } })
+    await settle()
+    const groups = serverGroups(service.getSnapshot().documents[id])
+    expect(groups.map(group => [group.connectionId, group.result?.total])).toEqual([['bq', 1], ['a', 0]])
+    // The query's own problem (an invalid regular expression) is the merged answer's when every server asked has it: a server
+    // that was not asked says nothing about it.
+    service.setQuery(id, { text: '(' })
+    service.setQuery(id, { types: ['bqModels'], regex: true })
+    pendingSearch.at(-1)!({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 1, problem: 'Invalid regular expression.', index: status({ provider: 'bigquery' }) } })
+    await settle()
+    expect(service.getSnapshot().documents[id].result?.problem).toBe('Invalid regular expression.')
+    // A database scope stays with SQL Server's search.
+    const tab = service.open('bq', 'orders', false, 'Sales')!
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'bq', text: 'orders' })
+    expect(calls.search.at(-1)).not.toHaveProperty('database')
+    expect(service.getSnapshot().documents[tab].database).toBe('Sales')
+  })
+
+  it('re-reads part of a BigQuery index: a scope from Object Explorer\'s Refresh, the stale datasets after DDL, never cancelling a build', async () => {
+    const { service, calls, connections, pendingIndex, documents, events } = harness()
+    connections.set([bigQueryConnection('bq'), connection('a')])
+    const [bq, sql] = [pendingIndex[0], pendingIndex[1]]
+    // A build is running: the refresh waits for it.
+    service.refreshNode('bq', { type: 'object', object: { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } })
+    expect(calls.index).toHaveLength(2)
+    bq({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: 'req3', definitions: true, extraDetails: false, scope: { project: 'varia-alpha', dataset: 'sales' } })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    // A project, a node below a dataset (its dataset), and the server's node (everything).
+    service.refreshNode('bq', { type: 'object', object: { kind: 'bqProject', name: 'varia-beta' } })
+    expect(calls.index.at(-1)).toMatchObject({ scope: { project: 'varia-beta' } })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    service.refreshNode('bq', { type: 'folder', owner: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }, folder: 'bqColumns' })
+    expect(calls.index.at(-1)).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'sales' } })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: expect.any(String), definitions: true, extraDetails: false })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    // SQL Server's nodes re-read nothing (its index has no scoped refresh).
+    const count = calls.index.length
+    service.refreshNode('a', { type: 'object', object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' } })
+    sql({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(count)
+    // A query tab's DDL (or script) re-reads the datasets it marked; a SELECT, or a tab on another server, re-reads nothing.
+    vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: tabId === 'q1' ? 'bq' : 'a' })) as never)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'SELECT' } } as never })
+    events.emit({ type: 'query.finished', tabId: 'q2', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
+    expect(calls.index).toHaveLength(count)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    expect(bigQueryChangesObjects('DROP_VIEW')).toBe(true)
+    expect(bigQueryChangesObjects('SCRIPT')).toBe(true)
+    expect(bigQueryChangesObjects('UNDROP_SCHEMA')).toBe(true)
+    expect(bigQueryChangesObjects('INSERT')).toBe(false)
+    expect(bigQueryChangesObjects(undefined)).toBe(false)
+    // Two refreshes asked during a build each run once after it, in order, and the same one twice runs once.
+    service.refreshBigQuery('bq', { stale: true })
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    const queued = calls.index.length
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index.slice(queued)).toEqual([expect.objectContaining({ stale: true })])
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index.slice(queued + 1)).toEqual([expect.objectContaining({ scope: { project: 'varia-alpha' } })])
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(queued + 2)
+    // A full rebuild drops the refreshes still waiting: it reads everything they would.
+    service.build('bq')
+    service.refreshBigQuery('bq', { stale: true })
+    service.build('bq')
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index.slice(queued + 2).map(call => call.stale ?? call.scope ?? 'full')).toEqual(['full', 'full'])
+    // With no index yet, a refresh builds nothing: the first build reads everything.
+    const fresh = harness({ indexOnConnect: false })
+    fresh.connections.set([bigQueryConnection('bq')])
+    fresh.service.refreshBigQuery('bq', { stale: true })
+    expect(fresh.calls.index).toHaveLength(0)
+  })
+
+  it('re-reads after a failed BigQuery run, keeps a failed refresh off the index, queues the server\'s Refresh, and drops waiting refreshes on Stop', async () => {
+    const { service, calls, connections, pendingIndex, documents, events } = harness()
+    const ok = { ok: true as const, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } }
+    connections.set([bigQueryConnection('bq')])
+    pendingIndex[0](ok)
+    await settle()
+    // A run that failed reports no statement type, but DDL before the failure may have run.
+    vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: 'bq' })) as never)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', error: 'boom' } as never)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    // That refresh failing leaves the index it refreshed searchable: no error on it.
+    pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
+    await settle()
+    expect(service.getSnapshot().indexes.bq.error).toBeUndefined()
+    expect(service.getSnapshot().indexes.bq.status?.state).toBe('ready')
+    // The server's Refresh during a build waits for it, then reads everything.
+    service.build('bq')
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
+    const during = calls.index.length
+    pendingIndex.at(-1)!(ok)
+    await settle()
+    expect(calls.index.slice(during)).toEqual([{ connectionId: 'bq', requestId: expect.any(String), definitions: true, extraDetails: false }])
+    pendingIndex.at(-1)!(ok)
+    await settle()
+    // Stop ends the refreshes waiting behind the build, and so does a build cancelled another way.
+    service.build('bq')
+    service.refreshBigQuery('bq', { stale: true })
+    service.stopBuild('bq')
+    pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    service.build('bq')
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    const cancelled = calls.index.length
+    pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    expect(calls.index).toHaveLength(cancelled)
+    // A whole build's failure is the index's, and neither a refresh waiting behind it nor a later one hides it; a full one may.
+    service.build('bq')
+    service.refreshBigQuery('bq', { stale: true })
+    const failing = calls.index.length
+    pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
+    await settle()
+    expect(service.getSnapshot().indexes.bq.error).toBe('slow')
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    expect(calls.index).toHaveLength(failing)
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
+    expect(calls.index.at(-1)).not.toHaveProperty('stale')
+    expect(calls.index).toHaveLength(failing + 1)
   })
 
   it('builds nothing until the user asks when Options turns indexing on connect off', () => {
@@ -875,6 +1084,59 @@ describe('ObjectSearchService', () => {
     expect(searchHitPath({ object: { kind: 'column', database: 'Sales', name: 'id', parent: { kind: 'table', schema: 'dbo', name: 'T' } }, folder: 'columns', label: 'dbo.T.id' })).toBe('Sales › Columns')
   })
 
+  it('reveals a BigQuery hit below its project and dataset, a column below its table and the record columns above it', () => {
+    const project = { type: 'object', object: { kind: 'bqProject', name: 'varia-alpha' } }
+    const dataset = { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } as const
+    const datasetHit: ObjectSearchHit = { object: dataset, folder: '', label: 'sales' }
+    expect(revealPaths(datasetHit)).toEqual([[project, { type: 'object', object: dataset }]])
+    const view: ObjectSearchHit = { object: { kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }, folder: 'bqViews', label: 'sales.daily' }
+    expect(revealPaths(view)).toEqual([[project, { type: 'object', object: dataset }, { type: 'folder', owner: dataset, folder: 'bqViews' }, { type: 'object', object: view.object }]])
+    const city: ObjectSearchHit = { object: { kind: 'bqColumn', project: 'varia-alpha', dataset: 'sales', table: 'daily', name: 'address.geo.city' }, folder: 'bqColumns', parentFolder: 'bqViews', label: 'sales.daily.address.geo.city' }
+    const table = { kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }
+    const column = (name: string) => ({ type: 'object', object: { kind: 'bqColumn', project: 'varia-alpha', dataset: 'sales', table: 'daily', name } })
+    expect(revealPaths(city)).toEqual([[project, { type: 'object', object: dataset }, { type: 'folder', owner: dataset, folder: 'bqViews' }, { type: 'object', object: table },
+      { type: 'folder', owner: table, folder: 'bqColumns' }, column('address'), column('address.geo'), { type: 'object', object: city.object }]])
+    // Group by Schema has no say in BigQuery's tree, and a column whose table's folder is unknown has no path.
+    expect(revealPaths(city, true)).toEqual(revealPaths(city))
+    expect(revealPaths({ ...city, parentFolder: undefined })).toEqual([])
+  })
+
+  it('shows where a BigQuery hit is, its name without the dataset the path names, and its names to copy', () => {
+    const table: ObjectSearchHit = { object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'events_20260103' }, folder: 'bqTables', label: 'sales.events_20260103', range: [6, 6],
+      shards: { prefix: 'events_', count: 3, first: '20260101', last: '20260103' } }
+    expect(searchHitPath(table)).toBe('varia-alpha › sales › Tables · 3 shards, 20260101–20260103')
+    expect(searchHitLabel(table)).toEqual({ text: 'events_20260103', range: [0, 6] })
+    const column: ObjectSearchHit = { object: { kind: 'bqColumn', project: 'varia-alpha', dataset: 'sales', table: 'orders', name: 'address.city' }, folder: 'bqColumns', parentFolder: 'bqTables',
+      label: 'sales.orders.address.city', range: [2, 6], type: 'STRING' }
+    expect(searchHitPath(column)).toBe('varia-alpha › sales › Columns · STRING')
+    // A match that runs into the dataset's name is cut to what the row shows of it ("les.or" marks "or"); one inside it marks nothing.
+    expect(searchHitLabel(column)).toEqual({ text: 'orders.address.city', range: [0, 2] })
+    expect(searchHitLabel({ ...column, range: [0, 5] })).toEqual({ text: 'orders.address.city' })
+    expect(searchHitLabel({ ...column, range: [13, 4] })).toEqual({ text: 'orders.address.city', range: [7, 4] })
+    expect(searchHitPath({ object: { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' }, folder: '', label: 'sales' })).toBe('varia-alpha')
+    expect(searchHitLabel({ object: { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' }, folder: '', label: 'sales', range: [0, 5] })).toEqual({ text: 'sales', range: [0, 5] })
+    // The name, and the backtick-quoted path as its fully qualified name; no schema-qualified or bracketed one.
+    expect(searchHitNames(table.object)).toEqual({ name: 'events_20260103', qualified: '`varia-alpha.sales.events_20260103`' })
+    expect(searchHitNames(column.object)).toEqual({ name: 'address.city', qualified: '`varia-alpha.sales.orders`.`address`.`city`' })
+    expect(searchHitNames({ kind: 'bqDataset', project: 'varia-alpha', name: 'sales' })).toEqual({ name: 'sales', qualified: '`varia-alpha.sales`' })
+  })
+
+  it('says what a BigQuery index holds, in datasets, and which pass its build is in', () => {
+    const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 120, phase: 'names' }, undefined)).toBe('Indexing 1 of 4 datasets (120 objects so far)…')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 7, total: 30, objects: 120, phase: 'details' }, undefined)).toBe('Reading details of 7 of 30 objects…')
+    expect(indexSummary(undefined, bq())).toBe('Index: 40 objects, 5 definitions in 2 datasets')
+    expect(indexSummary(undefined, bq({ state: 'none' }))).toBe('This connection has no index yet.')
+    expect(indexSummary(undefined, bq({ namesOnly: ['varia-beta'], skipped: [
+      { database: 'census', project: 'varia-beta', code: 'PERMISSION_DENIED', message: 'm' }, { database: '', project: 'varia-gamma', code: 'API_DISABLED', message: 'm' },
+      { database: 'sales', project: 'varia-alpha', code: 'CATALOG_ERROR', message: 'm', details: true }, { database: 'big', project: 'varia-alpha', code: childrenLeftOut, message: 'm' }
+    ] }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 project skipped · 1 dataset skipped · details missing in 1 dataset · columns left out of 1 large dataset · names only in 1 project')
+    expect(indexedCount(status({ provider: 'bigquery', indexed: 3 }))).toBe('3 datasets')
+    expect(indexedCount(status({ indexed: 1 }))).toBe('1 database')
+    expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: 'census', project: 'varia-beta', code: 'NOT_FOUND', message: 'm' }, { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', message: 'm', details: true }] }) }))
+      .toBe('1 dataset skipped, details missing')
+  })
+
   it('runs Object Explorer\'s box as one more search, on the selected server or the first connected one', () => {
     const { service, connections, calls } = harness({ indexOnConnect: false })
     service.followExplorer(undefined)
@@ -1142,10 +1404,23 @@ describe('Search Objects\' summary', () => {
 describe('Search Objects type filters', () => {
   it('names the kinds of the types chosen, in the index’s order, and every kind when none is', () => {
     expect(searchTypeKinds([])).toBeUndefined()
-    expect(searchTypeKinds(['columns'])).toEqual(['column'])
-    expect(searchTypeKinds(['indexes', 'tables'])).toEqual(['table', 'key', 'constraint', 'index', 'statistic'])
-    expect(searchTypeKinds(searchTypes.map(type => type.id))).toEqual([...searchKinds])
-    expect(objectSearchParamsSchema.safeParse({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), text: 'x', kinds: searchTypeKinds(searchTypes.map(type => type.id)) }).success).toBe(true)
+    expect(searchTypeKinds(['columns'])).toEqual(['column', 'bqColumn'])
+    expect(searchTypeKinds(['indexes', 'tables'])).toEqual(['table', 'key', 'constraint', 'index', 'statistic', 'bqTable'])
+    expect(searchTypeKinds(['bqSnapshots', 'procedures'])).toEqual(['procedure', 'bqTable:snapshot', 'bqRoutine:procedure'])
+    expect(searchTypeKinds(searchTypes.map(type => type.id))).toEqual([...searchKindFilters])
+    // Every type chosen: each engine's part fits one request.
+    for (const provider of ['sqlserver', 'bigquery'] as const)
+      expect(objectSearchParamsSchema.safeParse({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), text: 'x', kinds: providerSearchKinds(provider, searchTypeKinds(searchTypes.map(type => type.id))) }).success).toBe(true)
+  })
+
+  it('shows the chips of the engines searched, and any chosen that they lack', () => {
+    const ids = (providers: readonly ('sqlserver' | 'bigquery')[], types: readonly typeof searchTypes[number]['id'][] = []) => shownSearchTypes(new Set(providers), types).map(type => type.id)
+    expect(ids(['sqlserver'])).toEqual(searchTypes.filter(type => (type.providers as readonly string[]).includes('sqlserver')).map(type => type.id))
+    expect(ids(['bigquery'])).toEqual(['tables', 'views', 'columns', 'procedures', 'bqMaterializedViews', 'bqExternalTables', 'bqSnapshots', 'bqClones', 'bqRoutines', 'bqTableFunctions', 'bqModels', 'bqDatasets'])
+    expect(ids(['sqlserver', 'bigquery'])).toEqual(searchTypes.map(type => type.id))
+    expect(ids(['sqlserver'], ['bqModels'])).toContain('bqModels')
+    expect(ids([])).toEqual(ids(['sqlserver']))
+    expect([...searchProviders([{ providerId: 'bigquery' }, { options: {} }, { options: { provider: 'bigquery' } }])].sort()).toEqual(['bigquery', 'sqlserver'])
   })
 
   it('toggles a type in the chips’ order and sums up what is chosen', () => {

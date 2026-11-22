@@ -553,7 +553,10 @@ export const commandCatalog = {
   'explorer.previewRows': {
     title: 'Preview Rows', category: 'Object Explorer', icon: 'table', keywords: ['bigquery', 'preview', 'rows', 'tabledata', 'free', 'top'], methods: ['query.execute'], providers: ['bigquery'],
     precondition: "backendReady && explorerSelectionKind == 'bqTable' && !documentBusy", unavailableHint: 'Select a BigQuery table in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" },
+      { menu: 'search.hit.context', group: '1_query', order: 1, mnemonic: 'p', when: "explorerSelectionKind == 'bqTable'" }
+    ]
   },
   // BigQuery's Properties: a table-like object's facts from tables.get in a read-only document tab.
   'explorer.bigQueryProperties': {
@@ -1393,7 +1396,7 @@ export const commandCatalog = {
   },
   // Search Objects: a tab that searches a server's object index (names and module definitions), loaded in the tree or not.
   'explorer.searchObjects': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Search Objects…', category: 'Object Explorer', icon: 'search', keywords: ['find', 'objects', 'definitions', 'text', 'procedures', 'index', 'regex', 'grep'], methods: ['explorer.search'],
     precondition: 'hasConnection', unavailableHint: noServer,
     menus: [
@@ -1402,20 +1405,20 @@ export const commandCatalog = {
     ]
   },
   'explorer.rebuildIndex': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
     precondition: 'hasConnection', unavailableHint: noServer
   },
-  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
+  'explorer.stopIndexing': { providers: both, title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
   // A Search Objects result's menu (search.hit.context) and keys. They act on the result the menu was opened for, else the
   // selected result of the list that has focus; the palette offers none of them, since it has no result to act on.
   'search.revealHit': {
-    title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    providers: both, title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     menus: [{ menu: 'search.hit.context', group: '0_reveal', order: 1, mnemonic: 'r' }]
   },
   // Ctrl+C (and Edit › Copy) on a focused result runs it from SearchPanel's list, as the results grid's does; the rule only labels the key.
   'search.copyName': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]
   },
@@ -1425,14 +1428,14 @@ export const commandCatalog = {
     menus: [{ menu: 'search.copy', group: '1_names', order: 2, title: 'Schema-Qualified Name', mnemonic: 's', when: 'searchHitSchema' }]
   },
   'search.copyQualifiedName': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Copy Fully Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
-    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema' }]
+    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema || searchHitBigQuery' }]
   },
   'search.copyBracketedName': {
     providerContext: 'own',
     title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
-    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
+    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b', when: '!searchHitBigQuery' }]
   },
   // Peek's Properties pane (peek.properties.context): the facts whose text is selected, else all of them, as Name<TAB>Value lines.
   'peek.copyProperties': {

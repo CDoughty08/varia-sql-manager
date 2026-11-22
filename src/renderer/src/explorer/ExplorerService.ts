@@ -597,7 +597,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const connection = this.connectionOf(connectionId)
     return {
       connectionId, ref: { type: 'object', object }, kind: object.kind, label, ...(subtype ? { subtype } : {}),
-      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !connectionAvailable(connection)
+      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
+      lost: !connection || !connectionAvailable(connection)
     }
   }
   private connectionOf(connectionId: string): LiveConnection | undefined {
