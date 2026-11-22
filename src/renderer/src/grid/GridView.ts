@@ -7,7 +7,7 @@ import { gesturesFor } from '../core/gestures'
 import { observeResize, windowOf, windows } from '../core/windows'
 import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
-import type { ResultHandle, RowWindow } from '../results/ResultClient'
+import type { ResultHandle, ResultSnapshot, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { FLAG_ERROR, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
@@ -32,6 +32,11 @@ import { diffGutter, type DiffSides } from './diff-gutter'
 import { diffSuffixOf, visibleColumnCount, type DiffSuffix } from './hidden-columns'
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+
+/** The rows a grid draws: those available, and while a load into memory is open, the rows it showed before it. */
+export function drawnRowCount(snapshot: ResultSnapshot): number {
+  return Math.max(snapshot.rowsAvailable, snapshot.state === 'open' ? snapshot.rowsExpected ?? 0 : 0)
+}
 
 // A cell's look is one of 4,096 class strings, picked by these bits.
 // HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
@@ -704,7 +709,7 @@ export class GridView {
     this.scroller.replaceChildren()
   }
 
-  private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  private rows(): number { return drawnRowCount(this.handle.getSnapshot()) }
   /** Runs `callback` once the results port has had time to make room, unless the grid is disposed first. */
   private later(callback: () => void): void {
     if (this.disposed) return
@@ -1529,7 +1534,8 @@ export class GridView {
     // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
     if (width <= 0 || height <= 0) return
     const state = this.o.state, snapshot = this.handle.getSnapshot()
-    const rows = snapshot.rowsAvailable
+    // A result loading into memory keeps drawing the rows it showed (loading past those read): reads stop at those available.
+    const rows = drawnRowCount(snapshot), available = snapshot.rowsAvailable
     // What is drawn: the rows and columns themselves, or turned. A transposed grid's columns grow as rows arrive.
     const drawnRows = this.drawnRows(rows), drawnColumns = this.drawnColumns(rows)
     if (this.uniform && this.uniform.count !== drawnColumns) this.uniform.setCount(drawnColumns)
@@ -1632,7 +1638,7 @@ export class GridView {
       // read is one across them.
       const view = this.sourceRange(range)
       const moved = this.rotated ? range.firstColumn - this.lastFirstColumn : offsets.topRow - this.lastTopRow
-      const again = this.data.ensure(view, rows, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
+      const again = this.data.ensure(view, available, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
       if (again) this.schedule()
       if (!this.rotated || view.lastRow >= view.firstRow) this.sizes?.ensure(view.firstRow, view.lastRow)
     }

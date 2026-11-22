@@ -443,9 +443,6 @@ const unavailable = 'These results are no longer available because the SQL backe
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
 const stillSorting = 'Save the results after they are sorted.'
-// Said before the file dialog, as the backend would refuse the save after it (REMOTE_RESULT).
-const windowedSave = 'Could not save the results: This result is windowed in BigQuery: its rows are not in memory, so it cannot be saved yet.'
-const windowedCopy = 'Could not copy the results: This result is windowed in BigQuery: its rows are not in memory, so they cannot be copied yet.'
 // A view built while rows still arrived whose rebuild from every row was cancelled: nothing builds it again by itself.
 const partialView = 'The grid is sorted or filtered over only the rows that had arrived. Sort or filter it again to include every row, then save.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
@@ -1019,8 +1016,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
-    // Refused before it cancels the copy running (another grid's, perhaps): the backend would refuse it anyway.
-    if (set.handle.getSnapshot().residence === 'remote') return windowedCopy
     // A grid drawn transposed copies as drawn: the selection it shows, written turned.
     const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
     const parts = (turned ? transposedCopyPlan : copyPlan)(selection, set.descriptor.columns.length)
@@ -1060,9 +1055,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set) return undefined
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
-    // The snapshot, not the opening descriptor: a set switches residence after it opened (resultSet.residence). Before the
-    // loading check: waiting would not help.
-    if (snapshot.residence === 'remote') return windowedSave
     if (snapshot.state !== 'complete') return stillLoading
     const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running sort or filter is about to change: Save waits for it.

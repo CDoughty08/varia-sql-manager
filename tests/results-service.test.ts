@@ -479,7 +479,7 @@ describe('results service', () => {
       ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
     ])
   })
-  it('refuses to copy a windowed result before it cancels the copy running', async () => {
+  it('copies a windowed result through the backend, which reads its rows from BigQuery', async () => {
     const { api, service } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
@@ -487,40 +487,40 @@ describe('results service', () => {
     const first = deferred<ApiResult<ResultsJobResult>>()
     api.copyResults.mockReturnValueOnce(first.promise)
     const copying = service.copy('t1', keyAt(service, 't1', 0), false)
-    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toMatch(/^Could not copy the results: This result is windowed in BigQuery/)
-    expect(api.copyResults).toHaveBeenCalledTimes(1)
-    expect(api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toBeUndefined()
+    expect(api.copyResults).toHaveBeenCalledTimes(2)
+    expect(api.copyResults.mock.calls[1][0]).toMatchObject({ generation: 1, resultId: 2 })
     first.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
-    expect(await copying).toBeUndefined()
+    await copying
     service.dispose()
   })
-  it('says a windowed result still loading cannot be saved, rather than to wait for it', async () => {
+  it('says a windowed result still running can be saved once it finishes', async () => {
     const { api, client, service, flush } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toBe('Save the results after this result set finishes loading.')
     expect(api.saveResults).not.toHaveBeenCalled()
     service.dispose()
   })
-  it('refuses to save a windowed result before main shows the file dialog', async () => {
+  it('saves a windowed result through main, which streams its rows from BigQuery to the file', async () => {
     const { api, service, flush } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
-    expect(api.saveResults).not.toHaveBeenCalled()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
     service.dispose()
   })
-  it('refuses to save a result that switched to windowed after it opened in memory, before the dialog', async () => {
+  it('saves a result that switched to windowed after it opened in memory', async () => {
     const { api, client, service, flush } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', residence: 'memory', revision: 0 }) })
     client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })]) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
-    expect(api.saveResults).not.toHaveBeenCalled()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
     service.dispose()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
