@@ -64,6 +64,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 | Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too; the card's `focusSamples` entry is under § 3 + 7's catalogues. |
 | Q9 | A comparison of rows as shown going out of date: rebuild automatically like Pivots, or Update only? | **Update only.** A rebuild resets the comparison's sort, filters and scroll, which is more disruptive than a Pivot rebuild. |
 | Q10 | A global "always ignore columns named …" setting (dbForge's mask) with C2? | **No.** Ignored columns are remembered per pair. Revisit if people ask. |
+| Q11 | Should Check each statement also check that each UPDATE's row still holds the values it changes from? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Without it, the wrong direction for a repair passes every check and changes nothing, since each UPDATE finds its row. Columns without `=` (xml, text, ntext, image, json), float and real (a literal may not compare equal to the stored value) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
 
 ## What every feature shares
 
@@ -75,9 +76,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - Ignore and Stop ignoring keep the columns, so they also keep the sort keys, as a rebuilt Pivot does. Because they
     keep the sort, someone could expect them to keep value filters too, so they alone say when those were cleared.
   - The announcement, in order: the shipped sentence ("Comparison updated: matched by id, 4 changed, 3 added, 1
-    removed."); "Value filters were removed." (Ignore and Stop ignoring, when there were any); the notices it newly
-    shows; and the shipped sentence for each chip left with no rows ("No changed rows are left, so that filter was turned
-    off.").
+    removed."); "Result 1's current filters were applied." (a comparison of rows as shown that was out of date, § 6);
+    "Value filters were removed." (Ignore and Stop ignoring, when there were any); the notices it newly shows; and the
+    shipped sentence for each chip left with no rows ("No changed rows are left, so that filter was turned off.").
 - **Remembered per pair.** The match memory (the last 64 pairs of names, one way round, per tab) also keeps ignored
   column names (1) and the Compare each result choice (6), each apart from the match: choosing Automatic forgets the remembered key
   columns (`CompareService`), but keeps the ignored columns. The popover shows what it reuses ("Ignoring: server_time
@@ -349,13 +350,19 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     as today. Over that cell the card replaces the tooltip and repeats its truncation sentence.
   - **By key**, **Show Change Details** (Ctrl+I, ⌘I on macOS; Q8), the Comparison submenu or the palette opens it
     on the active cell. From the grid menu it opens on the cell the menu was opened on, passed through `argsFor` as
-    Ignore This Column's column is: a right press inside a selection keeps the active cell elsewhere. It is available
-    on any comparison cell; cells with nothing to mark open the short cards below.
+    Ignore This Column's column is: a right press inside a selection keeps the active cell elsewhere. Opened on a cell
+    that is not the active cell, the card describes that cell, which gets `aria-details`, and does not follow; it
+    closes when the active cell moves. It is available on any comparison cell; cells with nothing to mark open the
+    short cards below.
   - The card is a non-modal dialog named "Change details: note" ("Possible match" for the look-alike card) that does
-    not take focus. Opened by key, it stays open, and the live region says
-    "Change details: ", the column and the card's summary, then "Tab to read it, Escape to close.": "Change details: note,
-    2 edits: '9' became '10', and 1 more. Tab to read it, Escape to close." The active cell gets `aria-details` pointing
-    at it. Tab moves into it, and Escape closes it, returning focus to the cell.
+    not take focus. Opened by key, it stays open, with a close button (✕, "Close change details"), and the live region
+    says the card's name, the column and the card's summary, then "Tab to read it, Escape to close.": "Change details:
+    note, 2 edits: '9' became '10', and 1 more. Tab to read it, Escape to close."; on a ? row "Possible match:
+    customer, removed row, looks like row 9 in Result 3: 4 of 5 compared columns equal. Tab to read it, Escape to
+    close." The active cell gets `aria-details` pointing at it.
+  - The card comes after the grid root in the DOM and its body is focusable (`tabindex="0"`), then its close button,
+    so it is the next Tab stop: Tab moves into it without leaving the grid and card, and a second Ctrl+I focuses the
+    same body. Escape closes it, returning focus to the cell.
 - **Follow mode** (opened by key): the card follows the active cell.
   - Alt+F5 and Alt+Shift+F5 work from the grid or the card: their `when` gains `comparisonDetailsFocus`.
   - Each move gives one live message: the position, then the column and the card's summary, as on opening: "Change 2
@@ -673,22 +680,29 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       with all 6 columns. id is its identity column."). It warns, never refuses, when the index lacks the table or a
       column, or marks a ticked column computed or identity.
   - **Direction**, naming the target as typed:
-    - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's" (default);
+    - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
 
-    The script is written for the chosen direction, and the comparison is not swapped.
-  - **Statements:** DELETE (n), UPDATE (n) and INSERT (n), each a checkbox with its count for the direction. While
-    DELETE is ticked, a line says "DELETEs fire the target's delete triggers and ON DELETE cascades. A row missing from a
-    result is deleted, even when the query only left it out (a WHERE or TOP)." With none ticked, the summary says "No
-    statements are ticked." and Script is unavailable.
-    When the comparison has look-alike rows (?), a line warns: "12 removed rows look like added rows: each pair is
-    scripted as a DELETE and an INSERT, not an UPDATE."
+    Neither is picked the first time, and Script waits for one ("Choose a direction.", after "Choose the target
+    table."): both jobs above need the second, so no default fits. After that the pair's draft remembers it. The script
+    is written for the chosen direction, and the comparison is not swapped. The summary names the end state, and Q11's
+    check stops a wrong direction when the script runs.
+  - **Statements:** DELETE (n), UPDATE (n) and INSERT (n), each a checkbox with its count for the direction, shown
+    once one is picked. While DELETE is ticked, a line says "DELETEs fire the target's delete triggers and ON DELETE
+    cascades. A row missing from a result is deleted, even when the query only left it out (a WHERE or TOP)." With none
+    ticked, the summary says "No statements are ticked." and Script is unavailable.
+    When the comparison has look-alike rows (?) and DELETE or INSERT is ticked, a line warns: "12 removed rows look
+    like added rows: each pair is scripted as a DELETE and an INSERT, not an UPDATE."
   - **Columns:** the data columns.
     - Key columns are ticked and locked. Ignored columns are ticked, for INSERT only.
     - Unscriptable columns start unticked with the reason: rowversion and timestamp ("Not insertable"), computed per the
       index ("Computed"), CLR types, sql_variant and vector ("Cannot be written as a literal"). Unscriptable wins over
       ignored: "row_ver (ignored): Not insertable".
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
+    - While UPDATE or INSERT is ticked, a line names the unticked columns the script would otherwise write: "note is
+      unticked: UPDATEs leave its changes out, and inserted rows get its default or NULL." ("note and memo are
+      unticked: … their changes …"), each clause only while its statement is ticked. Columns the target fills itself
+      (rowversion, computed, an identity left out) have their own lines instead.
     - A data column without a name, whose name the result repeats, or whose name holds a line break starts unticked
       and locked ("No name", "Name repeated", "Name has a line break"), since an INSERT could not name it: a query
       window normalizes line breaks in a bracketed name too.
@@ -706,34 +720,43 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - With Exact text off, values that differ only by collation are equal to the comparison, so they are not scripted. A
       line says so when there are any: "12 values differ only by collation and are not scripted. Turn on Exact text to
       include them."
-  - **Rows:** All differences, Rows in the grid (chips and filters) or Selected rows, each with its count. Selected rows
-    are the grid's selection, which always holds at least the active cell's row. The preview reads them as it shows,
+  - **Rows:** All differences, Rows in the grid (chips and filters) or Selected rows, each with its count. Rows in the
+    grid is the default, and the same rows as All differences while nothing is filtered: someone who filtered the
+    comparison to one customer gets statements only for the rows they saw. The draft remembers the choice. Selected
+    rows are the grid's selection, which always holds at least the active cell's row. The preview reads them as it shows,
     and Script reads them again.
-  - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2). Turning off the transaction
-    warns "Without a transaction, statements before a failure stay applied.", since a failed check, a key violation or a
-    trigger's error all leave earlier statements in place.
+  - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs
+    also check that the row still holds the values they change from." (Q11). Turning off the transaction warns
+    "Without a transaction, statements before a failure stay applied.", since a failed check, a key violation or a
+    trigger's error all leave earlier statements in place. Turning off the checks warns "Without the checks, a
+    statement runs even when its row is missing, repeated or changed, and nothing says so."
   - **Destination:** New Query Editor Window (default) or Clipboard.
   - A **preview** of the first 30 lines, a summary beside Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in
-    [Sales_Test].[dbo].[Orders].", with singulars, leaving out zero counts), and **Script** and **Cancel**. When every
+    [Sales_Test].[dbo].[Orders] to match Result 3.", with singulars, naming only ticked statements and leaving out zero
+    counts), and **Script** and **Cancel**. While an unticked column has changes (the answer's `columnChanges`), it
+    says "updates up to 5 rows", since an UPDATE whose changes are all in unticked columns is skipped. When every
     ticked statement counts 0, the summary is "The chosen rows have no differences to script." and Script is
     unavailable.
     - The preview asks the backend for its 30 lines (`results.scriptDiff` with `maxLines`), 300 ms after the form last
       changed, cancelling the request before. It refuses only what those lines need (a truncated or U+FFFD value among
       them, or a refusal known on opening); the rest are found on Script.
     - The counts and the summary are entries by kind in the chosen rows, read from the change index (cheap at any
-      size), whatever the Statements ticks. Every preview answer carries them, a refused one included, so the counts
-      and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns are all unticked is skipped,
-      so the counts said after Script, which are the script's own, can be lower.
+      size). Each statement shows its count whether or not it is ticked. Every preview answer carries them, a refused
+      one included, so the counts and the zero-count rules hold while a refusal shows. An UPDATE whose changed columns
+      are all unticked is skipped, so the counts said after Script, which are the script's own, can be lower.
 - **The script:**
   - A header comment names the comparison, the match, the server and database, the direction and the time, and says
     "Review it before you run it. Varia does not run it for you."
   - Then `SET XACT_ABORT ON;` and `BEGIN TRANSACTION;`.
   - DELETEs, then UPDATEs, then INSERTs, so a reused key cannot collide.
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
-    - An UPDATE SETs only changed, compared, ticked columns, never an identity column.
+    - An UPDATE SETs only changed, compared, ticked columns, never an identity column. With the check on, its WHERE
+      also holds each of those columns' current value, written as the key values are (`AND [status] = N'Open'`, or
+      `[status] IS NULL`), except the columns Q11 leaves out.
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
-      once.', 1;`. THROW takes only a literal or a variable, so the key text there is one plain literal: the raw key
-      text is cut to 200 code points first (never inside a surrogate pair), then escaped, with quotes doubled and
+      once.', 1;` (an UPDATE's says "…exactly once with the values it changes from."). THROW takes only a literal or
+      a variable, so the key text there is one plain literal: the raw key text is cut to 200 code points first (never
+      inside a surrogate pair), then escaped, with quotes doubled and
       backslash, tab, CR, LF and other control characters written as Copy as Diff writes them (`\\`, `\t`, `\r`, `\n`,
       `\u2028`), never as `NCHAR` joins. Escaping after the cut means a doubled quote or an escape is never split.
   - `COMMIT TRANSACTION;`.
@@ -743,17 +766,24 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **Refused, with the reason in the dialog.** The first four are known when the dialog opens: the refusal is the
   window's description, read when it opens, and the focus starts on its first button. The rest are found on Script:
   the window's live region says the refusal, Script keeps the focus, marked unavailable (`aria-disabled`), and it is
-  available again once the form changes. Each refusal says what to do:
+  available again on any change the preview follows: the form, or the comparison's sort, filters, chips, selection or
+  a replace. When a refusal clears, after its own button or a replace, the focus moves to Target table and the live
+  region says the shipped sentence ("Comparison updated: matched by updated_at, …"); a replace that fails says its
+  sentence in the dialog and keeps the refusal and its focus. When several apply, the first in this list shows. Each
+  refusal says what to do:
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
     removed, and a script would insert or delete them. Compare whole results to script differences.", with **Compare
-    whole results**. This holds even when both sides have the same filters, since a row that changes out of a filter
-    shows as removed;
+    whole results** ("Result 1 and Result 3 are compared as shown, so rows their filters hide …" for both). This holds
+    even when both sides have the same filters, since a row that changes out of a filter shows as removed. It shows
+    only under key columns the user chose: under any other match the not-matched-by-key refusal shows instead, since
+    comparing whole results alone would not help, so a side shown only in its sorted order (Row position) never
+    reaches it;
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
     xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
   - a key column without a name, whose name the result repeats, or whose name holds a line break: "Result 3 has 2
     columns named id, so a statement could not name its key. Give each column its own name in the query.";
-  - rows not matched by key columns the user chose:
+  - rows not matched by key columns the user chose (before the as-shown refusal when both apply):
     - Row position, Whole rows, or Automatic that fell back to whole rows: "Rows are not matched by key columns, so a
       statement could not find its row. Choose key columns to script differences.", with **Choose key columns…**;
     - Automatic that chose a key: "Rows were matched automatically by updated_at. Choose key columns to script
@@ -762,22 +792,27 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       DELETE and an INSERT, firing delete triggers and cascades;
     - **Choose key columns…** brings the main window forward, shows the Results pane and the comparison's tab, and opens
       the Match menu at the toolbar's Match button, or beside ⋯ when Match is folded (`MatchMenuFrom` gains `script`).
-      The dialog is a child window, always above the main one, so it hides while the menu is open and comes back on
-      Apply or Cancel, with the focus; the replace that follows refreshes it;
+      The dialog is a child window, always above the main one, so it hides while the menu is open and comes back with
+      the focus whenever the menu closes (Apply, Cancel, a press outside, F6, the pane hiding or the comparison
+      closing); the replace that follows refreshes it;
     - with an input closed, rows cannot be matched again, so the buttons are unavailable and the sentence's last part
       becomes "…, and Result 1 is closed, so rows cannot be matched again. Run the query again to script differences."
       The as-shown refusal does the same: "Result 1 is closed, so the comparison cannot be rebuilt."
   - chosen rows with a repeated key (≈): "12 rows share a key, so a statement could change several rows. Choose key
     columns that are unique, or rows without a repeated key.";
   - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full, so the script
-    would not be exact. Untick note, or choose rows without them." (Q3);
-  - a needed text value holding U+FFFD: "2 values in note cannot be written exactly. Untick note, or choose rows without
-    them." Stored pages already hold U+FFFD
+    would not be exact. Choose rows without them, or untick note." (Q3). One value reads "1 value in note was not kept
+    in full", and several columns "5 values in note and memo were not kept in full, … or untick those columns.";
+    unticking says what it costs (Columns above);
+  - a needed text value holding U+FFFD: "2 values in note cannot be written exactly. Choose rows without them, or untick
+    note.", with the same singular and several-column forms. Stored pages already hold U+FFFD
     for a lone surrogate (`PageBuilder.AppendText`) and for bytes a `_UTF8` collation could not decode (`CellLengths`),
     and a genuine U+FFFD cannot be told apart from either, so the script would write U+FFFD over the original. A rare
     genuine U+FFFD is refused too: the cost of never writing a wrong value. The live round trip cannot catch this,
     since both sides store U+FFFD and compare equal, so an offline check does;
   - no differences in the chosen rows: "The chosen rows have no differences to script.";
+  - every UPDATE skipped because its changes are all in unticked columns, with no other statement left: "None of the
+    ticked columns changed in the chosen rows. Tick a changed column.";
   - over 1,000,000 characters, a query window's execute limit: "The script would be about 2,400,000 characters. Scripts
     are limited to 1,000,000 characters, the most a query window runs. Choose fewer rows." (Q5).
 
@@ -787,7 +822,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     filters, chips or selection: the counts, summary and preview follow the grid, as the preview follows the form, so
     what Script writes is what the window shows.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and disables Script.
-  - The draft (target, direction, columns, options) is remembered per pair in the tab, in the same 64-pair memory as
+  - The draft (target, direction, rows, columns, options) is remembered per pair in the tab, in the same 64-pair memory as
     the match.
   - Invoked from another comparison, the open window switches to it, with that pair's draft; the first pair's draft stays
     remembered.
@@ -801,7 +836,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - The preview is a read-only text area.
   - After Script to a New Query Editor Window, the window closes, that editor has focus, and the live region says "Script opened in a new
     query editor window." and the summary ("It deletes 2 rows, updates 5 rows and inserts 1 row in
-    [Sales_Test].[dbo].[Orders].").
+    [Sales_Test].[dbo].[Orders] to match Result 3.").
     After Clipboard, the window closes, the live region says "Script copied to the clipboard." and the summary, and focus
     returns to where it was, as after Cancel and for other dialog windows.
 - **Fallback:** where main refuses the window, the dialog shows over the main window, as Options does.
@@ -883,6 +918,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - every SQL Server type in `sortKind`'s table;
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
+    - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, both
+      directions;
     - identity insert, an identity column never SET, collation-only values left out under Exact text off;
     - float values whose text does not read back, datetime in the `T` form, char values as `N'…'`;
     - the refusals, a match that is not `columns`, and a comparison of rows as shown;
@@ -898,7 +935,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A **live round trip** (`VARIA_TEST_SQL_SCRATCH`): two scratch tables with every type (multi-line and control-character
     text, and 17-digit floats, included), compare their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
-    non-English language and DATEFORMAT. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI
+    non-English language and DATEFORMAT. Then run a script of the wrong direction and expect the check's THROW, with
+    the target unchanged. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI
     seconds go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
