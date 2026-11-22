@@ -517,6 +517,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The SQL Server Agent job document (AG-6a): its first section's item in the list once loaded, or New Job's start panel.
   const jobDocuments = new JobDocumentService({
     api, documents, files, connections, live, targetIdOf,
+    openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()

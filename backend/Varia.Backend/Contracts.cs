@@ -612,8 +612,17 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
 /// RemoveAlerts (at most agentLimits.jobAlerts) detaches alerts from the job, each guarded by its id still running this job.</summary>
 internal sealed record AgentJobSaveDto(int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, string? Description = null, string? Category = null,
     string? Owner = null, int? EmailLevel = null, string? EmailOperator = null, int? PageLevel = null, string? PageOperator = null, int? NetSendLevel = null, string? NetSendOperator = null,
-    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null);
+    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null, AgentStepsSaveDto? Steps = null);
 internal sealed record AgentAlertRefDto(int Id, string Name);
+/// <summary>The steps' save (AG-6b, src/shared/agent/steps.ts AgentStepsSave), in the order the batch calls it: Deletes (described ids, highest
+/// first), Temporary (every surviving step's temporary name at its id after the deletes), Adds (new steps at their final ids, ascending, under
+/// temporary names), Writes (each step's whole content into its final id; New Job's are its sp_add_jobstep calls, ids 1..n), StartStepId.</summary>
+internal sealed record AgentStepsSaveDto(List<int>? Deletes = null, List<AgentStepNameDto>? Temporary = null, List<AgentStepNameDto>? Adds = null, List<AgentStepWriteDto>? Writes = null,
+    int? StartStepId = null);
+internal sealed record AgentStepNameDto(int Id, string Name);
+/// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
+internal sealed record AgentStepWriteDto(int Id, string Name, string Subsystem, string Command, string DatabaseName, string DatabaseUserName, int OnSuccessAction, int OnSuccessStepId,
+    int OnFailAction, int OnFailStepId, int RetryAttempts, int RetryInterval, string OutputFileName, int Flags, int CmdexecSuccessCode, int ProxyId, string Server, int OsRunPriority);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -802,11 +811,16 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null, List<string>? JobIds = null);
+    List<string>? Jobs = null, List<string>? JobIds = null, List<string>? Subsystems = null, List<AgentJobProxyDto>? Proxies = null, List<string>? Databases = null);
+/// <summary>A proxy the step editor's Run as offers (AG-6b): the step types sp_help_proxy @subsystem_name lists it for.</summary>
+internal sealed record AgentJobProxyDto(int Id, string Name, bool Enabled, List<string> Subsystems, string? Identity = null);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
     string? LastRun = null, int? LastOutcome = null);
-internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem);
+/// <summary>A step as sp_help_jobstep reads it: AG-6a's id, name and type, and AG-6b's whole content.</summary>
+internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem, string? Command = null, int? Flags = null, int? CmdexecSuccessCode = null, int? OnSuccessAction = null,
+    int? OnSuccessStepId = null, int? OnFailAction = null, int? OnFailStepId = null, string? Server = null, string? DatabaseName = null, string? DatabaseUserName = null,
+    int? RetryAttempts = null, int? RetryInterval = null, int? OsRunPriority = null, string? OutputFileName = null, int? ProxyId = null);
 internal sealed record AgentDutyHoursDto(int Start, int End);
 internal sealed record AgentJobOperatorDto(string Name, bool Enabled, bool Email, bool Pager, bool NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday, AgentDutyHoursDto Sunday);
 internal sealed record AgentJobAlertDto(int Id, string Name, bool Enabled, int Severity, int MessageId);

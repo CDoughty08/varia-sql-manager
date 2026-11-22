@@ -46,7 +46,14 @@ const limitNotes: { readonly [L in AgentLimit]: string } = {
   retentionDays: 'The days of history "What this keeps" measures each job\'s rate over',
   retentionJobs: 'Jobs "What this keeps" lists, those with the most rows first; more set `truncated`',
   historyAgeDays: 'Whole days of age the purge\'s row estimate counts separately (older rows count together)',
-  purgeCount: 'The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`)'
+  purgeCount: 'The most days, weeks or months "Delete old history now" goes back (999 months stays inside `datetime`)',
+  stepCommandChars: "Characters of one step's command in a job save",
+  stepCommandTotalChars: "Characters of all the steps' commands in one job save",
+  stepOutputChars: "Characters of a step's output file path (`sysjobsteps.output_file_name`)",
+  stepRetries: "A step's largest Retry attempts",
+  stepRetryMinutes: "A step's largest Retry interval, in minutes",
+  parseChars: "Characters the step editor's Parse sends (`language.parse`)",
+  parseErrors: 'Errors one Parse reports; more set `truncated`'
 }
 
 /** The generated reference: code tables, gates, procedures and limits. */

@@ -13,6 +13,8 @@ export const reviewedImports = [
   'monaco-editor/editor/editor.api.js',
   'monaco-editor/languages/definitions/sql/register.js',
   'monaco-editor/languages/definitions/xml/register.js',
+  'monaco-editor/languages/definitions/powershell/register.js',
+  'monaco-editor/languages/definitions/bat/register.js',
   'monaco-editor/editor/contrib/find/browser/findController.js',
   'monaco-editor/editor/contrib/clipboard/browser/clipboard.js',
   'monaco-editor/editor/contrib/dnd/browser/dnd.js',

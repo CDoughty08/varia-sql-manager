@@ -28,6 +28,10 @@ import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import { addStep, agentStepProblems, deleteStep, moveStep, newStepDraft, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepDeletion } from '../../../shared/agent/steps.ts'
+import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
+import type { LanguageParseError } from '../../../shared/agent/parse.ts'
+import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
 
 export type JobDocumentPhase = 'loading' | 'loadFailed' | 'choosing' | 'ready' | 'saving'
 /** The header's live state from the watched probe: running (with its step), idle, or a job msdb no longer has. */
@@ -63,11 +67,33 @@ export interface JobDocumentState {
   readonly scriptRevision?: number
   readonly scriptDatabase?: string
   readonly scriptNotice?: string
+  /** Steps (AG-6b): the selected step's key. */
+  readonly step?: string
+  /** The last delete, for its banner and Undo until Save or Reload. */
+  readonly deletion?: StepDeletion
+  /** The selected step's Parse: running, or its errors (none: it parsed). */
+  readonly parse?: JobStepParse
+  /** The SSIS step's catalog picker: SSISDB's folders, each folder's projects, and the project and package the selected step runs. */
+  readonly ssis?: JobSsisPicker
+}
+export interface JobStepParse { readonly key: string; readonly running: boolean; readonly errors?: readonly LanguageParseError[]; readonly truncated?: boolean; readonly failure?: string }
+export interface JobSsisPicker {
+  readonly folders?: readonly string[]
+  readonly projects: Readonly<Record<string, readonly string[]>>
+  /** `folder\project` and its describe. */
+  readonly project?: { readonly key: string; readonly model: SsisProjectModel }
+  /** `folder\project\package` and its describe. */
+  readonly package?: { readonly key: string; readonly model: SsisPackageModel }
+  readonly loading?: string
+  readonly error?: string
 }
 export interface JobDocumentSnapshot { readonly documents: Readonly<Record<string, JobDocumentState>> }
 
 export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
+    & Partial<Pick<VariaApi, 'languageParse' | 'describeSsis' | 'explorerChildren'>>
+  /** Steps' Open in query window (AG-6b): a new query tab on the job's connection, in the step's database. */
+  readonly openQuery?: (sql: string, name: string, connectionId: string, database?: string) => void
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -92,7 +118,7 @@ export const jobDocumentText = {
   replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.'
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
-  { id: 'general', title: 'General' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
+  { id: 'general', title: 'General' }, { id: 'steps', title: 'Steps' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
 ]
 const fallback = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'STALE' && code !== 'NOT_FOUND' })
 
@@ -225,7 +251,28 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   problems(id: string): AgentJobProblem[] {
     const state = this.get(id)
-    return state?.model && state.draft ? agentJobProblems(state.model, state.draft) : []
+    return state?.model && state.draft ? agentJobProblems(state.model, state.draft, this.ssisProblems(state)) : []
+  }
+  /** The steps' problems by step and field, as the Steps section shows them (the header counts them through problems()). */
+  stepProblems(id: string): AgentStepProblem[] {
+    const state = this.get(id)
+    if (!state?.model || !state.draft) return []
+    const ssis = this.ssisProblems(state)
+    return agentStepProblems(state.draft.steps, { sysadmin: state.model.sysadmin, ...state.model.proxies ? { proxies: state.model.proxies } : {}, ...ssis ? { ssis } : {} })
+  }
+  /** Each SSIS step's required parameters without a value, for the steps whose project and package the picker has read. */
+  private ssisProblems(state: JobDocumentState): ReadonlyMap<string, readonly string[]> | undefined {
+    const project = state.ssis?.project, packaged = state.ssis?.package
+    if (!state.draft || !project || !packaged) return undefined
+    const found = new Map<string, readonly string[]>()
+    for (const step of state.draft.steps.steps) {
+      if (step.subsystem !== 'SSIS') continue
+      const command = parseSsisCommand(step.command)
+      if (!command || `${command.folder}\\${command.project}` !== project.key || `${project.key}\\${command.package}` !== packaged.key) continue
+      const messages = ssisProblems(ssisParameterRows(command, project.model.parameters, packaged.model.parameters))
+      if (messages.length) found.set(step.key, messages)
+    }
+    return found
   }
   /** Each section with an error or warning on it, or a save error landed on one of its fields. */
   problemSections(id: string): Set<AgentJobSection> {
@@ -248,6 +295,150 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.patch(id, { changes })
     this.options.documents.setDirty(id, state.model.job ? changes > 0 : state.phase === 'ready')
     this.schedulePreview(id)
+  }
+
+  // --- Steps (AG-6b) ---------------------------------------------------------------------------------------------------
+
+  /** The step the editor pane shows: the selected one, else the first. */
+  selectedStep(id: string): AgentStepDraft | undefined {
+    const state = this.get(id), steps = state?.draft?.steps.steps ?? []
+    return steps.find(step => step.key === state?.step) ?? steps[0]
+  }
+  selectStep(id: string, key: string): void {
+    const state = this.get(id)
+    if (!state?.draft?.steps.steps.some(step => step.key === key) || state.step === key) return
+    this.patch(id, { step: key, ...state.parse && state.parse.key !== key ? { parse: undefined } : {} })
+  }
+  /** Add step: a new step of `subsystem` after the last, selected; T-SQL in the database the job's connection has open (master by default). */
+  addStepOf(id: string, subsystem = 'TSQL'): void {
+    const state = this.get(id)
+    if (!state?.draft || !this.canEdit(id)) return
+    const step = newStepDraft(state.draft.steps.steps, subsystem)
+    this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
+    this.patch(id, { step: step.key, parse: undefined })
+  }
+  /** Moves a step to `index` (drag, Move up and down, Alt+Up and Alt+Down); go-to targets follow, being keys. */
+  moveStepTo(id: string, key: string, index: number): void {
+    const state = this.get(id)
+    if (!state?.draft || !this.canEdit(id)) return
+    const moved = moveStep(state.draft.steps, key, index)
+    if (moved !== state.draft.steps) this.updateDraft(id, { steps: moved })
+  }
+  moveStepBy(id: string, key: string, delta: number): void {
+    const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
+    if (at >= 0) this.moveStepTo(id, key, at + delta)
+  }
+  /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
+  deleteStepOf(id: string, key: string): void {
+    const state = this.get(id)
+    if (!state?.draft || !this.canEdit(id)) return
+    const result = deleteStep(state.draft.steps, key)
+    if (!result) return
+    const steps = result.draft.steps
+    const next = steps[Math.min(result.deletion.position, steps.length - 1)]
+    this.updateDraft(id, { steps: result.draft })
+    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined })
+  }
+  undoDeleteStep(id: string): void {
+    const state = this.get(id)
+    if (!state?.draft || !state.deletion || !this.canEdit(id)) return
+    const deletion = state.deletion
+    this.updateDraft(id, { steps: undoStepDeletion(state.draft.steps, deletion) })
+    this.patch(id, { deletion: undefined, step: deletion.deleted.key })
+  }
+  dismissDeletion(id: string): void { if (this.get(id)?.deletion) this.patch(id, { deletion: undefined }) }
+  /** One step's fields; a type change drops what the new type cannot keep. */
+  updateStep(id: string, key: string, patch: Partial<Omit<AgentStepDraft, 'key' | 'from'>>): void {
+    const state = this.get(id)
+    if (!state?.draft || !this.canEdit(id)) return
+    let changed = false
+    const steps = state.draft.steps.steps.map(step => {
+      if (step.key !== key) return step
+      const typed = patch.subsystem !== undefined ? withSubsystem(step, patch.subsystem) : step
+      const { subsystem: _subsystem, ...rest } = patch
+      const next = { ...typed, ...rest }
+      changed = JSON.stringify(next) !== JSON.stringify(step)
+      return next
+    })
+    if (!changed) return
+    this.updateDraft(id, { steps: { ...state.draft.steps, steps } })
+    if (state.parse?.key === key && patch.command !== undefined) this.patch(id, { parse: undefined })
+  }
+  setStartStep(id: string, key: string): void {
+    const state = this.get(id)
+    if (!state?.draft || !this.canEdit(id) || state.draft.steps.startKey === key || !state.draft.steps.steps.some(step => step.key === key)) return
+    this.updateDraft(id, { steps: { ...state.draft.steps, startKey: key } })
+  }
+  /** Parse: ScriptDom's parse of the step's T-SQL in the backend (`language.parse`); nothing runs. */
+  async parseStep(id: string, key: string): Promise<void> {
+    const step = this.get(id)?.draft?.steps.steps.find(item => item.key === key)
+    const parse = this.options.api.languageParse
+    if (!step || step.subsystem !== 'TSQL') return
+    if (!parse) { this.patch(id, { parse: { key, running: false, failure: 'Parse is not available.' } }); return }
+    const text = step.command
+    this.patch(id, { parse: { key, running: true } })
+    const result = await this.call(() => parse({ text }))
+    const current = this.get(id)
+    if (this.disposed || !current || current.parse?.key !== key || !current.parse.running) return
+    this.patch(id, { parse: result.ok ? { key, running: false, errors: result.value.errors, truncated: result.value.truncated } : { key, running: false, failure: result.error } })
+  }
+  /** Open in query window: the step's T-SQL in a new query tab on the job's connection and the step's database, to test it there (not as the job). */
+  openStepInQuery(id: string, key: string): void {
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    const step = state?.draft?.steps.steps.find(item => item.key === key)
+    if (!step || !connectionId || !this.options.openQuery) return
+    this.options.openQuery(step.command, `${step.name || 'Step'}.sql`, connectionId, step.subsystem === 'TSQL' && step.databaseName ? step.databaseName : undefined)
+  }
+
+  // --- The SSIS step's catalog picker ------------------------------------------------------------------------------
+
+  private patchSsis(id: string, patch: Partial<JobSsisPicker>): void {
+    const ssis = this.get(id)?.ssis ?? { projects: {} }
+    const next = { ...ssis, ...patch } as JobSsisPicker & Record<string, unknown>
+    for (const name of Object.keys(patch)) if (next[name] === undefined) delete next[name]
+    this.patch(id, { ssis: next })
+  }
+  /** SSISDB's folders, as Object Explorer lists them below the catalog. */
+  async loadSsisFolders(id: string): Promise<void> {
+    const connectionId = this.connectionOf(id), children = this.options.api.explorerChildren
+    if (!connectionId || !children || this.get(id)?.ssis?.folders) return
+    this.patchSsis(id, { loading: 'folders', error: undefined })
+    const result = await this.call(() => children({ connectionId, requestId: this.newId(), node: { type: 'object', object: { kind: 'ssisCatalog', name: 'SSISDB' } } }))
+    if (this.disposed || !this.get(id)) return
+    const failure = !result.ok ? result.error : result.value.error?.message
+    this.patchSsis(id, failure ? { loading: undefined, error: failure } : { loading: undefined, folders: result.ok ? result.value.nodes.map(node => node.label) : [] })
+  }
+  async loadSsisProjects(id: string, folder: string): Promise<void> {
+    const connectionId = this.connectionOf(id), children = this.options.api.explorerChildren
+    if (!connectionId || !children || this.get(id)?.ssis?.projects[folder]) return
+    this.patchSsis(id, { loading: folder, error: undefined })
+    const result = await this.call(() => children({ connectionId, requestId: this.newId(), node: { type: 'folder', owner: { kind: 'ssisFolder', name: folder }, folder: 'ssisProjects' } }))
+    if (this.disposed || !this.get(id)) return
+    const failure = !result.ok ? result.error : result.value.error?.message
+    const projects = this.get(id)?.ssis?.projects ?? {}
+    this.patchSsis(id, failure ? { loading: undefined, error: failure } : { loading: undefined, projects: { ...projects, [folder]: result.ok ? result.value.nodes.map(node => node.label) : [] } })
+  }
+  /** The project's describe (its packages, parameters and environment references) and the package's (its parameters). */
+  async loadSsisPackage(id: string, folder: string, project: string, packageName?: string): Promise<void> {
+    const connectionId = this.connectionOf(id), describe = this.options.api.describeSsis
+    if (!connectionId || !describe) return
+    const projectKey = `${folder}\\${project}`
+    if (this.get(id)?.ssis?.project?.key !== projectKey) {
+      this.patchSsis(id, { loading: projectKey, error: undefined })
+      const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'project', target: { kind: 'ssisProject', name: project, ssisFolder: folder } }))
+      if (this.disposed || !this.get(id)) return
+      const model = result.ok && result.value.model?.view === 'project' ? result.value.model : undefined
+      if (!model) { this.patchSsis(id, { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The project could not be read.' }); return }
+      this.patchSsis(id, { loading: undefined, project: { key: projectKey, model }, package: undefined })
+    }
+    if (!packageName) return
+    const packageKey = `${projectKey}\\${packageName}`
+    if (this.get(id)?.ssis?.package?.key === packageKey) return
+    this.patchSsis(id, { loading: packageKey, error: undefined })
+    const result = await this.call(() => describe({ connectionId, requestId: this.newId(), view: 'package', target: { kind: 'ssisPackage', name: packageName, ssisFolder: folder, ssisProject: project } }))
+    if (this.disposed || !this.get(id)) return
+    const model = result.ok && result.value.model?.view === 'package' ? result.value.model : undefined
+    this.patchSsis(id, model ? { loading: undefined, package: { key: packageKey, model } } : { loading: undefined, error: !result.ok ? result.error : result.value.error?.message ?? 'The package could not be read.' })
   }
 
   // --- Reading -------------------------------------------------------------------------------------------------------
@@ -281,7 +472,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const create = !model.job
     this.patch(id, {
       phase: create ? 'choosing' : 'ready', model, draft: create ? undefined : initialAgentJobDraft(model), revision: current.revision + 1, changes: 0, error: undefined, stale: undefined,
-      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined
+      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined, deletion: undefined, parse: undefined,
+      ...current.step && !model.steps.some(step => `s${step.id}` === current.step) ? { step: undefined } : {}
     })
     this.options.documents.setDirty(id, false)
     if (model.job) this.follow(id, model.job.jobId)
@@ -347,7 +539,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       const created = !state.model.job
       // The name as msdb keeps it: the save trims it, as sp_add_job and sp_update_job do.
       const target: ObjectRef = { kind: 'agentJob', name: built.agentJob.name ?? state.model.job?.name ?? state.draft.name.trim() }
-      this.patch(id, { phase: 'loading', target, changes: 0 })
+      this.patch(id, { phase: 'loading', target, changes: 0, deletion: undefined })
       this.options.documents.setDirty(id, false)
       this.options.documents.update(id, { name: agentJobTabName(target.name) })
       await this.describe(id, created ? jobDocumentText.created : jobDocumentText.saved)
@@ -406,7 +598,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)
     if (!state?.stale) return
     const { current } = state.stale
-    this.patch(id, { model: current, draft: initialAgentJobDraft(current), stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1 })
+    this.patch(id, { model: current, draft: initialAgentJobDraft(current), stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, deletion: undefined })
     this.afterDraft(id)
   }
 
@@ -582,6 +774,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   private put(state: JobDocumentState): void { this.publish({ documents: { ...this.getSnapshot().documents, [state.id]: state } }) }
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
+  /** The job's connection, which the step editor's language service uses. */
+  connectionId(id: string): string | undefined { return this.connectionOf(id) }
   live(id: string): boolean {
     const connectionId = this.connectionOf(id)
     return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))

@@ -4,6 +4,7 @@ using Varia.Backend;
 using Varia.Backend.Actions;
 using Varia.Backend.Agent;
 using Varia.Backend.Explorer;
+using Varia.Backend.Language;
 
 namespace Varia.Backend.Tests;
 
@@ -46,6 +47,8 @@ internal static class AgentJobDocumentChecks
         Validation(check);
         Errors(check);
         Script(check);
+        Steps(check);
+        Parse(check);
         return Task.CompletedTask;
     }
 
@@ -53,10 +56,10 @@ internal static class AgentJobDocumentChecks
     {
         var results = AgentSql.LintJobSaves().ToList();
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
-        check(failures.Count == 0 && results.Count == 2, "the job document's two save shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 2, "the Agent write lint (and so the object actions' lint) runs the job saves too");
-        foreach (var statement in new[] { AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobCategories, AgentSql.Operators, AgentSql.Alerts, AgentSql.AgentMail, AgentSql.MailProfiles,
-            AgentSql.JobDocumentFacts, AgentSql.OwnerLogins })
+        check(failures.Count == 0 && results.Count == 4, "the job document's four save shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
+        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 4, "the Agent write lint (and so the object actions' lint) runs the job saves too");
+        foreach (var statement in (AgentStatement[])[ AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobCategories, AgentSql.Operators, AgentSql.Alerts, AgentSql.AgentMail, AgentSql.MailProfiles,
+            AgentSql.JobDocumentFacts, AgentSql.OwnerLogins, AgentSql.JobStepDatabases, AgentSql.Subsystems, ..AgentSql.JobStepProxies])
             check(AgentSql.Known(statement) && AgentSql.Lint(statement, null).Count == 0, "the job document's read " + statement.Id + " is one the reader runs, and passes the Agent read lint");
 
         var existing = AgentSql.Resolve + AgentSql.StaleGuard;
@@ -81,12 +84,12 @@ internal static class AgentJobDocumentChecks
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_delete_job @job_id = @job_id;"), "EXECs sp_delete_job, which a job save does not call"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @enabled = @enabled;"), "sp_update_job does not name the job"),
             (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id OUTPUT, @enabled = @enabled;"), "passes @job_id as an OUTPUT"),
-            (existing + AgentSql.AlertGuard(1) + Call(1, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_1, @job_id = @no_job;") + Call(2, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "updates the job more than once, or after an alert"),
+            (existing + AgentSql.AlertGuard(1) + Call(1, "EXEC @rc = msdb.dbo.sp_update_alert @name = @name_1, @job_id = @no_job;") + Call(2, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "updates the job more than once, or calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
             (existing + add, "adds a job in an existing job's save"),
             (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id;") + Call(2, "EXEC @rc = msdb.dbo.sp_add_jobserver @job_id = @job_id;"),
                 "does not take the new job's id as sp_add_job's OUTPUT"),
-            (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;"), "New Job's save is not sp_add_job then sp_add_jobserver"),
-            (AgentSql.NewJobHead + add + Call(3, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "New Job's save is not sp_add_job then sp_add_jobserver"),
+            (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver and at most the Start step"),
+            (AgentSql.NewJobHead + add + Call(3, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled;"), "New Job's save is not sp_add_job, its steps, sp_add_jobserver and at most the Start step"),
             (existing + Call(1, "EXEC @rc = master.dbo.xp_servicecontrol @a = @a;"), "uses xp_servicecontrol"),
             (existing, "makes no call")
         };
@@ -247,5 +250,128 @@ internal static class AgentJobDocumentChecks
         check(created.Contains("DECLARE @jobId BINARY(16)\nEXEC @ReturnCode = msdb.dbo.sp_add_job @job_name=N'New', \n\t\t@enabled=1, \n\t\t@notify_level_eventlog=0, \n\t\t@job_id = @jobId OUTPUT\n", StringComparison.Ordinal)
             && created.Contains("EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, \n\t\t@server_name = N'(local)'\n", StringComparison.Ordinal) && created.EndsWith("EndSave:\nGO\n", StringComparison.Ordinal),
             "New Job's Script is sp_add_job with the new id as @jobId OUTPUT, then sp_add_jobserver on (local), in SSMS's QuitWithRollback shape");
+    }
+
+    // --- The steps (AG-6b) -------------------------------------------------------------------------------------------------
+
+    private static AgentStepWriteDto StepWrite(int id, string name = "", int proxy = 0, int onSuccess = 3, int onSuccessTarget = 0, int onFail = 2, int onFailTarget = 0, string subsystem = "TSQL",
+        int flags = 0, int priority = 0) =>
+        new(id, name.Length > 0 ? name : "Step " + id, subsystem, "SELECT 1;", subsystem == "TSQL" ? "master" : "", "", onSuccess, onSuccessTarget, onFail, onFailTarget, 0, 0, "", flags, 0, proxy, "", priority);
+    private static string Temp(int n) => AgentSql.TemporaryStepPrefix + n.ToString("x32", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static void Steps(Action<bool, string> check)
+    {
+        static object? ValueOf(AgentSaveBatch batch, string name) => batch.Parameters.First(parameter => parameter.Parameter.Name == name).Value;
+        static string Order(AgentSaveBatch batch) => string.Join(",", batch.Calls.Select(call => call.Procedure switch
+        {
+            "sp_delete_jobstep" => "D", "sp_add_jobstep" => "A", "sp_update_jobstep" => call.Arguments.Count == 3 ? "T" : "W", "sp_update_job" => call.Part is null ? "J" : "S", "sp_update_alert" => "X", _ => "?"
+        }));
+
+        // A swap of two steps with a rename: survivors renamed, then each step written whole into its final id, then the Start step.
+        var swap = new AgentStepsSaveDto(Temporary: [new(1, Temp(1)), new(2, Temp(2))], Writes: [StepWrite(1, "B", onSuccess: 4, onSuccessTarget: 2), StepWrite(2, "A", proxy: 4, subsystem: "CmdExec", flags: 96, priority: 15)], StartStepId: 2);
+        var swapped = ActionService.AgentJobSavePlan(Save(Changed(new(Description: "x", RemoveAlerts: [new(11, "Log full")], Steps: swap))), Job);
+        check(Order(swapped) == "J,X,T,T,W,W,S" && AgentSql.LintJobSave(swapped.Text).Count == 0, "a swap saves the job, the alerts, temporary names, whole contents and the Start step, in that order: " + Order(swapped));
+        check((int?)ValueOf(swapped, "@step_id_3") == 1 && (string?)ValueOf(swapped, "@step_name_3") == Temp(1) && (string?)ValueOf(swapped, "@step_name_5") == "B"
+            && ValueOf(swapped, "@on_success_action_5") is (byte)4 && (int?)ValueOf(swapped, "@on_success_step_id_5") == 2 && (int?)ValueOf(swapped, "@proxy_id_6") == 4
+            && (int?)ValueOf(swapped, "@flags_6") == 96 && (int?)ValueOf(swapped, "@os_run_priority_6") == 15 && (string?)ValueOf(swapped, "@proxy_name_5") == ""
+            && (int?)ValueOf(swapped, "@start_step_id") == 2 && swapped.Calls[^1] is { Procedure: "sp_update_job", Part: "the Start step" },
+            "each step call binds its own indexed parameters: actions as tinyint, a proxy by id or the service account as @proxy_name '', flags and priority as given");
+
+        var reordered = ActionService.AgentJobSavePlan(Save(Changed(new(Steps: new(Deletes: [3, 1], Temporary: [new(1, Temp(1))], Adds: [new(1, Temp(2))], Writes: [StepWrite(1), StepWrite(2)], StartStepId: 1)))), Job);
+        check(Order(reordered) == "D,D,T,A,W,W,S" && AgentSql.LintJobSave(reordered.Text).Count == 0 && (int?)ValueOf(reordered, "@step_id_1") == 3 && (int?)ValueOf(reordered, "@step_id_2") == 1,
+            "deletes go first from the highest id, then temporary names, inserts and whole contents; only steps change, so there is no sp_update_job of the job's own");
+
+        var edit = ActionService.AgentJobSavePlan(Save(Changed(new(Steps: new(Writes: [StepWrite(2, "Load")])))), Job);
+        check(Order(edit) == "W" && AgentSql.LintJobSave(edit.Text).Count == 0, "an edit without a structural change writes only the changed step");
+
+        var created = ActionService.AgentJobSavePlan(Save(new(Name: "New", Steps: new(Writes: [StepWrite(1, onSuccess: 4, onSuccessTarget: 2), StepWrite(2)], StartStepId: 2)), AgentNode), AgentNode);
+        check(string.Join(",", created.Calls.Select(call => call.Procedure)) == "sp_add_job,sp_add_jobstep,sp_add_jobstep,sp_add_jobserver,sp_update_job" && AgentSql.LintJobSave(created.Text).Count == 0
+            && created.Calls[1].Arguments.Count == AgentSql.StepWriteArguments.Count + 2,
+            "New Job adds its steps whole between sp_add_job and sp_add_jobserver, then sets its Start step");
+
+        // The lint's step near misses.
+        var existing = AgentSql.Resolve + AgentSql.StaleGuard;
+        string Call(int index, string call) => call + AgentSql.CheckAt(index);
+        var misses = new (string Text, string Problem)[]
+        {
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id;"), "passes @step_id another parameter's value"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1;"), "deletes a step without its job and id alone"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_1, @command = @command_1;"), "updates a step with neither its whole content nor only a temporary name"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1, @command = @command_1;"), "inserts a step with more than its id and temporary name"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled, @start_step_id = @start_step_id;"), "sets the Start step with other job settings"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1;")
+                + Call(2, "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_job @job_id = @job_id, @start_step_id = @start_step_id;")
+                + Call(2, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_2, @step_name = @step_name_2;"), "calls out of the save's order (job, alerts, step deletes, temporary names, inserts, step contents, Start step)"),
+            (AgentSql.NewJobHead + Call(1, "EXEC @rc = msdb.dbo.sp_add_job @job_name = @job_name, @job_id = @job_id OUTPUT;") + Call(2, "EXEC @rc = msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = @step_id_2, @step_name = @step_name_2;")
+                + Call(3, "EXEC @rc = msdb.dbo.sp_add_jobserver @job_id = @job_id;"), "adds a new job's step without its whole content"),
+            (existing + Call(1, "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id_1, @step_name = @step_name_1, @output_file_name = @output_file_name_1;"), "updates a step with neither its whole content nor only a temporary name")
+        };
+        foreach (var (text, problem) in misses)
+        {
+            var found = AgentSql.LintJobSave(text);
+            check(found.Any(item => item.EndsWith(problem, StringComparison.Ordinal)), "the job save lint refuses a step save that " + problem + " (found: " + string.Join(", ", found) + ")");
+        }
+        check(AgentSql.LintExecutable(AgentSql.Resolve + "EXEC @rc = msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = @step_id;" + AgentSql.Check).Contains("EXECs sp_delete_jobstep, which only a job save calls")
+            && AgentSql.LintExecutable(AgentSql.Resolve + "EXEC @rc = msdb.dbo.sp_update_jobstep @job_id = @job_id, @step_id = @step_id;" + AgentSql.Check).Contains("EXECs sp_update_jobstep, which only a job save calls"),
+            "the one-call write lints refuse the step procedures, which only the planner's whole sequence calls");
+
+        // Validation.
+        using var service = new ActionService(new Host(Box2022));
+        string Answer(AgentStepsSaveDto steps, bool create = false)
+        {
+            try { service.Validate(create ? Save(new(Name: "New", Steps: steps), AgentNode) : Save(Changed(new(Steps: steps))), false); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        check(Answer(swap) == "accepted" && Answer(new(Writes: [StepWrite(2, "Load")])) == "accepted" && Answer(new(Writes: [StepWrite(1), StepWrite(2)], StartStepId: 2), create: true) == "accepted"
+            && Answer(new(Deletes: [1])) == "accepted" && Answer(new(StartStepId: 2)) == "accepted" && Answer(new(Writes: [StepWrite(1, onFail: 4, onFailTarget: 9)])) == "accepted",
+            "the steps save validates: a swap, one step's edit, New Job's steps, deleting the last step, the Start step alone, and a go-to past the last step as msdb keeps it");
+        var invalid = new (string Name, AgentStepsSaveDto Steps, bool Create)[]
+        {
+            ("nothing", new(), false), ("an empty list", new(Deletes: []), false), ("deletes upward", new(Deletes: [1, 3]), false),
+            ("a survivor renamed out of place", new(Temporary: [new(2, Temp(1))], Writes: [StepWrite(1)], StartStepId: 1), false),
+            ("a temporary name not in the pattern", new(Temporary: [new(1, "x")], Writes: [StepWrite(1)], StartStepId: 1), false),
+            ("a step named with the temporary prefix", new(Writes: [StepWrite(1, AgentSql.TemporaryStepPrefix + "x")]), false),
+            ("an insert past the end", new(Temporary: [new(1, Temp(1))], Adds: [new(3, Temp(2))], Writes: [StepWrite(1), StepWrite(2)], StartStepId: 1), false),
+            ("a missing write after renumbering", new(Temporary: [new(1, Temp(1)), new(2, Temp(2))], Writes: [StepWrite(1)], StartStepId: 1), false),
+            ("no Start step after renumbering", new(Temporary: [new(1, Temp(1))], Writes: [StepWrite(1)]), false),
+            ("a temporary name twice", new(Temporary: [new(1, Temp(1)), new(2, Temp(1))], Writes: [StepWrite(1), StepWrite(2)], StartStepId: 1), false),
+            ("two steps of one name", new(Temporary: [new(1, Temp(1)), new(2, Temp(2))], Writes: [StepWrite(1, "a"), StepWrite(2, "A")], StartStepId: 1), false),
+            ("a step written twice", new(Writes: [StepWrite(1), StepWrite(1)]), false), ("a go-to to itself", new(Writes: [StepWrite(1, onSuccess: 4, onSuccessTarget: 1)]), false),
+            ("a target without a go-to", new(Writes: [StepWrite(1, onSuccessTarget: 2)]), false), ("an action of 5", new(Writes: [StepWrite(1, onSuccess: 5)]), false),
+            ("flags past 114", new(Writes: [StepWrite(1, flags: 115)]), false), ("an os priority of 2", new(Writes: [StepWrite(1, priority: 2)]), false),
+            ("an unknown step type", new(Writes: [StepWrite(1, subsystem: "Nope")]), false), ("a command too long", new(Writes: [StepWrite(1) with { Command = new string('c', 100_001) }]), false),
+            ("an output path too long", new(Writes: [StepWrite(1) with { OutputFileName = new string('o', 201) }]), false), ("a retry count too high", new(Writes: [StepWrite(1) with { RetryAttempts = 10_000 }]), false),
+            ("a command with U+0000", new(Writes: [StepWrite(1) with { Command = "a\0b" }]), false), ("step 51", new(Writes: [StepWrite(51)]), false),
+            ("commands too long together", new(Writes: [.. Enumerable.Range(1, 11).Select(id => StepWrite(id) with { Command = new string('c', 100_000) })]), true),
+            ("New Job deleting a step", new(Deletes: [1], Writes: [StepWrite(1)]), true), ("New Job's steps out of order", new(Writes: [StepWrite(2)]), true),
+            ("New Job's Start step past its steps", new(Writes: [StepWrite(1)], StartStepId: 2), true)
+        };
+        foreach (var (name, steps, create) in invalid) check(Answer(steps, create) == "INVALID_PARAMS", "the steps save is refused: " + name);
+
+        // Refusals land on the steps and name the step's part.
+        var failed = service.JobSaveError(Exception((14262, 6, "The specified @proxy_id ('4') does not exist."), (50012, 6, AgentSql.RefusedMessage)), swapped, null);
+        check(failed is { Field: "steps" } && failed.Message.StartsWith("Saving step 2 was refused", StringComparison.Ordinal) is var named && named,
+            "a refused step call lands on the steps and says which step: " + failed.Message);
+
+        // The script carries the step calls by the job's name.
+        var script = ActionService.AgentJobDocumentScript(Save(Changed(new(Steps: swap))), Job);
+        check(script.Contains("EXEC @ReturnCode = msdb.dbo.sp_update_jobstep @job_name=N'Nightly '']'' -- load', \n\t\t@step_id=1, \n\t\t@step_name=N'" + Temp(1) + "'", StringComparison.Ordinal)
+            && script.Contains("@start_step_id=2", StringComparison.Ordinal) && script.Contains("@proxy_id=4", StringComparison.Ordinal),
+            "the save's script renames, writes and sets the Start step by the job's name");
+    }
+    /// <summary>language.parse: ScriptDom alone, batches split on GO, errors with their position and number, and the text bounded.</summary>
+    private static void Parse(Action<bool, string> check)
+    {
+        var clean = StepParser.Parse(new LanguageParseArgs("SELECT 1;\nGO\nEXEC dbo.Load @day = 1;"), CancellationToken.None);
+        check(clean.Errors.Count == 0 && !clean.Truncated, "Parse finds no error in T-SQL batches split on GO");
+        var wrong = StepParser.Parse(new LanguageParseArgs("SELECT 1;\nSELEC 2"), CancellationToken.None);
+        check(wrong.Errors.Count >= 1 && wrong.Errors[0] is { Line: 2, Number: > 0 } first && first.Message.Contains("SELEC", StringComparison.Ordinal) && first.Message.Length <= StepParser.MessageChars,
+            "Parse reports a syntax error with its line, number and message");
+        var limit = (int)AgentCatalog.Current.Limit("parseChars");
+        var refused = false;
+        try { StepParser.Parse(new LanguageParseArgs(new string(' ', limit + 1)), CancellationToken.None); }
+        catch (RequestException error) { refused = error.Code == "INVALID_PARAMS"; }
+        check(refused, "Parse refuses a text over the catalogue's parseChars");
     }
 }

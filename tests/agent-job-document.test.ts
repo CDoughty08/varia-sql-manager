@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, copiedAgentJobDraft,
+  agentJobChangeCount, agentJobCommandEntries, agentJobCompare, agentJobProblems, agentJobSavable, agentJobSave, agentJobSaveProblems, agentJobSaveSchema, agentJobTabName, copiedAgentJobDraft, type AgentJobSave,
   initialAgentJobDraft, pagerDuty, rebaseAgentJobDraft, uncategorizedCategory, type AgentJobDocumentModel, type AgentJobOperator, type AgentJobRecord
 } from '../src/shared/actions/agent-job'
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
@@ -302,5 +302,64 @@ describe('the job document', () => {
     expect(jobDocuments.get(id)?.live).toMatchObject({ running: true, step: 1 })
     jobDocuments.closed(id)
     expect(handle.disposed).toBe(true)
+  })
+})
+
+describe("the job document's Steps page", () => {
+  const stepped = () => model({ steps: [
+    { id: 1, name: 'Extract', subsystem: 'TSQL', command: 'SELECT 1;', databaseName: 'Sales', onSuccessAction: 3, onFailAction: 4, onFailStepId: 3 },
+    { id: 2, name: 'Load', subsystem: 'TSQL', command: 'SELEC 2', databaseName: 'master', onSuccessAction: 3, onFailAction: 2 },
+    { id: 3, name: 'Notify', subsystem: 'CmdExec', command: 'notify.cmd', onSuccessAction: 1, onFailAction: 2 }
+  ] })
+  const keys = (jobDocuments: ReturnType<typeof opened>['jobDocuments'], id: string) => jobDocuments.get(id)?.draft?.steps.steps.map(step => step.key)
+
+  it('adds, moves with go-to targets following, deletes with Undo and sets the Start step, saving them in the planner\'s order', async () => {
+    const { jobDocuments, executes } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.moveStepBy(id, 's3', -2)
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's1', 's2'])
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ key: 's1', onFail: 4, onFailTarget: 's3' })
+    jobDocuments.deleteStepOf(id, 's3')
+    expect(jobDocuments.get(id)?.deletion).toMatchObject({ deleted: { key: 's3' }, retargeted: ['s1'] })
+    expect(jobDocuments.get(id)?.draft?.steps.steps[0]).toMatchObject({ key: 's1', onFail: 2 })
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.undoDeleteStep(id)
+    expect(jobDocuments.get(id)?.deletion).toBeUndefined()
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's1', 's2'])
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ onFail: 4, onFailTarget: 's3' })
+    jobDocuments.addStepOf(id, 'PowerShell')
+    expect(jobDocuments.selectedStep(id)).toMatchObject({ key: 'n1', name: 'Step 4', subsystem: 'PowerShell', databaseName: '' })
+    jobDocuments.updateStep(id, 'n1', { command: 'Get-Date' })
+    jobDocuments.setStartStep(id, 's2')
+    expect(jobDocuments.get(id)?.draft?.steps.startKey).toBe('s2')
+    expect(jobDocuments.get(id)?.changes).toBeGreaterThan(0)
+    expect(await jobDocuments.save(id)).toBe(true)
+    const steps = (executes()[0] as ActionRequest & { agentJob: AgentJobSave }).agentJob.steps!
+    expect(steps.deletes ?? []).toEqual([])
+    expect(steps.temporary?.map(item => item.id)).toEqual([1, 2, 3])
+    expect(steps.adds?.map(item => item.id)).toEqual([4])
+    expect(steps.writes?.map(write => [write.id, write.name, write.onFailAction, write.onFailStepId])).toEqual([[1, 'Notify', 2, 0], [2, 'Extract', 4, 1], [3, 'Load', 2, 0], [4, 'Step 4', 2, 0]])
+    expect(steps.startStepId).toBe(3)
+  })
+  it('drops what a new type cannot keep, parses T-SQL in the backend and opens a step in a query window on its database', async () => {
+    const fixture = opened(stepped()), { jobDocuments, documents } = fixture
+    const parse = vi.fn(async () => ({ ok: true as const, value: { errors: [{ line: 1, column: 1, number: 102, message: "Incorrect syntax near 'SELEC'." }], truncated: false } }))
+    Object.assign(fixture.api, { languageParse: parse })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    await jobDocuments.parseStep(id, 's2')
+    expect(parse).toHaveBeenCalledWith({ text: 'SELEC 2' })
+    expect(jobDocuments.get(id)?.parse).toMatchObject({ key: 's2', running: false, errors: [{ number: 102 }] })
+    jobDocuments.updateStep(id, 's2', { command: 'SELECT 2' })
+    expect(jobDocuments.get(id)?.parse).toBeUndefined()
+    await jobDocuments.parseStep(id, 's3')
+    expect(parse).toHaveBeenCalledTimes(1)
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    expect(jobDocuments.get(id)?.draft?.steps.steps[0]).toMatchObject({ subsystem: 'CmdExec', databaseName: '' })
+    jobDocuments.updateStep(id, 's2', { databaseName: 'Sales' })
+    jobDocuments.openStepInQuery(id, 's2')
+    expect(documents.active).toMatchObject({ name: 'Load.sql', connectionId: 'c1', database: 'Sales' })
   })
 })

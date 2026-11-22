@@ -103,9 +103,21 @@ internal static partial class AgentSql
     /// <summary>The job the document edits (one result set with the JOB aspect).</summary>
     public static readonly AgentStatement JobDocument = new("jobDocument", "EXEC msdb.dbo.sp_help_job @job_id = @job_id, @job_aspect = N'JOB';", JobDocumentColumns,
         [new("@job_id", SqlDbType.UniqueIdentifier)], "listRows");
-    /// <summary>The job's steps, for the Start menu and the Start step (every Agent role may read them).</summary>
-    public static readonly AgentStatement JobDocumentSteps = new("jobDocumentSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name", "subsystem"],
+    /// <summary>The job's steps, for the Start menu and the Start step (every Agent role may read them), with each step's whole content for the
+    /// Steps section (AG-6b): what its save writes back, the columns Varia does not model included.</summary>
+    public static readonly AgentStatement JobDocumentSteps = new("jobDocumentSteps", "EXEC msdb.dbo.sp_help_jobstep @job_id = @job_id;", ["step_id", "step_name", "subsystem",
+        "command", "flags", "cmdexec_success_code", "on_success_action", "on_success_step_id", "on_fail_action", "on_fail_step_id", "server", "database_name", "database_user_name",
+        "retry_attempts", "retry_interval", "os_run_priority", "output_file_name", "proxy_id"],
         [new("@job_id", SqlDbType.UniqueIdentifier)], "stepsPerJob");
+    /// <summary>The databases a T-SQL step's Database offers (AG-6b).</summary>
+    public static readonly AgentStatement JobStepDatabases = new("jobStepDatabases", "SELECT d.name FROM sys.databases AS d ORDER BY d.name;", ["name"], [], "listRows");
+    /// <summary>The proxies active for one step type (AG-6b's Run as; below sysadmin only those granted to the login), one statement per type
+    /// Run as offers proxies for, each binding its type as @subsystem_name.</summary>
+    private static AgentStatement StepProxies(string subsystem) => new("jobStepProxies" + subsystem, "EXEC msdb.dbo.sp_help_proxy @subsystem_name = @subsystem_name;",
+        ["proxy_id", "name", "enabled", "credential_identity"], [new("@subsystem_name", SqlDbType.NVarChar, 40)], "listRows");
+    /// <summary>The step types Run as can pick a proxy for, as msdb spells them (sp_enum_sqlagent_subsystems).</summary>
+    public static readonly IReadOnlyList<string> ProxySubsystems = ["CmdExec", "PowerShell", "SSIS", "ANALYSISQUERY", "ANALYSISCOMMAND"];
+    public static readonly IReadOnlyList<AgentStatement> JobStepProxies = [.. ProxySubsystems.Select(StepProxies)];
     /// <summary>The job categories the Category picker offers.</summary>
     public static readonly AgentStatement JobCategories = new("jobCategories", "EXEC msdb.dbo.sp_help_category @class = N'JOB';", ["name"], [], "listRows");
     /// <summary>The operators Notifications offers, with their addresses and pager duty (msdb grants SQLAgentUserRole EXECUTE).</summary>
@@ -129,7 +141,8 @@ internal static partial class AgentSql
     // Built on first use: the history statements live in another part of this class, whose field initialisers run in file order.
     private static IReadOnlyList<AgentStatement>? all;
     public static IReadOnlyList<AgentStatement> All => all ??= [State, Jobs, Job, Activity, History, Subsystems, Properties, ErrorLogs, ErrorLog, ServiceState, JobSteps, AgentProperties, JobActivity, WatchedJob, Activities, ServerClock, LastRunHistory,
-        HistoryAll, HistoryAllSince, HistorySince, HistoryMessage, JobDocument, JobDocumentSteps, JobCategories, Operators, Alerts, AgentMail, MailProfiles, JobDocumentFacts, OwnerLogins];
+        HistoryAll, HistoryAllSince, HistorySince, HistoryMessage, JobDocument, JobDocumentSteps, JobCategories, Operators, Alerts, AgentMail, MailProfiles, JobDocumentFacts, OwnerLogins,
+        JobStepDatabases, ..JobStepProxies];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

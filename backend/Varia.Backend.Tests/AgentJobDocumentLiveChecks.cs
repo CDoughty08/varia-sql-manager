@@ -115,7 +115,40 @@ internal static class AgentJobDocumentLiveChecks
             var again = await Create();
             check(again.Error is { Field: "name" } && (await sql("SELECT CONVERT(nvarchar(9), COUNT(*)) FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ";", "msdb")).Scalar == "1",
                 "New Job's save under a name in use is refused on the Name field and creates nothing: " + Said(again));
+            await StepsAsync(check, service, info, json, job, sql);
         }
         finally { await sql("IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = " + Quote(job) + ") EXEC msdb.dbo.sp_delete_job @job_name = " + Quote(job) + ", @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
+    }
+    /// <summary>Steps (AG-6b) on New Job's job: two steps added whole, swapped (each under a temporary name first, the go-to and the Start step
+    /// following) and one deleted with its referrer retargeted, each save in the planner's shape and read back from sysjobsteps.</summary>
+    private static async Task StepsAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, string job, Func<string, string, Task<SqlRun>> sql)
+    {
+        async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
+        async Task<AgentJobRecordDto?> Read() =>
+            (await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "agentJob", new ObjectRefDto("agentJob", Name: job)))).AgentJobDocument?.Job;
+        async Task<ActionExecuteResult?> Save(AgentStepsSaveDto steps) => await Read() is { } held
+            ? await Call<ActionExecuteResult>("actions.execute", new ActionArgs("agentJob", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("agentJob", Name: job), AgentIdentity: new(held.JobId),
+                AgentJob: new AgentJobSaveDto(held.Version, held.Modified, Steps: steps)))
+            : null;
+        async Task<string> Rows() => string.Join("|", ((await sql("SELECT CONCAT(s.step_id, ':', s.step_name, ':', s.on_fail_action, '/', s.on_fail_step_id, ':', s.flags, ':', s.database_name, ':', j.start_step_id) "
+            + "FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " ORDER BY s.step_id;", "msdb")).Sets.FirstOrDefault() ?? []).Select(row => row[0]));
+        static string Temp() => "__varia_step_" + Guid.NewGuid().ToString("N");
+        static AgentStepWriteDto Write(int id, string name, int onFail, int onFailStep, int flags) =>
+            new(id, name, "TSQL", "SELECT " + id + ";", "master", "", 3, 0, onFail, onFailStep, 0, 0, "", flags, 0, 0, "", 0);
+
+        var added = await Save(new(Adds: [new(1, Temp()), new(2, Temp())], Writes: [Write(1, "First", 4, 2, 8), Write(2, "Second", 2, 0, 0)], StartStepId: 1));
+        var addedRows = await Rows();
+        check(added?.Error is null && addedRows == "1:First:4/2:8:master:1|2:Second:2/0:0:master:1",
+            "a job document save adds two steps whole, a go-to and log-to-table flag included: " + (added is null ? "no job" : Said(added)) + " " + addedRows);
+        // The swap: both steps take temporary names, then each is written into the other's id; step 1's go-to and the Start step follow it.
+        var swapped = await Save(new(Temporary: [new(1, Temp()), new(2, Temp())], Writes: [Write(1, "Second", 2, 0, 0), Write(2, "First", 4, 1, 8)], StartStepId: 2));
+        var swappedRows = await Rows();
+        check(swapped?.Error is null && swappedRows == "1:Second:2/0:0:master:2|2:First:4/1:8:master:2",
+            "a job document save swaps two steps under temporary names, the go-to and the Start step following: " + (swapped is null ? "no job" : Said(swapped)) + " " + swappedRows);
+        // Delete step 1 ("Second"): First moves to id 1 and, having gone to it, quits reporting failure; it is the Start step.
+        var deleted = await Save(new(Deletes: [1], Temporary: [new(1, Temp())], Writes: [Write(1, "First", 2, 0, 8)], StartStepId: 1));
+        var deletedRows = await Rows();
+        check(deleted?.Error is null && deletedRows == "1:First:2/0:8:master:1",
+            "a job document save deletes a step, retargeting the step that went to it: " + (deleted is null ? "no job" : Said(deleted)) + " " + deletedRows);
     }
 }

@@ -73,8 +73,68 @@ internal sealed partial class ActionService
             if (save.Version is not { } version || version < 0 || save.Modified is null || JobModified(save.Modified) is null) throw Invalid("agentJob.version.");
             if (save with { Version = null, Modified = null } == new AgentJobSaveDto()) throw Invalid("there is nothing to change.");
         }
+        if (save.Steps is { } steps) ValidateAgentSteps(steps, create, limits);
         return target;
     }
+
+    private static readonly HashSet<int> OsRunPriorities = [-15, -1, 0, 1, 15];
+
+    /// <summary>Re-validates a save's steps (src/shared/agent/steps.ts agentStepsSaveSchema and agentStepsSaveProblems): the planner's shape (deletes
+    /// from the highest id, every survivor renamed at its id after them, inserts ascending inside the final count, every step then written once in
+    /// order, the Start step set), each write's bounds, and temporary names only in the temporary steps.</summary>
+    internal static void ValidateAgentSteps(AgentStepsSaveDto steps, bool create, AgentCatalog limits)
+    {
+        var perJob = (int)limits.Limit("stepsPerJob");
+        var names = (int)limits.Limit("nameChars");
+        bool Id(int id) => id >= 1 && id <= perJob;
+        bool Text(string? value, long max) => value is not null && value.Length <= max && !value.Contains('\0');
+        static bool Temporary(AgentStepNameDto item) => item.Name is not null && TemporaryStep().IsMatch(item.Name);
+        List<int> deletes = steps.Deletes ?? [];
+        List<AgentStepNameDto> temporary = steps.Temporary ?? [], adds = steps.Adds ?? [];
+        List<AgentStepWriteDto> writes = steps.Writes ?? [];
+        if (steps.Deletes is { Count: 0 } || steps.Temporary is { Count: 0 } || steps.Adds is { Count: 0 } || steps.Writes is { Count: 0 }) throw Invalid("agentJob.steps lists are never empty.");
+        if (deletes.Count > perJob || temporary.Count > perJob || adds.Count > perJob || writes.Count > perJob) throw Invalid("agentJob.steps has too many steps.");
+        if (!deletes.All(Id) || !temporary.All(item => Id(item.Id) && Temporary(item)) || !adds.All(item => Id(item.Id) && Temporary(item))) throw Invalid("agentJob.steps renumbering.");
+        if (steps.StartStepId is { } start && !Id(start)) throw Invalid("agentJob.steps.startStepId.");
+        foreach (var write in writes)
+        {
+            if (!Id(write.Id) || write.Name is null || !ExplorerRefs.Ident(write.Name, names) || write.Name.StartsWith(AgentSql.TemporaryStepPrefix, StringComparison.OrdinalIgnoreCase))
+                throw Invalid("agentJob.steps name.");
+            if (write.Subsystem is null || !limits.SubsystemLabels.ContainsKey(write.Subsystem)) throw Invalid("agentJob.steps subsystem.");
+            if (!Text(write.Command, limits.Limit("stepCommandChars")) || !Text(write.DatabaseName, names) || !Text(write.DatabaseUserName, names) || !Text(write.Server, names)
+                || !Text(write.OutputFileName, limits.Limit("stepOutputChars"))) throw Invalid("agentJob.steps text.");
+            if (write.OnSuccessAction is < 1 or > 4 || write.OnFailAction is < 1 or > 4 || write.OnSuccessStepId < 0 || write.OnSuccessStepId > perJob || write.OnFailStepId < 0 || write.OnFailStepId > perJob)
+                throw Invalid("agentJob.steps actions.");
+            if ((write.OnSuccessAction == 4) != (write.OnSuccessStepId != 0) || (write.OnFailAction == 4) != (write.OnFailStepId != 0)
+                || write.OnSuccessStepId == write.Id || write.OnFailStepId == write.Id) throw Invalid("agentJob.steps go-to targets.");
+            if (write.RetryAttempts < 0 || write.RetryAttempts > limits.Limit("stepRetries") || write.RetryInterval < 0 || write.RetryInterval > limits.Limit("stepRetryMinutes")) throw Invalid("agentJob.steps retries.");
+            if (write.Flags is < 0 or > 114 || write.ProxyId < 0 || !OsRunPriorities.Contains(write.OsRunPriority)) throw Invalid("agentJob.steps options.");
+        }
+        if (writes.Sum(write => (long)write.Command.Length) > limits.Limit("stepCommandTotalChars")) throw Invalid("agentJob.steps commands are too long together.");
+        var structural = deletes.Count > 0 || temporary.Count > 0 || adds.Count > 0;
+        if (create)
+        {
+            if (structural) throw Invalid("a new job has no steps to delete, rename or insert.");
+            if (!writes.Select((write, at) => write.Id == at + 1).All(ok => ok)) throw Invalid("a new job's steps are added in order from 1.");
+        }
+        else if (structural)
+        {
+            var final = temporary.Count + adds.Count;
+            if (deletes.Zip(deletes.Skip(1)).Any(pair => pair.Second >= pair.First)) throw Invalid("steps are deleted from the highest id down.");
+            if (!temporary.Select((item, at) => item.Id == at + 1).All(ok => ok)) throw Invalid("every surviving step is renamed at its id after the deletes.");
+            if (adds.Zip(adds.Skip(1)).Any(pair => pair.Second.Id <= pair.First.Id) || adds.Any(item => item.Id > final)) throw Invalid("new steps are inserted in ascending order inside the steps.");
+            if (writes.Count != final || !writes.Select((write, at) => write.Id == at + 1).All(ok => ok)) throw Invalid("after renumbering, every step is written once, in order.");
+            if (temporary.Concat(adds).Select(item => item.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != final) throw Invalid("a temporary name is used twice.");
+            if (final > 0 && steps.StartStepId is null) throw Invalid("after renumbering, the Start step is set.");
+        }
+        else if (writes.Select(write => write.Id).Distinct().Count() != writes.Count) throw Invalid("a step is written twice.");
+        if ((create || structural) && writes.Select(write => write.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != writes.Count) throw Invalid("two steps have the same name.");
+        if (steps.StartStepId is { } first && (create || structural) && first > writes.Count) throw Invalid("the Start step is past the last step.");
+        if (steps == new AgentStepsSaveDto()) throw Invalid("agentJob.steps changes nothing.");
+    }
+
+    [GeneratedRegex("^__varia_step_[0-9a-f]{32}$", RegexOptions.CultureInvariant)]
+    private static partial Regex TemporaryStep();
 
     /// <summary>The modified date a save names, exactly yyyy-MM-ddTHH:mm:ss.fff inside datetime's range, or null.</summary>
     internal static DateTime? JobModified(string text) =>
@@ -105,7 +165,7 @@ internal sealed partial class ActionService
         JobRow? row = null;
         if (target.Kind == "agentJob" && (row = await ReadJobAsync(connection, target.Name!, token)) is null) return new(null, 0, JobGone(target));
         var reader = new AgentReader();
-        List<AgentStatement> first = [AgentSql.JobDocumentFacts, AgentSql.JobCategories, AgentSql.Operators, AgentSql.MailProfiles];
+        List<AgentStatement> first = [AgentSql.JobDocumentFacts, AgentSql.JobCategories, AgentSql.Operators, AgentSql.MailProfiles, AgentSql.Subsystems, AgentSql.JobStepDatabases];
         if (row is not null) first.AddRange([AgentSql.JobDocument, AgentSql.JobDocumentSteps]);
         // New Job's Copy an existing job picks from the jobs msdb lets the login see.
         else first.Add(AgentSql.Jobs);
@@ -149,7 +209,14 @@ internal sealed partial class ActionService
                 IntOf(Value("notify_level_netsend")), Operator("notify_level_netsend", "notify_netsend_operator"), IntOf(Value("notify_level_eventlog")), IntOf(Value("delete_level")),
                 row.Created, modified, IntOf(Value("version_number")), IntOf(Value("start_step_id"), 1), RunStamp(IntOf(Value("last_run_date")), IntOf(Value("last_run_time"))), outcome);
             var stepRows = results[AgentSql.JobDocumentSteps.Id];
-            steps = [.. stepRows.Rows.Select(item => new AgentJobStepRowDto(IntOf(stepRows.Value(item, "step_id")), TextOf(stepRows.Value(item, "step_name")), TextOf(stepRows.Value(item, "subsystem"))))];
+            steps = [.. stepRows.Rows.Select(item =>
+            {
+                object? Value(string column) => stepRows.Value(item, column);
+                return new AgentJobStepRowDto(IntOf(Value("step_id")), TextOf(Value("step_name")), TextOf(Value("subsystem")), TextOf(Value("command")), IntOf(Value("flags")),
+                    IntOf(Value("cmdexec_success_code")), IntOf(Value("on_success_action"), 1), IntOf(Value("on_success_step_id")), IntOf(Value("on_fail_action"), 2), IntOf(Value("on_fail_step_id")),
+                    TextOf(Value("server")), TextOf(Value("database_name")), TextOf(Value("database_user_name")), IntOf(Value("retry_attempts")), IntOf(Value("retry_interval")),
+                    IntOf(Value("os_run_priority")), TextOf(Value("output_file_name")), IntOf(Value("proxy_id")));
+            })];
         }
 
         // The second read: sysadmin's own (Agent's mail profile, the owner picker), and the alerts where the platform has them. Each may fail alone.
@@ -157,9 +224,18 @@ internal sealed partial class ActionService
         var alertsOffered = row is not null && catalogue.Offers("alerts", platform);
         if (alertsOffered) second.Add(AgentSql.Alerts);
         if (sysadmin) second.AddRange([AgentSql.AgentMail, AgentSql.OwnerLogins]);
+        // The step types this server runs (syssubsystems; the platform's list when the login may not read it), and Run as's proxies for each that has them.
+        var platformTypes = catalogue.PlatformSubsystems.TryGetValue(platform, out var offered) ? offered : new HashSet<string>(StringComparer.Ordinal);
+        List<string> subsystems = Failed(AgentSql.Subsystems) is null && results.TryGetValue(AgentSql.Subsystems.Id, out var typeRows)
+            ? [.. typeRows.Rows.Select(item => TextOf(typeRows.Value(item, "subsystem"))).Where(catalogue.SubsystemLabels.ContainsKey)]
+            : [.. platformTypes.Where(catalogue.SubsystemLabels.ContainsKey).Order(StringComparer.Ordinal)];
+        List<AgentStatement> proxyReads = catalogue.Offers("proxies", platform)
+            ? [.. AgentSql.JobStepProxies.Where((_, at) => subsystems.Contains(AgentSql.ProxySubsystems[at], StringComparer.OrdinalIgnoreCase))] : [];
+        second.AddRange(proxyReads);
+        string? ProxyType(AgentStatement statement) => AgentSql.JobStepProxies.Select((entry, at) => (entry, at)).Where(pair => pair.entry == statement).Select(pair => AgentSql.ProxySubsystems[pair.at]).FirstOrDefault();
         Dictionary<string, AgentResult> more = [];
         List<AgentReadError> moreErrors = [];
-        if (second.Count > 0) (more, moreErrors) = await reader.ReadAsync(connection, null, second, (_, _) => null, token);
+        if (second.Count > 0) (more, moreErrors) = await reader.ReadAsync(connection, null, second, (statement, _) => ProxyType(statement), token);
         bool Read(AgentStatement statement, out AgentResult result) => more.TryGetValue(statement.Id, out result!) && moreErrors.All(error => error.Statement != statement.Id);
         List<AgentJobAlertDto>? alerts = null;
         if (alertsOffered && Read(AgentSql.Alerts, out var alertRows))
@@ -175,6 +251,23 @@ internal sealed partial class ActionService
             agentProfile = TextOf(mailRows.Value(mailRows.Rows[0], "databasemail_profile")) is { Length: > 0 } named ? named : null;
         }
         List<string>? owners = sysadmin && Read(AgentSql.OwnerLogins, out var ownerRows) ? [.. ownerRows.Rows.Select(item => TextOf(ownerRows.Value(item, "name")))] : null;
+        // One entry per proxy, with every step type it is active for; a type the login may not read leaves its proxies out.
+        var proxies = new Dictionary<int, AgentJobProxyDto>();
+        foreach (var statement in proxyReads)
+        {
+            if (!Read(statement, out var proxyRows)) continue;
+            var type = ProxyType(statement)!;
+            foreach (var item in proxyRows.Rows)
+            {
+                var id = IntOf(proxyRows.Value(item, "proxy_id"));
+                if (!proxies.TryGetValue(id, out var proxy))
+                    proxies[id] = proxy = new(id, TextOf(proxyRows.Value(item, "name")), IntOf(proxyRows.Value(item, "enabled")) == 1, [],
+                        TextOf(proxyRows.Value(item, "credential_identity")) is { Length: > 0 } who ? who : null);
+                proxy.Subsystems.Add(type);
+            }
+        }
+        List<string>? databases = Failed(AgentSql.JobStepDatabases) is null && results.TryGetValue(AgentSql.JobStepDatabases.Id, out var databaseRows)
+            ? [.. databaseRows.Rows.Select(item => TextOf(databaseRows.Value(item, "name"))).Where(name => name.Length > 0)] : null;
 
         // By name, each with its job id (JobIds, same order), so a document whose job was renamed elsewhere can find it again.
         var listed = row is null && Failed(AgentSql.Jobs) is null && results.TryGetValue(AgentSql.Jobs.Id, out var jobList)
@@ -184,7 +277,8 @@ internal sealed partial class ActionService
         List<string>? jobIds = listed?.Select(entry => entry.Id).ToList();
         var readOnly = job is not null && !sysadmin && !string.Equals(job.Owner, login, StringComparison.OrdinalIgnoreCase) ? JobReadOnlyMessage : null;
         var mail = new AgentJobMailDto(mailChecked, sysadmin, mailXps is { } on ? on == 1 : null, profiles, useDatabaseMail, agentProfile);
-        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds));
+        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds,
+            subsystems, proxyReads.Count > 0 ? [.. proxies.Values.OrderBy(proxy => proxy.Name, StringComparer.CurrentCultureIgnoreCase)] : null, databases));
     }
 
     // --- Plan --------------------------------------------------------------------------------------------------------------
@@ -232,10 +326,23 @@ internal sealed partial class ActionService
         {
             arguments.Add(new("@job_id", jobId, null, Output: true));
             calls.Add(new("sp_add_job", arguments));
+            foreach (var write in save.Steps?.Writes ?? []) calls.Add(AgentSql.WriteStep(calls.Count + 1, jobId, write, true));
             calls.Add(new("sp_add_jobserver", [new("@job_id", jobId, null)]));
         }
         else if (arguments.Count > 1) calls.Add(new("sp_update_job", arguments));
         foreach (var alert in save.RemoveAlerts ?? []) calls.Add(AgentSql.DetachAlert(calls.Count + 1, alert.Id, alert.Name));
+        // The steps in the planner's order (steps.ts planAgentSteps): deletes, temporary names, inserts, whole contents, then the Start step.
+        if (save.Steps is { } steps)
+        {
+            if (!create)
+            {
+                foreach (var id in steps.Deletes ?? []) calls.Add(AgentSql.DeleteStep(calls.Count + 1, jobId, id));
+                foreach (var item in steps.Temporary ?? []) calls.Add(AgentSql.RenameStep(calls.Count + 1, jobId, item.Id, item.Name));
+                foreach (var item in steps.Adds ?? []) calls.Add(AgentSql.InsertStep(calls.Count + 1, jobId, item.Id, item.Name));
+                foreach (var write in steps.Writes ?? []) calls.Add(AgentSql.WriteStep(calls.Count + 1, jobId, write, false));
+            }
+            if (steps.StartStepId is { } start) calls.Add(AgentSql.StartStep(jobId, start));
+        }
         return create ? AgentSql.JobSave(true, calls) : AgentSql.JobSave(false, calls, target.Name, args.AgentIdentity is { } identity ? Guid.ParseExact(identity.JobId, "D") : null, save.Version, JobModified(save.Modified!));
     }
 
@@ -305,7 +412,7 @@ internal sealed partial class ActionService
         if (thrown is null || thrown.State < 1 || thrown.State > batch.Calls.Count)
             return ActionErrors.Create(catalog, mapped.Code, JobSaveAbortedMessage + (text.Length > 0 ? " " + text : "")) with { Retryable = mapped.Retryable };
         var call = batch.Calls[thrown.State - 1];
-        var part = call.Procedure switch
+        var part = call.Part is { } named && call.Procedure != "sp_update_alert" ? named : call.Procedure switch
         {
             "sp_add_job" => "creating the job",
             "sp_add_jobserver" => "targeting this server",
@@ -315,6 +422,7 @@ internal sealed partial class ActionService
         string? field = NamedArgument().Matches(text).Select(match => AgentSql.FieldOfArgument(match.Groups["arg"].Value)).FirstOrDefault(found => found is not null);
         if (field is null && mapped.Code == "NAME_IN_USE" && call.Procedure is "sp_add_job" or "sp_update_job") field = "name";
         if (field is null && call.Procedure == "sp_update_alert") field = "alerts";
+        if (call.Part is not null && call.Procedure != "sp_update_alert") field = "steps";
         if (field is null && call.Procedure is "sp_update_job" or "sp_add_job")
         {
             var changed = call.Arguments.Select(argument => AgentSql.FieldOfArgument(argument.Name)).Where(found => found is not null).Distinct().ToList();

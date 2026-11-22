@@ -26,6 +26,7 @@ import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest,
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { AgentProfileRequest, AgentProfileResult } from './agent/profile.ts'
 import type { AgentHistoryMessageRequest, AgentHistoryMessageResult } from './agent/history.ts'
+import type { LanguageParseRequest, LanguageParseResult } from './agent/parse.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionCloseOptions, SessionCloseResult, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -728,6 +729,7 @@ export interface RpcMethods {
   /** What this login may do with SQL Server Agent (roles, permissions, Agent XPs, platform), read in msdb on the Object Explorer pool. */
   'agent.profile': { params: AgentProfileRequest; result: AgentProfileResult }
   'agent.historyMessage': { params: AgentHistoryMessageRequest; result: AgentHistoryMessageResult }
+  'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -997,6 +999,8 @@ export interface VariaApi {
   /** Reads what this login may do with SQL Server Agent on a server, or why it cannot (`result.error`). */
   agentProfile(params: AgentProfileRequest): Promise<ApiResult<AgentProfileResult>>
   agentHistoryMessage(params: AgentHistoryMessageRequest): Promise<ApiResult<AgentHistoryMessageResult>>
+  /** The job step editor's Parse (AG-6b): ScriptDom only, no connection. */
+  languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
