@@ -15,7 +15,7 @@ internal static class AgentJobDocumentChecks
     private static readonly ServerProfile Box2022 = new(16, "16.0.4135.4", 3, "sa", false, true, false, 16);
     private static readonly ObjectRefDto AgentNode = new("agent");
     private static readonly ObjectRefDto Job = new("agentJob", Name: "Nightly ']' -- load");
-    private const string Created = "2026-01-02T03:04:05";
+    private const string JobId = "00000000-1111-2222-3333-444444444441";
     private const string Modified = "2026-11-20T14:32:07.123";
 
     private sealed class Host(ServerProfile profile) : IActionHost
@@ -35,8 +35,8 @@ internal static class AgentJobDocumentChecks
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 
-    private static ActionArgs Save(AgentJobSaveDto save, ObjectRefDto? target = null, string? created = Created) =>
-        new("agentJob", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target ?? Job) { AgentJob = save, AgentIdentity = target?.Kind == "agent" || created is null ? null : new(created) };
+    private static ActionArgs Save(AgentJobSaveDto save, ObjectRefDto? target = null, string? jobId = JobId) =>
+        new("agentJob", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target ?? Job) { AgentJob = save, AgentIdentity = target?.Kind == "agent" || jobId is null ? null : new(jobId) };
     private static AgentJobSaveDto Changed(AgentJobSaveDto changes) => changes with { Version = 7, Modified = Modified };
 
     public static Task RunAsync(Action<bool, string> check)
@@ -114,7 +114,7 @@ internal static class AgentJobDocumentChecks
 
         var described = ActionService.AgentJobSavePlan(Save(Changed(new(Description: "Rebuilds indexes"))), Job);
         check(described.Calls is [{ Procedure: "sp_update_job" } call] && Names(call) == "@job_id,@description" && AgentSql.LintJobSave(described.Text).Count == 0
-            && (string?)ValueOf(described, "@name") == Job.Name && (string?)ValueOf(described, "@created") == Created && (int?)ValueOf(described, "@version") == 7
+            && (string?)ValueOf(described, "@name") == Job.Name && ValueOf(described, "@expected_job_id") is Guid expected && expected == Guid.Parse(JobId) && (int?)ValueOf(described, "@version") == 7
             && ValueOf(described, "@modified") is DateTime modified && modified == new DateTime(2026, 11, 20, 14, 32, 7, 123) && (string?)ValueOf(described, "@description") == "Rebuilds indexes",
             "an existing job's save sends sp_update_job with only the changed argument, under the identity and STALE guards' values");
 
@@ -137,7 +137,7 @@ internal static class AgentJobDocumentChecks
             PageLevel: 0, PageOperator: "", NetSendLevel: 0, NetSendOperator: "", EventLogLevel: 0, DeleteLevel: 0), AgentNode), AgentNode);
         check(created.Calls is [{ Procedure: "sp_add_job" } job, { Procedure: "sp_add_jobserver" } server] && AgentSql.LintJobSave(created.Text).Count == 0 && created.Text.StartsWith(AgentSql.NewJobHead, StringComparison.Ordinal)
             && Names(job) == "@job_name,@enabled,@category_name,@notify_level_eventlog,@notify_level_email,@notify_level_netsend,@notify_level_page,@delete_level,@job_id"
-            && job.Arguments[^1].Output && Names(server) == "@job_id" && !created.Parameters.Any(parameter => parameter.Parameter.Name is "@name" or "@created" or "@version" or "@modified"),
+            && job.Arguments[^1].Output && Names(server) == "@job_id" && !created.Parameters.Any(parameter => parameter.Parameter.Name is "@name" or "@expected_job_id" or "@version" or "@modified"),
             "New Job's save is sp_add_job with every value it sets (no operator for level 0, no description '' or owner left out, so msdb's defaults stand) and the new id as its OUTPUT, then sp_add_jobserver on the local server; no identity or STALE guard");
         var owned = ActionService.AgentJobSavePlan(Save(new(Name: "Theirs", Owner: "CONTOSO\\dana", Description: "d"), AgentNode), AgentNode);
         check(owned.Calls[0].Arguments.Any(argument => argument.Name == "@owner_login_name" && (string?)argument.Value == "CONTOSO\\dana") && owned.Calls[0].Arguments.Any(argument => argument.Name == "@description"),
@@ -162,7 +162,7 @@ internal static class AgentJobDocumentChecks
             ("a removed alert", Save(Changed(new(RemoveAlerts: [new(1, "a")])))), ("New Job", Save(new(Name: "New"), AgentNode)), ("New Job with an owner", Save(new(Name: "New", Owner: "sa", EventLogLevel: 2), AgentNode))
         };
         foreach (var (name, args) in valid) check(Answer(args) == "accepted" && Answer(args, script: true) == "accepted", "the job document's save validates: " + name);
-        check(Answer(Save(Changed(new(Description: "x")), created: null), script: true) == "accepted" && Answer(Save(Changed(new(Description: "x")), created: null)) == "INVALID_PARAMS",
+        check(Answer(Save(Changed(new(Description: "x")), jobId: null), script: true) == "accepted" && Answer(Save(Changed(new(Description: "x")), jobId: null)) == "INVALID_PARAMS",
             "Script may leave out the job's identity; the save itself may not");
         var invalid = new (string Name, ActionArgs Args)[]
         {
@@ -176,10 +176,10 @@ internal static class AgentJobDocumentChecks
             ("an alert twice", Save(Changed(new(RemoveAlerts: [new(1, "a"), new(1, "a")])))), ("an alert id of 0", Save(Changed(new(RemoveAlerts: [new(0, "a")])))),
             ("too many alerts", Save(Changed(new(RemoveAlerts: [.. Enumerable.Range(1, 33).Select(id => new AgentAlertRefDto(id, "a" + id))])))),
             ("New Job without a name", Save(new(Description: "x"), AgentNode)), ("New Job with a version", Save(Changed(new(Name: "x")), AgentNode)), ("New Job removing an alert", Save(new(Name: "x", RemoveAlerts: [new(1, "a")]), AgentNode)),
-            ("New Job with an identity", Save(new(Name: "x"), AgentNode) with { AgentIdentity = new(Created) }), ("a named Agent node", Save(new(Name: "x"), new ObjectRefDto("agent", Name: "x"))),
+            ("New Job with an identity", Save(new(Name: "x"), AgentNode) with { AgentIdentity = new(JobId) }), ("a named Agent node", Save(new(Name: "x"), new ObjectRefDto("agent", Name: "x"))),
             ("a database's target", Save(Changed(new(Description: "x")), new ObjectRefDto("database", Name: "db"))), ("no save", Save(Changed(new(Description: "x"))) with { AgentJob = null }),
             ("another member", Save(Changed(new(Description: "x"))) with { NewName = "x" }),
-            ("the save on another action", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), Job) { NewName = "y", AgentIdentity = new(Created), AgentJob = new(Name: "y") })
+            ("the save on another action", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), Job) { NewName = "y", AgentIdentity = new(JobId), AgentJob = new(Name: "y") })
         };
         foreach (var (name, args) in invalid) check(Answer(args) == "INVALID_PARAMS", "the job document's save is refused: " + name);
         string Describe(ObjectRefDto target)

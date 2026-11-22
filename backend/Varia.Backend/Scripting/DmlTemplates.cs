@@ -217,12 +217,14 @@ internal static class DmlTemplates
     /// <summary>The template batch for a resolved target and verb, from the rows its preflight read.</summary>
     public static string Batch(ResolvedTarget target, ScriptVerb verb, bool schemaQualify)
     {
-        var obj = Object(target.Ref.Schema, target.Ref.Name!, schemaQualify);
+        var tableFunction = target.Kind == "function" && TableValued.Contains(target.Subtype);
+        var scalarSelect = target.Kind == "function" && verb == ScriptVerb.Select && !tableFunction;
+        var obj = Object(target.Ref.Schema, target.Ref.Name!, schemaQualify || scalarSelect);
         var columns = target.Columns ?? [];
         var parameters = target.Parameters ?? [];
         return (target.Kind, verb) switch
         {
-            ("function", ScriptVerb.Select) => SelectFunction(obj, parameters, TableValued.Contains(target.Subtype), schemaQualify),
+            ("function", ScriptVerb.Select) => SelectFunction(obj, parameters, tableFunction, schemaQualify),
             (_, ScriptVerb.Select) => Select(obj, columns),
             (_, ScriptVerb.Insert) => Insert(obj, columns, schemaQualify),
             (_, ScriptVerb.Update) => Update(obj, columns, schemaQualify),

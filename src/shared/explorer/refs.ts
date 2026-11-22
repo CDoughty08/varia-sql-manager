@@ -54,8 +54,10 @@ export interface ExplorerTarget {
   readonly linux?: boolean
   /** The server's engine; absent for SQL Server. */
   readonly provider?: 'bigquery'
-  /** The row's listed create date (a SQL Server Agent job's names the job its verbs act on, AG-2). */
+  /** The creation date shown for this row. */
   readonly created?: string
+  /** The immutable msdb job_id from the listing, checked by every SQL Server Agent job action. */
+  readonly jobId?: string
   /** The SQL Server Agent node: what its service verbs depend on (actions catalogue, agentServiceRules). */
   readonly agent?: import('../actions/catalog.ts').AgentServiceTarget
 }

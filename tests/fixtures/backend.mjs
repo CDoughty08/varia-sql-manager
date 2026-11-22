@@ -1878,7 +1878,7 @@ async function agentJobSave(params) {
   }
   const job = agentJobs.find(item => item.name === params.target.name)
   if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
-  if (params.agentIdentity?.created !== job.created) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
+  if (params.agentIdentity?.jobId?.toLowerCase() !== job.id) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
   const doc = agentJobDoc(job)
   // Another session's save: its description and version change before this one lands.
   if (await controlled('job-save-race', true)) Object.assign(doc, { description: 'Changed by someone else.', version: doc.version + 1, modified: stamp() })
@@ -1956,7 +1956,7 @@ function agentJobVerb(params) {
   const job = agentJobs.find(item => item.name === params.target.name)
   const refused = (code, message) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false } })
   if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
-  if (params.agentIdentity?.created !== job.created) return refused('CHANGED', `The job ${job.name} was replaced since it was listed.`)
+  if (params.agentIdentity?.jobId?.toLowerCase() !== job.id) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
   if (params.action === 'startJob') {
     if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
