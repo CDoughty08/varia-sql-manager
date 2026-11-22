@@ -774,9 +774,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       `IF EXISTS (SELECT 1 FROM [Sales_Test].[dbo].[Orders] WHERE [id] = 1011) THROW 50000, N'Row id = 1011 is already
       in the target.', 1;` (Q11). DELETEs run first, so a reused key is gone before its INSERT checks. THROW takes
       only a literal or a variable, so the key text there is one plain literal: the raw key text is cut to 200 code
-      points first (never inside a surrogate pair), then escaped by the script's comment escape: quotes doubled, `\\`, `\t`, `\r` and `\n`
-      for backslash, tab, CR and LF, and `\uXXXX` for every other control character (U+0000–U+001F, U+007F–U+009F),
-      U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
+      points first (never inside a surrogate pair), then escaped by the script's comment escape: quotes doubled,
+      `\\`, `\t`, `\r` and `\n` for backslash, tab, CR and LF, and `\uXXXX` for every other control character
+      (U+0000–U+001F, U+007F–U+009F), U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
       rule. Escaping after the cut means a doubled quote or an escape is never split.
   - `COMMIT TRANSACTION;`.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
@@ -794,10 +794,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
     removed, and a script would insert or delete them. Compare whole results to script differences. To script only
     some rows, filter the comparison itself.", with **Compare whole results** ("Result 1 and Result 3 are compared as
-    shown, so rows their filters hide …" for both). This holds even when both sides have the same filters, since a row that changes out of a filter shows as removed. It shows
-    only under key columns the user chose: under any other match the not-matched-by-key refusal shows instead, since
-    comparing whole results alone would not help, so a side shown only in its sorted order (Row position) never
-    reaches it;
+    shown, so rows their filters hide …" for both). This holds even when both sides have the same filters, since a row
+    that changes out of a filter shows as removed. It shows only under key columns the user chose: under any other
+    match the not-matched-by-key refusal shows instead, since comparing whole results alone would not help, so a side
+    shown only in its sorted order (Row position) never reaches it;
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
     xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
