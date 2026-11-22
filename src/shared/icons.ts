@@ -40,7 +40,8 @@ export const svgIcons = {
   agent: { path: 'M13.5 8A5.5 5.5 0 1 1 11.5 3.75M13.5 2.5v3h-3M7.5 4.5v4l2 1.5', use: 'SQL Server Agent: Object Explorer\'s Agent node (a clock that comes round again).' },
   'agent-activity': { path: 'M2.5 2.5h11v8h-11ZM5.5 13.5h5M7.5 10.5v3M4.5 7.5h1.5l1-2 2 4 1-2h1.5', use: 'SQL Server Agent: Job Activity Monitor.' },
   'agent-operator': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 9.5h5v4h-5ZM9.5 9.5l2.5 2 2.5-2', use: 'SQL Server Agent: operators (a person who is sent mail).' },
-  'agent-proxy': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 10.5h5M12.5 8.5l2 2-2 2', use: 'SQL Server Agent: proxies (an account a step runs as).' }
+  'agent-proxy': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 10.5h5M12.5 8.5l2 2-2 2', use: 'SQL Server Agent: proxies (an account a step runs as).' },
+  'agent-schedule': { path: 'M2.5 3.5h11v10h-11ZM2.5 6.5h11M5.5 2v3M10.5 2v3M4.5 9.5h2M7 9.5h2M9.5 9.5h2M4.5 11.5h2M7 11.5h2', use: 'SQL Server Agent: schedules (a calendar page).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons
 /** The stroke width of Varia's icons, in px at the 16 px grid. */

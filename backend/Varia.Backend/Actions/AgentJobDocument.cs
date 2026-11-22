@@ -73,6 +73,8 @@ internal sealed partial class ActionService
             if (save.Version is not { } version || version < 0 || save.Modified is null || JobModified(save.Modified) is null) throw Invalid("agentJob.version.");
             if (save with { Version = null, Modified = null } == new AgentJobSaveDto()) throw Invalid("there is nothing to change.");
         }
+        // The Schedules section (AG-6c, AgentSchedules.cs).
+        if (save.Schedules is { } schedules) ValidateJobSchedules(schedules, create);
         return target;
     }
 
@@ -106,13 +108,15 @@ internal sealed partial class ActionService
         if (target.Kind == "agentJob" && (row = await ReadJobAsync(connection, target.Name!, token)) is null) return new(null, 0, JobGone(target));
         var reader = new AgentReader();
         List<AgentStatement> first = [AgentSql.JobDocumentFacts, AgentSql.JobCategories, AgentSql.Operators, AgentSql.MailProfiles];
-        if (row is not null) first.AddRange([AgentSql.JobDocument, AgentSql.JobDocumentSteps]);
+        if (row is not null) first.AddRange([AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobSchedules, AgentSql.ScheduleVersions]);
         // New Job's Copy an existing job picks from the jobs msdb lets the login see.
         else first.Add(AgentSql.Jobs);
+        // The Schedules section's next runs count from the server's clock (AG-6c).
+        first.Add(AgentSql.ServerClock);
         var (results, errors) = await reader.ReadAsync(connection, null, first, (_, _) => row?.Id, token);
         AgentReadError? Failed(AgentStatement statement) => errors.FirstOrDefault(error => error.Statement == statement.Id);
         // What the document cannot open without: who the login is, and the job with its steps.
-        foreach (var needed in new[] { AgentSql.JobDocumentFacts, AgentSql.JobDocument, AgentSql.JobDocumentSteps })
+        foreach (var needed in new[] { AgentSql.JobDocumentFacts, AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobSchedules })
             if (ReadFailure(Failed(needed)) is { } failure) return new(null, 0, failure);
         var facts = results[AgentSql.JobDocumentFacts.Id];
         if (facts.Rows.Count == 0) return new(null, 0, Error("SQL_ERROR", AgentReader.FailedMessage));
@@ -184,7 +188,9 @@ internal sealed partial class ActionService
         List<string>? jobIds = listed?.Select(entry => entry.Id).ToList();
         var readOnly = job is not null && !sysadmin && !string.Equals(job.Owner, login, StringComparison.OrdinalIgnoreCase) ? JobReadOnlyMessage : null;
         var mail = new AgentJobMailDto(mailChecked, sysadmin, mailXps is { } on ? on == 1 : null, profiles, useDatabaseMail, agentProfile);
-        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds));
+        var schedules = row is null ? [] : JobDocumentSchedules(results, errors);
+        return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds,
+            schedules, ClockOf(results)));
     }
 
     // --- Plan --------------------------------------------------------------------------------------------------------------
@@ -236,6 +242,8 @@ internal sealed partial class ActionService
         }
         else if (arguments.Count > 1) calls.Add(new("sp_update_job", arguments));
         foreach (var alert in save.RemoveAlerts ?? []) calls.Add(AgentSql.DetachAlert(calls.Count + 1, alert.Id, alert.Name));
+        // The Schedules section's calls come last (AG-6c).
+        AddJobScheduleCalls(save.Schedules, calls);
         return create ? AgentSql.JobSave(true, calls) : AgentSql.JobSave(false, calls, target.Name, args.AgentIdentity is { } identity ? Guid.ParseExact(identity.JobId, "D") : null, save.Version, JobModified(save.Modified!));
     }
 
@@ -310,9 +318,11 @@ internal sealed partial class ActionService
             "sp_add_job" => "creating the job",
             "sp_add_jobserver" => "targeting this server",
             "sp_update_alert" => "removing alert '" + (call.Arguments.FirstOrDefault(argument => argument.Name == "@name")?.Value as string ?? "") + "'",
+            _ when call.Label is { } label => label,
             _ => "the job's settings"
         };
-        string? field = NamedArgument().Matches(text).Select(match => AgentSql.FieldOfArgument(match.Groups["arg"].Value)).FirstOrDefault(found => found is not null);
+        // A schedule call's refusal lands on the Schedules section, whatever argument msdb's text names (its @enabled is not the job's).
+        string? field = AgentSql.JobScheduleProcedures.Contains(call.Procedure) ? "schedules" : NamedArgument().Matches(text).Select(match => AgentSql.FieldOfArgument(match.Groups["arg"].Value)).FirstOrDefault(found => found is not null);
         if (field is null && mapped.Code == "NAME_IN_USE" && call.Procedure is "sp_add_job" or "sp_update_job") field = "name";
         if (field is null && call.Procedure == "sp_update_alert") field = "alerts";
         if (field is null && call.Procedure is "sp_update_job" or "sp_add_job")
@@ -336,6 +346,7 @@ internal sealed partial class ActionService
         {
             null => "NULL",
             string text => Literal(text),
+            bool flag => flag ? "1" : "0",
             byte or int => Convert.ToString(value, CultureInfo.InvariantCulture)!,
             Guid id => Literal(id.ToString("D")),
             _ => throw new InvalidOperationException("Not a script value.")

@@ -117,6 +117,7 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { SchedulesService } from '../agent/SchedulesService'
 import { agentContribution } from '../contributions/agent'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
@@ -280,6 +281,7 @@ export interface Workbench extends Disposable {
   /** The status bar's running Agent jobs this window started, followed while hidden (AG-3). */
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
+  readonly schedules: SchedulesService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -522,6 +524,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
+  // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
+  const schedules = new SchedulesService({
+    api, documents, connections, targetIdOf,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] [data-agent-schedules-focus]`)?.focus())
+  })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -721,6 +728,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     logViewer,
     agentJobs,
     jobDocuments,
+    schedules,
     objectSearch,
     searchDetails,
     theme,
@@ -776,6 +784,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       logViewer.dispose()
       agentJobs.dispose()
       jobDocuments.dispose()
+      schedules.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.

@@ -93,6 +93,7 @@ import { JobActivityService } from '../../src/renderer/src/agent/JobActivityServ
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
+import { SchedulesService } from '../../src/renderer/src/agent/SchedulesService'
 import { agentContribution } from '../../src/renderer/src/contributions/agent'
 import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
@@ -447,6 +448,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const agentJobs = new AgentJobStatusService({ api, live, connections })
   const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
   const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const schedules = new SchedulesService({ api, documents, connections, targetIdOf })
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
@@ -582,6 +584,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     logViewer,
     agentJobs,
     jobDocuments,
+    schedules,
     objectSearch
   }
   const contributions = [
@@ -635,6 +638,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     disconnectPrompts.dispose()
     actionProgress.dispose()
     jobDocuments.dispose()
+    schedules.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -730,6 +734,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     operations,
     jobActivity,
     jobDocuments,
+    schedules,
     logViewer,
     agentJobs,
     objectSearch,

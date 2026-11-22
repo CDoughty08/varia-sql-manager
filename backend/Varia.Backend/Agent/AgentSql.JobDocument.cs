@@ -7,7 +7,10 @@ namespace Varia.Backend.Agent;
 
 /// <summary>One msdb call of a job save: the procedure, its arguments in order (each bound to the parameter of the same name, or for a
 /// removed alert's <c>@name</c> to <c>@name_&lt;index&gt;</c> and its <c>@job_id</c> to <c>@no_job</c>), and the parameters' values.</summary>
-internal sealed record AgentSaveCall(string Procedure, IReadOnlyList<AgentSaveArgument> Arguments, int? AlertId = null);
+/// <remarks>AG-6c: a schedule update or attach carries its <paramref name="Guard"/>, a Schedules document's attach or detach its job's
+/// <paramref name="JobVersion"/>; <paramref name="Label"/> names the part a refusal names.</remarks>
+internal sealed record AgentSaveCall(string Procedure, IReadOnlyList<AgentSaveArgument> Arguments, int? AlertId = null, AgentScheduleGuardValues? Guard = null, int? JobVersion = null,
+    string? Label = null);
 internal sealed record AgentSaveArgument(string Name, AgentParameter Parameter, object? Value, bool Output = false);
 /// <summary>A job save's batch: its text, its parameters with their values, and which call each THROW state names (index 1 is the first call).</summary>
 internal sealed record AgentSaveBatch(string Text, IReadOnlyList<(AgentParameter Parameter, object? Value)> Parameters, IReadOnlyList<AgentSaveCall> Calls);
@@ -83,6 +86,11 @@ internal static partial class AgentSql
                 text.Append(AlertGuard(i + 1));
                 parameters.Add((new AgentParameter("@alert_id_" + (i + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.Int), alert));
             }
+            if (call.Guard is { } guard)
+            {
+                text.Append(ScheduleGuard(i + 1));
+                parameters.AddRange([(Indexed("@schedule_version", i + 1, SqlDbType.Int), guard.Version), (Indexed("@schedule_modified", i + 1, SqlDbType.DateTime), guard.Modified)]);
+            }
             text.Append(Call(call)).Append(CheckAt(i + 1));
             foreach (var argument in call.Arguments)
                 if (argument.Parameter.Name is not ("@job_id" or "@no_job")) parameters.Add((argument.Parameter, argument.Value));
@@ -96,10 +104,14 @@ internal static partial class AgentSql
 
     [GeneratedRegex(@"^EXEC @rc = msdb\.dbo\.(?<proc>\w+) (?<arg>@\w+) = (?<value>@\w+)(?<out> OUTPUT)?(?:, (?<arg>@\w+) = (?<value>@\w+)(?<out> OUTPUT)?)*;$", RegexOptions.CultureInvariant)]
     private static partial Regex SaveCall();
-    private static readonly HashSet<string> SaveProcedures = new(["sp_update_job", "sp_update_alert", "sp_add_job", "sp_add_jobserver"], StringComparer.Ordinal);
+    private static readonly HashSet<string> SaveProcedures = new(["sp_update_job", "sp_update_alert", "sp_add_job", "sp_add_jobserver",
+        // AG-6c (AgentSql.Schedules.cs JobScheduleProcedures; spelled out, as field initialisers of another part of this class may not have run).
+        "sp_detach_schedule", "sp_attach_schedule", "sp_update_schedule", "sp_add_jobschedule"], StringComparer.Ordinal);
     /// <summary>The procedures only a job save calls, in its own shape: the one-call write lints refuse them (New Job's id is an OUTPUT, and a
     /// detach needs its alert guard).</summary>
-    internal static readonly IReadOnlySet<string> SaveOnly = new HashSet<string>(["sp_add_job", "sp_add_jobserver", "sp_update_alert"], StringComparer.Ordinal);
+    internal static readonly IReadOnlySet<string> SaveOnly = new HashSet<string>(["sp_add_job", "sp_add_jobserver", "sp_update_alert",
+        // AG-6c: schedules change only in a job save's or the Schedules document's guarded batch.
+        "sp_add_jobschedule", "sp_attach_schedule", "sp_detach_schedule", "sp_add_schedule", "sp_update_schedule", "sp_delete_schedule"], StringComparer.Ordinal);
 
     /// <summary>Problems with a job save's full text; empty when it passes. It opens with <see cref="NewJobHead"/> (New Job: sp_add_job, then
     /// sp_add_jobserver, nothing else) or with <see cref="Resolve"/> and <see cref="StaleGuard"/> exactly (sp_update_job at most once, first, and
@@ -129,6 +141,13 @@ internal static partial class AgentSql
                 if (!rest.StartsWith(guard, StringComparison.Ordinal)) { problems.Add("call " + index + " has an alert guard that is not exactly its own"); return problems; }
                 rest = rest[guard.Length..];
             }
+            var scheduleGuarded = rest.StartsWith(ScheduleGuardHead, StringComparison.Ordinal);
+            if (scheduleGuarded)
+            {
+                var guard = ScheduleGuard(index);
+                if (!rest.StartsWith(guard, StringComparison.Ordinal)) { problems.Add("call " + index + " has a schedule guard that is not exactly its own"); return problems; }
+                rest = rest[guard.Length..];
+            }
             var end = rest.IndexOf('\n', StringComparison.Ordinal);
             if (end < 0) { problems.Add("call " + index + " is not followed by its return-code check"); return problems; }
             var call = rest[..end];
@@ -142,6 +161,8 @@ internal static partial class AgentSql
             procedures.Add(procedure);
             if (!SaveProcedures.Contains(procedure) || !catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which a job save does not call"); continue; }
             if (guarded != (procedure == "sp_update_alert")) problems.Add(guarded ? "guards a call that is not sp_update_alert" : "detaches an alert without its guard");
+            if (scheduleGuarded != (procedure is "sp_update_schedule" or "sp_attach_schedule")) problems.Add(scheduleGuarded ? "guards a call that does not change or attach a schedule" : "changes or attaches a schedule without its guard");
+            var schedule = JobScheduleProcedures.Contains(procedure);
             var seen = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < match.Groups["arg"].Captures.Count; i++)
             {
@@ -151,22 +172,34 @@ internal static partial class AgentSql
                     && (i + 1 == match.Groups["arg"].Captures.Count || capture.Index < match.Groups["arg"].Captures[i + 1].Index));
                 if (!allowed.Contains(argument)) problems.Add("passes " + argument + " to " + procedure);
                 if (!seen.Add(argument)) problems.Add("passes " + argument + " twice");
+                var at = index.ToString(CultureInfo.InvariantCulture);
                 var expected = procedure == "sp_update_alert"
-                    ? argument == "@name" ? "@name_" + index.ToString(CultureInfo.InvariantCulture) : argument == "@job_id" ? "@no_job" : argument
-                    : argument;
+                    ? argument == "@name" ? "@name_" + at : argument == "@job_id" ? "@no_job" : argument
+                    // A schedule call's arguments are indexed by the call, all but the job's own id.
+                    : schedule && argument != "@job_id" ? argument + "_" + at : argument;
                 if (value != expected) problems.Add("passes " + argument + " another parameter's value");
                 if (output != (procedure == "sp_add_job" && argument == "@job_id")) problems.Add(output ? "passes " + argument + " as an OUTPUT" : "does not take the new job's id as sp_add_job's OUTPUT");
             }
             if (procedure is "sp_update_job" or "sp_add_jobserver" && !seen.Contains("@job_id")) problems.Add(procedure + " does not name the job");
             if (procedure == "sp_add_job" && !seen.Contains("@job_id")) problems.Add("does not take the new job's id as sp_add_job's OUTPUT");
             if (procedure == "sp_update_alert" && !(seen.Contains("@name") && seen.Contains("@job_id"))) problems.Add("detaches an alert without its name and the zero job id");
+            if (procedure is "sp_detach_schedule" or "sp_attach_schedule" or "sp_add_jobschedule" && !seen.Contains("@job_id")) problems.Add(procedure + " does not name the job");
+            if (procedure is "sp_detach_schedule" or "sp_attach_schedule" or "sp_update_schedule" && !seen.Contains("@schedule_id")) problems.Add(procedure + " does not name the schedule");
+            if (procedure == "sp_add_jobschedule" && !seen.Contains("@name")) problems.Add("adds a schedule without its name");
         }
+        // The Schedules section's calls come last, in the order detach, attach, update, add.
+        var ranks = procedures.Select(procedure => JobScheduleProcedures.ToList().IndexOf(procedure)).ToList();
+        var own = procedures.Where((_, at) => ranks[at] < 0).ToList();
+        if (ranks.SkipWhile(rank => rank < 0).Any(rank => rank < 0)) problems.Add("makes a job or alert call after a schedule call");
+        var scheduleRanks = ranks.Where(rank => rank >= 0).ToList();
+        if (scheduleRanks.Zip(scheduleRanks.Skip(1)).Any(pair => pair.Second < pair.First)) problems.Add("makes its schedule calls out of order (detach, attach, update, add)");
+        if (create && scheduleRanks.Contains(0)) problems.Add("detaches a schedule from a new job");
         if (procedures.Count == 0) problems.Add("makes no call");
-        if (create && !procedures.SequenceEqual(["sp_add_job", "sp_add_jobserver"])) problems.Add("New Job's save is not sp_add_job then sp_add_jobserver");
+        if (create && !own.SequenceEqual(["sp_add_job", "sp_add_jobserver"])) problems.Add("New Job's save is not sp_add_job then sp_add_jobserver");
         if (!create)
         {
-            if (procedures.Any(procedure => procedure is "sp_add_job" or "sp_add_jobserver")) problems.Add("adds a job in an existing job's save");
-            if (procedures.Count(procedure => procedure == "sp_update_job") > 1 || procedures.Skip(1).Contains("sp_update_job")) problems.Add("updates the job more than once, or after an alert");
+            if (own.Any(procedure => procedure is "sp_add_job" or "sp_add_jobserver")) problems.Add("adds a job in an existing job's save");
+            if (own.Count(procedure => procedure == "sp_update_job") > 1 || procedures.Skip(1).Contains("sp_update_job")) problems.Add("updates the job more than once, or after an alert");
         }
         return problems;
     }
@@ -185,7 +218,15 @@ internal static partial class AgentSql
         var batches = new (string Name, AgentSaveBatch Batch)[]
         {
             ("new job", JobSave(true, [new("sp_add_job", Every(true)), new("sp_add_jobserver", [new("@job_id", new("@job_id", SqlDbType.UniqueIdentifier), null)])])),
-            ("job update", JobSave(false, [new("sp_update_job", Every(false)), DetachAlert(2, 7, "a"), DetachAlert(3, 8, "b")], "x", Guid.Empty, 1, DateTime.UnixEpoch))
+            ("job update", JobSave(false, [new("sp_update_job", Every(false)), DetachAlert(2, 7, "a"), DetachAlert(3, 8, "b")], "x", Guid.Empty, 1, DateTime.UnixEpoch)),
+            // AG-6c: the Schedules section's calls after the job's own, every kind with every value.
+            ("job update with schedules", JobSave(false, [new("sp_update_job", Every(false)), DetachAlert(2, 7, "a"), DetachSchedule(3, 4, true), DetachSchedule(4, 5, false),
+                AttachSchedule(5, 7, new(1, DateTime.UnixEpoch)), UpdateSchedule(6, 6, new(1, DateTime.UnixEpoch), "x", true, new int[TimingArguments.Count]),
+                AddJobSchedule(7, "x", true, new int[TimingArguments.Count])], "x", Guid.Empty, 1, DateTime.UnixEpoch)),
+            ("schedules only", JobSave(false, [UpdateSchedule(1, 6, new(1, DateTime.UnixEpoch), null, false, null)], "x", Guid.Empty, 1, DateTime.UnixEpoch)),
+            ("new job with schedules", JobSave(true, [new("sp_add_job", Every(true)), new("sp_add_jobserver", [new("@job_id", new("@job_id", SqlDbType.UniqueIdentifier), null)]),
+                AttachSchedule(3, 6, new(1, DateTime.UnixEpoch)), UpdateSchedule(4, 6, new(1, DateTime.UnixEpoch), null, null, new int[TimingArguments.Count]),
+                AddJobSchedule(5, "x", false, new int[TimingArguments.Count])]))
         };
         foreach (var (name, batch) in batches)
         {
@@ -196,6 +237,7 @@ internal static partial class AgentSql
             var bound = batch.Parameters.Select(parameter => parameter.Parameter.Name).ToHashSet(StringComparer.Ordinal);
             foreach (var variable in values.Except(bound)) problems.Add("binds the undeclared " + variable);
             foreach (var variable in bound.Except(used)) problems.Add("declares the unused " + variable);
+            if (batch.Parameters.Select(parameter => parameter.Parameter.Name).Distinct(StringComparer.Ordinal).Count() != batch.Parameters.Count) problems.Add("binds a parameter twice");
             yield return ("job save " + name, problems);
         }
     }

@@ -233,6 +233,8 @@ internal sealed partial class ActionService : IDisposable
         // Login Properties' User Mapping reads one database for the login it shows (D2c): its user there and that user's roles.
         if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
         if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        // The Schedules describe (AG-6c) may read one schedule's jobs, and only it names a schedule.
+        if (args.Schedule is { } schedule && (args.Dialog != "agentSchedules" || schedule < 1)) throw Invalid("schedule.");
         if (args.Attach is { } attach && (args.Dialog != AttachDialog || !ServerPath.Valid(attach.Mdf, catalog.Limit("serverPath")))) throw Invalid("attach.");
         if ((args.Dialog == catalog.Restore.Describe) != (args.Restore is not null)) throw Invalid("restore.");
         if (args.Restore is not null) return ValidateRestoreSource(args);
@@ -297,6 +299,8 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        // A schedule's save (AG-6c) validates itself.
+        if (ValidateAgentSchedule(args) is { } scheduleTarget) return scheduleTarget;
         // The job document's Save (AG-6a) validates itself, before the job verbs, which take every other action on a job.
         if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
         // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
@@ -480,6 +484,7 @@ internal sealed partial class ActionService : IDisposable
                 "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
                 "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
                 "agentJob" => DescribeAgentJobDocumentAsync(connection, profile, target, job),
+                "agentSchedules" => DescribeAgentSchedulesAsync(connection, profile, args.Schedule, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -490,6 +495,7 @@ internal sealed partial class ActionService : IDisposable
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         if (args.Action == "agentJob") return ScriptAgentJobDocument(args, target);
+        if (args.Action == "agentSchedule") return ScriptAgentSchedule(args);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
         if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
@@ -549,6 +555,7 @@ internal sealed partial class ActionService : IDisposable
                 "agentJob" => ExecuteAgentJobDocumentAsync(connection, args, target, job),
                 _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
                 "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
+                "agentSchedule" => ExecuteAgentScheduleAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

@@ -520,7 +520,7 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// reads too (Login Properties' User Mapping, D2c), and Securable the one securable loginEffective reads as the login (Login Properties'
 /// Securables page, D2d); no other describe takes either.</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null,
-    AttachDescribeArgsDto? Attach = null, string? Login = null, SecurableRefDto? Securable = null);
+    AttachDescribeArgsDto? Attach = null, string? Login = null, SecurableRefDto? Securable = null, int? Schedule = null);
 /// <summary>A securable of a login's Securables page (src/shared/actions/securables.ts SecurableRef, D2d): a catalogue type, and a name
 /// (at most 128 UTF-16 units) exactly when it is not the server.</summary>
 internal sealed record SecurableRefDto(string Type, string? Name = null);
@@ -605,15 +605,35 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null,
+    AgentScheduleSaveDto? AgentSchedule = null);
 /// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
 /// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
 /// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
 /// RemoveAlerts (at most agentLimits.jobAlerts) detaches alerts from the job, each guarded by its id still running this job.</summary>
 internal sealed record AgentJobSaveDto(int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, string? Description = null, string? Category = null,
     string? Owner = null, int? EmailLevel = null, string? EmailOperator = null, int? PageLevel = null, string? PageOperator = null, int? NetSendLevel = null, string? NetSendOperator = null,
-    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null);
+    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null, AgentJobSchedulesSaveDto? Schedules = null);
 internal sealed record AgentAlertRefDto(int Id, string Name);
+/// <summary>A schedule's timing as sysschedules stores it (src/shared/agent/schedule.ts AgentScheduleTiming); ActionService.ScheduleTimingValid
+/// refuses what sp_verify_schedule would.</summary>
+internal sealed record AgentScheduleTimingDto(int FreqType, int FreqInterval, int FreqSubdayType, int FreqSubdayInterval, int FreqRelativeInterval, int FreqRecurrenceFactor,
+    int ActiveStartDate, int ActiveEndDate, int ActiveStartTime, int ActiveEndTime);
+/// <summary>A schedule a save names with the version_number and date_modified (yyyy-MM-ddTHH:mm:ss.fff) its describe read: the guard checks both.</summary>
+internal sealed record AgentScheduleGuardDto(int Id, int Version, string Modified);
+/// <summary>A schedule's change in a job's save (Id, Version, Modified: its guard) or a new one (no guard): only what changed, the whole
+/// timing whenever any of it changes.</summary>
+internal sealed record AgentScheduleChangeDto(int? Id = null, int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, AgentScheduleTimingDto? Timing = null);
+internal sealed record AgentScheduleDetachDto(int Id, bool DeleteUnused);
+/// <summary>The job document's Schedules section in a job's save (AG-6c, src/shared/actions/agent-schedule.ts AgentJobSchedulesSave): detach,
+/// update, attach, add, each at most agentLimits.schedulesPerJob.</summary>
+internal sealed record AgentJobSchedulesSaveDto(List<AgentScheduleDetachDto>? Detach = null, List<AgentScheduleChangeDto>? Update = null, List<AgentScheduleGuardDto>? Attach = null,
+    List<AgentScheduleChangeDto>? Add = null);
+/// <summary>The Schedules document's save (AG-6c, agent-schedule.ts AgentScheduleSave): Op create, update, enable, disable or delete; Schedule its guard
+/// (not for create); Jobs (at most agentLimits.scheduleJobChanges) each attached or detached under its job's version_number.</summary>
+internal sealed record AgentScheduleSaveDto(string Op, AgentScheduleGuardDto? Schedule = null, string? Name = null, bool? Enabled = null, AgentScheduleTimingDto? Timing = null,
+    List<AgentScheduleJobChangeDto>? Jobs = null);
+internal sealed record AgentScheduleJobChangeDto(string JobId, int Version, bool Attach);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -796,13 +816,23 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
     TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
-    AgentJobDocumentDto? AgentJobDocument = null);
+    AgentJobDocumentDto? AgentJobDocument = null, AgentSchedulesDto? AgentSchedules = null);
 /// <summary>The job document's describe (AG-6a, src/shared/actions/agent-job.ts AgentJobDocumentModel). Job is null for New Job; Operators null
 /// when the login may not read them; Owners for sysadmin only; Alerts null where the section is hidden (below SQLAgentOperatorRole, or a
 /// platform without alerts).</summary>
 internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
     AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
-    List<string>? Jobs = null, List<string>? JobIds = null);
+    List<string>? Jobs = null, List<string>? JobIds = null, List<AgentScheduleRecordDto>? Schedules = null, string? Now = null);
+/// <summary>A schedule as sp_help_schedule or sp_help_jobschedule list it (agent-schedule.ts AgentScheduleRecord), with its owner, version and
+/// modified date from sysschedules_localserver_view where that lists it.</summary>
+internal sealed record AgentScheduleRecordDto(int Id, string Name, bool Enabled, int FreqType, int FreqInterval, int FreqSubdayType, int FreqSubdayInterval, int FreqRelativeInterval,
+    int FreqRecurrenceFactor, int ActiveStartDate, int ActiveEndDate, int ActiveStartTime, int ActiveEndTime, int JobCount, string? Owner = null, int? Version = null, string? Modified = null);
+/// <summary>The Schedules describe (AG-6c, agent-schedule.ts AgentSchedulesModel).</summary>
+internal sealed record AgentSchedulesDto(string Login, bool Sysadmin, string Platform, string Now, List<AgentScheduleRecordDto> Schedules, bool? IdleDefined = null, bool? Truncated = null,
+    List<AgentScheduleJobDto>? Jobs = null, List<AgentScheduleLinkDto>? Links = null, List<AgentJobDurationDto>? Durations = null, List<AgentScheduleJobDto>? ScheduleJobs = null);
+internal sealed record AgentScheduleJobDto(string Id, string Name, bool Enabled, string Owner, int Version);
+internal sealed record AgentScheduleLinkDto(int ScheduleId, string JobId);
+internal sealed record AgentJobDurationDto(string JobId, int Seconds);
 internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
     string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
     string? LastRun = null, int? LastOutcome = null);

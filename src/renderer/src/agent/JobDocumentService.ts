@@ -11,6 +11,10 @@ import {
   initialAgentJobDraft, rebaseAgentJobDraft, type AgentJobCompareRow, type AgentJobDocumentModel, type AgentJobDraft, type AgentJobField, type AgentJobProblem, type AgentJobSection
 } from '../../../shared/actions/agent-job.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest } from '../../../shared/actions/schema.ts'
+import {
+  jobScheduleText, momentOfText, ownsSchedule, refreshPickedSchedules, scheduleFieldsOf, scheduleKey, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry
+} from '../../../shared/actions/agent-schedule.ts'
+import { defaultSchedule, type AgentMoment, type AgentScheduleFields } from '../../../shared/agent/schedule.ts'
 import { agentJobsSource, agentWatchedProbe, watchedGoneStatus, watchedSlot, type WatchedSample } from '../../../shared/agent/jobs.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -63,7 +67,16 @@ export interface JobDocumentState {
   readonly scriptRevision?: number
   readonly scriptDatabase?: string
   readonly scriptNotice?: string
+  /** The Schedules section (AG-6c): the entry or shared schedule (`pick:<id>`) shown beside the list, the search, the shared schedules as read
+   *  (once, when the section first asks), and one schedule's jobs where the login cannot read every link (below sysadmin). */
+  readonly scheduleSelected?: string
+  readonly scheduleSearch?: string
+  readonly shared?: SharedSchedules
+  readonly scheduleJobs?: Readonly<Record<number, ScheduleJobsRead>>
 }
+/** The shared schedules a job's Schedules section offers to attach, as one `agentSchedules` describe read them. */
+export interface SharedSchedules { readonly state: 'loading' | 'ready' | 'failed'; readonly model?: AgentSchedulesModel; readonly error?: string }
+export interface ScheduleJobsRead { readonly state: 'loading' | 'ready' | 'failed'; readonly jobs?: readonly AgentScheduleJob[] }
 export interface JobDocumentSnapshot { readonly documents: Readonly<Record<string, JobDocumentState>> }
 
 export interface JobDocumentServiceOptions extends CustomDocumentTargetOptions {
@@ -92,7 +105,7 @@ export const jobDocumentText = {
   replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.'
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
-  { id: 'general', title: 'General' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
+  { id: 'general', title: 'General' }, { id: 'schedules', title: 'Schedules' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
 ]
 const fallback = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'STALE' && code !== 'NOT_FOUND' })
 
@@ -112,6 +125,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private readonly registration: Disposable
   private readonly unsubscribe: (() => void)[]
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'save' | 'copy'; readonly connectionId?: string; dropped: boolean }>()
+  /** The Schedules section's reads (shared schedules, one schedule's jobs), apart from the document's own so neither drops the other. */
+  private readonly scheduleReads = new Map<string, Set<string>>()
+  /** Bumped whenever the Schedules section's reads start over, so a read that answers after it is dropped. */
+  private readonly scheduleGenerations = new Map<string, number>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly saving = new Map<string, Promise<boolean>>()
@@ -281,7 +298,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const create = !model.job
     this.patch(id, {
       phase: create ? 'choosing' : 'ready', model, draft: create ? undefined : initialAgentJobDraft(model), revision: current.revision + 1, changes: 0, error: undefined, stale: undefined,
-      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined
+      notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined,
+      // The shared schedules and their jobs are read again when the section next asks: a save may have changed them.
+      ...this.restartScheduleReads(id), scheduleSelected: undefined
     })
     this.options.documents.setDirty(id, false)
     if (model.job) this.follow(id, model.job.jobId)
@@ -398,15 +417,17 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.stale || !state.model || !state.draft) return
     const { current, keepServer } = state.stale
     const draft = rebaseAgentJobDraft(state.model, current, state.draft, new Set(keepServer))
-    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1 })
+    this.patch(id, { model: current, draft, stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, ...this.restartScheduleReads(id) })
     this.afterDraft(id)
+    // Picked schedules take their guards from the shared schedules as read now, as the job's own schedules just did.
+    this.ensureShared(id, true)
   }
   /** Discard mine and reload: the job as read now. */
   reloadDiscard(id: string): void {
     const state = this.get(id)
     if (!state?.stale) return
     const { current } = state.stale
-    this.patch(id, { model: current, draft: initialAgentJobDraft(current), stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1 })
+    this.patch(id, { model: current, draft: initialAgentJobDraft(current), stale: undefined, error: undefined, revision: state.revision + 1, edits: state.edits + 1, ...this.restartScheduleReads(id) })
     this.afterDraft(id)
   }
 
@@ -544,6 +565,9 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
+    this.restartScheduleReads(id)
+    this.scheduleReads.delete(id)
+    this.scheduleGenerations.delete(id)
     this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
@@ -568,6 +592,144 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.registration.dispose()
     this.unsubscribe.forEach(unsubscribe => unsubscribe())
     this.clearListeners()
+  }
+
+  // --- The Schedules section (AG-6c) ----------------------------------------------------------------------------------
+
+  /** The server's clock as the describe read it (the local clock before any read). */
+  now(id: string): AgentMoment {
+    const read = this.get(id)?.model?.now
+    const moment = read ? momentOfText(read) : undefined
+    if (moment) return moment
+    const date = new Date()
+    return { date: date.getFullYear() * 10_000 + (date.getMonth() + 1) * 100 + date.getDate(), time: date.getHours() * 10_000 + date.getMinutes() * 100 + date.getSeconds() }
+  }
+  /** Whether the login may change a schedule (its owner, or sysadmin) and Varia read the version a guarded save names. */
+  canChangeSchedule(id: string, record: AgentScheduleRecord | undefined): boolean {
+    const model = this.get(id)?.model
+    if (!model || !record) return true
+    return record.version !== undefined && !!record.modified && (model.sysadmin || ownsSchedule(record, model.login))
+  }
+  /** The record an entry was read as: the job's schedule, or a picked one as the pick read it; undefined for a new one. */
+  scheduleRecord(id: string, entry: JobScheduleEntry): AgentScheduleRecord | undefined {
+    if (entry.id === undefined) return undefined
+    return entry.attached ? entry.base : this.get(id)?.model?.schedules?.find(record => record.id === entry.id)
+  }
+  selectSchedule(id: string, key: string | undefined): void {
+    const state = this.get(id)
+    if (!state || state.scheduleSelected === key) return
+    this.patch(id, { scheduleSelected: key })
+    const picked = key?.startsWith('pick:') ? Number(key.slice(5)) : undefined
+    if (picked) this.ensureScheduleJobs(id, picked)
+  }
+  setScheduleSearch(id: string, text: string): void {
+    if (!this.get(id)) return
+    this.patch(id, { scheduleSearch: text })
+    this.ensureShared(id)
+  }
+  /** The shared schedules, read once per open (a save and Reload read them again). `rebase` (Reload and keep my changes) moves picked
+   *  schedules onto what this read finds. */
+  ensureShared(id: string, rebase = false): void {
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    if (!state || !connectionId || state.shared?.state === 'loading' || state.shared?.state === 'ready' || !this.live(id)) return
+    this.patch(id, { shared: { state: 'loading' } })
+    const generation = this.scheduleGeneration(id)
+    void this.scheduleRead(id, { connectionId, dialog: 'agentSchedules', target: { kind: 'agent' } }).then(result => {
+      if (!this.get(id) || this.scheduleGeneration(id) !== generation) return
+      const model = result.ok ? result.value.agentSchedules : undefined
+      const error = !result.ok ? result.error : result.value.error?.message
+      this.patch(id, { shared: model && !error ? { state: 'ready', model } : { state: 'failed', error: error ?? jobScheduleText.listFailed } })
+      const draft = this.get(id)?.draft
+      if (rebase && model && !error && draft) {
+        const schedules = refreshPickedSchedules(draft.schedules, model.schedules)
+        if (schedules !== draft.schedules) this.updateDraft(id, { schedules })
+      }
+    })
+  }
+  /** One schedule's jobs, where the shared read has no links (below sysadmin): read once per schedule; a failed read is tried again next time. */
+  ensureScheduleJobs(id: string, scheduleId: number): void {
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    const read = state?.scheduleJobs?.[scheduleId]
+    if (!state || !connectionId || state.shared?.model?.links || (read && read.state !== 'failed') || !this.live(id)) return
+    this.patch(id, { scheduleJobs: { ...state.scheduleJobs, [scheduleId]: { state: 'loading' } } })
+    const generation = this.scheduleGeneration(id)
+    void this.scheduleRead(id, { connectionId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId }).then(result => {
+      const current = this.get(id)
+      if (!current || this.scheduleGeneration(id) !== generation) return
+      const jobs = result.ok && !result.value.error ? result.value.agentSchedules?.scheduleJobs : undefined
+      this.patch(id, { scheduleJobs: { ...current.scheduleJobs, [scheduleId]: jobs ? { state: 'ready', jobs } : { state: 'failed' } } })
+    })
+  }
+  private scheduleGeneration(id: string): number { return this.scheduleGenerations.get(id) ?? 0 }
+  /** Starts the Schedules section's reads over: cancels those on their way, drops what they would answer and forgets what was read. */
+  private restartScheduleReads(id: string): Pick<JobDocumentState, 'shared' | 'scheduleJobs'> {
+    this.cancel([...this.scheduleReads.get(id) ?? []])
+    this.scheduleReads.get(id)?.clear()
+    this.scheduleGenerations.set(id, this.scheduleGeneration(id) + 1)
+    return { shared: undefined, scheduleJobs: undefined }
+  }
+  private async scheduleRead(id: string, request: { readonly connectionId: string; readonly dialog: 'agentSchedules'; readonly target: ObjectRef; readonly schedule?: number }) {
+    const requestId = this.newId()
+    const reads = this.scheduleReads.get(id) ?? new Set<string>()
+    reads.add(requestId)
+    this.scheduleReads.set(id, reads)
+    try { return await this.call(() => this.options.api.describeObject({ ...request, requestId })) } finally { reads.delete(requestId) }
+  }
+  private setSchedules(id: string, schedules: readonly JobScheduleEntry[], selected?: string): void {
+    this.updateDraft(id, { schedules })
+    if (selected !== undefined && this.get(id)?.draft?.schedules === schedules) this.patch(id, { scheduleSelected: selected })
+  }
+  /** New schedule (named from the search when it has text): SSMS's defaults, edited in place and created when the job is saved. */
+  newSchedule(id: string, name = ''): void {
+    const draft = this.get(id)?.draft
+    if (!draft || !this.canEdit(id)) return
+    const key = `n:${this.newId()}`
+    this.setSchedules(id, [...draft.schedules, { key, fields: defaultSchedule(this.now(id).date, name.trim().slice(0, 128)) }], key)
+    this.patch(id, { scheduleSearch: '' })
+  }
+  /** Attach a shared schedule: added to the job when it is saved, guarded by the version the pick read. */
+  attachSchedule(id: string, record: AgentScheduleRecord): void {
+    const draft = this.get(id)?.draft
+    if (!draft || !this.canEdit(id) || draft.schedules.some(entry => entry.id === record.id && !entry.remove)) return
+    const kept = draft.schedules.filter(entry => entry.id !== record.id)
+    const key = scheduleKey(record.id)
+    // A schedule removed from this job and picked again is the job's own once more.
+    const own = draft.schedules.find(entry => entry.id === record.id && !entry.attached)
+    this.setSchedules(id, own ? draft.schedules.map(entry => entry === own ? { ...entry, remove: undefined } as JobScheduleEntry : entry)
+      : [...kept, { key, id: record.id, attached: true, base: record, fields: scheduleFieldsOf(record) }], key)
+  }
+  updateSchedule(id: string, key: string, fields: AgentScheduleFields): void {
+    const draft = this.get(id)?.draft
+    if (!draft) return
+    this.updateDraft(id, { schedules: draft.schedules.map(entry => entry.key === key ? { ...entry, fields } : entry) })
+  }
+  /** Remove: the job's own schedule is marked (detach by default) with Undo until Save; a new or picked one simply goes. */
+  removeSchedule(id: string, key: string): void {
+    const draft = this.get(id)?.draft
+    const entry = draft?.schedules.find(item => item.key === key)
+    if (!draft || !entry) return
+    if (entry.id === undefined || entry.attached) { this.setSchedules(id, draft.schedules.filter(item => item !== entry), ''); return }
+    this.updateDraft(id, { schedules: draft.schedules.map(item => item === entry ? { ...item, remove: 'detach' } : item) })
+  }
+  setRemoveMode(id: string, key: string, mode: 'detach' | 'delete'): void {
+    const draft = this.get(id)?.draft
+    if (!draft) return
+    this.updateDraft(id, { schedules: draft.schedules.map(item => item.key === key && item.remove ? { ...item, remove: mode } : item) })
+  }
+  undoRemove(id: string, key: string): void {
+    const draft = this.get(id)?.draft
+    if (!draft) return
+    this.updateDraft(id, { schedules: draft.schedules.map(item => item.key === key ? { key: item.key, ...item.id !== undefined ? { id: item.id } : {}, fields: item.fields } : item) })
+  }
+  /** Copy for this job only: the shared schedule is detached as read (any edit to it moves to the copy) and the copy, new and this job's alone, takes its place. */
+  copySchedule(id: string, key: string): void {
+    const draft = this.get(id)?.draft
+    const entry = draft?.schedules.find(item => item.key === key)
+    if (!draft || !entry || !this.canEdit(id)) return
+    const record = this.scheduleRecord(id, entry)
+    const copy: JobScheduleEntry = { key: `n:${this.newId()}`, fields: { ...entry.fields, name: jobScheduleText.copyName(record?.name ?? entry.fields.name) } }
+    const rest = entry.attached ? draft.schedules.filter(item => item !== entry) : draft.schedules.map(item => item === entry ? { key: item.key, id: item.id, fields: record ? scheduleFieldsOf(record) : item.fields, remove: 'detach' as const } : item)
+    this.setSchedules(id, [...rest, copy], copy.key)
   }
 
   // --- Internals -----------------------------------------------------------------------------------------------------

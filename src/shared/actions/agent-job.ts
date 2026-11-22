@@ -6,6 +6,8 @@
 import { z } from 'zod'
 import { agentGateOpen, agentLimits, notifyLevels, type AgentPlatform } from '../agent/catalog.ts'
 import { ident } from '../explorer/schema.ts'
+import { initialJobSchedules, jobScheduleChangeCount, jobScheduleProblems, jobSchedulesSave, jobSchedulesSaveProblems, jobSchedulesSaveSchema, jobSchedulesValue, momentOfText, ownsSchedule, rebaseJobSchedules,
+  type AgentJobSchedulesSave, type AgentScheduleRecord, type JobScheduleEntry } from './agent-schedule.ts'
 
 /** sp_help_job's notify and delete levels: 0 never, 1 on success, 2 on failure, 3 on completion. */
 export type AgentNotifyLevel = 0 | 1 | 2 | 3
@@ -89,15 +91,19 @@ export interface AgentJobDocumentModel {
   readonly jobs?: readonly string[]
   /** New Job only: each listed job's id (sysjobs job_id), in `jobs`' order, so a document can find its job again after a rename elsewhere. */
   readonly jobIds?: readonly string[]
+  /** The job's schedules (AG-6c; sp_help_jobschedule with each one's owner, version and modified date). Empty for New Job. */
+  readonly schedules?: readonly AgentScheduleRecord[]
+  /** The server's clock when the describe ran (yyyy-mm-ddThh:mm:ss): the Schedules section's next runs count from it. */
+  readonly now?: string
 }
 
 /** The editable fields, as the document, the changes, the compare and the save's error mapping name them. */
-export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts'] as const
+export const agentJobFields = ['name', 'owner', 'category', 'description', 'enabled', 'email', 'page', 'netSend', 'eventLog', 'delete', 'alerts', 'schedules'] as const
 export type AgentJobField = typeof agentJobFields[number]
-export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts'
+export type AgentJobSection = 'general' | 'notifications' | 'targets' | 'alerts' | 'schedules'
 export const agentJobFieldSection: { readonly [F in AgentJobField]: AgentJobSection } = {
   name: 'general', owner: 'general', category: 'general', description: 'general', enabled: 'general',
-  email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts'
+  email: 'notifications', page: 'notifications', netSend: 'notifications', eventLog: 'notifications', delete: 'notifications', alerts: 'alerts', schedules: 'schedules'
 }
 
 export interface AgentJobDraft {
@@ -113,19 +119,22 @@ export interface AgentJobDraft {
   readonly deleteLevel: AgentNotifyLevel
   /** Alert ids Remove took off this job (saved with it). */
   readonly removeAlerts: readonly number[]
+  /** The Schedules section's entries (AG-6c): the job's, picked, new, and removed ones. */
+  readonly schedules: readonly JobScheduleEntry[]
 }
 
 /** The draft a describe opens with: the job as read, or New Job's blank (owner the login, SSMS's defaults). */
-export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login'>): AgentJobDraft {
+export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login' | 'schedules'>): AgentJobDraft {
   const job = model.job
   if (!job) return {
     name: '', owner: model.login, category: uncategorizedCategory, description: '', enabled: true,
-    emailLevel: 0, emailOperator: '', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 0, deleteLevel: 0, removeAlerts: []
+    emailLevel: 0, emailOperator: '', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 0, deleteLevel: 0, removeAlerts: [], schedules: []
   }
   return {
     name: job.name, owner: job.owner, category: job.category, description: job.description, enabled: job.enabled,
     emailLevel: job.emailLevel, emailOperator: job.emailOperator, pageLevel: job.pageLevel, pageOperator: job.pageOperator,
-    netSendLevel: job.netSendLevel, netSendOperator: job.netSendOperator, eventLogLevel: job.eventLogLevel, deleteLevel: job.deleteLevel, removeAlerts: []
+    netSendLevel: job.netSendLevel, netSendOperator: job.netSendOperator, eventLogLevel: job.eventLogLevel, deleteLevel: job.deleteLevel, removeAlerts: [],
+    schedules: initialJobSchedules(model.schedules)
   }
 }
 
@@ -144,6 +153,7 @@ function fieldValue(draft: AgentJobDraft, field: AgentJobField): string {
     case 'eventLog': return String(draft.eventLogLevel)
     case 'delete': return String(draft.deleteLevel)
     case 'alerts': return [...draft.removeAlerts].sort((a, b) => a - b).join(',')
+    case 'schedules': return jobSchedulesValue(draft.schedules)
   }
 }
 
@@ -153,7 +163,7 @@ export function changedAgentJobFields(base: AgentJobDraft, draft: AgentJobDraft)
 }
 /** "Save · n changes": each changed field, and each removed alert. */
 export function agentJobChangeCount(base: AgentJobDraft, draft: AgentJobDraft): number {
-  return changedAgentJobFields(base, draft).reduce((count, field) => count + (field === 'alerts' ? draft.removeAlerts.length : 1), 0)
+  return changedAgentJobFields(base, draft).reduce((count, field) => count + (field === 'alerts' ? draft.removeAlerts.length : field === 'schedules' ? Math.max(1, jobScheduleChangeCount(base.schedules, draft.schedules)) : 1), 0)
 }
 
 // --- What Save sends ---------------------------------------------------------------------------------------------------
@@ -176,6 +186,8 @@ export interface AgentJobSave {
   readonly eventLogLevel?: AgentNotifyLevel
   readonly deleteLevel?: AgentNotifyLevel
   readonly removeAlerts?: readonly AgentAlertRef[]
+  /** The Schedules section's changes (AG-6c), run after the job's own calls in the same transaction. */
+  readonly schedules?: AgentJobSchedulesSave
 }
 
 /** The save the draft asks for: undefined when an existing job's draft changes nothing. */
@@ -183,7 +195,7 @@ export function agentJobSave(model: AgentJobDocumentModel, draft: AgentJobDraft)
   const job = model.job
   const base = initialAgentJobDraft(model)
   const save: { -readonly [K in keyof AgentJobSave]: AgentJobSave[K] } = job ? { version: job.version, modified: job.modified } : {}
-  const fields = job ? changedAgentJobFields(base, draft) : agentJobFields.filter(field => field !== 'alerts')
+  const fields = job ? changedAgentJobFields(base, draft) : agentJobFields.filter(field => field !== 'alerts' && (field !== 'schedules' || draft.schedules.length > 0))
   if (job && fields.length === 0) return undefined
   for (const field of fields) {
     switch (field) {
@@ -203,8 +215,11 @@ export function agentJobSave(model: AgentJobDocumentModel, draft: AgentJobDraft)
         save.removeAlerts = draft.removeAlerts.flatMap(id => alerts.filter(alert => alert.id === id).map(alert => ({ id: alert.id, name: alert.name })))
         break
       }
+      case 'schedules': { const schedules = jobSchedulesSave(model.schedules ?? [], draft.schedules); if (schedules) save.schedules = schedules; break }
     }
   }
+  // Schedule entries that send nothing (a new one added and removed again) leave an existing job's save empty.
+  if (job && Object.keys(save).length === 2) return undefined
   return save
 }
 
@@ -225,7 +240,8 @@ export const agentJobSaveSchema = z.object({
   netSendLevel: level.optional(), netSendOperator: operatorName.optional(),
   eventLogLevel: level.optional(),
   deleteLevel: level.optional(),
-  removeAlerts: z.array(z.object({ id: z.number().int().min(1).max(2_147_483_647), name: ident }).strict()).min(1).max(agentLimits.jobAlerts).optional()
+  removeAlerts: z.array(z.object({ id: z.number().int().min(1).max(2_147_483_647), name: ident }).strict()).min(1).max(agentLimits.jobAlerts).optional(),
+  schedules: jobSchedulesSaveSchema.optional()
 }).strict() satisfies z.ZodType<AgentJobSave>
 
 /** Why a save cannot run whatever the server says (C#'s ValidateAgentJob refuses the same). `create`: New Job (target the Agent node, no
@@ -237,6 +253,7 @@ export function agentJobSaveProblems(save: AgentJobSave, create: boolean): strin
     if (save.version !== undefined || save.modified !== undefined) problems.push('A new job has no version.')
     if (save.name === undefined) problems.push('A new job needs a name.')
     if (save.removeAlerts !== undefined) problems.push('A new job has no alerts.')
+    if (save.schedules?.detach || save.schedules?.update?.some(update => !save.schedules?.attach?.some(attach => attach.id === update.id))) problems.push('A new job has no schedule of its own to detach or change.')
   } else {
     if (save.version === undefined || save.modified === undefined) problems.push("A job's save names the version it read.")
     const { version: _version, modified: _modified, ...changes } = save
@@ -248,6 +265,7 @@ export function agentJobSaveProblems(save: AgentJobSave, create: boolean): strin
     else if (sent !== undefined && (sent === 0) !== (operator === '')) problems.push('A notification names an operator exactly when it is sent.')
   }
   if (save.removeAlerts && new Set(save.removeAlerts.map(alert => alert.id)).size !== save.removeAlerts.length) problems.push('An alert is removed twice.')
+  if (save.schedules) problems.push(...jobSchedulesSaveProblems(save.schedules))
   return problems
 }
 
@@ -358,6 +376,11 @@ export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDr
   check('page', draft.pageLevel, draft.pageOperator)
   check('netSend', draft.netSendLevel, draft.netSendOperator)
   if (draft.emailLevel !== 0) { const mail = mailProblem(model.mail, model.platform); if (mail) problems.push({ field: 'email', severity: 'warning', message: mail }) }
+  const now = model.now ? momentOfText(model.now) : undefined
+  for (const { key, problem } of jobScheduleProblems(draft.schedules, now)) {
+    const name = draft.schedules.find(entry => entry.key === key)?.fields.name.trim()
+    problems.push({ field: 'schedules', severity: problem.severity, message: name ? `${name}: ${problem.message}` : problem.message })
+  }
   return problems
 }
 /** Whether Save can send the draft: no error-level problem. */
@@ -373,7 +396,7 @@ export const gateClosedText = (title: string) => `${title} is not available on t
 
 export const agentJobFieldLabels: { readonly [F in AgentJobField]: string } = {
   name: 'Name', owner: 'Owner', category: 'Category', description: 'Description', enabled: 'Enabled', email: 'E-mail', page: 'Page', netSend: 'Net send',
-  eventLog: 'Windows event log', delete: 'Delete the job', alerts: 'Alerts'
+  eventLog: 'Windows event log', delete: 'Delete the job', alerts: 'Alerts', schedules: 'Schedules'
 }
 /** A field as the compare shows it. */
 export function agentJobFieldText(draft: AgentJobDraft, field: AgentJobField, alerts: readonly AgentJobAlert[] = []): string {
@@ -386,6 +409,7 @@ export function agentJobFieldText(draft: AgentJobDraft, field: AgentJobField, al
     case 'eventLog': return notifyLevelLabel(draft.eventLogLevel)
     case 'delete': return notifyLevelLabel(draft.deleteLevel)
     case 'alerts': return draft.removeAlerts.length ? `Remove ${draft.removeAlerts.map(id => alerts.find(alert => alert.id === id)?.name ?? `#${id}`).join(', ')}` : 'not changed'
+    case 'schedules': return draft.schedules.filter(entry => !entry.remove).map(entry => entry.fields.name).join(', ') || '(none)'
     default: return fieldValue(draft, field) || '(none)'
   }
 }
@@ -425,6 +449,7 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
       case 'eventLog': next.eventLogLevel = draft.eventLogLevel; break
       case 'delete': next.deleteLevel = draft.deleteLevel; break
       case 'alerts': next.removeAlerts = draft.removeAlerts.filter(id => (current.alerts ?? []).some(alert => alert.id === id)); break
+      case 'schedules': next.schedules = rebaseJobSchedules(opened.schedules ?? [], current.schedules ?? [], draft.schedules); break
       case 'enabled': next.enabled = draft.enabled; break
       default: next[field] = draft[field]
     }
@@ -436,7 +461,11 @@ export function rebaseAgentJobDraft(opened: AgentJobDocumentModel, current: Agen
 export function copiedAgentJobDraft(source: AgentJobDocumentModel, login: string, sysadmin: boolean): AgentJobDraft {
   const from = initialAgentJobDraft(source)
   const name = `Copy of ${from.name}`.slice(0, agentLimits.nameChars)
-  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [] }
+  // Create from… shares the source's schedules (the owner's 2026-11-18 decision) where the login may attach them; others are copied as new.
+  const schedules = (source.schedules ?? []).map((record, index): JobScheduleEntry => sysadmin || ownsSchedule(record, login)
+    ? { key: `s:${record.id}`, id: record.id, attached: true, base: record, fields: from.schedules[index]?.fields ?? record }
+    : { key: `n:copy:${record.id}`, fields: from.schedules[index]?.fields ?? record })
+  return { ...from, name, owner: sysadmin ? from.owner : login, removeAlerts: [], schedules }
 }
 
 // --- Commands ----------------------------------------------------------------------------------------------------------

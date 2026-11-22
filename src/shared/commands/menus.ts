@@ -126,7 +126,9 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
     title: 'New', nativeId: 'explorer.new',
     placements: [{
       menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n',
-      when: "explorerNode == 'folder' && (explorerFolder == 'tables' || (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance') && !explorerServerLost))"
+      // One placement, so macOS's native menu (which keeps a submenu by its items, not its `when`) never shows it twice. The SQL Server Agent
+      // node's New › (AG-6c) has Job… and Schedule…; the other Agent lanes add Alert…, Operator… and Proxy… to its group 2_agent.
+      when: "(explorerNode == 'folder' && (explorerFolder == 'tables' || (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance') && !explorerServerLost))) || (explorerNode == 'agent' && agentEnabled)"
     }]
   },
   // SSMS's Tasks on a database node and its Restore submenu. Both stay hidden until a database action is placed in them

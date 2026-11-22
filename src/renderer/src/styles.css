@@ -3376,3 +3376,48 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
 .agent-history-delete-older > input { width: 72px; }
 .agent-history-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+
+/* SQL Server Agent schedules (AG-6c): the job document's Schedules section, the shared schedule editor and the Schedules document. */
+.agent-schedules { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--varia-space-4); min-height: 0; }
+.agent-schedule-list { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.agent-schedule-list h4, .agent-schedule-detail h4, .agent-schedules-detail h4 { margin: var(--varia-space-2) 0 var(--varia-space-1); font-size: var(--varia-size-sm); font-weight: 600; }
+.agent-schedule-list ul, .agent-schedule-jobs, .agent-schedule-runs { margin: 0; padding: 0; list-style: none; }
+.agent-schedule-item { display: flex; align-items: flex-start; gap: var(--varia-space-2); width: 100%; padding: var(--varia-space-1) var(--varia-space-2); text-align: left; white-space: normal; background: transparent; border: 1px solid transparent; border-radius: var(--varia-radius-sm); }
+.agent-schedule-item:hover:not(:disabled) { background: var(--varia-list-hoverBackground); }
+.agent-schedule-item[aria-current] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-schedule-item[data-removed] .agent-schedule-item-name { text-decoration: line-through; }
+.agent-schedule-item-text { display: flex; flex-direction: column; min-width: 0; }
+.agent-schedule-item-name { overflow: hidden; text-overflow: ellipsis; }
+.agent-schedule-tag { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.agent-schedule-add { align-self: flex-start; margin-top: var(--varia-space-1); }
+.agent-schedule-detail, .agent-schedule-entry, .agent-schedule-preview, .agent-schedule-removed { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-schedule-preview h3, .agent-schedule-removed h3, .agent-schedules-detail h3 { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; font-size: var(--varia-size-md); font-weight: 600; }
+.agent-schedule-removed label { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-schedule-sentence { margin: 0; }
+.agent-schedule-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--varia-space-3); }
+.agent-schedule-runs li, .agent-schedule-jobs li { display: flex; align-items: center; gap: var(--varia-space-1); line-height: var(--varia-row); font-size: var(--varia-size-sm); }
+.agent-schedule-runs li { font-family: var(--varia-font-mono); }
+.agent-schedule-editor { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-schedule-presets { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.agent-schedule-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-schedule-number { width: 72px; }
+.agent-schedules-doc { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 360px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.agent-schedules-tools > input[type="search"] { flex: 0 1 240px; min-width: 0; }
+.agent-schedules-time { margin-left: auto; white-space: nowrap; }
+.agent-schedules-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: var(--varia-space-3); flex: 1; min-height: 0; }
+.agent-schedules-grid-wrap { min-height: 0; overflow: auto; border: 1px solid var(--varia-panel-border); }
+.agent-schedules-grid { width: 100%; border-collapse: collapse; font-size: var(--varia-size-sm); }
+.agent-schedules-grid th { position: sticky; top: 0; padding: 0 var(--varia-space-2); text-align: left; font-weight: normal; color: var(--varia-descriptionForeground); background: var(--varia-panel-background); line-height: var(--varia-row); }
+.agent-schedules-grid td { padding: 0 var(--varia-space-2); line-height: var(--varia-row); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32ch; }
+.agent-schedules-grid tbody tr:hover { background: var(--varia-list-hoverBackground); }
+.agent-schedules-grid tr[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-schedules-grid tr[data-disabled] { color: var(--varia-descriptionForeground); }
+.agent-schedules-row { padding: 0; color: inherit; background: transparent; border: 0; text-align: left; }
+.agent-schedules-detail { display: flex; flex-direction: column; gap: var(--varia-space-2); min-height: 0; overflow: auto; padding-left: var(--varia-space-3); border-left: 1px solid var(--varia-panel-border); }
+.agent-schedules-detail-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.agent-schedules-detail-head h3 { flex: 1; min-width: 0; }
+.agent-schedules-link { margin-left: auto; padding: 0 var(--varia-space-1); color: var(--varia-resultsGrid-linkForeground); background: transparent; border: 0; }
+.agent-schedules-attach { display: flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-1); }
+.agent-schedules-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-left: 2px solid var(--varia-errorForeground); }
+.agent-schedules-confirm p { flex-basis: 100%; margin: 0; }
+.agent-schedules-empty { padding: var(--varia-space-3); }

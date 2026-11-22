@@ -36,6 +36,7 @@ import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
 import JobActivityMonitor from '../agent/JobActivityMonitor'
 import JobDocument from '../agent/JobDocument'
+import SchedulesDocument from '../agent/SchedulesDocument'
 import LogFileViewer from '../agent/LogFileViewer'
 import ObjectSearch from '../search/ObjectSearch'
 import PeekTab from '../explorer/PeekTab'
@@ -150,6 +151,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}
     {kind === 'agentJobActivity' && <JobActivityMonitor documentId={id} />}
     {kind === 'agentJob' && <JobDocument documentId={id} />}
+    {kind === 'agentSchedules' && <SchedulesDocument documentId={id} />}
     {kind === 'agentLogViewer' && <LogFileViewer documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>

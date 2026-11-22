@@ -23,7 +23,8 @@
     {"action":"loginProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"login","title":"Login Properties","verb":"properties"},
     {"action":"tableProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"table","title":"Table Properties","verb":"properties"},
     {"action":"agentProperties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"SQL Server Agent Properties","verb":"properties"},
-    {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"}
+    {"action":"agentJob","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agentJob","title":"Job Properties","verb":"properties"},
+    {"action":"agentSchedule","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"kind":"agent","title":"Schedules","verb":"properties"}
   ],
   "compatibilityLevels": [100,110,120,130,140,150,160,170],
   "databaseOptions": [
@@ -106,7 +107,8 @@
     {"action":"stopAgent","dialog":"stopAgent","pages":["general"]},
     {"action":"restartAgent","dialog":"restartAgent","pages":["general"]},
     {"action":"agentProperties","dialog":"agentProperties","pages":["general","history"]},
-    {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]}
+    {"action":"agentJob","dialog":"agentJob","pages":["general","steps","schedules","notifications","targets","alerts","history"]},
+    {"action":"agentSchedule","dialog":"agentSchedules","pages":["schedules"]}
   ],
   "errors": [
     {"code":"NOT_FOUND","retryable":false},

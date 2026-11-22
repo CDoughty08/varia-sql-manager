@@ -141,6 +141,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `restartAgent` | Restart SQL Server Agent | Modal dialog | `restartAgent` | General (`settings-gear`) | Yes |
 | `agentProperties` | SQL Server Agent Properties | Modal dialog | `agentProperties` | General (`settings-gear`), History (`history`) | No |
 | `agentJob` | Job Properties - <name> | Document tab | `agentJob` | General (`settings-gear`), Steps (`settings-gear`), Schedules (`settings-gear`), Notifications (`settings-gear`), Targets (`settings-gear`), Alerts (`settings-gear`), History (`history`) | No |
+| `agentSchedules` | Schedules | Document tab | `agentSchedule` | Schedules (`settings-gear`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.

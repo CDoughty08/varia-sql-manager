@@ -4,8 +4,8 @@ SQL Server Agent support is planned for 0.11.0 ([docs/agent-plan.md](agent-plan.
 [docs/agent-ui-rethink.md](agent-ui-rethink.md)). Behind the release gate (below) Object Explorer shows the SQL Server Agent node, a job's New Job…, View History, Start Job at Step…, Stop
 Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and Properties; Search Objects finds jobs, alerts
 and operators, Script As scripts jobs, alerts, operators and proxies, Job Activity Monitor follows the jobs live, the
-Log File Viewer reads and deletes job history, and the job document edits a job's General, Notifications, Targets and Alerts or creates a job. Its Steps and Schedules sections arrive in
-later lanes, behind the same gate until 0.11.0.
+Log File Viewer reads and deletes job history, the job document edits a job's General, Schedules, Notifications, Targets and Alerts or creates a job, and the
+Schedules document manages the shared schedules. The job document's Steps section arrives in a later lane, behind the same gate until 0.11.0.
 
 ## How it works
 
@@ -94,7 +94,43 @@ later lanes, behind the same gate until 0.11.0.
   `GOTO QuitWithRollback`) by name with literal values. **New Job** (a Jobs folder's or job's menu, or the palette) opens a
   start panel: Blank job, or Copy an existing job, which fills General and Notifications from the job picked ("Copy of …");
   nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
-  their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty against the job's schedules comes with the Schedules lane.
+  their own exact-shape lint, `AgentSql.LintJobSave`. Pager duty is not yet checked against the job's schedules.
+- **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
+  `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
+  with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
+  Daily frequency, Duration), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
+  minutes", "Monthly on day…", and under More… agent start, CPU idle and one time), SSMS's sentence, the next five runs in server
+  time (the describe reads the server's clock; disabled, agent-start and idle schedules say why they have none) and, for
+  sysadmin, a **free-slot check**: this schedule's next runs, each lasting the job's usual duration (the median of its last 10
+  successful runs from `sp_help_jobhistory`, or a minute when it has none), against the runs of every other enabled job's
+  schedules lasting theirs. A schedule shared with other jobs names them and says a change moves them too, with **Copy for this
+  job only** (detach the shared one as read, add a copy that keeps the edits); one the login neither owns nor may change
+  (below sysadmin) is read-only with Copy. **Add** searches the shared schedules by name or by when they run ("night", "every
+  15 minutes", "sunday"); a match shows a preview (sentence, owner, next runs, the jobs that use it) with Attach, and New
+  schedule starts from SSMS's defaults, named from the search. **Remove** marks the job's schedule removed with Undo and a
+  choice: detach it and keep the schedule, or (its owner and sysadmin) detach it and delete it when no job uses it. Nothing
+  reaches the server until the job's Save, which runs the schedule calls last in the job's transaction in a fixed order:
+  `sp_detach_schedule` (with `@delete_unused_schedule` for delete, so msdb deletes only an unused schedule, jobs the login cannot
+  see included, and never fails the save over it), a guarded `sp_attach_schedule` for each picked one, a guarded
+  `sp_update_schedule` for each edited one (after the attach, which leaves the schedule's version as it is, so a picked schedule
+  edited in the same save passes both guards), and `sp_add_jobschedule` for each new one. Each guard compares the schedule's
+  `version_number` and `date_modified` (`sysschedules_localserver_view`, `UPDLOCK, HOLDLOCK`) and THROWs 50011 with the call's
+  index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits.
+- **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
+  document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
+  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule and job names and when schedules run, and
+  beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
+  job, and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
+  the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
+  user's on top, for the user to save again. The tab asks before closing with unsaved ones. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
+  Create adds; Delete asks inline and never forces, so msdb refuses one a job uses (`IN_USE`, 14372), saying how many jobs.
+  Every change is the `agentSchedule` object action on the Agent node with `op` `create` (`sp_add_schedule` with the new id as
+  an OUTPUT local, then guarded `sp_attach_schedule`s), `update` (the guard, `sp_update_schedule` with what changed, then guarded
+  attaches and `sp_detach_schedule`s), `enable`, `disable` or `delete` (`sp_delete_schedule` without `@force_delete`), one
+  transaction each with the guard above and each job's `version_number` checked before it is attached or detached. Below
+  sysadmin, `sysjobschedules` is closed, so a schedule's jobs are read when it is selected (`sp_help_jobs_in_schedule`, which
+  shows SQLAgentUserRole only its own jobs) and Unused counts every job, the unseen included. The saves have their own
+  exact-shape lint, `AgentSql.LintScheduleSave`, which also refuses `@force_delete`.
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
   document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
@@ -256,6 +292,13 @@ checks nothing committed, renames it to a hostile name and back, runs the script
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, and creates
 a job by copying another from New Job.
+
+`AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
+a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror
+`timingProblem`, the validation, the error mapping onto the Schedules field, the script and the describe's records, jobs and
+median durations. The `agent-job` smoke suite adds a schedule from a preset and attaches a shared one found by search on the job
+document, then, in the Schedules document, saves an Enabled box at once and a rename under the guard, and creates a schedule
+from the Agent node's New › Schedule….
 
 `AgentHistoryChecks` checks the `agent.history` reader offline over a fake runner (the statements each source and window
 reads, grouping into runs with In progress, Unknown and Agent XPs off, the filters regrouping without SQL, truncation and each
@@ -498,12 +541,12 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_add_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_update_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_delete_jobstep` | later lanes | AG-6b |
-| `msdb.dbo.sp_add_jobschedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_attach_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_detach_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_add_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_update_schedule` | later lanes | AG-6c |
-| `msdb.dbo.sp_delete_schedule` | later lanes | AG-6c |
+| `msdb.dbo.sp_add_jobschedule` | `@job_id`, `@name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time` | AG-6c |
+| `msdb.dbo.sp_attach_schedule` | `@job_id`, `@schedule_id` | AG-6c |
+| `msdb.dbo.sp_detach_schedule` | `@job_id`, `@schedule_id`, `@delete_unused_schedule` | AG-6c |
+| `msdb.dbo.sp_add_schedule` | `@schedule_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time`, `@schedule_id` | AG-6c |
+| `msdb.dbo.sp_update_schedule` | `@schedule_id`, `@new_name`, `@enabled`, `@freq_type`, `@freq_interval`, `@freq_subday_type`, `@freq_subday_interval`, `@freq_relative_interval`, `@freq_recurrence_factor`, `@active_start_date`, `@active_end_date`, `@active_start_time`, `@active_end_time` | AG-6c |
+| `msdb.dbo.sp_delete_schedule` | `@schedule_id` | AG-6c |
 | `msdb.dbo.sp_add_operator` | later lanes | AG-7 |
 | `msdb.dbo.sp_update_operator` | later lanes | AG-7 |
 | `msdb.dbo.sp_delete_operator` | later lanes | AG-7 |

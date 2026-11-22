@@ -61,7 +61,8 @@ export const kindDialogActions = [
   'loginProperties',
   'tableProperties',
   'agentProperties',
-  'agentJob'
+  'agentJob',
+  'agentSchedule'
 ] as const
 export type KindDialogAction = typeof kindDialogActions[number]
 export interface KindDialogActionSpec {
@@ -100,7 +101,8 @@ export const dialogIds = [
   'stopAgent',
   'restartAgent',
   'agentProperties',
-  'agentJob'
+  'agentJob',
+  'agentSchedules'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -934,7 +936,10 @@ const dialogSpecData = {
     title: 'Job Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentJob',
     pages: [page('general', 'General'), page('steps', 'Steps'), page('schedules', 'Schedules'), page('notifications', 'Notifications'), page('targets', 'Targets'), page('alerts', 'Alerts'),
       page('history', 'History', { icon: 'history' })]
-  }
+  },
+  // The Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc), which replaces SSMS's Manage Schedules: the grid of the
+  // schedules the login may see, the selected one's editor and its jobs beside it. Each save is one `agentSchedule` action.
+  agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -1086,7 +1091,9 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   // SQL Server Agent Properties opens on Managed Instance too, read-only there (agentPlatformGates.agentPropertiesWrite).
   agentProperties: { title: 'SQL Server Agent Properties', dialog: 'agentProperties', kind: 'agent', verb: 'properties', engines: onServers },
   // The job document's Save (AG-6a): an existing job's changes, or New Job (target the Agent node). Agent runs on SQL Server and Managed Instance.
-  agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers }
+  agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers },
+  // A schedule's save from the Schedules document or New › Schedule… (AG-6c): on the SQL Server Agent node, as New Job's.
+  agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers }
 }
 export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
 /** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */

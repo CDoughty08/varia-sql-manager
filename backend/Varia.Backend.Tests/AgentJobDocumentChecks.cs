@@ -53,8 +53,8 @@ internal static class AgentJobDocumentChecks
     {
         var results = AgentSql.LintJobSaves().ToList();
         var failures = results.Where(item => item.Problems.Count > 0).Select(item => item.Name + ": " + string.Join(", ", item.Problems)).ToList();
-        check(failures.Count == 0 && results.Count == 2, "the job document's two save shapes pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
-        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 2, "the Agent write lint (and so the object actions' lint) runs the job saves too");
+        check(failures.Count == 0 && results.Count == 5, "the job document's five save shapes (AG-6c: three with schedule calls) pass their lint" + (failures.Count == 0 ? "" : ": " + string.Join("; ", failures)));
+        check(AgentSql.LintWrites().Count(item => item.Name.StartsWith("job save ", StringComparison.Ordinal)) == 5, "the Agent write lint (and so the object actions' lint) runs the job saves too");
         foreach (var statement in new[] { AgentSql.JobDocument, AgentSql.JobDocumentSteps, AgentSql.JobCategories, AgentSql.Operators, AgentSql.Alerts, AgentSql.AgentMail, AgentSql.MailProfiles,
             AgentSql.JobDocumentFacts, AgentSql.OwnerLogins })
             check(AgentSql.Known(statement) && AgentSql.Lint(statement, null).Count == 0, "the job document's read " + statement.Id + " is one the reader runs, and passes the Agent read lint");

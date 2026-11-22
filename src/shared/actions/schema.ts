@@ -29,6 +29,7 @@ import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentPropertiesModel, type AgentPropertiesRequest } from './agent-properties.ts'
 import { agentJobFields, agentJobSaveProblems, agentJobSaveSchema, type AgentJobDocumentModel, type AgentJobField, type AgentJobSave } from './agent-job.ts'
+import { scheduleSaveProblems, scheduleSaveSchema, type AgentScheduleSave, type AgentSchedulesModel } from './agent-schedule.ts'
 import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
@@ -49,6 +50,8 @@ export interface AttachDescribeRequest { readonly mdf: string }
 export interface ActionDescribeRequest {
   readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest; readonly restore?: RestoreSource
   readonly attach?: AttachDescribeRequest; readonly login?: string; readonly securable?: SecurableRef
+  /** agentSchedules (AG-6c): one schedule's jobs only (sp_help_jobs_in_schedule), by its id. */
+  readonly schedule?: number
 }
 /**
  * Rename. A database's (D3c) may close the other connections first (`closeConnections`: SINGLE_USER WITH ROLLBACK IMMEDIATE,
@@ -178,9 +181,15 @@ export interface AgentJobRequest {
   readonly action: 'agentJob'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentIdentity?: AgentIdentity
   readonly agentJob: AgentJobSave
 }
+/** The Schedules document's and New › Schedule…'s save (AG-6c, agent-schedule.ts): one schedule created, changed, enabled, disabled or
+ *  deleted on the SQL Server Agent node (target `{ kind: 'agent' }`), under the schedule's version guard. */
+export interface AgentScheduleRequest {
+  readonly action: 'agentSchedule'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
+  readonly agentSchedule: AgentScheduleSave
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
-  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest
+  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest | AgentScheduleRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest
@@ -396,6 +405,8 @@ export interface ActionDescribeResult {
   readonly agentProperties?: AgentPropertiesModel
   /** agentJob (AG-6a): the job document's model (agent-job.ts); without a job for New Job. */
   readonly agentJobDocument?: AgentJobDocumentModel
+  /** agentSchedules (AG-6c): the shared schedules, the jobs, which job uses which (sysadmin) and their usual durations; or one schedule's jobs. */
+  readonly agentSchedules?: AgentSchedulesModel
 }
 /** One step of a job, as sp_help_jobstep lists it. */
 export interface AgentJobStepFact { readonly id: number; readonly name: string }
@@ -527,7 +538,7 @@ export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePur
 export const attachDescribeSchema = z.object({ mdf: serverPathSchema }).strict() satisfies z.ZodType<AttachDescribeRequest>
 export const actionDescribeSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional(), restore: restoreSourceSchema.optional(),
-  attach: attachDescribeSchema.optional(), login: ident.optional(), securable: securableSchema.optional()
+  attach: attachDescribeSchema.optional(), login: ident.optional(), securable: securableSchema.optional(), schedule: z.number().int().min(1).max(2_147_483_647).optional()
 }).strict()
   .superRefine((request, context) => {
     if ((request.dialog === serverFilesDescribeId) !== (request.files !== undefined)) issue(context, 'files', 'Only the server file picker lists files, and it needs what to list.')
@@ -535,6 +546,7 @@ export const actionDescribeSchema = z.object({
     if (request.attach !== undefined && request.dialog !== 'attachDatabase') issue(context, 'attach', 'Only Attach Databases reads a primary data file.')
     if (request.login !== undefined && request.dialog !== loginDatabaseRolesDescribe) issue(context, 'login', 'Only User Mapping\'s read of a database names a login.')
     if ((request.securable !== undefined) !== (request.dialog === loginEffectiveDescribe)) issue(context, 'securable', 'Exactly the Effective tab\'s read names a securable.')
+    if (request.schedule !== undefined && request.dialog !== 'agentSchedules') issue(context, 'schedule', 'Only the Schedules read names a schedule.')
     switch (request.dialog) {
       case serverFilesDescribeId:
         if (request.target.kind !== 'server') issue(context, 'target', 'The server file picker lists folders on the server.')
@@ -573,6 +585,10 @@ export const actionDescribeSchema = z.object({
       // The job document describes a job, or the SQL Server Agent node for New Job.
       case 'agentJob':
         if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, 'agentJob', 'agentJob')) issue(context, 'target', message)
+        break
+      // The Schedules document reads the SQL Server Agent node's schedules.
+      case 'agentSchedules':
+        if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) issue(context, 'target', 'The Schedules document reads the SQL Server Agent node.')
         break
       default: {
         // A server action's document describes the server it makes something on.
@@ -615,6 +631,7 @@ const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), conne
 const startJobSchema = z.object({ action: z.literal('startJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), stepName: ident.optional() }).strict()
 const stopJobSchema = z.object({ action: z.literal('stopJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional() }).strict()
 const agentJobRequestSchema = z.object({ action: z.literal('agentJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), agentJob: agentJobSaveSchema }).strict()
+const agentScheduleRequestSchema = z.object({ action: z.literal('agentSchedule'), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict(), agentSchedule: scheduleSaveSchema }).strict()
 export const agentServiceRequestSchema = z.object({
   action: z.enum(['startAgent', 'stopAgent', 'restartAgent']), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict()
 }).strict() satisfies z.ZodType<AgentServiceRequest>
@@ -803,7 +820,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   startJobSchema,
   stopJobSchema,
   agentPropertiesRequestSchema,
-  agentJobRequestSchema
+  agentJobRequestSchema,
+  agentScheduleRequestSchema
 ]).superRefine((request, context) => {
   // A job's identity goes only with a job's verb.
   if ('agentIdentity' in request && request.agentIdentity !== undefined && request.target.kind !== 'agentJob') issue(context, 'agentIdentity', 'Only a SQL Server Agent job has an Agent identity.')
@@ -811,7 +829,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   // included), the database it makes, or the server.
   // New Job is the job document's Save on the SQL Server Agent node.
   const newJob = request.action === 'agentJob' && request.target.kind === 'agent' && Object.keys(request.target).length === 1
-  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
+  // A schedule's save runs on the SQL Server Agent node, whose schema already allows nothing else.
+  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob && request.action !== 'agentSchedule') for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
   switch (request.action) {
     case 'createDatabase':
       for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
@@ -851,6 +870,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
     case 'agentJob':
       for (const problem of agentJobSaveProblems(request.agentJob, newJob)) issue(context, 'agentJob', problem)
+      break
+    case 'agentSchedule':
+      for (const problem of scheduleSaveProblems(request.agentSchedule)) issue(context, 'agentSchedule', problem)
       break
   }
 }) satisfies z.ZodType<ActionRequest>
