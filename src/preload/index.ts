@@ -195,6 +195,13 @@ const api: VariaApi = {
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
   dropJobRecords: jobKey => ipcRenderer.invoke('varia:job-records-drop', jobKey),
   keepJobsAtQuit: jobKeys => ipcRenderer.invoke('varia:quit-keep-jobs', jobKeys),
+  cancelRestoredJobs: jobKeys => ipcRenderer.invoke('varia:jobs-cancel-restored', jobKeys),
+  reviewJobsWithoutTab: openJobKeys => ipcRenderer.invoke('varia:jobs-without-tab', openJobKeys),
+  onFailedAborts: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, count: unknown) => { if (typeof count === 'number' && Number.isSafeInteger(count) && count > 0) listener(count) }
+    ipcRenderer.on('varia:failed-aborts', handler)
+    return () => { ipcRenderer.removeListener('varia:failed-aborts', handler) }
+  },
   writeClipboardText: text => { clipboardWrites++; return ipcRenderer.invoke('varia:clipboard-write', text) },
   clipboardWrites: () => clipboardWrites,
   raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),

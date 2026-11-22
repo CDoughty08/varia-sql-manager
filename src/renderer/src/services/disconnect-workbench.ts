@@ -12,7 +12,7 @@ import type { QueryService } from './queries'
 export interface DisconnectWorkbenchOptions {
   readonly connectionTargets: ConnectionTargetService
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'revision' | 'runTask' | 'connectionBusy' | 'endSession'>
-  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions' | 'sessionNote'>
+  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions' | 'sessionNote'> & Partial<Pick<QueryService, 'failedAborts'>>
   readonly files: Pick<FileService, 'prepareQueryClose' | 'validateQueryClose'>
   readonly longRuns: Pick<LongRunService, 'disconnectRefusal'>
   readonly prompts: DisconnectPromptService
@@ -46,6 +46,8 @@ export function createDisconnectCoordinator(options: DisconnectWorkbenchOptions)
     disconnect: async handle => {
       const response = await api.disconnect(handle.id)
       if (!response.ok) throw new Error(response.error)
+      // Idle BigQuery sessions whose end failed: their temp tables and any transaction stay until BigQuery ends them.
+      if (response.value.failedAborts) queries.failedAborts?.(response.value.failedAborts)
     },
     detached: options.detached,
     closeQueries: options.closeQueries

@@ -70,3 +70,9 @@ export const cancelJobsResultSchema = z.object({
   jobs: z.array(z.object({ jobId: jobIdSchema, cancelled: z.boolean(), note: noteSchema.optional(), error: z.string().max(16_385).optional() }).strict()).max(jobLimits.cancel)
 }).strict()
 export type CancelJobsResult = z.infer<typeof cancelJobsResultSchema>
+/** Cancelling jobs from their records (session.cancelRestoredJobs, the records dialog, deleting a profile): each job's
+ *  outcome, and the jobs whose profile cannot cancel without a connection (an ad-hoc connection, a key file picked for one
+ *  run), listed by id for BigQuery's job history. */
+export interface RecordedJobsCancel { readonly jobs: CancelJobsResult['jobs']; readonly uncancellable: readonly string[] }
+/** The records dialog's outcome: what was asked about, and what Cancel Jobs did. */
+export interface JobsWithoutTabReview { readonly answer: 'cancel' | 'keep'; readonly jobIds: readonly string[]; readonly cancel?: RecordedJobsCancel }
