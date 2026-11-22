@@ -811,6 +811,33 @@ describe("the job document's Schedules section", () => {
     await jobDocuments.save(id)
     expect(executes().at(-1)).toMatchObject({ agentJob: { schedules: { attach: [{ id: 2, version: 9, modified: '2026-11-21T00:00:00.000' }] } } })
   })
+  it("says which of a New Job's picked schedules were deleted after a STALE save, and when they could not be read again", async () => {
+    const { jobDocuments, answers, setShared, api } = jobWorkbench({ ...job, job: undefined, schedules: [] })
+    const id = jobDocuments.newJob('c1')
+    await settled()
+    jobDocuments.startBlank(id)
+    jobDocuments.updateDraft(id, { name: 'Fresh' })
+    jobDocuments.ensureShared(id)
+    await settled()
+    jobDocuments.attachSchedule(id, jobDocuments.get(id)!.shared!.model!.schedules[1])
+    const stale = { ok: true as const, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE' as const, message: 'Changed.', retryable: false, field: 'schedules' as const } } }
+    // The shared read fails: nothing moved, and the message says so rather than claiming the picks show the change.
+    answers.push(stale)
+    const describe = api.describeObject.getMockImplementation()!
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, code: 'SQL_ERROR', error: 'Refused.' }))
+    expect(await jobDocuments.save(id)).toBe(false)
+    await settled()
+    expect(jobDocuments.get(id)?.error?.message).toBe(jobDocumentText.pickedUnread('Refused.'))
+    expect(jobDocuments.get(id)!.draft!.schedules.map(entry => entry.id)).toEqual([2])
+    // Deleted since: dropped, and the banner's error says so (a notice would sit under it unseen).
+    api.describeObject.mockImplementation(describe)
+    answers.push(stale)
+    setShared(schedulesModel({ schedules: [record(1)] }))
+    expect(await jobDocuments.save(id)).toBe(false)
+    await settled()
+    expect(jobDocuments.get(id)!.draft!.schedules).toEqual([])
+    expect(jobDocuments.get(id)?.error?.message).toBe(`${jobDocumentText.pickedChanged} ${jobScheduleText.pickedGone(1)}`)
+  })
   it("neither removes nor copies a job's schedule the login cannot see, and attaches no schedule without a guard", async () => {
     const unseen = record(7, { name: 'Theirs', owner: undefined, version: undefined, modified: undefined })
     const { jobDocuments } = jobWorkbench({ ...job, job: { ...job.job!, owner: 'pat' }, owners: ['pat'], login: 'pat', sysadmin: false, schedules: [unseen, record(1, { owner: 'pat' })] })

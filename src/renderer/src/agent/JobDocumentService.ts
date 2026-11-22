@@ -103,7 +103,9 @@ export const jobDocumentText = {
   backendLost: 'The SQL backend stopped while the job was being saved, so whether it was saved is unknown. Reload the job to check.',
   copyFailed: 'The job to copy could not be read:',
   replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.',
-  pickedChanged: 'A schedule you attached was changed since it was read, so the job was not created. The attached schedules now show it as it is, with your edits kept: check them and save again.'
+  pickedChanged: 'A schedule you attached was changed or deleted since it was read, so the job was not created. Those still attached now show the server’s version with your edits kept: check them and save again.',
+  pickedUnread: (error: string) => `A schedule you attached was changed or deleted since it was read, so the job was not created, and the shared schedules could not be read again: ${error} Save again to retry.`,
+  closed: 'The connection is closed.'
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
   { id: 'general', title: 'General' }, { id: 'schedules', title: 'Schedules' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
@@ -389,11 +391,11 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.model || !state.draft || !connectionId) return
     // A new job has no version of its own: only an attached schedule's guard can refuse it. Its pick is read again and moved onto the
-    // schedules as they are now (Reload would discard the new job), so the next Save names their versions. The message names no field,
-    // so moving the picks does not clear it.
+    // schedules as they are now (Reload would discard the new job), so the next Save names their versions. The message, set once that
+    // read lands, says what moved or why nothing did; it names no field, so moving the picks does not clear it.
     if (!state.model.job) {
-      this.patch(id, { phase: 'ready', error: { code: refusal.code, retryable: refusal.retryable, message: jobDocumentText.pickedChanged }, ...this.restartScheduleReads(id) })
-      this.ensureShared(id, true)
+      this.patch(id, { phase: 'ready', error: { code: refusal.code, retryable: refusal.retryable, message: refusal.message }, ...this.restartScheduleReads(id) })
+      if (!this.ensureShared(id, true, refusal)) this.patch(id, { error: { code: refusal.code, retryable: refusal.retryable, message: jobDocumentText.pickedUnread(jobDocumentText.closed) } })
       return
     }
     const requestId = this.begin(id, 'describe')
@@ -640,9 +642,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   /** The shared schedules, read once per open (a save and Reload read them again). `rebase` (Reload and keep my changes) moves picked
    *  schedules onto what this read finds. */
-  ensureShared(id: string, rebase = false): void {
+  ensureShared(id: string, rebase = false, stale?: ActionError): boolean {
     const state = this.get(id), connectionId = this.connectionOf(id)
-    if (!state || !connectionId || state.shared?.state === 'loading' || state.shared?.state === 'ready' || !this.live(id)) return
+    if (!state || !connectionId || !this.live(id)) return false
+    if (state.shared?.state === 'loading' || state.shared?.state === 'ready') return true
     this.patch(id, { shared: { state: 'loading' } })
     const generation = this.scheduleGeneration(id)
     void this.scheduleRead(id, { connectionId, dialog: 'agentSchedules', target: { kind: 'agent' } }).then(result => {
@@ -651,15 +654,22 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       const error = !result.ok ? result.error : result.value.error?.message
       this.patch(id, { shared: model && !error ? { state: 'ready', model } : { state: 'failed', error: error ?? jobScheduleText.listFailed } })
       const draft = this.get(id)?.draft
+      let gone = 0
       if (rebase && model && !error && draft) {
         const schedules = refreshPickedSchedules(draft.schedules, model.schedules, !model.truncated)
         if (schedules !== draft.schedules) {
-          const gone = draft.schedules.length - schedules.length
+          gone = draft.schedules.length - schedules.length
           this.updateDraft(id, { schedules })
-          if (gone) this.patch(id, { notice: jobScheduleText.pickedGone(gone) })
+          if (gone && !stale) this.patch(id, { notice: jobScheduleText.pickedGone(gone) })
         }
       }
+      // A New Job's STALE: the banner shows the error, not a notice, so what the read found goes in its message.
+      if (stale) {
+        const message = model && !error ? `${jobDocumentText.pickedChanged}${gone ? ` ${jobScheduleText.pickedGone(gone)}` : ''}` : jobDocumentText.pickedUnread(error ?? jobScheduleText.listFailed)
+        this.patch(id, { error: { code: stale.code, retryable: stale.retryable, message } })
+      }
     })
+    return true
   }
   /** One schedule's jobs, where the shared read has no links (below sysadmin): read once per schedule; a failed read is tried again next time. */
   ensureScheduleJobs(id: string, scheduleId: number): void {
