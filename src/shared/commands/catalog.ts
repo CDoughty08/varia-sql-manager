@@ -553,7 +553,10 @@ export const commandCatalog = {
   'explorer.previewRows': {
     title: 'Preview Rows', category: 'Object Explorer', icon: 'table', keywords: ['bigquery', 'preview', 'rows', 'tabledata', 'free', 'top'], methods: ['query.execute'], providers: ['bigquery'],
     precondition: "backendReady && explorerSelectionKind == 'bqTable' && !documentBusy", unavailableHint: 'Select a BigQuery table in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'w', when: "explorerNode == 'bqTable' && !explorerServerLost" },
+      { menu: 'search.hit.context', group: '1_query', order: 1, mnemonic: 'p', when: "explorerSelectionKind == 'bqTable'" }
+    ]
   },
   // BigQuery's Properties: a table-like object's facts from tables.get in a read-only document tab.
   'explorer.bigQueryProperties': {
@@ -842,12 +845,12 @@ export const commandCatalog = {
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
   },
   'edit.commasToFront': {
-    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
   },
   'edit.commasToEnd': {
-    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'], providers: both,
+    title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
     precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
@@ -1221,6 +1224,12 @@ export const commandCatalog = {
     title: 'Transpose Results', category: 'Query', icon: 'transpose', keywords: ['transpose', 'transposed', 'rotate', 'swap', 'flip', 'columns', 'rows', 'record', 'grid', 'result', 'orientation'], toggled: 'resultsGridTransposed', providers: both,
     menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 1, title: 'Transposed', mnemonic: 't', when: 'outputGridTransposable' }, { menu: 'output.tools', group: '2_view', order: 3, title: 'Transposed', mnemonic: 't' }]
   },
+  // A windowed BigQuery result of a finished run read into result memory (results.remoteQuery `load`), in place: its grid's
+  // strip offers it too, and Stop while it runs.
+  'output.loadIntoMemory': {
+    title: 'Load Result into Memory', category: 'Query', icon: 'cloud-download', keywords: ['bigquery', 'windowed', 'load', 'memory', 'remote', 'rows', 'grid', 'result'], providers: ['bigquery'], methods: ['results.remoteQuery'],
+    menus: [{ menu: 'output.tools', group: '2_view', order: 5, title: 'Load into Memory', mnemonic: 'i' }]
+  },
   'output.transposeSelectedRows': {
     title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'keep', 'grid'], providers: both,
     menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 2, title: 'Selected Rows', mnemonic: 's', when: 'outputGridTransposable' }]
@@ -1387,7 +1396,7 @@ export const commandCatalog = {
   },
   // Search Objects: a tab that searches a server's object index (names and module definitions), loaded in the tree or not.
   'explorer.searchObjects': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Search Objects…', category: 'Object Explorer', icon: 'search', keywords: ['find', 'objects', 'definitions', 'text', 'procedures', 'index', 'regex', 'grep'], methods: ['explorer.search'],
     precondition: 'hasConnection', unavailableHint: noServer,
     menus: [
@@ -1396,20 +1405,20 @@ export const commandCatalog = {
     ]
   },
   'explorer.rebuildIndex': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
     precondition: 'hasConnection', unavailableHint: noServer
   },
-  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
+  'explorer.stopIndexing': { providers: both, title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
   // A Search Objects result's menu (search.hit.context) and keys. They act on the result the menu was opened for, else the
   // selected result of the list that has focus; the palette offers none of them, since it has no result to act on.
   'search.revealHit': {
-    title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    providers: both, title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     menus: [{ menu: 'search.hit.context', group: '0_reveal', order: 1, mnemonic: 'r' }]
   },
   // Ctrl+C (and Edit › Copy) on a focused result runs it from SearchPanel's list, as the results grid's does; the rule only labels the key.
   'search.copyName': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]
   },
@@ -1419,14 +1428,14 @@ export const commandCatalog = {
     menus: [{ menu: 'search.copy', group: '1_names', order: 2, title: 'Schema-Qualified Name', mnemonic: 's', when: 'searchHitSchema' }]
   },
   'search.copyQualifiedName': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Copy Fully Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
-    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema' }]
+    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema || searchHitBigQuery' }]
   },
   'search.copyBracketedName': {
     providerContext: 'own',
     title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
-    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
+    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b', when: '!searchHitBigQuery' }]
   },
   // Peek's Properties pane (peek.properties.context): the facts whose text is selected, else all of them, as Name<TAB>Value lines.
   'peek.copyProperties': {

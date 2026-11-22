@@ -230,6 +230,7 @@ export const contextKeys = {
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
   documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
   searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' },
+  searchHitBigQuery: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is a BigQuery object, whose full name is its backtick-quoted path rather than a bracketed one.' },
   resultsGridComparison: { type: 'boolean', scope: 'state', description: "The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is." },
   comparisonInputsOpen: { type: 'boolean', scope: 'state', description: "Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable." },
   outputGridComparison: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a comparison's results grid." },

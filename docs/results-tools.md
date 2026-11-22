@@ -154,8 +154,10 @@ Cancel still stops the query.
 
 A BigQuery result can instead stay windowed in BigQuery: its rows are read into a bounded cache as the grid scrolls, and
 an Automatic result the budget refuses part way switches to windowed rather than stopping. Its sorts, filters and value
-lists run in BigQuery as billed queries ([Sort and filter in BigQuery](bigquery.md#sort-and-filter-in-bigquery)); profiles,
-pivots, comparisons, Copy and Save need its rows in memory and refuse a windowed result
+lists run in BigQuery as billed queries ([Sort and filter in BigQuery](bigquery.md#sort-and-filter-in-bigquery)). Copy
+reads its rows through that cache within the Copy limit, Save Results As streams them from BigQuery to the file, and
+Load into memory (its grid's strip, the toolbar's ⋯, offered while the result fits the result memory free) reads the
+whole result into memory. Profiles, pivots and comparisons need its rows in memory and refuse a windowed result
 (docs/bigquery.md, [Residence](bigquery.md#residence)); Search searches the run's other grids, skips a windowed one and
 says so ("A result windowed in BigQuery was not searched").
 

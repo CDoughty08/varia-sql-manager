@@ -36,9 +36,8 @@ later lanes, behind the same gate until 0.11.0.
   Disable (Enable on a disabled job), Rename and Delete. Start Job at Step… reads the job and its steps (`sp_help_jobstep`):
   a job with one step starts as the dialog opens, as SSMS's does, and one with more lists its steps, the first chosen.
   Stop Job, Disable, Enable and Rename run as status-bar jobs with Stop; Delete is Delete Object, which also deletes the
-  job's history and the schedules no other job uses. Each verb sends the job's creation time from the tree
-  (`agentIdentity`, sysjobs `date_created` to the second), and its one batch resolves the job by name and that time first,
-  so a job created since under the name is refused `NOT_FOUND` before msdb runs anything. The batches call only the msdb
+  job's history and the schedules no other job uses. Each verb sends the listed job's immutable msdb `job_id` and name. If another job has
+  taken the name, the batch returns `NOT_FOUND` before calling the procedure. The batches call only the msdb
   procedures listed below, with named arguments, and are checked by `AgentSql.LintExecutable`, an exact-shape allow list.
   msdb's procedures report failures by return code, so each batch raises its own error on a nonzero code. SQL Server
   Agent's 22022 is read again before it is reported: Agent XPs off is `AGENT_STOPPED` ("SQL Server Agent is not running"),
@@ -86,7 +85,7 @@ later lanes, behind the same gate until 0.11.0.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
-  the job is resolved by name and creation time, the STALE guard compares `version_number` and `date_modified` under `UPDLOCK, HOLDLOCK` (so no other save lands
+  the job is resolved by name and its immutable `job_id`, the STALE guard compares `version_number` and `date_modified` under `UPDLOCK, HOLDLOCK` (so no other save lands
   before this one's) and THROWs 50011 when either moved, each removed alert is checked to still run this job before `sp_update_alert @job_id` detaches it
   (the zero GUID), and every call checks its return code (50012 with the call's index), so nothing commits unless all of it
   does. A refusal lands on the field the failing call changed (msdb's "does not exist" for an owner, operator or alert is a `SQL_ERROR` there, since `NOT_FOUND` means the job itself), the document keeps the edits, and `STALE`, or `NOT_FOUND` for a job no longer under the name it was read by (the compare finds a renamed job by its id; a job deleted and created again under the name is not compared, and Reload opens it), opens a field-by-field

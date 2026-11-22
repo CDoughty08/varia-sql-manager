@@ -122,7 +122,7 @@ internal sealed partial class SqlService
     {
         var rows = Math.Min(Wanted(context.Args, context.TotalRows), RemoteResult.MaxRows);
         return RemoteResult.Create(store, set.ResultId, set.Wires, rows, context.TotalRows > rows, context.RowCost, context.CacheBytes, context.Connection.FetchLane,
-            BigQueryFetch(context), context);
+            BigQueryFetch(context), context, new BigQueryRemoteRows(this, context, set));
     }
 
     /// <summary>

@@ -65,6 +65,7 @@ internal static partial class BigQueryExecutionChecks
         ForkedPlans(check);
         Trace("RemoteViews");
         await RemoteViewsAsync(check);
+        await CopySaveAsync(check);
     }
 
     /// <summary>Forks of one column plan decode side by side exactly as one plan decodes alone (block fetches run in parallel).</summary>
@@ -974,7 +975,7 @@ internal static partial class BigQueryExecutionChecks
             await harness.ConnectAsync();
             var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
-            check(code == "ok" && set is { Residence: "memory", RowsTotal: 1200, RowsStored: 1200, Revision: 0 } && harness.Service.Results.Find(set.ResultId)?.SwitchesOnRefusal == true
+            check(code == "ok" && set is { Residence: "memory", RowsTotal: 1200, RowsStored: 1200, Revision: 0, ProjectedBytes: null } && harness.Service.Results.Find(set.ResultId)?.SwitchesOnRefusal == true
                 && harness.Jobs.TableReads.IsEmpty, $"Automatic keeps a result that fits in memory: {set?.Residence} {set?.RowsStored}");
         }
         // Too large for half the room: windowed, its first page cached, nothing read from the table yet.
@@ -990,6 +991,10 @@ internal static partial class BigQueryExecutionChecks
                 $"Automatic windows a result too large for half the room, its first page cached: {code} {message} {set?.Residence} {set?.RowsAvailable} {set?.Truncated}");
             check(store.WindowCacheBytes > 0 && store.WindowCacheBytes == buffer?.Remote?.CachedBytes && store.MemoryDetail().WindowCacheBytes == store.WindowCacheBytes,
                 "the window cache is charged to the store and shown in the memory detail: " + store.WindowCacheBytes);
+            // Load into memory is offered under the projection: the measured row cost times the rows.
+            var projected = buffer?.Remote is { } windowed ? (long)Math.Ceiling(windowed.RowCost * windowed.Rows) : -1;
+            check(set?.ProjectedBytes == projected && projected > 0 && buffer?.Describe().ProjectedBytes == projected,
+                $"a windowed result's descriptor carries its projected size in memory: {set?.ProjectedBytes} {projected}");
         }
         // Always in memory truncates at the budget as before.
         using (var harness = new Harness(Lines(3000), new ResultStore(4L << 20, 32 * 1024)))
@@ -1127,20 +1132,6 @@ internal static partial class BigQueryExecutionChecks
             await RefusesDiff(memoryId, id);
             await Refuses("results.diffSeek", new JsonObject { ["viewId"] = 1, ["partnerOf"] = 0 });
             check(refusals.Count == 0, "every reader of stored pages answers REMOTE_RESULT for a windowed result: " + string.Join("; ", refusals));
-            var set = harness.Service.Results.Find(id)!;
-            string? leased;
-            using (var context = new RequestContext(3, "results.copy", RequestLane.Results, 0, 16L << 20, sendData: (owner, _, body) => owner.Grant((uint)body.Length)))
-            {
-                var copy = new JsonObject
-                {
-                    ["resultId"] = id, ["parts"] = new JsonArray(new JsonObject { ["rows"] = new JsonArray(new JsonArray(0, 1)), ["columns"] = new JsonArray(new JsonArray(0, 1)) }),
-                    ["headers"] = false, ["eol"] = "lf", ["maxBytes"] = 1000
-                };
-                using var document = JsonDocument.Parse(copy.ToJsonString());
-                try { await harness.Service.DispatchAsync("results.copy", document.RootElement.Clone(), Wire, context); leased = "ok"; }
-                catch (RequestException error) { leased = error.Code; }
-            }
-            check(leased == "REMOTE_RESULT" && set.Leases == 0, "Copy and Save's lease refuses a windowed result: " + leased);
 
             harness.Service.Results.Release([id, memoryId]);
             check(harness.Service.Results.WindowCacheBytes == 0 && harness.Service.Results.UsedBytes == 0, "closing a windowed result gives back its cache: " + harness.Service.Results.UsedBytes);
@@ -1987,9 +1978,10 @@ internal static partial class BigQueryExecutionChecks
                 var size = remote.BlockRows;
                 blocks.PadOf = row => row < size ? 2_000 : (int)(2_000 * wide);
                 await ReadRemote(remote, 0, 10, viewer: 1);
-                // A fetch leaves the count before its finally gives the estimate back: wait for both (a leak never settles).
-                SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), 15_000);
-                if (store.WindowCacheBytes != remote.CachedPageCost()) failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
+                // Yield the read continuation so read-ahead can finish and return its estimate before comparing page costs.
+                var settled = await BigQuerySessionChecks.Poll(() => remote.FetchingBlocks() == 0 && store.WindowCacheBytes == remote.CachedPageCost(), seconds: 15);
+                if (!settled || store.WindowCacheBytes != remote.CachedPageCost())
+                    failures.Add($"{wide}x: charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}, fetching {remote.FetchingBlocks()}, settled {settled}");
             }
             check(failures.Count == 0, "a refused read-ahead overrun gives back its estimate: " + string.Join(", ", failures));
         }
@@ -2063,8 +2055,57 @@ internal static partial class BigQueryExecutionChecks
             List<long> rows = [];
             try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
             catch (RequestException error) { outcome = error.Code; }
+            // The blocks the read answered without are still settling (each refused in turn): the cache is measured after.
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
             check(outcome == "ok" && next > 0 && next < 10L * remote.BlockRows && Consecutive(rows, 0, (int)next) && remote.CachedBytes <= remote.CacheLimit,
                 $"a read across more blocks than the cache holds answers short with the rows that fit: {outcome} {next} {remote.BlockRows} {remote.CachedBytes}");
+        }
+        // The same read with its first block slow to reach its reservation: the later blocks wait for it rather than take the
+        // room first (up to twice the cache, for blocks a read waits for), which left the first refused and the read TOO_LARGE
+        // with no rows sent. Block 0 holds its lane until a later block waits for it, or, were they not ordered, until every
+        // later block has settled.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 16_000 };
+            using var remote = Remote(store, blocks, rows: 100_000, rowBytes: 16_384, cache: 16L << 20);
+            var awaiting = 0;
+            remote.AwaitingRoom = _ => Interlocked.Increment(ref awaiting);
+            remote.Reserving = index => { if (index == 0) SpinWait.SpinUntil(() => Volatile.Read(ref awaiting) > 0 || remote.FetchingBlocks() == 1, 15_000); };
+            string outcome;
+            long next = -1;
+            List<long> rows = [];
+            try { (next, rows) = await ReadRemote(remote, 0, 10 * remote.BlockRows); outcome = "ok"; }
+            catch (RequestException error) { outcome = error.Code; }
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(outcome == "ok" && awaiting > 0 && next > 0 && Consecutive(rows, 0, (int)next),
+                $"a read's later blocks never take the room its first block needs: {outcome} next {next}, {awaiting} waited");
+        }
+        // A read whose block a read-ahead overrun waits for resumes off the fetch's thread: inline, the read's sending (here held
+        // until the overrun settles) ran before the overrun's wait could end, so the overrun stayed parked behind it.
+        {
+            var store = new ResultStore(1L << 30, 1L << 29);
+            var blocks = new Blocks { Pad = 200_000, Gate = new(TaskCreationOptions.RunContinuationsAsynchronously), Holds = first => first == 0 };
+            using var remote = Remote(store, blocks, rows: 1000, rowBytes: 200_016, cache: 16L << 20);
+            var size = remote.BlockRows;
+            // Block 1, read ahead, comes out wider than its estimate: its overrun finds block 0 holding the room and waits for it.
+            blocks.PadOf = row => row < size ? 200_000 : 300_000;
+            var overrunWaited = false;
+            var zeroReserved = 0;
+            // Block 1 reserves after block 0, so its overrun finds block 0 holding room (else it would find nothing to wait for).
+            remote.Reserved = index => { if (index == 0) Volatile.Write(ref zeroReserved, 1); };
+            remote.Reserving = index => { if (index == 1) SpinWait.SpinUntil(() => Volatile.Read(ref zeroReserved) == 1, 15_000); };
+            remote.OverrunWaiting = index => { if (index == 1) { Volatile.Write(ref overrunWaited, true); blocks.Gate.TrySetResult(); } };
+            var settled = false;
+            var sends = 0;
+            var next = await remote.ReadAsync(0, 10, 1, _ =>
+            {
+                if (Interlocked.Increment(ref sends) == 1) settled = SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+                return ValueTask.CompletedTask;
+            }, TimeSpan.FromSeconds(30), CancellationToken.None);
+            blocks.Gate.TrySetResult();
+            SpinWait.SpinUntil(() => remote.FetchingBlocks() == 0, 15_000);
+            check(overrunWaited && settled && next >= 10 && store.WindowCacheBytes == remote.CachedPageCost(),
+                $"a read resumes off its fetch's thread, so an overrun waiting on that fetch settles while the read sends: waited {overrunWaited}, settled {settled}, next {next}, charged {store.WindowCacheBytes}, pages {remote.CachedPageCost()}");
         }
         // The table expires after some blocks were cached: a read across them answers with the cached rows, not an error.
         {

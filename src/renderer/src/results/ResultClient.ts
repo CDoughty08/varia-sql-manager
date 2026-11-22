@@ -60,6 +60,11 @@ export interface ResultSnapshot {
   residence?: ResultResidence
   rowsTotal?: number
   revision?: number
+  /** A windowed result's projected size in memory (ResultDescriptor); only while it is windowed. */
+  projectedBytes?: number
+  /** While a windowed result loads into memory, the rows it showed before: the grid keeps drawing them (as loading past
+   *  the rows loaded so far) so it neither empties nor loses its scroll position. Gone once the load completes. */
+  rowsExpected?: number
 }
 /** What a window holds: columns [colStart, colEnd), cells cut at `maxCellChars`, and with `display` grid text. */
 export interface WindowShape { colStart?: number; colEnd?: number; maxCellChars?: number; display?: boolean }
@@ -1076,6 +1081,11 @@ export class ResultClient implements Disposable {
     if (rowsTotal !== undefined) next.rowsTotal = rowsTotal
     const revision = values.revision ?? previous.revision
     if (revision !== undefined) next.revision = revision
+    const projected = values.projectedBytes ?? (revised ? undefined : previous.projectedBytes)
+    if (projected !== undefined && residence === 'remote') next.projectedBytes = projected
+    // A windowed result loading into memory starts its counters again: the grid keeps the rows it showed until they load.
+    const expected = revised ? (current.residence === 'remote' && residence === 'memory' ? Math.max(current.rowsAvailable, current.rowsExpected ?? 0) : 0) : previous.rowsExpected ?? 0
+    if (next.state === 'open' && residence !== 'remote' && expected > next.rowsAvailable) next.rowsExpected = expected
     this.publish(state, next)
   }
 

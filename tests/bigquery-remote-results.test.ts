@@ -77,6 +77,9 @@ describe('BigQuery remote results', () => {
   it('says in the caption that a result is windowed in BigQuery', () => {
     expect(rowsFact({ rowsAvailable: 5_000_000, state: 'complete', residence: 'remote' })).toBe('5,000,000 rows · windowed in BigQuery')
     expect(rowsFact({ rowsAvailable: 1, state: 'complete', residence: 'memory' })).toBe('1 row')
+    // A cache hit's destination table is an older one, which may expire sooner than a day after this run.
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'remote' }, undefined, true)).toBe('5 rows · windowed in BigQuery · cached result: may expire early')
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'memory' }, undefined, true)).toBe('5 rows')
     expect(rowsFact({ rowsAvailable: 2, state: 'open' })).toBe('2 rows')
   })
 
@@ -199,7 +202,7 @@ describe('the user-facing text about windowed results', () => {
     const remoteQuery = ipc.slice(start, ipc.indexOf('\n- ', start + 3))
     expect(remoteQuery).toMatch(/`RESULT_RELEASED`/)
     expect(bigquery.slice(bigquery.indexOf('- **Load into memory.**'), bigquery.indexOf('- **What waits.**'))).toMatch(/Closing the result stops the load/)
-    // No renderer command loads a windowed result yet: the docs must not tell the user to.
+    // While no renderer command loads a windowed result, the docs must not tell the user to (Load into memory now does).
     const renderer = join(__dirname, '..', 'src', 'renderer', 'src')
     const sources = (readdirSync(renderer, { recursive: true }) as string[]).filter(name => /\.tsx?$/.test(name))
     // A real call on a code line: a comment, or a wrapper's own declaration, does not turn the gate off.

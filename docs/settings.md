@@ -284,6 +284,7 @@ A property grid: True/False lists, values that differ from their default in bold
 | `objectExplorer.groupBySchema` | Group by Schema | Boolean | False |  | All | At once | Lists each database's schemas after its own folders, with the Tables, Views, Synonyms and Programmability folders of each schema below it; Database Triggers, Assemblies and Plan Guides stay in the database's Programmability folder. A filter below a schema applies to that schema's folder only. The Object Explorer toolbar's Group by Schema button turns it on and off. |
 | `objectExplorer.search.indexOnConnect` | Index objects when a server connects | Boolean | True |  | All | At once | Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, a server is indexed only when you ask: Build index in Search Objects, or Rebuild Search Index. Not in SSMS. |
 | `objectExplorer.search.definitions` | Index module definitions | Boolean | True |  | All | At once | Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build. Not in SSMS. |
+| `objectExplorer.search.bigQueryExtraProjects` | Index BigQuery extra projects’ schemas | Boolean | False |  | All | At once | A BigQuery connection’s index reads every table’s columns and every view’s and routine’s text in its billing project, and only the names of datasets and objects in its extra projects. When True, the extra projects’ schemas and text are read as well (free metadata calls, one per table, view and routine). Applies to the next build. Not in SSMS. |
 
 ### SQL Server Object Explorer › Scripting
 
@@ -395,4 +396,4 @@ Sections: **Object Explorer**, **Operations** (The Operations view of the SSIS C
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (133 today).
+A patch holds at most one entry per setting (134 today).

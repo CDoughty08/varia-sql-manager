@@ -325,7 +325,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const save = agentJobSave(state.model, state.draft)
     if (!save) return undefined
     const job = state.model.job
-    return job ? { action: 'agentJob', target: { kind: 'agentJob', name: job.name }, agentIdentity: { created: job.created }, agentJob: save } : { action: 'agentJob', target: { kind: 'agent' }, agentJob: save }
+    return job ? { action: 'agentJob', target: { kind: 'agentJob', name: job.name }, agentIdentity: { jobId: job.jobId }, agentJob: save } : { action: 'agentJob', target: { kind: 'agent' }, agentJob: save }
   }
   private async runSave(id: string): Promise<boolean> {
     const state = this.get(id)
@@ -425,14 +425,14 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!this.canStart(id)) return
     await this.verb(id, 'starting', connectionId => {
       const job = this.get(id)!.model!.job!
-      return this.options.api.executeObjectAction({ action: 'startJob', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: job.name }, agentIdentity: { created: job.created }, ...stepName ? { stepName } : {} })
+      return this.options.api.executeObjectAction({ action: 'startJob', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: job.name }, agentIdentity: { jobId: job.jobId }, ...stepName ? { stepName } : {} })
     }, jobDocumentText.started)
   }
   async stop(id: string): Promise<void> {
     if (!this.canStop(id)) return
     await this.verb(id, 'stopping', connectionId => {
       const job = this.get(id)!.model!.job!
-      return this.options.api.executeObjectAction({ action: 'stopJob', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: job.name }, agentIdentity: { created: job.created } })
+      return this.options.api.executeObjectAction({ action: 'stopJob', connectionId, requestId: this.newId(), target: { kind: 'agentJob', name: job.name }, agentIdentity: { jobId: job.jobId } })
     }, jobDocumentText.stopped)
   }
   private async verb(id: string, verb: 'starting' | 'stopping', send: (connectionId: string) => Promise<ApiResult<ActionExecuteResult>>, done: string): Promise<void> {

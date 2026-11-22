@@ -1363,7 +1363,8 @@ internal sealed class ResultSetBuffer
             var reason = Truncated;
             return new ResultDescriptor(ResultId, Index, BatchNumber, Iteration, Kind, Columns, RowsRead, rowsStored, rowsAvailable, bytesStored, truncatedCells,
                 state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete, ResultName,
-                residence, residence is null || rowsTotal < 0 ? null : rowsTotal, residence is null ? null : revision);
+                residence, residence is null || rowsTotal < 0 ? null : rowsTotal, residence is null ? null : revision,
+                remote is { } windowed ? (long)Math.Min(Math.Ceiling(windowed.RowCost * windowed.Rows), 9_007_199_254_740_991d) : null);
         }
     }
 

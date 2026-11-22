@@ -63,13 +63,13 @@ describe('the AG-2 request schema', () => {
   const base = { connectionId: '00000000-0000-4000-8000-0000000000aa', requestId: '00000000-0000-4000-8000-000000000001' }
   const job = { kind: 'agentJob', name: 'Nightly' } as const
   it('requires the identity of the job a verb read, in the tree\'s format', () => {
-    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { created: '2026-01-01T00:00:00' } }).success).toBe(true)
-    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'startJob', target: job, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Load' }).success).toBe(true)
+    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } }).success).toBe(true)
+    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'startJob', target: job, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' }, stepName: 'Load' }).success).toBe(true)
     expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'disable', target: job }).success).toBe(false)
-    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { created: '2026-02-30T00:00:00' } }).success).toBe(false)
-    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { created: '2026-01-01 00:00:00' } }).success).toBe(false)
+    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { jobId: '2026-02-30T00:00:00' } }).success).toBe(false)
+    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'stopJob', target: job, agentIdentity: { created: '2026-01-01T00:00:00' } }).success).toBe(false)
     // A login's verb never carries a job's identity.
-    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'disable', target: { kind: 'login', name: 'AppUser' }, agentIdentity: { created: '2026-01-01T00:00:00' } }).success).toBe(false)
+    expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'disable', target: { kind: 'login', name: 'AppUser' }, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } }).success).toBe(false)
   })
   it('takes the service verbs on the Agent node only', () => {
     expect(actionExecuteRequestSchema.safeParse({ ...base, action: 'restartAgent', target: { kind: 'agent' } }).success).toBe(true)
@@ -80,20 +80,20 @@ describe('the AG-2 request schema', () => {
 
 describe('Start Job at Step and the service dialogs', () => {
   const facts = (steps: number, changes: Partial<AgentJobFacts> = {}): AgentJobFacts => ({
-    name: 'Nightly', agentIdentity: { created: '2026-01-01T00:00:00' }, enabled: true, running: false, stepsTruncated: false,
+    name: 'Nightly', agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' }, enabled: true, running: false, stepsTruncated: false,
     steps: Array.from({ length: steps }, (_, index) => ({ id: index + 1, name: `Step ${index + 1}` })), ...changes
   })
   const target = { kind: 'agentJob', name: 'Nightly' } as const
   it('starts a one-step job as it opens, and always names the chosen step (the job\'s start step need not be the first)', () => {
     const runOnOpen = startJobAtStepDefinition.runOnOpen as (model: AgentJobFacts) => boolean
     expect([runOnOpen(facts(1)), runOnOpen(facts(3)), runOnOpen(facts(1, { running: true }))]).toEqual([true, false, false])
-    expect(startJobAtStepDefinition.request(target, facts(3), { step: 1 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 1' })
-    expect(startJobAtStepDefinition.request(target, facts(3), { step: 2 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { created: '2026-01-01T00:00:00' }, stepName: 'Step 2' })
+    expect(startJobAtStepDefinition.request(target, facts(3), { step: 1 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' }, stepName: 'Step 1' })
+    expect(startJobAtStepDefinition.request(target, facts(3), { step: 2 }, undefined as never)).toEqual({ action: 'startJob', target, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' }, stepName: 'Step 2' })
     expect([startJobBlocked(facts(0)), startJobBlocked(facts(2, { running: true })), startJobBlocked(facts(2))]).toEqual([agentDialogText.noSteps, agentDialogText.running, undefined])
   })
   it('refuses a job created since the tree listed the row, even one that would start as it opens', () => {
-    expect(startJobBlocked(facts(1), { step: 1, listed: '2025-12-31T23:59:59' })).toBe(agentDialogText.replaced)
-    expect(startJobBlocked(facts(1), { step: 1, listed: '2026-01-01T00:00:00' })).toBeUndefined()
+    expect(startJobBlocked(facts(1), { step: 1, listed: '00000000-1111-2222-3333-444444444440' })).toBe(agentDialogText.replaced)
+    expect(startJobBlocked(facts(1), { step: 1, listed: '00000000-1111-2222-3333-444444444441' })).toBeUndefined()
     expect(startJobBlocked(facts(1), { step: 1 })).toBeUndefined()
   })
   it("samples the server's status again once a start, stop or restart ran, so the verbs do not wait for the next interval", () => {
@@ -104,10 +104,10 @@ describe('Start Job at Step and the service dialogs', () => {
     expect(effects.refreshStatus).toHaveBeenCalledTimes(2)
   })
   it('deletes the job the tree listed, so one created since under the name is refused', () => {
-    const job = { kind: 'agentJob', name: 'Nightly' } as const, model = { agentIdentity: { created: '2026-01-02T00:00:00' } } as never
+    const job = { kind: 'agentJob', name: 'Nightly' } as const, model = { agentIdentity: { jobId: '00000000-1111-2222-3333-444444444442' } } as never
     const draft = { deleteHistory: true, closeConnections: false, dropMappedUsers: false }
-    expect(deleteObjectDefinition.request(job, model, { ...draft, listed: '2026-01-01T00:00:00' }, undefined as never)).toMatchObject({ agentIdentity: { created: '2026-01-01T00:00:00' } })
-    expect(deleteObjectDefinition.request(job, model, draft, undefined as never)).toMatchObject({ agentIdentity: { created: '2026-01-02T00:00:00' } })
+    expect(deleteObjectDefinition.request(job, model, { ...draft, listed: '00000000-1111-2222-3333-444444444441' }, undefined as never)).toMatchObject({ agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } })
+    expect(deleteObjectDefinition.request(job, model, draft, undefined as never)).toMatchObject({ agentIdentity: { jobId: '00000000-1111-2222-3333-444444444442' } })
   })
   it('keeps the service dialogs open on their steps, with no Script button, and asks as SSMS does', () => {
     expect([stopAgentDefinition.noScript, stopAgentDefinition.keepOpen, stopAgentDefinition.longRun]).toEqual([true, true, 'stopAgent'])
@@ -125,25 +125,25 @@ describe('a job\'s Stop, Disable, Enable and Rename', () => {
     fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     const node = (changes: Partial<ExplorerMenuNode> = {}): ExplorerMenuNode => ({
       id: 9_999, connectionId: 'server-a', ref: { type: 'object', object: { kind: 'agentJob', name: 'Nightly' } }, kind: 'agentJob', label: 'Nightly', engine: 'box',
-      created: '2026-01-01T00:00:00', lost: false, ...changes
+      jobId: '00000000-1111-2222-3333-444444444441', lost: false, ...changes
     })
     const notices = () => fixture.notifications.getSnapshot().visible.map(toast => toast.message)
     return { ...fixture, node, notices }
   }
-  it('sends the job\'s creation time with Stop Job and Disable, and says what it did', async () => {
+  it('sends the job\'s ID with Stop Job and Disable, and says what it did', async () => {
     const { actions, api, node, notices } = setup()
     api.executeObjectAction.mockResolvedValue(done())
     await actions.changeJobState(node(), 'stopJob')
     await actions.changeJobState(node(), 'disable')
     expect(api.executeObjectAction.mock.calls.map(call => call[0])).toEqual([
-      { action: 'stopJob', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-01T00:00:00' } },
-      { action: 'disable', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-01T00:00:00' } }
+      { action: 'stopJob', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } },
+      { action: 'disable', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } }
     ])
     expect(notices()).toContain(jobActionMessages.disabled('Nightly'))
   })
-  it('refuses a row without its creation time, and reports SQL Server Agent\'s refusal', async () => {
+  it('refuses a row without its ID, and reports SQL Server Agent\'s refusal', async () => {
     const { actions, api, commands, node } = setup()
-    await actions.changeJobState(node({ created: undefined }), 'stopJob')
+    await actions.changeJobState(node({ jobId: undefined }), 'stopJob')
     expect(api.executeObjectAction).not.toHaveBeenCalled()
     expect(commands.getSnapshot().error).toBe(jobActionMessages.unidentified)
     api.executeObjectAction.mockResolvedValueOnce(done({ error: { code: 'JOB_STATE', message: 'The job is not running.', retryable: false } }))
@@ -153,10 +153,10 @@ describe('a job\'s Stop, Disable, Enable and Rename', () => {
   it('sends the job\'s identity with a rename, and refuses a row without it', async () => {
     const { actions, api, commands, node } = setup()
     api.executeObjectAction.mockResolvedValue(done())
-    await actions.commitRename(node({ created: undefined }), 'Nightly2')
+    await actions.commitRename(node({ jobId: undefined }), 'Nightly2')
     expect(api.executeObjectAction).not.toHaveBeenCalled()
     expect(commands.getSnapshot().error).toBe(jobActionMessages.unidentified)
     await actions.commitRename(node(), 'Nightly2')
-    expect(api.executeObjectAction.mock.calls[0]![0]).toMatchObject({ action: 'rename', newName: 'Nightly2', agentIdentity: { created: '2026-01-01T00:00:00' } })
+    expect(api.executeObjectAction.mock.calls[0]![0]).toMatchObject({ action: 'rename', newName: 'Nightly2', agentIdentity: { jobId: '00000000-1111-2222-3333-444444444441' } })
   })
 })

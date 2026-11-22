@@ -569,8 +569,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.dependencies" => await explorer.DependenciesAsync(Read<DependenciesArgs>(parameters, json), Token(context)),
         "explorer.peekDefinition" => await explorer.PeekDefinitionAsync(Read<PeekDefinitionArgs>(parameters, json), Token(context)),
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
-        "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
-        "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
+        "explorer.index" => Read<ObjectIndexArgs>(parameters, json) is var indexArgs && bigQuery.Owns(indexArgs.ConnectionId)
+            ? await search.IndexBigQueryAsync(indexArgs, bigQuery, Token(context), context is null ? null : value => context.SendEvent(value, droppable: true))
+            : await search.IndexAsync(SqlServerIndexArgs(indexArgs), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "explorer.search" => Read<ObjectSearchArgs>(parameters, json) is var searchArgs && bigQuery.Owns(searchArgs.ConnectionId)
+            ? search.Search(searchArgs, Token(context), bigQuery: true) : search.Search(searchArgs, Token(context)),
         "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
             ? await bigQuery.ScriptAsync(scriptArgs, scripting.Validate(scriptArgs, Providers.BigQuery).Target, scriptArgs.Verb, Token(context)) : await scripting.ScriptAsync(scriptArgs, Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
@@ -590,6 +593,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
+
+    /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
+    private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) => args.ExtraDetails is null && args.Scope is null && args.Stale is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: extraDetails, scope and stale are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
@@ -856,7 +863,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             // Its running queries end as cancelled before the client they read through is disposed.
             foreach (var query in queries.Values.Where(query => query.ConnectionId == args.ConnectionId)) query.Cancel();
-            return new { Disconnected = bigQuery.Disconnect(args.ConnectionId) };
+            var disconnected = bigQuery.Disconnect(args.ConnectionId);
+            search.Forget(args.ConnectionId);
+            ReportIndexMemory();
+            return new { Disconnected = disconnected };
         }
         bool removed;
         string? connectionString;

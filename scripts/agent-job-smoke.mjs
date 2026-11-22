@@ -74,7 +74,7 @@ try {
   await job('Nightly').getByRole('button', { name: 'Remove Nightly failed', exact: true }).click()
   await verb('Nightly', 'Save · 2 changes').click()
   await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
-  expect((await saves()).at(-1)).toMatchObject({ target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { created: '2026-01-02T03:04:05' },
+  expect((await saves()).at(-1)).toMatchObject({ target: { kind: 'agentJob', name: 'Nightly' }, agentIdentity: { jobId: 'A1B2C3D4-0000-4000-8000-000000000001' },
     agentJob: { version: 3, modified: '2026-11-10T09:15:30.120', description: 'Nightly integrity and index care.', removeAlerts: [{ id: 7, name: 'Nightly failed' }] } })
   await expect(verb('Nightly', 'Save')).toBeVisible()
   await expect(job('Nightly').getByText('No alert runs this job.', { exact: true })).toBeVisible()

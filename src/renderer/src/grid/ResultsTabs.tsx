@@ -86,11 +86,11 @@ export function tabsFold(height: number, scrollbar: number = scrollbarSize()): '
 }
 
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
-const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number }) {
+const ViewFacts = memo(function ViewFacts({ entry, sort, totalBatches, cached }: { entry: ResultSetEntry; sort?: GridSort; totalBatches: number; cached: boolean }) {
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const columns = visibleColumnCount(entry.descriptor), number = entrySecondary(entry)
   // A named result's number leads its facts, as in its Stacked caption, so two tabs of one name are told apart on screen.
-  const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const facts = [...number ? [number] : [], rowsFact(snapshot, sort, cached), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (entry.descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(entry.descriptor.batchNumber, entry.descriptor.iteration, totalBatches)
   if (batch) facts.push(batch)
@@ -420,7 +420,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
           </div>
         })}
       </div> : <span className="rt-view-label"><Icon name="git-compare" />Comparison</span>}
-      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} />
+      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={tab.summary?.job?.cacheHit === true} />
       {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={distinctName(group.table.entry, tab.sets)} stale={stale} running={running} refocus={refocusView} />}
       <FilterChips tabId={tabId} entry={selected} name={spokenName(selected)} sort={sort} refocus={refocusView} />
       <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />

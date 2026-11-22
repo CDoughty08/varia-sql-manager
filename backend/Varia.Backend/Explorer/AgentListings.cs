@@ -62,8 +62,8 @@ internal static class AgentListings
     [
         // sysjobs_view filters by role itself (owner, SQLAgentReaderRole or sysadmin) and every Agent role may read it; an owner
         // is named only where the login may see that server principal.
-        List("agentJobs", "dbo.sysjobs_view AS j", "j.name", "j.enabled, j.date_created, own.name, j.description",
-            row => Named(row, "agentJob", Disabledness(row.B(0)), ExplorerLabels.Join([row.S(2) is { } owner ? "Owner " + owner : null, row.S(3) is { Length: > 0 } text ? text : null]), row.D(1)),
+        List("agentJobs", "dbo.sysjobs_view AS j", "j.name", "j.enabled, j.date_created, own.name, j.description, j.job_id",
+            row => Named(row, "agentJob", Disabledness(row.B(0)), ExplorerLabels.Join([row.S(2) is { } owner ? "Owner " + owner : null, row.S(3) is { Length: > 0 } text ? text : null]), row.D(1)) with { JobId = row.S(4) },
             filter: new(Name: "j.name", Owner: "own.name", Created: "j.date_created"), ownerJoin: "LEFT JOIN sys.server_principals AS own ON own.sid = j.owner_sid"),
         List("agentAlerts", "dbo.sysalerts AS a", "a.name", "a.enabled", row => Named(row, "agentAlert", Disabledness(row.B(0)))),
         List("agentOperators", "dbo.sysoperators AS o", "o.name", "o.enabled", row => Named(row, "agentOperator", Disabledness(row.B(0)))),

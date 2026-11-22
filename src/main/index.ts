@@ -1260,15 +1260,14 @@ app.whenReady().then(async () => {
     const request = recoveryWriteSchema.parse(value), generation = pageGeneration
     const values = (await settings.load().catch(() => ({ values: settings.current() }))).values
     if (!values['environment.autoRecover.enabled'] || closeApproved) return
-    let path: string | undefined
-    try { path = request.fileId ? files.get(request.fileId).path : undefined } catch { /* Released: kept without a file. */ }
-    await recovery.write({ ...request, ...path ? { path } : {} }, generation)
+    const file = request.fileId ? files.sessionFile(request.fileId) : undefined
+    await recovery.write({ ...request, ...file }, generation)
   })
   handle('varia:recovery-discard', value => recovery.discard(recoveryDiscardSchema.parse(value).ids, pageGeneration))
   handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
-    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined
+    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind, { baseSha256: record.fileSha256 }) : undefined
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.

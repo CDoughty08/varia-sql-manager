@@ -42,6 +42,7 @@ export interface TreeNode {
   icon: ExplorerIcon
   subtype: NodeSubtype | undefined
   status: NodeStatus | undefined
+  jobId?: string
   created: string | undefined
   hasChildren: boolean
   expanded: boolean

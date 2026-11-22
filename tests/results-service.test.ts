@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, fitsFreeMemory, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -12,7 +12,7 @@ import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixt
 import { manualTimers } from './fixtures/workbench'
 import { keyAt, noEntry } from './fixtures/entries'
 
-function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void } = {}) {
+function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void; memory?: () => { usedBytes: number; globalBytes: number } } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const frames: (() => void)[] = []
   const progress = new Set<(value: ResultsJobProgress) => void>()
@@ -21,7 +21,9 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
-    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
+    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } }),
+    remoteQuery: vi.fn<VariaApi['remoteQuery']>(async () => ({ ok: false, error: 'Not faked.' })),
+    cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } }))
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
   const clock = { now: 1000 }
@@ -479,7 +481,7 @@ describe('results service', () => {
       ['SQLQuery1-Result2-Result1', '-Result1'], ['SQLQuery1-Result2', '-Result2'], ['SQLQuery1-Differences1-Result3', '-Result3'], ['SQLQuery1-Open orders', undefined]
     ])
   })
-  it('refuses to copy a windowed result before it cancels the copy running', async () => {
+  it('copies a windowed result through the backend, which reads its rows from BigQuery', async () => {
     const { api, service } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
@@ -487,40 +489,142 @@ describe('results service', () => {
     const first = deferred<ApiResult<ResultsJobResult>>()
     api.copyResults.mockReturnValueOnce(first.promise)
     const copying = service.copy('t1', keyAt(service, 't1', 0), false)
-    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toMatch(/^Could not copy the results: This result is windowed in BigQuery/)
-    expect(api.copyResults).toHaveBeenCalledTimes(1)
-    expect(api.cancelResultsJob).not.toHaveBeenCalled()
+    expect(await service.copy('t1', keyAt(service, 't1', 1), false)).toBeUndefined()
+    expect(api.copyResults).toHaveBeenCalledTimes(2)
+    expect(api.copyResults.mock.calls[1][0]).toMatchObject({ generation: 1, resultId: 2 })
     first.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
-    expect(await copying).toBeUndefined()
+    await copying
     service.dispose()
   })
-  it('says a windowed result still loading cannot be saved, rather than to wait for it', async () => {
+  it('says a windowed result still running can be saved once it finishes', async () => {
     const { api, client, service, flush } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
+    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toBe('Save the results after this result set finishes loading.')
     expect(api.saveResults).not.toHaveBeenCalled()
     service.dispose()
   })
-  it('refuses to save a windowed result before main shows the file dialog', async () => {
+  it('saves a windowed result through main, which streams its rows from BigQuery to the file', async () => {
     const { api, service, flush } = fixture()
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
-    expect(api.saveResults).not.toHaveBeenCalled()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
     service.dispose()
   })
-  it('refuses to save a result that switched to windowed after it opened in memory, before the dialog', async () => {
+  it('saves a result that switched to windowed after it opened in memory', async () => {
     const { api, client, service, flush } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', residence: 'memory', revision: 0 }) })
     client.emit('q1', { type: 'resultSet.residence', descriptor: descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 }) })
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 1, rowsTotal: 5_000 })]) })
     flush()
-    expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')).toMatch(/^Could not save the results: This result is windowed in BigQuery/)
-    expect(api.saveResults).not.toHaveBeenCalled()
+    await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
+    service.dispose()
+  })
+  it('loads a windowed result of a finished run into memory, following its own events after the run ended', async () => {
+    const { api, client, service, tab, flush, timers } = fixture()
+    service.begin('t1', 'q1')
+    const windowed = descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })
+    service.finish('t1', 'q1', { summary: summaryOf([windowed]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', key)
+    expect(api.remoteQuery).toHaveBeenCalledWith({ queryId: 'job-1', generation: 1, resultId: 1, kind: 'load' })
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: false }))
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    // The load's residence event arrives after the run finished: it is the load's, so the switch is said.
+    client.emit('job-1', { type: 'resultSet.residence', descriptor: { ...windowed, residence: 'memory', revision: 1, rowsAvailable: 0, state: 'open' } })
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('The result is loading into memory.')
+    // Stop asks query.cancel with the load's own id, once.
+    service.stopLoad('t1', key)
+    service.stopLoad('t1', key)
+    expect(api.cancel).toHaveBeenCalledTimes(1)
+    expect(api.cancel).toHaveBeenCalledWith('job-1')
+    const before = tab()!.loads
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: true }))
+    // Snapshots share the entries: Stop replaces this one rather than changing it in place.
+    expect(before).not.toBe(tab()!.loads)
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('Stopping the load')
+    const loaded = { ...windowed, residence: 'memory' as const, revision: 1, rowsStored: 5_000, state: 'complete' as const }
+    answer.resolve({ ok: true, value: { ...summaryOf([loaded]), messages: [{ text: 'The result was loaded into memory.', kind: 'info' }] } })
+    expect(await loading).toBeUndefined()
+    flush()
+    expect(tab()!.loads).toBeUndefined()
+    expect(client.listening('job-1')).toBe(0)
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'The result was loaded into memory.', kind: 'info' })
+    expect(tab()!.settled.get('1:1')).toEqual(expect.objectContaining({ rows: 5_000 }))
+    service.dispose()
+  })
+  it('offers Load into memory only while the projection fits the result memory free', () => {
+    let memory = { usedBytes: 900, globalBytes: 1_000 }
+    const { service, flush } = fixture({ memory: () => memory })
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000, projectedBytes: 200 })]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(service.loadNeedsRoom('t1', key)).toBe(true)
+    memory = { usedBytes: 800, globalBytes: 1_000 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    expect(service.loadNeedsRoom('t1', key)).toBe(false)
+    // Before memory's first report nothing is held back: the load itself switches back if the rows do not fit.
+    memory = { usedBytes: 0, globalBytes: 0 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    service.dispose()
+  })
+  it('compares a projection with the room free', () => {
+    expect(fitsFreeMemory(undefined, { usedBytes: 10, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(5, undefined)).toBe(true)
+    expect(fitsFreeMemory(5, { usedBytes: 5, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(6, { usedBytes: 5, globalBytes: 10 })).toBe(false)
+    expect(fitsFreeMemory(1, { usedBytes: 12, globalBytes: 10 })).toBe(false)
+  })
+  it('says nothing of a load the user stopped by closing its result, nor of one a new run replaced', async () => {
+    const { api, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }), descriptor(2, { index: 1 })]) })
+    flush()
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', keyAt(service, 't1', 0))
+    service.removeEntry('t1', keyAt(service, 't1', 0))
+    const before = tab()!.messages.length
+    answer.resolve({ ok: true, value: { ...summaryOf([]), status: 'failed', messages: [{ text: 'These results were closed.', kind: 'error' }] } })
+    await loading
+    flush()
+    expect(tab()!.messages.length).toBe(before)
+    expect(tab()!.strip).toBe(false)
+    expect(tab()!.loads).toBeUndefined()
+    service.dispose()
+  })
+  it('refuses Load into memory while the run still runs, and says why a refused load failed', async () => {
+    const { api, client, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'complete', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(await service.loadIntoMemory('t1', key)).toBe('Load the result into memory once its query has finished.')
+    expect(api.remoteQuery).not.toHaveBeenCalled()
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    api.remoteQuery.mockResolvedValueOnce({ ok: false, error: 'Another result of this query is loading into memory.', code: 'BUSY' })
+    await service.loadIntoMemory('t1', key)
+    flush()
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'Could not load the result into memory: Another result of this query is loading into memory.', kind: 'error' })
+    expect(tab()!.loads).toBeUndefined()
     service.dispose()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {

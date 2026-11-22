@@ -133,11 +133,15 @@ export class GridData {
   toneTile(row: number): number | undefined { return this.tone < 0 ? undefined : tileKey(Math.floor(row / this.shape.rows), Math.floor(this.tone / this.shape.columns)) }
   /** The first failed read's message, while any tile has failed. */
   get error(): string | undefined { return this.errors.values().next().value }
+  /** Whether a read failed because BigQuery no longer keeps the windowed result (REMOTE_EXPIRED): Retry cannot help. */
+  get expired(): boolean { return this.expiredRead && this.errors.size > 0 }
+  private expiredRead = false
   get reading(): number { return this.inflight.size }
   failed(key: number): boolean { return this.errors.has(key) }
   /** Retry: failed tiles are read again. */
   retry(): void {
     this.errors.clear()
+    this.expiredRead = false
     this.retried.clear()
     this.stalls.clear()
     this.changed()
@@ -320,7 +324,10 @@ export class GridData {
       if (this.disposed || isAbort(error)) return
       if (portBusy(error)) { this.wake(g.busyRetryMs); return }
       if (workerStopped(error) && !this.retried.has(key)) this.retried.add(key)
-      else this.errors.set(key, errorMessage(error))
+      else {
+        this.errors.set(key, errorMessage(error))
+        if ((error as { code?: unknown } | null)?.code === 'REMOTE_EXPIRED') this.expiredRead = true
+      }
       this.changed()
     })
   }

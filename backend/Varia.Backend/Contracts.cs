@@ -80,10 +80,12 @@ internal sealed record ResultColumn(string Name, string DataType, string Wire, s
 internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool Utf8, int Options);
 /// <summary>A stored result set. rowsAvailable counts rows in sealed pages (what results.read can serve); main adds the
 /// backend generation before the renderer sees it. Name is the query's own name for the set, from a #Name="…" marker comment
-/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.</summary>
+/// (ResultNames.cs): 1 to ResultNames.MaxChars characters, none of the refused ones; null (left out) when it has none.
+/// ProjectedBytes is a windowed result's projected size in memory (its measured row cost times its rows), which the
+/// renderer offers Load into memory under; null for any other result.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
     long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null,
-    string? Residence = null, long? RowsTotal = null, int? Revision = null);
+    string? Residence = null, long? RowsTotal = null, int? Revision = null, long? ProjectedBytes = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
@@ -386,7 +388,7 @@ internal sealed record DateFilterDto(string Op, string Value, string? Value2 = n
 /// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss. Database: a database node's runtime state.
 /// ConnectDenied: a login denied CONNECT SQL, sent only when true (Status says disabled when it is disabled too).</summary>
 internal sealed record ExplorerNode(NodeRefDto Ref, string Label, string Icon, bool HasChildren, string? Sublabel = null, string? Detail = null, string? Subtype = null,
-    string? Status = null, string? Created = null, ExplorerDatabase? Database = null, bool? ConnectDenied = null);
+    string? Status = null, string? Created = null, ExplorerDatabase? Database = null, bool? ConnectDenied = null, string? JobId = null);
 /// <summary>A database's runtime state as the listing read it (sys.databases' state, user_access, is_read_only and
 /// is_in_standby), in the shape of the live status rows, so the renderer's action rules can take the newer of the two.</summary>
 internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly, bool Standby);
@@ -431,17 +433,25 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
-internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null);
+/// <summary>BigQuery only (SQL Server refuses them): ExtraDetails reads the extra projects' schemas too (pass 2), Scope re-reads one
+/// project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
+internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, bool? ExtraDetails = null, BigQueryIndexScope? Scope = null, bool? Stale = null);
+/// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
+internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
 /// <summary>Agent: SQL Server Agent's objects were left out, not the database named (msdb, where they are read).</summary>
-internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null);
+/// <summary>Project: a BigQuery dataset's project (Database is the dataset, or empty when the project's listing failed).</summary>
+internal sealed record ObjectIndexSkip(string Database, string Code, string Message, bool? Agent = null, string? Project = null, bool? Details = null);
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
-internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null);
+/// <summary>BigQuery: Databases and Indexed count datasets; Phase is names (pass 1) or details (pass 2) while building; NamesOnly lists
+/// the projects indexed without schemas (extra projects, by default).</summary>
+internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
 internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,
-    List<string>? Kinds = null, string? Database = null, int? Limit = null, string? Match = null);
+    List<string>? Kinds = null, string? Database = null, int? Limit = null, string? Match = null, string? Project = null, string? Dataset = null);
 /// <summary>A definition's first match: its line and column (1-based), part of its line with the match's [start, length] in it,
 /// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.
 /// Uncounted (true or absent): the search's budget ran out before the count reached the definition's end, so Matches is only
@@ -450,9 +460,12 @@ internal sealed record DefinitionMatch(int Line, int Column, string Preview, int
 /// <summary>One object found: Range is the name match's [start, length] in Label; Modified is server local time; Subtype is its
 /// node's where the index knows it; ParentFolder is the folder that lists a child's parent (Tables › Graph Tables, say); Via is
 /// the table (in its database, in Folder) that shows a history table, or a history table's parent, as its history row;
-/// Approximate marks a Fuzzy Match name hit, whose Range spans its first to last matched word.</summary>
+/// Approximate marks a Fuzzy Match name hit, whose Range spans its first to last matched word.
+/// Type is a BigQuery column's type (INT64, ARRAY&lt;STRING&gt;); Shards a date-sharded group the hit's table (its newest shard) stands for.</summary>
 internal sealed record ObjectSearchHit(ObjectRefDto Object, string Folder, string Label, int[]? Range, string? Modified, DefinitionMatch? Definition, string? Subtype = null,
-    string? ParentFolder = null, ViaRefDto? Via = null, bool? Approximate = null);
+    string? ParentFolder = null, ViaRefDto? Via = null, bool? Approximate = null, string? Type = null, BigQueryShardsDto? Shards = null);
+/// <summary>A date-sharded table group (events_20260101, events_20260102, …): its prefix, how many shards, and the first and last date suffix.</summary>
+internal sealed record BigQueryShardsDto(string Prefix, int Count, string First, string Last);
 internal sealed record ViaRefDto(string Schema, string Name, string Folder);
 /// <summary>The best Limit hits of Total; Partial when the search stopped at its budget or candidate cap. Problem: why the
 /// pattern cannot be searched for (no hits then).</summary>
@@ -627,10 +640,10 @@ internal sealed record AgentHistoryMessageArgs(string ConnectionId, string Reque
 /// <summary>The row's message (null when the row has none), or why it could not be read.</summary>
 internal sealed record AgentHistoryMessageResult(string? Message, long ElapsedMs, ActionError? Error = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
-/// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
+/// its sysjobs job_id, as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the
 /// Agent node as their target, on actions.execute only.</summary>
-internal sealed record AgentIdentityDto(string Created);
+internal sealed record AgentIdentityDto(string JobId);
 /// <summary>Table Properties' changes (src/shared/actions/tables.ts TableChanges): LockEscalation TABLE, AUTO or DISABLE; ChangeTracking
 /// on or off with Track columns updated (only with it on); extended properties to add, update (each with a text Value of at most the
 /// catalogue's extendedPropertyValue UTF-16 units) or drop (no Value), each name once. The tableProperties action takes them with Identity
