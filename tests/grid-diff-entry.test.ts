@@ -242,6 +242,13 @@ describe('a comparison\'s grid', () => {
       for (let i = 0; i < 4 && view.diffTone(390) === undefined; i++) await frame()
       await frame()
       expect(state.selection).toMatchObject({ active: { row: 390, column: 0 }, blocks: [{ kind: 'rows' }] })
+      // A tone that came in before the next frame settles the landing as soon as a move reads the active cell.
+      expect(view.diffTone(250)).toBeUndefined()
+      view.landDiff(250, { column: 1, whole: false }, tone => tone === 'added' ? { column: 0, whole: true } : { column: 1, whole: false }, false)
+      const read = vi.spyOn(view, 'diffTone').mockReturnValue('added')
+      expect(view.diffActive()).toMatchObject({ row: 250, column: 0, whole: true })
+      expect(state.selection).toMatchObject({ active: { row: 250, column: 0 }, blocks: [{ kind: 'rows' }] })
+      read.mockRestore()
       // A landing whose selection the user moved before its tone came stays where the user put it.
       expect(view.diffTone(150)).toBeUndefined()
       view.landDiff(150, { column: 1, whole: false }, () => ({ column: 0, whole: true }), false)

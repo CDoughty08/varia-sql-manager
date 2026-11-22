@@ -346,8 +346,8 @@ previous change, wrapping round: each changed value (on a changed row's + row in
 row, which is selected whole. A row whose changes are not all listed ("More changes in this row are not listed") counts
 its unlisted changes as one more, which selects the row. The keys work while a comparison's grid has the focus; the
 palette, the grid's menu, More results tools and the toolbar's arrow buttons work from anywhere. The toolbar shows "Change
-2 of 31" until the active cell leaves that row (otherwise the total, such as "31 changes"), and screen readers hear the
-same. Under a chip or
+2 of 31" until the active cell leaves that row, and screen readers hear the same; otherwise it shows the total ("31
+changes"), or nothing under a chip or filter until you move. Under a chip or
 another filter the counts are of the rows shown ("Change 2 of 5 shown"). Some Linux window managers take Alt+F5, macOS
 keyboards may need Fn (Option+Fn+F5) and macOS shortcuts may take it; it can be remapped
 ([commands and keyboard shortcuts](commands.md)).

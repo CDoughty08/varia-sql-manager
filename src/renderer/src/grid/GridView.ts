@@ -666,6 +666,8 @@ export class GridView {
   /** A comparison's active cell, whether its whole row (alone) is selected, and its row's tone (null for none, undefined
    *  while its tile is not read); undefined without an active cell. */
   diffActive(): { readonly row: number; readonly column: number; readonly whole: boolean; readonly tone: string | null | undefined } | undefined {
+    // A landing whose tone came in since the last frame lands where the tone says first, so a move steps from there.
+    this.settleLanding()
     const selection = this.diff ? this.sourceSelection() : undefined, rows = this.rows()
     if (!selection || rows === 0 || this.columns === 0) return undefined
     const row = Math.min(selection.active.row, rows - 1), column = Math.min(selection.active.column, this.columns - 1)
@@ -736,6 +738,16 @@ export class GridView {
   /** After a frame: a landing waiting for its row's tone lands where the tone says, and `onDiffRow` hears of a new active
    *  row or tone. */
   private settleDiff(): void {
+    this.settleLanding()
+    this.answerToneWaiters()
+    if (!this.o.onDiffRow) return
+    const active = this.diffActive(), tone = active?.tone ?? null, key = active ? `${active.row}|${tone ?? ''}` : ''
+    if (key === this.diffRowKey) return
+    this.diffRowKey = key
+    this.o.onDiffRow(active?.row ?? -1, tone)
+  }
+  /** A landing waiting for its row's tone: dropped once the selection moved, else landed where the tone says once read. */
+  private settleLanding(): void {
     const landing = this.landing
     if (landing && this.o.state.selection !== landing.selection) this.landing = undefined
     else if (landing) {
@@ -749,12 +761,6 @@ export class GridView {
         }
       }
     }
-    this.answerToneWaiters()
-    if (!this.o.onDiffRow) return
-    const active = this.diffActive(), tone = active?.tone ?? null, key = active ? `${active.row}|${tone ?? ''}` : ''
-    if (key === this.diffRowKey) return
-    this.diffRowKey = key
-    this.o.onDiffRow(active?.row ?? -1, tone)
   }
 
   setHighlights(sets: readonly RowHighlights[]): void {
