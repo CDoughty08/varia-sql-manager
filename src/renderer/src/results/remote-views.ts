@@ -1,6 +1,6 @@
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
 import type { RemoteDryRun, RemoteFilter, RemoteQueryKind, RemoteSortKey } from '../../../shared/bigquery/remote-view'
-import type { QueryEvent, ResultColumn, ResultDescriptor, ResolvedViewFilter, VariaApi, ViewFilter, ViewSortKey } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, ResultColumn, ResultDescriptor, ResolvedViewFilter, VariaApi, ViewFilter, ViewSortKey } from '../../../shared/contracts'
 import { ResultError, type DistinctList, type ResultClient, type ResultHandle, type ResultView } from './ResultClient'
 
 /**
@@ -55,6 +55,8 @@ export interface RemoteViewDeps {
   /** The free estimate and the cost prompts (BigQueryCostService.beforeRemote): the estimate when it may run, else undefined. */
   readonly estimate: (tabId: string, remote: RemoteDryRun, signal?: AbortSignal) => Promise<BigQueryDryRunResult | undefined>
   readonly newId?: () => string
+  /** The query's messages (its job, rows and cost), for the tab's Messages. */
+  readonly messages?: (tabId: string, messages: readonly MessageEntry[]) => void
 }
 
 export class RemoteViews {
@@ -99,6 +101,8 @@ export class RemoteViews {
       const answer = await this.deps.api.remoteQuery({ queryId, resultId, generation, ...kind, ...estimate.fallback ? { fallback: true } : {} })
       if (!answer.ok) throw new ResultError((answer.code ?? 'BACKEND_ERROR') as ResultError['code'], answer.error)
       const summary = answer.value
+      // A stop's lines are information (the grid kept its view); only a failure's error opens Messages as an error.
+      if (summary.messages.length) this.deps.messages?.(tabId, summary.status === 'failed' ? summary.messages : summary.messages.map(message => message.kind === 'error' ? { ...message, kind: 'info' as const } : message))
       if (signal.aborted) {
         for (const set of summary.resultSets) void this.deps.client.open(set).close()
         throw new RemoteDeclined()

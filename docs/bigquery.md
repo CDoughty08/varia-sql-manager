@@ -325,13 +325,45 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while another result of the same query loads (they share its budget). Closing the result stops the load,
   which then says the result was closed. Reads under way when it starts
   answer with the rows they have, and the grid reads again from memory.
-- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
-  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
+- **What waits.** Search, profiles, pivots, row identities, comparisons, Copy and Save of a windowed result (its sorts,
+  filters and value lists run in BigQuery, below) answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
   filters are removed when its result switches (the screen reader hears so). The grid does not offer them where it can tell
   first: Save Results As refuses before its file dialog (even while the result still loads), Copy before it stops the copy
   running, a transposed grid's strip does not suggest filtering, the Pivot builder says the result cannot be pivoted yet, the
   Compare popover leaves it out, and Search skips it. A destination table lasts
   about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
+
+### Sort and filter in BigQuery
+
+A windowed result's grid sorts and filters in BigQuery: each sort, filter or value list is a query over the result's
+temporary table, so it is billed, and its answer is a result of its own that the grid shows in place of the source
+(`SqlService.BigQueryViews.cs`, `BigQueryViewSql.cs`, `src/renderer/src/results/remote-views.ts`; the protocol is
+`results.remoteQuery`'s `view` and `distinct` kinds in docs/ipc.md). The header's sort buttons and funnels say "in
+BigQuery" in their tooltips.
+
+- **Estimate first.** Before each one, `bigquery.dryRun` estimates it (free) and the cost prompts of Cost › Before Execute
+  apply as they do to Execute: above the threshold, or an incomplete estimate. A declined prompt runs nothing and the
+  grid keeps what it showed; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
+  go to Messages.
+- **Sort.** Up to 16 keys, ascending with NULLs first and descending with NULLs last, as the in-memory sort orders them.
+  BigQuery cannot order ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE or INTERVAL columns: their sort button says so and refuses,
+  and they have no funnel.
+- **Value lists.** A funnel lists the column's values with BigQuery's `GROUP BY`, over the rows the grid's other filters keep,
+  most frequent first, up to 100,000 values (past that the list is cut, and a checklist over it drops only the values it
+  unticks). The list is a small result in memory, read whole, with the snapshot the checklist ticks; when the column has a filter of its own,
+  each value starts ticked when the grid's filters keep it.
+- **Filters.** A checklist, Equals, Not equals, Between, NULL and not NULL apply in BigQuery. The values a filter names
+  are the value list's rows, so the filter keeps the list for as long as it applies. A checklist keeps the ticked values
+  when the list is whole and they are no more than the others, and otherwise drops the unticked ones, as in memory.
+  Filters that name the grid's rows rather than values (Filter by Selection, duplicates, Keep Selected Rows) say they need
+  the rows in memory.
+- **The view.** It is held under the source's budget, and windowed in its turn when it is large. A newer sort or filter
+  replaces it (the old one is released once the grid shows the new one); Stop cancels the BigQuery job; closing the
+  results or the tab releases both. BigQuery's resource errors on a large sort suggest filtering first.
+- **An expired table.** Once the source's temporary table has expired, a sort or filter answers `REMOTE_EXPIRED`, and a
+  value list that has expired answers the same when a filter names it. In emulator mode, where jobs run outside the
+  tab's session, the estimate notices the table is gone and the original query runs again with the sort or filter
+  around it, when the query has no parameters and nothing in it can change between runs; Messages says so.
 
 ### Cost
 
