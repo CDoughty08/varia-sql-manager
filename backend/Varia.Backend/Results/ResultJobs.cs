@@ -378,7 +378,7 @@ internal sealed class ResultJobs(ResultStore store)
                 {
                     if (rows.Reserved + page.Cost > MaxTurnedBytes)
                         throw save ? new RequestException("TOO_LARGE", "These rows are too large to save transposed (more than " + Size(MaxTurnedBytes) + "). Save them without Transpose instead.")
-                            : CopyTooLarge(rows.Reserved + page.Cost, MaxTurnedBytes);
+                            : new RequestException("TOO_LARGE", "These rows are too large to copy transposed (more than " + Size(MaxTurnedBytes) + " from the first row selected to the last). Select fewer rows, or use Save Results As instead.");
                     if (!set.TryReserveWork(page.Cost))
                         throw new RequestException("TOO_LARGE", "There is not enough result memory to turn these rows. Close other results to free memory, then try again.");
                     rows.Reserved += page.Cost;
@@ -415,6 +415,7 @@ internal sealed class ResultJobs(ResultStore store)
             || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _) || args.ViewId == 0 || !ValidTurn(args.Transposed, args.HeaderColumn))
             throw new RequestException("INVALID_PARAMS", "The export request is invalid.");
         var set = Lease(args.ResultId);
+        var leased = true;
         string? temporary = null;
         try
         {
@@ -427,6 +428,9 @@ internal sealed class ResultJobs(ResultStore store)
             var remote = set.Remote;
             if (remote is not null && args.ViewId is not null) throw ViewGone();
             var export = remote is null || args.Transposed ? null : remote.Export ?? throw SqlService.RemoteRefused();
+            // Such a Save reads only BigQuery's table, never the set's pages or cache: holding the lease for the whole stream
+            // would keep a refused load's or a closed result's memory charged until it ends.
+            if (export is not null) { set.ReleaseLease(); leased = false; }
             var source = remote is null ? SourceOf(set, args.ResultId, args.ViewId) : new Source(set, null);
             // A view sorted while rows were still arriving lacks the later ones; the grid sorts again once they are in.
             if (source.View is { Complete: false }) throw new RequestException("RESULT_OPEN", "Save the results after they are sorted again.");
@@ -516,11 +520,11 @@ internal sealed class ResultJobs(ResultStore store)
             return turned is null ? new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, false)
                 : new ResultsJobResult(turned.Positions.Length, writer.Bytes, writer.TruncatedCells, false, turned.Capped);
         }
-        catch (Exception error) when (error is not (RequestException or OperationCanceledException)) { throw Failed(ExportToken(error)); }
+        catch (Exception error) when (error is not (RequestException or OperationCanceledException) && context?.Token.IsCancellationRequested != true) { throw Failed(ExportToken(error)); }
         finally
         {
             if (temporary is not null) try { File.Delete(temporary); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-            set.ReleaseLease();
+            if (leased) set.ReleaseLease();
         }
     }
 

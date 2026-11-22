@@ -168,6 +168,18 @@ internal static partial class BigQueryExecutionChecks
             (code, text, saved, message) = await Save(harness, id, transposed: true);
             check(code == "ok" && text.StartsWith("Column\tRow 1\tRow 2", StringComparison.Ordinal) && saved?.Capped == 0 && SavedLines(text).Length == 3,
                 $"a transposed Save of a windowed result writes its rows as columns: {code} {message} {saved?.Rows} {text[..Math.Min(80, text.Length)]}");
+            // While it streams, a Save holds no lease on the set (it reads only the table), so a refused load's or a closed
+            // result's memory is not kept charged until it ends.
+            var set = harness.Service.Results.Find(id)!;
+            harness.Jobs.TableDataGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reads = harness.Jobs.TableReads.Count;
+            var saving = Save(harness, id);
+            SpinWait.SpinUntil(() => harness.Jobs.TableReads.Count > reads, 15_000);
+            var leasesWhileSaving = set.Leases;
+            harness.Jobs.TableDataGate.TrySetResult();
+            (code, _, saved, message) = await saving;
+            harness.Jobs.TableDataGate = null;
+            check(code == "ok" && saved?.Rows == 3000 && leasesWhileSaving == 0, $"a windowed Save holds no lease while it streams from BigQuery: {code} {message} {leasesWhileSaving}");
             harness.Jobs.TableDataStatus = 404;
             (code, _, _, message) = await Save(harness, id);
             check(code == "REMOTE_EXPIRED" && !message.Contains("temporary file left", StringComparison.Ordinal), $"Save of an expired windowed result answers REMOTE_EXPIRED and leaves no file: {code} {message}");

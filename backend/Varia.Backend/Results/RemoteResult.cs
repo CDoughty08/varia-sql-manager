@@ -752,10 +752,16 @@ internal sealed class RemoteResult : IDisposable
         }
     }
 
-    /// <summary>Forgets a viewer that reads no more (a Copy or Save that ended): its last range no longer keeps blocks.</summary>
+    /// <summary>Forgets a viewer that reads no more (a Copy or Save that ended): its last range no longer keeps blocks, and
+    /// the read-ahead it started that no read waits for stops (no one will read those rows).</summary>
     public void Forget(uint viewer)
     {
-        lock (gate) viewers.Remove(viewer);
+        if (viewer == 0) return;
+        lock (gate)
+        {
+            viewers.Remove(viewer);
+            foreach (var block in blocks.Values.Where(block => block.AheadOf == viewer && block.Waiters == 0 && block.Fetching is not null)) block.Stop?.Cancel();
+        }
     }
 
     /// <summary>Checks only: how many viewers' read-ahead state is remembered.</summary>

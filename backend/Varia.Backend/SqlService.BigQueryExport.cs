@@ -99,7 +99,9 @@ internal sealed partial class SqlService
                 try
                 {
                     var writer = new RemoteBlockWriter(set.ResultId, set.Wires, written);
-                    WriteRows(page, plan, writer, (int)Math.Min(rows - written, int.MaxValue));
+                    // A row Varia cannot decode is BigQuery's answer at fault, not the file: never EXPORT_FAILED.
+                    try { WriteRows(page, plan, writer, (int)Math.Min(rows - written, int.MaxValue)); }
+                    catch (Exception error) when (error is not (RequestException or OperationCanceledException)) { throw Unreadable(); }
                     foreach (var built in writer.Finish()) await each(built);
                     written += writer.Rows;
                 }
@@ -194,6 +196,7 @@ internal sealed partial class SqlService
     {
         var builder = writer.BeginRow();
         try { session.Plan.ReadRow(batch, row, builder, NoWarning); }
+        catch (Exception error) when (error is not (RequestException or OperationCanceledException)) { writer.AbortRow(); throw Unreadable(); }
         catch { writer.AbortRow(); throw; }
         writer.CommitRow();
     }
