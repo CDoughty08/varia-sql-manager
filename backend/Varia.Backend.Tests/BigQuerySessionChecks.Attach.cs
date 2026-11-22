@@ -25,6 +25,20 @@ internal static partial class BigQuerySessionChecks
         return (args, run, JobOf(bq.UserInserts.Last()));
     }
 
+    /// <summary>A running job an earlier backend left (Leave it running, then stopped), so no session here polls it. Left
+    /// running before the stop: the stop cancels what still runs, and that cancel could land at any later point.</summary>
+    static async Task<string> LeftByEarlierBackendAsync(Bq bq, JsonObject key)
+    {
+        using var earlier = new Harness(bq);
+        await earlier.ConnectAsync(key);
+        var earlierTab = Tab();
+        await earlier.Execute(earlierTab, "SELECT 1");
+        var (args, run, jobId) = await HeldAsync(earlier, earlierTab);
+        await earlier.Call("query.cancel", new JsonObject { ["queryId"] = args["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await run.WaitAsync(TimeSpan.FromSeconds(30));
+        return jobId;
+    }
+
     static JsonObject AttachArgs(Harness harness, string tab, string jobId, Action<JsonObject>? change = null)
     {
         var args = new JsonObject
@@ -412,14 +426,7 @@ internal static partial class BigQuerySessionChecks
 
         // Stop while a restored tab's re-attach is still checking the job's identity cancels the job once the check passes.
         // The job was left by an earlier backend (stopped), so no session here polls it.
-        string stopJob;
-        using (var earlier = new Harness(bq))
-        {
-            await earlier.ConnectAsync(key);
-            var earlierTab = Tab();
-            await earlier.Execute(earlierTab, "SELECT 1");
-            (_, _, stopJob) = await HeldAsync(earlier, earlierTab);
-        }
+        var stopJob = await LeftByEarlierBackendAsync(bq, key);
         var stopChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bq.AlsoHang = request =>
         {
@@ -440,14 +447,7 @@ internal static partial class BigQuerySessionChecks
 
         // The same Stop on a tab adopting the job's session (its record says a transaction is open) takes the session over, as
         // after a check that passed: a close then asks about the transaction.
-        string adoptJob;
-        using (var earlier = new Harness(bq))
-        {
-            await earlier.ConnectAsync(key);
-            var earlierTab = Tab();
-            await earlier.Execute(earlierTab, "SELECT 1");
-            (_, _, adoptJob) = await HeldAsync(earlier, earlierTab);
-        }
+        var adoptJob = await LeftByEarlierBackendAsync(bq, key);
         var adoptChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bq.AlsoHang = request =>
         {
@@ -468,14 +468,7 @@ internal static partial class BigQuerySessionChecks
 
         // Cancel the job on a tab closed during that check, when the re-check cannot pass (no jobs.list): the job is left, and
         // the run and the close both say it may still be running, naming it.
-        string unsureJob;
-        using (var earlier = new Harness(bq))
-        {
-            await earlier.ConnectAsync(key);
-            var earlierTab = Tab();
-            await earlier.Execute(earlierTab, "SELECT 1");
-            (_, _, unsureJob) = await HeldAsync(earlier, earlierTab);
-        }
+        var unsureJob = await LeftByEarlierBackendAsync(bq, key);
         var unsureChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bq.AlsoHang = request =>
         {
@@ -493,18 +486,11 @@ internal static partial class BigQuerySessionChecks
         bq.ListDenied = false;
         check(unsureChecking.Task.IsCompleted && unsureClose.Result is SessionCloseResult { Closed: true, Note: { Code: "outcomeUnknown" } unsureNote } && unsureNote.JobId == unsureJob
             && !bq.Cancels.Contains(unsureJob) && Says(unsureRun, "so it was not cancelled; it may still be running"),
-            $"Cancel the job during an identity check that cannot pass leaves the job and says so: {unsureClose.Code} {(unsureClose.Result as SessionCloseResult)?.Note} {Texts(unsureRun?.Messages ?? [])}");
+            $"Cancel the job during an identity check that cannot pass leaves the job and says so: {unsureClose.Code} {unsureClose.Result} cancelled {bq.Cancels.Contains(unsureJob)} {Texts(unsureRun?.Messages ?? [])}");
         bq.Release(bq.Jobs[unsureJob]);
 
         // Leave it running on a tab closed during an adopting re-attach's identity check leaves the job alone.
-        string keptJob;
-        using (var earlier = new Harness(bq))
-        {
-            await earlier.ConnectAsync(key);
-            var earlierTab = Tab();
-            await earlier.Execute(earlierTab, "SELECT 1");
-            (_, _, keptJob) = await HeldAsync(earlier, earlierTab);
-        }
+        var keptJob = await LeftByEarlierBackendAsync(bq, key);
         var keptChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bq.AlsoHang = request =>
         {
@@ -524,14 +510,7 @@ internal static partial class BigQuerySessionChecks
         bq.Release(bq.Jobs[keptJob]);
 
         // A plain Stop with the same unconfirmed cancel: the run says so, and a later run's close does not name it again.
-        string staleJob;
-        using (var earlier = new Harness(bq))
-        {
-            await earlier.ConnectAsync(key);
-            var earlierTab = Tab();
-            await earlier.Execute(earlierTab, "SELECT 1");
-            (_, _, staleJob) = await HeldAsync(earlier, earlierTab);
-        }
+        var staleJob = await LeftByEarlierBackendAsync(bq, key);
         var staleChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bq.AlsoHang = request =>
         {
