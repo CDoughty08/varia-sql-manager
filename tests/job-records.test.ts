@@ -204,7 +204,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain('if (kept !== undefined && matching.some(item => item.id === kept)) return')
     // A failed re-attach keeps its connection (the backend may hold the job); one its identity check refused drops its record.
     expect(source).not.toContain('jobConnections.delete(jobId)')
-    expect(source).toContain("if (attachJobId !== undefined && result.status === 'failed' && result.error?.code === 'AUTH_IDENTITY') jobRecords.drop(jobKey, record => record.jobId === attachJobId)")
+    expect(source).toContain("if (attachJobId !== undefined && !seen.has(attachJobId) && result.status === 'failed' && result.error?.code === 'AUTH_IDENTITY') jobRecords.drop(jobKey, record => record.jobId === attachJobId)")
     // Deleting a connection lists ten job ids and counts the rest, in its first box and its failed-cancel box.
     expect(source).toContain('ids = listedIds(running.map(record => record.jobId))')
     // Deleting a profile leaves the jobs of tabs still connected through it (running or left running) to those tabs.

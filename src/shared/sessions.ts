@@ -16,7 +16,7 @@ export type SessionAction = typeof sessionActions[number]
 export interface SessionTab { readonly name: string; readonly transactions: number; readonly running: boolean; readonly unchecked?: true; readonly provider?: SessionProvider; readonly job?: SessionJob }
 /** A BigQuery query holding a job (docs/bigquery.md, The prompt): how long it has run, its estimate, whether it is detached
  *  (left running, or not yet re-attached) rather than followed, and its job ids, which a quit lists since no tab keeps them. */
-export interface SessionJob { readonly elapsedMs: number; readonly estimateBytes?: number; /** `detached`: left running; `unattached`: a restored job not re-attached yet. */ readonly detached?: true; readonly unattached?: true; readonly jobIds?: readonly string[]; /** Running job ids beyond the `jobIds` sent. */ readonly moreJobIds?: number }
+export interface SessionJob { readonly elapsedMs: number; readonly estimateBytes?: number; /** `detached`: left running (or held in its session after a failed run); `unattached`: a restored job not re-attached yet. */ readonly detached?: true; readonly unattached?: true; readonly jobIds?: readonly string[]; /** Running job ids beyond the `jobIds` sent. */ readonly moreJobIds?: number }
 /** queryExecution.bigQuery.closeRunningJob: what a BigQuery-only job prompt answers without asking ("Remember my choice"). */
 export type CloseRunningJob = 'ask' | 'cancel' | 'leave'
 /** The engine a query's session is on, which picks the "not checked" note's causes. */

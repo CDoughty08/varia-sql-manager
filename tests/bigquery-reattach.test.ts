@@ -115,6 +115,8 @@ describe('a run that failed while its job ran', () => {
     pending.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
     await run; await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
+    // Held in this backend's session: holdsJob asks the backend.
+    f.queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 0, checked: false, job: 'running' } })
     await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
     expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, jobHeldAfterFailure(['job_1']), 'info')
     expect(f.results.addMessage).not.toHaveBeenCalledWith(f.tab.id, jobStillRunning(['job_1']), 'info')
@@ -139,6 +141,28 @@ describe('a run after Leave it running', () => {
     expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1'])
     await f.queries.execute(f.tab.id); await settle()
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+  it("keeps a failed run's own running job beside the detached one it waited for", async () => {
+    const f = fixture(), first = deferred<ApiResult<QueryResult>>(), second = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(first.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', location: 'US', state: 'running' })
+    first.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await run; await settle()
+    f.queryApi.execute.mockReturnValueOnce(second.promise)
+    const failing = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_2', location: 'US', state: 'running' })
+    second.resolve({ ok: true, value: output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }) })
+    await failing; await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs?.map(item => item.jobId)).toEqual(['job_1', 'job_2'])
+    // Both are held in this backend's session: the box says so, and once the backend sees them end they are let go.
+    f.queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 0, checked: false, job: 'running' } })
+    await f.queries.prepareSessions('close', [f.tab.id])
+    f.queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 0, checked: true, job: 'none' } })
+    expect(f.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ detached: true })
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
   })
 })
 
@@ -208,6 +232,10 @@ describe('heldAfter', () => {
   it('keeps what each ending leaves for a re-attach', () => {
     expect(heldAfter(undefined, [], [running, done], output({ status: 'detached' }), undefined)).toEqual([{ ...running, detached: true }])
     expect(heldAfter(undefined, [detached, running], [], output(), undefined)).toEqual([running])
+    // A sign-in check failing mid-poll after the re-attach's identity check passed (the job was reported) keeps it.
+    const authFailed = output({ status: 'failed', error: { code: 'AUTH_IDENTITY', message: 'Could not be verified.', batchNumber: 1, iteration: 1 } })
+    expect(heldAfter(running, [], [running], authFailed, undefined)).toEqual([running])
+    expect(heldAfter(running, [], [], authFailed, undefined)).toEqual([])
     // A run that failed while its job ran (no done event): the backend holds the job in the session.
     expect(heldAfter(undefined, [detached], [running, done], output({ status: 'failed', error: { code: 'QUOTA', message: 'Rate limited.', batchNumber: 1, iteration: 1 } }), undefined)).toEqual([running])
     expect(heldAfter(running, [detached], [], output(), undefined)).toEqual([detached])
@@ -222,8 +250,8 @@ describe('heldAfter', () => {
     // A quota or timeout says nothing about the job: tried again on the next connection.
     expect(heldAfter(running, [detached], [running], failed('QUOTA'), undefined)).toEqual([detached, running])
     expect(heldAfter(running, [], [], undefined, 'SESSION_BUSY')).toEqual([running])
-    // Another principal's job, or one Stop cancelled, is dropped.
-    expect(heldAfter(running, [], [running], failed('AUTH_IDENTITY'), undefined)).toEqual([])
+    // Another principal's job (refused before it was reported), or one Stop cancelled, is dropped.
+    expect(heldAfter(running, [], [], failed('AUTH_IDENTITY'), undefined)).toEqual([])
     expect(heldAfter(running, [], [running], output({ status: 'cancelled' }), undefined)).toEqual([])
     // A finished job's re-attach cut off keeps it, to read its results on the next connection.
     expect(heldAfter(running, [], [{ ...running, state: 'done', createdAt: 99 }], undefined, 'BACKEND_LOST')).toEqual([{ ...running, state: 'done' }])

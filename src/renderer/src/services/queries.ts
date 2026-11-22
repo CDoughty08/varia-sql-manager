@@ -90,7 +90,10 @@ export function heldAfter(attach: TabJob | undefined, held: readonly TabJob[] = 
   const own = attached ? [attached] : reported
   if (summary?.status === 'detached') return [...held, ...own.filter(job => job.state === 'running').map(job => ({ ...job, detached: true }))]
   // AUTH_IDENTITY before the run is the project check (another project's job): kept for a connection to that project.
-  if (attached && attached.state === 'running' && (attachPassing.has((summary ? summary.status === 'failed' ? summary.error?.code : undefined : code) ?? '') || !summary && code === 'AUTH_IDENTITY')) return [...held, attached]
+  const failedCode = summary ? summary.status === 'failed' ? summary.error?.code : undefined : code
+  // AUTH_IDENTITY after the job was reported is a sign-in check failing mid-poll (its identity check passed): kept too.
+  if (attached && attached.state === 'running' && (attachPassing.has(failedCode ?? '') || !summary && code === 'AUTH_IDENTITY'
+    || failedCode === 'AUTH_IDENTITY' && reported.some(job => job.jobId === attached.jobId))) return [...held, attached]
   if (summary) return attach || summary.status === 'superseded' ? [...held]
     // A run that failed mid-job (its job never reported done) leaves it held in the session, polled until DONE.
     : summary.status === 'failed' ? [...held.filter(job => !job.detached), ...reported.filter(job => job.state === 'running' && !held.some(other => other.jobId === job.jobId))]
@@ -125,6 +128,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly heldBySession = new Map<string, Map<string, string>>()
   // Per tab, the attach keys of jobs a detached summary left running in this backend's session (holdsJob may let them go).
   private readonly detachedHere = new Map<string, Set<string>>()
+  /** Per tab, the attach keys of jobs a failed run left held in this backend's session (keptFailed): seen to end there. */
+  private readonly heldHere = new Map<string, Set<string>>()
   private readonly executionVersions = new Map<string, number>()
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
@@ -159,7 +164,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         const key = this.jobKeys.get(event.tabId)
         this.jobKeys.delete(event.tabId)
         if (key) void this.api.dropJobRecords?.(key).catch(() => {})
-        this.attachTried.delete(event.tabId); this.passedOver.delete(event.tabId); this.heldBySession.delete(event.tabId); this.detachedHere.delete(event.tabId); this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId); this.locations.delete(event.tabId) }
+        this.attachTried.delete(event.tabId); this.passedOver.delete(event.tabId); this.heldBySession.delete(event.tabId); this.detachedHere.delete(event.tabId); this.heldHere.delete(event.tabId); this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId); this.locations.delete(event.tabId) }
       if (event.type === 'query.outputSelected') {
         const state = this.getSnapshot()[event.tabId]
         if (state?.estimated && state.estimated.view !== event.view)
@@ -378,7 +383,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A finished job's reference waits only for its results: nothing to cancel or leave running.
     const jobs = (state?.jobs ?? []).filter(job => job.state === 'running')
     if (!jobs.length) return false
-    if (jobs.some(job => !job.detached) || !this.connected(id)) return true
+    const heldHere = this.heldHere.get(id)
+    if (jobs.some(job => !job.detached && !(connection && heldHere?.has(this.attachKey(job, connection)))) || !this.connected(id)) return true
     try {
       const response = await this.api.querySessionState(id)
       if (!response.ok || response.value.job === undefined) return true
@@ -387,7 +393,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // restored one whose re-attach failed) is still the tab's.
       const current = this.getSnapshot()[id], here = this.detachedHere.get(id)
       if (current?.jobs?.length && connection) {
-        const { jobs: _jobs, ...rest } = current, kept = current.jobs.filter(job => !job.detached || !here?.has(this.attachKey(job, connection)))
+        const { jobs: _jobs, ...rest } = current, kept = current.jobs.filter(job => !(job.detached ? here : heldHere)?.has(this.attachKey(job, connection)))
         this.update(id, kept.length ? { ...rest, jobs: kept } : rest)
       }
       return !!this.getSnapshot()[id]?.jobs?.some(job => job.state === 'running')
@@ -682,7 +688,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (!forgotten && settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'detached' && held?.length) {
       const here = this.detachedHere.get(tabId)
       const kept = held.filter(job => job.detached && (settledBy.status === 'failed' || !here?.has(this.attachKey(job, connection))) && !jobs.includes(job))
-      if (kept.length) jobs = held.filter(job => jobs.includes(job) || kept.includes(job))
+      if (kept.length) jobs = [...held.filter(job => jobs.includes(job) || kept.includes(job)), ...jobs.filter(job => !held.includes(job))]
     }
     // A failed run may have failed waiting for them: only a run that got past them settles them.
     if (settledBy && !attach && settledBy.status !== 'superseded' && settledBy.status !== 'failed' && sessionHeld?.size) {
@@ -710,6 +716,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
       for (const job of keptFailed) tried.set(this.attachKey(job, connection), job.createdAt)
       this.attachTried.set(tabId, tried)
+      const heldHere = new Set([...this.heldHere.get(tabId) ?? []].slice(-sessionPromptLimits.jobIds * 8))
+      for (const job of keptFailed) heldHere.add(this.attachKey(job, connection))
+      this.heldHere.set(tabId, heldHere)
     }
     if (summary?.status === 'detached') {
       const tried = this.attachTried.get(tabId) ?? new Map<string, number>()
@@ -815,9 +824,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     for (const tab of candidates.filter(candidate => candidate.holding)) {
       const state = this.getSnapshot()[tab.id], held = this.heldJobIds(tab.id), jobIds = held.slice(0, sessionPromptLimits.jobIds)
-      // A job it does not run is one left running (detached), or a restored one not re-attached yet.
+      // A job it does not run is one left running (detached) or held after a failed run, or a restored one not re-attached yet.
       const following = tab.running && !!state?.running && !this.isGated(tab.id), estimateBytes = following ? state.running!.estimateBytes : undefined
-      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.some(job => job.state === 'running') && state.jobs.filter(job => job.state === 'running').every(job => job.detached) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {}, ...held.length > jobIds.length ? { moreJobIds: held.length - jobIds.length } : {} }
+      const connectionOf = this.documents.get(tab.id)?.connectionId, live = connectionOf ? this.getConnection(connectionOf) : undefined, heldHere = this.heldHere.get(tab.id)
+      const inSession = (job: TabJob) => job.detached || !!live && !!heldHere?.has(this.attachKey(job, live))
+      tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.some(job => job.state === 'running') && state.jobs.filter(job => job.state === 'running').every(inSession) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {}, ...held.length > jobIds.length ? { moreJobIds: held.length - jobIds.length } : {} }
       // Its session is asked about only through its job: Cancel the job rolls a transaction back, Leave it running keeps it.
       tab.state = nothingOpen
     }

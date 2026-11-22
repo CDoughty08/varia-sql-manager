@@ -611,7 +611,8 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
       if (result.status === 'superseded' || generation !== rendererGeneration) return
       // A re-attach refused by its identity check (another account's job, or one gone): the tab drops it, and so does its
       // record, which would otherwise hand it back at every restore.
-      if (attachJobId !== undefined && result.status === 'failed' && result.error?.code === 'AUTH_IDENTITY') jobRecords.drop(jobKey, record => record.jobId === attachJobId)
+      // One reported before failing passed its check (a sign-in check failing mid-poll): its record stays.
+      if (attachJobId !== undefined && !seen.has(attachJobId) && result.status === 'failed' && result.error?.code === 'AUTH_IDENTITY') jobRecords.drop(jobKey, record => record.jobId === attachJobId)
       jobRecords.drop(jobKey, record => seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },
     end(): void { if (requestJobKeys.get(queryId) === entry) requestJobKeys.delete(queryId) }

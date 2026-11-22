@@ -267,8 +267,8 @@ Stop pressed while a restart waits for idle sessions to end reaches the backend 
   has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; running jobs' records go
   only past 1,024 of them, newest first), is written atomically on every change and quarantined when unreadable, and
   records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab, and so do a stopped or timed-out request's; a job still running when the
-  backend was lost, or left running, keeps its record. A job re-attached under another key moves to it. A re-attach its identity check refused (`AUTH_IDENTITY`) drops that job's record, which would
-  otherwise come back at every restore.
+  backend was lost, or left running, keeps its record. A job re-attached under another key moves to it. A re-attach its identity check refused (`AUTH_IDENTITY` before the job was reported) drops that
+  job's record, which would otherwise come back at every restore.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
   it; `AUTH_IDENTITY` otherwise, and the job is left alone). The listing needs `bigquery.jobs.list` (BigQuery User has
