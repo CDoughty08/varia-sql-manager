@@ -74,6 +74,8 @@ interface FileBaseline { readonly baseSha256?: string }
 interface SaveConflict { readonly sha256: string }
 interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind }
 interface FileReadOptions {
+  /** A recovery must open detached if another buffer has already claimed this file. */
+  readonly requireUnowned?: boolean
   readonly reload?: boolean
   readonly kind?: DocumentKind
   /** The version under the restored buffer. An older checkpoint may not know it. */
@@ -167,7 +169,7 @@ export class SqlFileStore {
    * Reads and registers the file at `path`. A file already registered keeps its id, and keeps what it was last read as:
    * an Open that finds its tab must not hide a change the tab has not seen (`reload` is the read that does show it).
    */
-  async read(path: string, { reload = false, kind: requestedKind, restore, targets }: FileReadOptions = {}): Promise<OpenSqlFile> {
+  async read(path: string, { reload = false, requireUnowned = false, kind: requestedKind, restore, targets }: FileReadOptions = {}): Promise<OpenSqlFile> {
     const absolutePath = resolve(path)
     const extension = extname(absolutePath).toLowerCase()
     const inferXml = requestedKind === undefined && extension === '.xml'
@@ -187,6 +189,7 @@ export class SqlFileStore {
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
     // its tab instead of opening a second one that would save over the first.
     const finish = (existing: SqlFile | undefined): OpenSqlFile => {
+      if (existing && requireUnowned) throw new Error('This file is already open in another query tab.')
       // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
       const file: SqlFile = existing && !reload ? existing : {
         id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
@@ -225,7 +228,7 @@ export class SqlFileStore {
   async register(path: string, kind: DocumentKind = 'sql', restore?: FileBaseline, targets: TargetCache = new Map()): Promise<SqlFile | undefined> {
     if (await this.owner(resolve(path), undefined, targets)) return undefined
     try {
-      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, { kind, restore, targets })
+      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, { kind, restore, targets, requireUnowned: true })
       return { id, name, path: registered, encoding, ...codePage ? { codePage } : {}, readOnly }
     } catch { return undefined }
   }

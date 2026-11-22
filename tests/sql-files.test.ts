@@ -400,6 +400,29 @@ describe('SQL file encodings and save hardening', () => {
     expect(await store.read(alias, { targets: store.targets() })).toMatchObject({ id: registered[1]?.id })
     expect(calls).toContain(paths[0])
   }, 60_000)
+  it.each([false, true])('keeps a concurrent Open and restore from claiming separate buffers for one file (alias: %s)', async alias => {
+    const path = join(directory, 'source.sql'), openedPath = alias ? join(directory, 'alias.sql') : path
+    await writeFile(path, 'external bytes')
+    if (alias) await writeFile(openedPath, 'external bytes')
+    const options = { platform: 'win32' as const, realpath: async (candidate: string) => candidate === openedPath ? path : candidate }
+    const baseline = { baseSha256: '0'.repeat(64) }
+
+    // An Open wins after register's initial owner lookup and before the recovery read finishes.
+    const openFirst = new SqlFileStore(options), read = openFirst.read.bind(openFirst)
+    let ordinaryId = ''
+    vi.spyOn(openFirst, 'read').mockImplementationOnce(async (candidate, reading) => {
+      ordinaryId = (await read(openedPath)).id
+      return read(candidate, reading)
+    })
+    expect(await openFirst.register(path, 'sql', baseline)).toBeUndefined()
+    expect((await openFirst.read(path)).id).toBe(ordinaryId)
+    expect(await openFirst.changedOnDisk(ordinaryId)).toBe(false)
+
+    // A normal Open after recovery focuses the existing registration and keeps the recovered buffer's baseline.
+    const restoreFirst = new SqlFileStore(options), restored = await restoreFirst.register(path, 'sql', baseline)
+    expect((await restoreFirst.read(openedPath)).id).toBe(restored!.id)
+    expect(await restoreFirst.changedOnDisk(restored!.id)).toBe(true)
+  })
   it('registers a file and a link to it once when one Open dialog selection reads both at the same time', async () => {
     const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
     // A slow volume: every resolution takes a while, so both reads look for an owner before either has registered.

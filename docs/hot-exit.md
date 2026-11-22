@@ -34,7 +34,8 @@ default. While off, pinned tabs still reopen, and a close asks about unsaved cha
 - Untitled or unsaved tabs keep their text and unsaved state. A file-backed query recovered after deleting all its text still needs saving. A clean tab with a file keeps only the path and rereads it
   (a missing file is named in a notice). An unsaved tab whose file is gone reopens with its text, without the file.
 - A kept buffer with a file carries the disk fingerprint it was based on; with external-change detection on, saving asks
-  before replacing newer disk contents. Kept buffers without a fingerprint also ask before replacing an existing file.
+  before replacing newer disk contents. Recover Unsaved Queries uses the same check for AutoRecover copies. Older copies
+  without a fingerprint ask before replacing an existing file.
 - The tab's name, rename and line ending. Each query keeps its exact connection target, its database and whether it wants
   to attach after that target reconnects; a query deliberately disconnected keeps its context without attaching.
   A BigQuery query keeps its engine too, so it reopens as GoogleSQL before it reconnects (docs/googlesql.md).
