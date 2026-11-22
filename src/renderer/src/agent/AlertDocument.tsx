@@ -65,12 +65,12 @@ function WhenSection({ state, model, draft, editable, problems, service }: Props
       <PropertyField id={ids.when} label="Raise on" labelFor={false} {...when}>
         <span className="agent-alert-raise">
           <Segmented id={ids.when} labelledBy={`${ids.when}-label`} segments={[{ value: 'severity', label: 'Severity' }, { value: 'message', label: 'Error number' }]} value={draft.raiseOn} disabled={!editable}
-            onChange={value => update({ raiseOn: value as 'message' | 'severity' })} {...fieldAria(ids.when, when)} />
+            onChange={value => update({ raiseOn: value as 'message' | 'severity' })} {...draft.raiseOn === 'severity' ? fieldAria(ids.when, when) : {}} />
           {draft.raiseOn === 'severity'
             ? <select className="property-input" aria-label="Severity" value={draft.severity} disabled={!editable} onChange={event => update({ severity: Number(event.target.value) })}>
               {Array.from({ length: 25 }, (_, index) => index + 1).map(severity => <option key={severity} value={severity}>{String(severity).padStart(3, '0')}</option>)}
             </select>
-            : <input className="property-input" type="text" inputMode="numeric" aria-label="Error number" maxLength={10} value={draft.messageId} disabled={!editable} onChange={event => update({ messageId: event.target.value })} />}
+            : <input className="property-input" type="text" inputMode="numeric" aria-label="Error number" maxLength={10} value={draft.messageId} disabled={!editable} {...fieldAria(ids.when, when)} onChange={event => update({ messageId: event.target.value })} />}
         </span>
         {draft.raiseOn === 'message' && model.messageText && draft.messageId.trim() === String(model.alert?.messageId) && <p className="field-note">{model.messageText}</p>}
       </PropertyField>
@@ -86,16 +86,16 @@ function WhenSection({ state, model, draft, editable, problems, service }: Props
     </>}
     {draft.kind === 'performance' && <PropertyField id={ids.when} label="Condition" {...when} {...!model.counters ? { note: agentAlertText.countersTyped } : {}}>
       <span className="agent-alert-condition">
-        <input id={ids.when} className="property-input" type="text" list={`${ids.when}-objects`} aria-label="Object" placeholder="Object" maxLength={128} value={draft.object} disabled={!editable} onChange={event => update({ object: event.target.value, counter: '' })} />
+        <input id={ids.when} className="property-input" type="text" list={`${ids.when}-objects`} {...fieldAria(ids.when, when)} aria-label="Object" placeholder="Object" maxLength={128} value={draft.object} disabled={!editable} onChange={event => update({ object: event.target.value, counter: '' })} />
         <datalist id={`${ids.when}-objects`}>{objects.map(object => <option key={object} value={object} />)}</datalist>
-        <input className="property-input" type="text" list={`${ids.when}-counters`} aria-label="Counter" placeholder="Counter" maxLength={128} value={draft.counter} disabled={!editable} onChange={event => update({ counter: event.target.value })} />
+        <input className="property-input" type="text" list={`${ids.when}-counters`} {...fieldAria(ids.when, when)} aria-label="Counter" placeholder="Counter" maxLength={128} value={draft.counter} disabled={!editable} onChange={event => update({ counter: event.target.value })} />
         <datalist id={`${ids.when}-counters`}>{counters.map(counter => <option key={counter} value={counter} />)}</datalist>
         <input className="property-input" type="text" list={`${ids.when}-instances`} aria-label="Instance" placeholder="Instance (any)" maxLength={128} value={draft.instance} disabled={!editable} onChange={event => update({ instance: event.target.value })} />
         <datalist id={`${ids.when}-instances`}>{(reading?.result?.values ?? []).map(value => <option key={value.instance} value={value.instance} />)}</datalist>
         <select className="property-input" aria-label="Comparison" value={draft.comparator} disabled={!editable} onChange={event => update({ comparator: event.target.value as AgentComparator })}>
           {alertComparators.map(entry => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
         </select>
-        <input className="property-input" type="text" inputMode="decimal" aria-label="Value" placeholder="Value" maxLength={32} value={draft.value} disabled={!editable} onChange={event => update({ value: event.target.value })} />
+        <input className="property-input" type="text" inputMode="decimal" {...fieldAria(ids.when, when)} aria-label="Value" placeholder="Value" maxLength={32} value={draft.value} disabled={!editable} onChange={event => update({ value: event.target.value })} />
       </span>
       <CounterValues state={state} draft={draft} service={service} />
     </PropertyField>}

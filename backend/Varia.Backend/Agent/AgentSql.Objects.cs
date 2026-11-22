@@ -217,9 +217,10 @@ internal static partial class AgentSql
     /// <summary>Every notification (alert, operator, methods), for SQLAgentOperatorRole and sysadmin.</summary>
     public static readonly AgentStatement Notifications = new("notifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n;",
         ["alert_id", "operator_id", "notification_method"], [], "listRows");
-    /// <summary>One alert's notifications (the alert document).</summary>
-    public static readonly AgentStatement AlertNotifications = new("alertNotifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n WHERE n.alert_id = @alert_id;",
-        ["alert_id", "operator_id", "notification_method"], [new("@alert_id", SqlDbType.Int)], "listRows");
+    /// <summary>One alert's notifications with each operator's name (the alert document), so none depends on the capped operator listing.</summary>
+    public static readonly AgentStatement AlertNotifications = new("alertNotifications",
+        "SELECT n.alert_id, n.operator_id, n.notification_method, o.name AS operator_name FROM msdb.dbo.sysnotifications AS n JOIN msdb.dbo.sysoperators AS o ON o.id = n.operator_id WHERE n.alert_id = @alert_id;",
+        ["alert_id", "operator_id", "notification_method", "operator_name"], [new("@alert_id", SqlDbType.Int)], "listRows");
     /// <summary>One operator's notifications (the operator document and Delete Object's count).</summary>
     public static readonly AgentStatement OperatorNotifications = new("operatorNotifications", "SELECT n.alert_id, n.operator_id, n.notification_method FROM msdb.dbo.sysnotifications AS n WHERE n.operator_id = @operator_id;",
         ["alert_id", "operator_id", "notification_method"], [new("@operator_id", SqlDbType.Int)], "listRows");

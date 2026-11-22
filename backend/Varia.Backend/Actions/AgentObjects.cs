@@ -382,11 +382,9 @@ internal sealed partial class ActionService
                 Value("job_id") is Guid job && job != Guid.Empty ? job.ToString("D") : "", TextOf(Value("job_name")), IntOf(Value("delay_between_responses")), IntOf(Value("include_event_description")),
                 TextOf(Value("notification_message")), IntOf(Value("occurrence_count")), Stamp(Value("last_occurrence_date"), Value("last_occurrence_time")),
                 Stamp(Value("last_response_date"), Value("last_response_time")), Stamp(Value("count_reset_date"), Value("count_reset_time")));
-            if (Read(AgentSql.AlertNotifications, out var notified) && operators is not null)
-            {
-                var names = operators.ToDictionary(item => item.Id, item => item.Name);
-                notifications = [.. NotificationList(notified).Where(row => row.AlertId == id && row.Methods > 0 && names.ContainsKey(row.OperatorId)).Select(row => new AgentAlertNotifyDto(names[row.OperatorId], row.Methods))];
-            }
+            if (Read(AgentSql.AlertNotifications, out var notified))
+                notifications = [.. notified.Rows.Where(row => IntOf(notified.Value(row, "notification_method")) > 0)
+                    .Select(row => new AgentAlertNotifyDto(TextOf(notified.Value(row, "operator_name")), IntOf(notified.Value(row, "notification_method"))))];
             if (alert.MessageId > 0)
             {
                 var (text, _) = await reader.ReadAsync(connection, null, [AgentSql.MessageText], (_, _) => alert.MessageId, token);
