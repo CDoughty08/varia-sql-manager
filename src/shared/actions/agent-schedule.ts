@@ -161,6 +161,7 @@ export const jobScheduleText = {
   tooManyRemoved: `One save removes at most ${agentLimits.schedulesPerJob} schedules: save, then remove the rest.`,
   unguarded: 'This schedule\'s version could not be read, so it cannot be attached. Search again, or reload the job.',
   needsFix: 'needs a fix before Save',
+  pickedGone: (count: number) => count === 1 ? 'A shared schedule you attached was deleted since, so it is no longer attached.' : `${count} shared schedules you attached were deleted since, so they are no longer attached.`,
   onlyYourJobs: 'Only your own jobs are listed.',
   jobsReadFailed: 'Which jobs use it could not be read.',
   attachHint: 'Attaching adds it to this job when you save; nothing changes on the server until then.',
@@ -188,17 +189,19 @@ export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: 
 /**
  * Reload and keep my changes for picked schedules: each takes the shared schedule as read now (`current`) as its guard, keeping the
  * fields the user changed and the schedule's new values for the rest (name, Enabled and timing each on its own). Without this a picked schedule someone changed stays STALE after
- * every reload. One no longer listed keeps its old guard, so its save still reports it.
+ * every reload. One no longer listed is dropped when the read is `complete` (someone deleted it: its attach could only be STALE for
+ * ever), else it keeps its old guard, so its save still reports it.
  */
-export function refreshPickedSchedules(entries: readonly JobScheduleEntry[], current: readonly AgentScheduleRecord[]): readonly JobScheduleEntry[] {
+export function refreshPickedSchedules(entries: readonly JobScheduleEntry[], current: readonly AgentScheduleRecord[], complete = false): readonly JobScheduleEntry[] {
   let changed = false
-  const out = entries.map(entry => {
-    if (!entry.attached || !entry.base) return entry
+  const out = entries.flatMap(entry => {
+    if (!entry.attached || !entry.base) return [entry]
     const base = entry.base
     const record = current.find(item => item.id === entry.id)
-    if (!record || (record.version === base.version && record.modified === base.modified)) return entry
+    if (!record && complete) { changed = true; return [] }
+    if (!record || (record.version === base.version && record.modified === base.modified)) return [entry]
     changed = true
-    return { ...entry, base: record, fields: rebaseScheduleFields(base, record, entry.fields) }
+    return [{ ...entry, base: record, fields: rebaseScheduleFields(base, record, entry.fields) }]
   })
   return changed ? out : entries
 }

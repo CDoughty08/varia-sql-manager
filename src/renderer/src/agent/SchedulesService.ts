@@ -76,7 +76,8 @@ export const schedulesText = {
   unusedNote: 'Unused counts every job, including jobs you cannot see.',
   staleJobs: 'Someone changed a job you chose after it was read, so nothing was created. The jobs are read again: check them, then create again.',
   newPending: 'Finish or discard the new schedule first.',
-  jobsDropped: (count: number) => count === 1 ? 'One job you chose is gone or no longer yours to change, so it is left out.' : `${count} jobs you chose are gone or no longer yours to change, so they are left out.`,
+  jobsDropped: (count: number) => count === 1 ? 'One job change no longer applies (the job is gone, no longer yours to change, or already changed), so it is left out.'
+    : `${count} job changes no longer apply (the jobs are gone, no longer yours to change, or already changed), so they are left out.`,
   staleKept: 'Someone changed this schedule or one of its jobs after it was read, so nothing was saved. It now shows their change with yours on top: check it, then save again.',
   copyName: (name: string) => `${name} (copy)`.slice(0, agentLimits.nameChars)
 } as const
@@ -270,8 +271,10 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     const state = this.get(id), key = state?.selected, draft = this.draft(id)
     if (!state || !key || !draft) return []
     const read = key === newScheduleKey ? [] : this.jobsOf(id, Number(key)) ?? []
+    const using = new Set(read.map(job => job.id.toLowerCase()))
     const detached = new Set(draft.jobs.filter(job => !job.attach).map(job => job.jobId.toLowerCase()))
-    const attached = draft.jobs.filter(job => job.attach).map(job => this.job(id, job.jobId)).filter((job): job is AgentScheduleJob => !!job)
+    // An attach of a job that already uses the schedule (someone attached it since) is not listed twice.
+    const attached = draft.jobs.filter(job => job.attach && !using.has(job.jobId.toLowerCase())).map(job => this.job(id, job.jobId)).filter((job): job is AgentScheduleJob => !!job)
     return [...read.filter(job => !detached.has(job.id.toLowerCase())), ...attached]
   }
   private job(id: string, jobId: string): AgentScheduleJob | undefined {
@@ -439,7 +442,11 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     if (!read) { this.patch(id, { error: { ...error, message: `${error.message} ${current.error && current.error !== error ? current.error.message : ''}`.trim() } }); return }
     // Each job change takes the job's version as read now. A job gone since, or no longer the login's to change, is left out (the
     // view could neither show nor undo it, and every save would be refused), and the message says how many.
-    const jobs = (draft?.jobs ?? []).flatMap(change => { const job = this.job(id, change.jobId); return job && this.canChangeJob(id, job) ? [{ ...change, version: job.version }] : [] })
+    // Where the schedule's jobs are known, a detach of a job that no longer uses it, or an attach of one that already does (someone
+    // made that change since), no longer applies either.
+    const using = key === newScheduleKey ? [] : this.jobsOf(id, Number(key))
+    const applies = (change: AgentScheduleJobChange) => !using || using.some(job => job.id.toLowerCase() === change.jobId.toLowerCase()) !== change.attach
+    const jobs = (draft?.jobs ?? []).flatMap(change => { const job = this.job(id, change.jobId); return job && this.canChangeJob(id, job) && applies(change) ? [{ ...change, version: job.version }] : [] })
     const dropped = (draft?.jobs.length ?? 0) - jobs.length
     const message = (text: string) => dropped ? `${text} ${schedulesText.jobsDropped(dropped)}` : text
     // A new schedule's STALE can only be a chosen job's version: those are read again.

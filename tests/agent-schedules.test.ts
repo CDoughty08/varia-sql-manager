@@ -139,6 +139,9 @@ describe('schedule encoding, sentences and runs', () => {
     expect(scheduleProblems(once, now)).toContainEqual(expect.objectContaining({ field: 'startDate', severity: 'error' }))
     expect(timingProblem(once)).toBeDefined()
   })
+  it("stops a schedule without an end date at msdb's last day, 9999-12-31", () => {
+    expect(nextRuns(fields({ activeStartDate: 99991229 }), { date: 99991229, time: 0 }, 5).map(formatRun)).toHaveLength(3)
+  })
   it('takes an end time of 00:00 as the 23:59:59 msdb stores', () => {
     const evening = fields({ freqSubdayType: subday.minutes, freqSubdayInterval: 15, activeStartTime: 180000, activeEndTime: 0 })
     expect(scheduleProblems(evening, now)).toEqual([])
@@ -222,6 +225,9 @@ describe("the job document's schedule saves", () => {
     const own = initialJobSchedules([record(8, { version: 1 })]).map(entry => ({ ...entry, fields: { ...entry.fields, name: 'Mine' } }))
     expect(rebaseJobSchedules([record(8, { version: 1 })], [record(8, { version: 5, activeStartTime: 10000 })], own)[0]?.fields).toMatchObject({ name: 'Mine', activeStartTime: 10000 })
     expect(jobSchedulesSave([], moved)?.attach?.map(guard => guard.version)).toEqual([2, 5])
+    // A picked schedule deleted since: dropped when the read is complete (its attach could only be STALE), kept when it was cut short.
+    expect(refreshPickedSchedules(entries, [record(8, { version: 5 })], true).map(entry => entry.key)).toEqual(['s:8', 'n:1'])
+    expect(refreshPickedSchedules(entries, [record(8, { version: 5 })]).map(entry => entry.key)).toEqual(['s:9', 's:8', 'n:1'])
     // Keep my changes in the Schedules document: what the user changed stays, the rest takes the server's new values.
     expect(rebaseScheduleFields(record(1), record(1, { name: 'Theirs', activeStartTime: 10000, version: 4 }), { ...fields(), enabled: false })).toMatchObject({ name: 'Theirs', enabled: false, activeStartTime: 10000 })
     expect(rebaseScheduleFields(record(1), record(1, { name: 'Theirs', version: 4 }), { ...fields(), name: 'Mine', activeStartTime: 40000 })).toMatchObject({ name: 'Mine', activeStartTime: 40000 })
@@ -562,6 +568,22 @@ describe('the Schedules document', () => {
     expect(executes()[1]).toMatchObject({ agentSchedule: { op: 'create', name: 'Month end', jobs: [{ jobId: jobA.id, attach: true }] } })
     expect((executes()[1] as { agentSchedule?: { jobs?: unknown[] } }).agentSchedule?.jobs).toHaveLength(1)
   })
+  it("drops a job change someone else already made after a STALE save, and lists an attached job once", async () => {
+    const { schedules, setModel, answers } = schedulesWorkbench()
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '1')
+    schedules.toggleJob(id, jobA.id, false)
+    schedules.toggleJob(id, jobB.id, true)
+    // Someone else detached Backup's sibling ETL (its version moved) and attached Backup.
+    setModel(schedulesModel({ jobs: [{ ...jobA, version: 5 }, jobB], links: [{ scheduleId: 1, jobId: jobB.id }, { scheduleId: 3, jobId: jobB.id }] }))
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false } } })
+    expect(await schedules.save(id)).toBe(false)
+    await settled()
+    expect(schedules.get(id)?.error?.message).toBe(`${schedulesText.staleKept} ${schedulesText.jobsDropped(2)}`)
+    expect(schedules.draft(id)?.jobs).toEqual([])
+    expect(schedules.draftJobs(id).map(job => job.name)).toEqual(['Backup'])
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
@@ -674,6 +696,22 @@ describe("the job document's Schedules section", () => {
     expect(jobDocuments.get(id)!.draft!.schedules.find(entry => entry.id === 2)).toMatchObject({ base: { version: 6 }, fields: { name: 'Unused (theirs)' } })
     expect(await jobDocuments.save(id)).toBe(true)
     expect(executes()[1]).toMatchObject({ agentJob: { schedules: { attach: [{ id: 2, version: 6 }] } } })
+  })
+  it('drops a picked schedule someone deleted on Reload and keep my changes, and says so, so the save is not STALE for ever', async () => {
+    const { jobDocuments, answers, setShared } = jobWorkbench()
+    const id = jobDocuments.openJob('c1', 'ETL')
+    await settled()
+    jobDocuments.ensureShared(id)
+    await settled()
+    jobDocuments.attachSchedule(id, jobDocuments.get(id)!.shared!.model!.schedules[1])
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false, field: 'schedules' } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    await settled()
+    setShared(schedulesModel({ schedules: [record(1)] }))
+    jobDocuments.reloadKeep(id)
+    await settled()
+    expect(jobDocuments.get(id)!.draft!.schedules.some(entry => entry.id === 2)).toBe(false)
+    expect(jobDocuments.get(id)?.notice).toBe(jobScheduleText.pickedGone(1))
   })
   it('drops a shared read that answers after a save started the reads over', async () => {
     const { jobDocuments, api } = jobWorkbench()

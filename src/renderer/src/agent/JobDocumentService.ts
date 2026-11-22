@@ -643,8 +643,12 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       this.patch(id, { shared: model && !error ? { state: 'ready', model } : { state: 'failed', error: error ?? jobScheduleText.listFailed } })
       const draft = this.get(id)?.draft
       if (rebase && model && !error && draft) {
-        const schedules = refreshPickedSchedules(draft.schedules, model.schedules)
-        if (schedules !== draft.schedules) this.updateDraft(id, { schedules })
+        const schedules = refreshPickedSchedules(draft.schedules, model.schedules, !model.truncated)
+        if (schedules !== draft.schedules) {
+          const gone = draft.schedules.length - schedules.length
+          this.updateDraft(id, { schedules })
+          if (gone) this.patch(id, { notice: jobScheduleText.pickedGone(gone) })
+        }
       }
     })
   }

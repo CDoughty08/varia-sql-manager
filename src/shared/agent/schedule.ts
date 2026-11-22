@@ -468,7 +468,8 @@ export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?
   if (![freq.daily, freq.weekly, freq.monthly, freq.relative].includes(schedule.freqType as 4) || !validDate(schedule.activeStartDate)) return []
   const runs: AgentMoment[] = []
   const times = timesOfDay(schedule)
-  const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? Infinity : dayNumber(schedule.activeEndDate)
+  // No end date still ends with msdb's calendar, on 9999-12-31.
+  const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? dayNumber(noEndDate) : dayNumber(schedule.activeEndDate)
   const firstDay = Math.max(dayNumber(schedule.activeStartDate), Math.floor(fromSeconds / 86_400))
   for (let day = firstDay; day <= lastDay && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
     if (until !== undefined && day * 86_400 > until) break
