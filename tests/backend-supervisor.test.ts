@@ -130,6 +130,18 @@ describe('BackendSupervisor over the fake backend process', () => {
 })
 
 describe('BackendSupervisor restarts', () => {
+  it('tells a BigQuery run lost with the backend that its job carries on', async () => {
+    const { value, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
+    const connected = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never) as { id: string }
+    backends[0].answer = false
+    const run = failure(value.request('query.execute', { ...query('tab-1'), connectionId: connected.id } as never))
+    const attach = failure(value.request('query.attach', { connectionId: connected.id } as never))
+    await settle()
+    backends[0].exit(1)
+    expect(await run).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostBigQuery })
+    expect(await attach).toMatchObject({ code: 'BACKEND_LOST' })
+    expect(sentences.lostBigQuery).not.toContain('SQL Server')
+  })
   it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running queries', async () => {
     const { value, advance, statuses, states, backends } = simulated({ deps: { policy: { breakerLosses: 10 } } })
     const connection = await value.request('connections.connect', options)
@@ -140,6 +152,7 @@ describe('BackendSupervisor restarts', () => {
     await settle()
     backends[0].exit(1)
     expect(await script).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
+    expect(sentences.lostQuery).toContain('SQL Server rolls back')
     expect(states.at(-1)).toEqual({ status: 'restarting', generation: 1, retryInMs: 0, lost: { generation: 1, reason: 'exit', connections: 1, queries: 1 } })
     expect(value.connectionCount()).toBe(0)
     expect(value.isLostConnection(connection.id)).toBe(true)
@@ -304,6 +317,12 @@ describe('BackendSupervisor restarts', () => {
     await advance(0)
     expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.session.close', params: { sessionId: '33333333-3333-4333-8333-333333333333', cancelJob: true } }))
     await expect(closing).resolves.toEqual({ closed: true })
+    // So does Stop (or Leave it running) on a run of that generation.
+    const stopping = value.request('query.cancel', { queryId: '44444444-4444-4444-8444-444444444444' } as never)
+    await advance(0)
+    expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.cancel' }))
+    expect(backends).toHaveLength(1)
+    void stopping.catch(() => undefined)
     // A Restart Backend that joins it still resets the crash breaker.
     const breaker = value as unknown as { attempts: number, losses: number[] }
     breaker.attempts = 3; breaker.losses = [1, 2]

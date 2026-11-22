@@ -257,8 +257,8 @@ refused, or whose request never left the machine, holds nothing; nor does one cu
 
 ### Re-attaching to jobs
 
-Stopping or restarting the backend never cancels a BigQuery job; only Stop and a close that asks to cancel the job do. The
-backend side of re-attaching:
+Stopping or restarting the backend never cancels a BigQuery job; only Stop and a close that asks to cancel the job do. A
+Stop pressed while a restart waits for idle sessions to end reaches the backend being ended. The backend side of re-attaching:
 
 - **Job keys and records.** A BigQuery request may carry its tab's `jobKey` (a uuid). Main records each request's
   top-level job from its `query.job` event in `WorkbenchSession/jobs.json`: job id, project, location, state, whether it
