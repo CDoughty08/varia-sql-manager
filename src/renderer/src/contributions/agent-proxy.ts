@@ -14,14 +14,16 @@ export function agentProxyContribution({ commands, documents, connections, explo
   options: { readonly agentEnabled?: boolean } = {}): Disposable {
   if (!options.agentEnabled) return { dispose: () => {} }
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
-  const target = (args?: CommandArgs): string | undefined => {
+  const target = (args?: CommandArgs, selectionFirst = false): string | undefined => {
     const node = explorerNodeOf(args)
     if (node) return node.lost ? undefined : live(node.connectionId)
-    return live(documents.active?.connectionId) ?? live(explorer.menuNode(explorer.getSnapshot().selected)?.connectionId)
+    const selected = live(explorer.menuNode(explorer.getSnapshot().selected)?.connectionId)
+    // New Credential… from the palette needs a Credentials folder or a credential selected (its precondition): that is its server.
+    return selectionFirst ? selected ?? live(documents.active?.connectionId) : live(documents.active?.connectionId) ?? selected
   }
   const report = (run: () => void, fallback: string) => { try { run() } catch (error) { commands.reportError(error instanceof Error ? error.message : fallback) } }
-  const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void) => {
-    const connectionId = target(args)
+  const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void, selectionFirst = false) => {
+    const connectionId = target(args, selectionFirst)
     if (connectionId) return then(connectionId)
     if (explorerNodeOf(args)) { commands.reportError('Connect to the server first.'); return }
     const choices = connections.liveSqlServer()
@@ -53,7 +55,7 @@ export function agentProxyContribution({ commands, documents, connections, explo
     commands.register('agentProxy.reload', on(proxies, id => proxyDocuments.canReload(id), id => proxyDocuments.reload(id))),
     commands.register('agent.newCredential', {
       when: nodeLive,
-      run: args => withServer(args, 'New Credential', connectionId => report(() => credentialDocuments.newCredential(connectionId), 'New Credential could not open.'))
+      run: args => withServer(args, 'New Credential', connectionId => report(() => credentialDocuments.newCredential(connectionId), 'New Credential could not open.'), true)
     }),
     commands.register('credential.save', on(credentials, id => credentialDocuments.canSave(id), id => credentialDocuments.save(id))),
     commands.register('credential.reload', on(credentials, id => credentialDocuments.canReload(id), id => credentialDocuments.reload(id)))

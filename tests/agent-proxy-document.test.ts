@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { commandDescriptor } from '../src/shared/commands/catalog'
+import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import {
   agentProxyChangeCount, agentProxyProblems, agentProxySave, agentProxySaveProblems, agentProxySaveSchema, agentProxyText, credentialProblems, credentialSave, credentialSaveSchema, credentialSecretsSchema,
   credentialText, initialAgentProxyDraft, initialCredentialDraft, proxyPrincipalsStep, savable, type AgentProxyDocumentModel, type CredentialDocumentModel
@@ -288,5 +290,29 @@ describe('the release gate', () => {
     try { expect(ids.filter(id => gated.commands.has(id))).toEqual([]) } finally { gated.dispose() }
     const open = workbenchFixture({ agentPreview: true })
     try { expect(ids.filter(id => !open.commands.has(id))).toEqual([]) } finally { open.dispose() }
+  })
+  it("keeps a credential's Properties and New Credential… behind the gate, though Security › Credentials lists without it", () => {
+    const credential = { id: 7, lost: false, kind: 'credential', connectionId: 'c1', label: 'FileShareWriterCred', engine: 'box', ref: { type: 'object', object: { kind: 'credential', name: 'FileShareWriterCred' } } } as unknown as ExplorerMenuNode
+    const args = { target: { kind: 'explorer' as const, node: credential } }
+    for (const agentPreview of [false, true]) {
+      const fixture = workbenchFixture({ agentPreview })
+      try {
+        fixture.api.push(readyBackend())
+        fixture.connect(connectionInfo('c1'))
+        expect(fixture.commands.canRun('explorer.properties', args), String(agentPreview)).toBe(agentPreview)
+      } finally { fixture.dispose() }
+    }
+    expect(commandDescriptor('agent.newCredential').menus?.every(placement => placement.when?.startsWith('agentEnabled && '))).toBe(true)
+  })
+  it("opens New Credential… from the palette on the selected Credentials folder's server, not the active tab's", async () => {
+    const { commands, documents, explorer, connect, credentialDocuments } = opened()
+    connect(connectionInfo('c2'))
+    documents.newQuery('', undefined, 'c1')
+    const folder = { id: 9, lost: false, kind: 'folder', folder: 'credentials', connectionId: 'c2', label: 'Credentials', ref: { type: 'folder', owner: { kind: 'server' }, folder: 'credentials' } } as unknown as ExplorerMenuNode
+    vi.spyOn(explorer, 'menuNode').mockReturnValue(folder)
+    await commands.execute('agent.newCredential', { state: { explorerSelectionFolder: 'credentials' } }, 'palette')
+    await settled()
+    const opened_ = Object.values(credentialDocuments.getSnapshot().documents).at(-1)!
+    expect(documents.get(opened_.id)?.connectionId).toBe('c2')
   })
 })

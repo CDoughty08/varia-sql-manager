@@ -115,7 +115,13 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node, listedJob(node)) }
     }),
     commands.register('explorer.properties', {
-      when: args => actions.canRun('properties', nodeOf(args)) && !dialogs.current,
+      when: args => {
+        const node = nodeOf(args)
+        if (!actions.canRun('properties', node) || dialogs.current) return false
+        // The job, proxy and credential documents are behind SQL Server Agent's release gate.
+        const dialog = node?.ref.type === 'object' ? actionDialog(node.ref.object.kind, 'properties') : undefined
+        return !!options.agentEnabled || (dialog !== 'agentJob' && dialog !== 'agentProxy' && dialog !== 'credential')
+      },
       run: args => {
         const node = nodeOf(args)
         if (!node) return

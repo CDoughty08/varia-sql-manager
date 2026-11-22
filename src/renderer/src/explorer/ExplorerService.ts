@@ -1852,7 +1852,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const next: ExplorerContextState = {
       ...selectionContextOf(node && this.targetOf(node), { filtered: !!node?.filtered, insertable: !!node && (node.kind === 'server' || this.insertable(node)) }),
       explorerLoading: this.loader.pending > 0,
-      explorerGroupBySchema: this.grouped
+      explorerGroupBySchema: this.grouped,
+      // A credential's Properties is its document (AG-8b), behind SQL Server Agent's release gate; Security › Credentials lists either way.
+      ...!this.agentEnabled && node?.kind === 'credential' ? { explorerActionProperties: '' as const } : {}
     }
     const current = this.contextStore.getSnapshot()
     if ((Object.keys(next) as (keyof ExplorerContextState)[]).some(key => next[key] !== current[key])) this.contextStore.set(next)

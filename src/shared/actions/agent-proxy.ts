@@ -464,7 +464,7 @@ export function agentProxyCommandEntries(): { readonly [K in AgentProxyCommandId
       title: 'New Credential…', category: 'Object Explorer', icon: 'key', keywords: ['credential', 'security', 'secret', 'identity', 'create', 'proxy'],
       precondition: "agentEnabled && backendReady && (explorerSelectionFolder == 'credentials' || explorerSelectionKind == 'credential')",
       unavailableHint: 'Select Security › Credentials of a SQL Server or Managed Instance in Object Explorer.',
-      menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: `${credentialNodes} && !explorerServerLost && ${serverEngines}` }]
+      menus: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: `agentEnabled && ${credentialNodes} && !explorerServerLost && ${serverEngines}` }]
     },
     'credential.save': {
       title: 'Save Credential', category: 'Object Explorer', icon: 'save', keywords: ['credential', 'apply', 'ok', 'password', 'secret'],
