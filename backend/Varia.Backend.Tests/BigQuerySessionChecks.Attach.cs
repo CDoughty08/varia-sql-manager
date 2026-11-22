@@ -496,6 +496,33 @@ internal static partial class BigQuerySessionChecks
             $"Cancel the job during an identity check that cannot pass leaves the job and says so: {unsureClose.Code} {(unsureClose.Result as SessionCloseResult)?.Note} {Texts(unsureRun?.Messages ?? [])}");
         bq.Release(bq.Jobs[unsureJob]);
 
+        // Leave it running on a tab closed during an adopting re-attach's identity check leaves the job alone.
+        string keptJob;
+        using (var earlier = new Harness(bq))
+        {
+            await earlier.ConnectAsync(key);
+            var earlierTab = Tab();
+            await earlier.Execute(earlierTab, "SELECT 1");
+            (_, _, keptJob) = await HeldAsync(earlier, earlierTab);
+        }
+        var keptChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + keptJob, StringComparison.Ordinal) || keptChecking.Task.IsCompleted) return false;
+            keptChecking.TrySetResult();
+            return true;
+        };
+        var keptTab = Tab();
+        var keptAttach = harness.Call("query.attach", AttachArgs(harness, keptTab, keptJob, args => args["transaction"] = "open"));
+        await Task.WhenAny(keptChecking.Task, keptAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        var aborts = bq.Aborts.Count;
+        var keptClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = keptTab, ["keepJob"] = true });
+        await keptAttach.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.AlsoHang = null;
+        check(keptChecking.Task.IsCompleted && keptClose.Code == "ok" && !bq.Cancels.Contains(keptJob) && bq.Aborts.Count == aborts,
+            $"Leave it running during an identity check cancels nothing and ends no session: {keptClose.Code} cancels {string.Join(",", bq.Cancels)} aborts {bq.Aborts.Count - aborts}");
+        bq.Release(bq.Jobs[keptJob]);
+
         // A plain Stop with the same unconfirmed cancel: the run says so, and a later run's close does not name it again.
         string staleJob;
         using (var earlier = new Harness(bq))

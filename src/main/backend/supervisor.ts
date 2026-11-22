@@ -108,7 +108,7 @@ export class BackendSupervisor {
   private readonly lost = new Set<string>()
   /** Query session ids by the generation their last script ran on. */
   private readonly sessions = new Map<string, number>()
-  /** The generation each query run (execute, attach) was sent to, newest last: where a Stop during a restart's wait goes. */
+  /** The generation each query run (execute, attach, Load into memory) was sent to, newest last: where a Stop during a restart's wait goes. */
   private readonly queries = new Map<string, number>()
   private connection: BackendConnection | undefined
   /** Closes of generations that a restart replaced; stop() waits for them too, so none outlives the app. */
@@ -203,7 +203,7 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const queryId = method === 'query.execute' || method === 'query.attach' ? idOf(params, 'queryId') : undefined
+    const queryId = method === 'query.execute' || method === 'query.attach' || method === 'results.remoteQuery' ? idOf(params, 'queryId') : undefined
     if (queryId !== undefined) {
       this.queries.delete(queryId)
       this.queries.set(queryId, connection.generation)

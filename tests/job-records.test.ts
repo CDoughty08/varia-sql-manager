@@ -76,12 +76,13 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(later.list()).toEqual([])
     await later.flush()
     expect((await onDisk(directory)).records).toEqual([])
-    // A process that stays up past the lifetime (macOS) reads none of them either.
-    later.record(keyB, job('varia_kept'))
+    // A store left open past a record's 24 hours stops offering it, with no change in between.
+    const open = new JobRecordStore(await folder(), { now: () => now })
+    await open.load()
+    open.record(keyA, job('varia_aging'))
     now += jobLimits.lifetimeMs
-    expect(later.forKeys([keyB])).toEqual([])
-    expect(later.withoutTab([])).toEqual([])
-    await later.flush()
+    expect([open.list(), open.forKeys([keyA]), open.withoutTab([])]).toEqual([[], [], []])
+    await open.flush()
   })
 
   it('drops the oldest finished records past the per-key and total limits, never a running one', async () => {

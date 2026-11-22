@@ -477,7 +477,8 @@ internal sealed partial class BigQueryService
             // keepJob), never leaked.
             else if (!session.ActiveJob && session.Tail is not { Holds: true })
             {
-                if (session.FollowsJob) session.DetachActive?.Invoke();
+                // Leave it running never stops: a re-attach still checking its job's identity leaves the job alone.
+                if (session.FollowsJob || keepJob) session.DetachActive?.Invoke();
                 else session.StopActive?.Invoke();
             }
             else
