@@ -99,10 +99,11 @@ export class JobRecordStore {
     this.persist()
   }
 
-  /** Leave it running on Close Results: the key's running records only hold the session's queue on a re-attach. */
-  markDetached(jobKey: string): void {
+  /** Leave it running on Close Results: the request's running jobs (`jobIds`, those it reported) only hold the session's
+   *  queue on a re-attach. Another job under the key (one kept from a lost backend) keeps its own mode. */
+  markDetached(jobKey: string, jobIds: ReadonlySet<string>): void {
     let changed = false
-    for (const record of this.records) if (record.jobKey === jobKey && record.state === 'running' && !record.detached) { record.detached = true; changed = true }
+    for (const record of this.records) if (record.jobKey === jobKey && jobIds.has(record.jobId) && record.state === 'running' && !record.detached) { record.detached = true; changed = true }
     if (changed) this.persist()
   }
 

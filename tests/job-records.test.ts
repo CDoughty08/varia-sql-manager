@@ -53,8 +53,11 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     const store = new JobRecordStore(await folder())
     await store.load()
     store.record(keyA, job('varia_1'))
-    store.markDetached(keyA)
-    expect(store.list()).toEqual([expect.objectContaining({ detached: true })])
+    // A job kept from a lost backend under the same key is not the request's: it keeps its mode.
+    store.record(keyA, job('varia_kept'))
+    store.markDetached(keyA, new Set(['varia_1']))
+    expect(store.list()).toEqual([expect.objectContaining({ jobId: 'varia_1', detached: true }), expect.not.objectContaining({ detached: true })])
+    store.drop(keyA, record => record.jobId === 'varia_kept')
     store.record(keyA, job('varia_1', 'done'))
     expect(store.list()).toEqual([])
   })
@@ -139,7 +142,9 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
 
   it('marks Leave it running from the request own detached answer (index.ts), which may come before the query.cancel answer', async () => {
     const source = await readFile(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
-    expect(source).toContain("if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }")
+    expect(source).toContain("if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }")
+    // A summary after a reload or crash replaced the page never reached a tab: nothing is dropped for it.
+    expect(source).toContain("if (result.status === 'superseded' || generation !== rendererGeneration) return")
     // Read after SessionStore's purge, which deletes interrupted writes in the same folder.
     expect(source).toContain('void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load())')
     // A quit waits for the records written while the stop ends idle sessions.

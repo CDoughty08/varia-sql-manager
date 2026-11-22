@@ -221,8 +221,8 @@ const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.au
 const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
 // BigQuery jobs main heard of, under their tabs' job keys (docs/bigquery.md, Re-attaching to jobs); never their SQL or secrets.
 const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current), { onWriteError: () => console.error('The BigQuery job records could not be written.') })
-// The job key of each running BigQuery request, so Leave it running (query.cancel detach) can mark its records.
-const requestJobKeys = new Map<string, string>()
+// Each running BigQuery request's job key and the jobs it reported, so Leave it running (query.cancel detach) marks only those.
+const requestJobKeys = new Map<string, { jobKey: string, seen: ReadonlySet<string> }>()
 // From the start of a quit: the kept tabs' job keys, which bigquery.endIdleSessions leaves (keepJobKeys).
 let quitKeepJobKeys: readonly string[] | undefined
 const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending(), async () => {
@@ -501,17 +501,21 @@ function requestClose(intent: CloseIntent): void {
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
 function jobRecorder(queryId: string, jobKey: string) {
-  requestJobKeys.set(queryId, jobKey)
   const seen = new Set<string>()
+  const entry = { jobKey, seen }
+  requestJobKeys.set(queryId, entry)
+  // A summary answered after a reload or crash replaced the page (a restart waits for bigquery.endIdleSessions first) never
+  // reached a tab: its records stay for the kept tab to re-attach.
+  const generation = rendererGeneration
   return {
     event(event: QueryEvent): void { if (event.type !== 'query.job') return; seen.add(event.jobId); jobRecords.record(jobKey, event) },
     summary(result: QueryResult): void {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
-      if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }
-      if (result.status === 'superseded') return
+      if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }
+      if (result.status === 'superseded' || generation !== rendererGeneration) return
       jobRecords.drop(jobKey, record => seen.has(record.jobId) && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },
-    end(): void { if (requestJobKeys.get(queryId) === jobKey) requestJobKeys.delete(queryId) }
+    end(): void { if (requestJobKeys.get(queryId) === entry) requestJobKeys.delete(queryId) }
   }
 }
 
@@ -1211,8 +1215,8 @@ app.whenReady().then(async () => {
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) { results.querySummary(result as QueryResult); jobs?.summary(result as QueryResult) }
       if (method === 'query.cancel' && (validated as RpcMethods['query.cancel']['params']).detach && (result as { cancelled: boolean }).cancelled) {
-        const key = requestJobKeys.get((validated as RpcMethods['query.cancel']['params']).queryId)
-        if (key !== undefined) jobRecords.markDetached(key)
+        const request = requestJobKeys.get((validated as RpcMethods['query.cancel']['params']).queryId)
+        if (request !== undefined) jobRecords.markDetached(request.jobKey, request.seen)
       }
       return { ok: true, value: result }
       } finally { if (bindingMutation) await connectionOpen?.finishBindingMutation(bindingMutation).catch(() => {}); prepared.release?.() }
