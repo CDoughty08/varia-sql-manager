@@ -289,6 +289,18 @@ internal static partial class BigQuerySessionChecks
                 $"a re-attached job that is already DONE is reported done, never running: {(gone.Result as QueryResult)?.Error?.Code} {string.Join(" ", jobEvents)}");
         }
         bq.ExpiredResults.Remove(goneJob);
+        // A job refused at insert is DONE with its error: it is reported done, so main never keeps a record of it as running.
+        bq.Failures["SELECT refused"] = Failure("invalidQuery", "Unrecognized name: refused");
+        bq.FailAtInsert.Add("SELECT refused");
+        var refusedEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using (var refusedContext = new Protocol.RequestContext(3, "query.execute", Protocol.RequestLane.Query, 0, sendEvent: (_, body, _) =>
+            refusedEvents.Enqueue(System.Text.Json.JsonSerializer.Serialize(body, body.GetType(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))))
+        {
+            var refusedRun = await harness.Call("query.execute", harness.Query(Tab(), "SELECT refused"), refusedContext);
+            var jobEvents = refusedEvents.Where(item => item.Contains("\"query.job\"", StringComparison.Ordinal)).ToList();
+            check(refusedRun.Result is QueryResult { Status: "failed" } && jobEvents.Count > 0 && jobEvents.All(item => item.Contains("\"state\":\"done\"", StringComparison.Ordinal)),
+                $"a job refused at insert is reported done, never running: {(refusedRun.Result as QueryResult)?.Status} {string.Join(" ", jobEvents)}");
+        }
 
         // A script: its children are listed again and read in statement order.
         bq.Scripts["SCRIPT two"] = [("SELECT", null), ("INSERT", null), ("SELECT", null)];
@@ -335,6 +347,48 @@ internal static partial class BigQuerySessionChecks
         check(bq.Polling.Task.IsCompleted && foreignClose.Code == "ok" && foreignAnswer is { Status: "detached" } && !bq.Cancels.Contains(holderJob) && !Says(foreignAnswer, "holds this tab"),
             $"closing a tab that follows another session's job leaves the job running: {foreignClose.Code} {foreignAnswer?.Status} cancels {string.Join(",", bq.Cancels)}");
         bq.Release(bq.Jobs[holderJob]);
+
+        // A re-attach outside any session (adoptSession false, in a tab that never ran anything): Leave it running on its close
+        // leaves the job running, and only Cancel the job cancels it.
+        var outsideHolder = Tab();
+        await harness.Execute(outsideHolder, "SELECT 1");
+        var (outsideArgs, outsideHeld, outsideJob) = await HeldAsync(harness, outsideHolder);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = outsideArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await outsideHeld.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Jobs[outsideJob].Hold = true;
+        foreach (var cancelling in new[] { false, true })
+        {
+            var outsideTab = Tab();
+            bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var outsideRun = harness.Call("query.attach", AttachArgs(harness, outsideTab, outsideJob, args => args["adoptSession"] = false));
+            await Task.WhenAny(bq.Polling.Task, outsideRun).WaitAsync(TimeSpan.FromSeconds(30));
+            var outsideClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = outsideTab, [cancelling ? "cancelJob" : "keepJob"] = true });
+            var outsideAnswer = (await outsideRun.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+            // The cancel is sent in the background.
+            if (cancelling) await Poll(() => bq.Cancels.Contains(outsideJob), 10);
+            check(bq.Polling.Task.IsCompleted && outsideClose.Code == "ok" && outsideAnswer?.Status == (cancelling ? "cancelled" : "detached") && bq.Cancels.Contains(outsideJob) == cancelling,
+                $"closing a tab whose re-attach reads outside any session {(cancelling ? "cancels the job only for Cancel the job" : "leaves the job running")}: {outsideClose.Code} {outsideAnswer?.Status} cancels {string.Join(",", bq.Cancels)}");
+        }
+        bq.Release(bq.Jobs[outsideJob]);
+
+        // Leave it running while the insert is still on its way: BigQuery may have the job, so it is left, never cancelled.
+        var insertTab = Tab();
+        await harness.Execute(insertTab, "SELECT 1");
+        var inserting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "POST" || !request.Body.Contains("SELECT inflight", StringComparison.Ordinal)) return false;
+            inserting.TrySetResult();
+            return true;
+        };
+        var cancelsBefore = bq.Cancels.Count;
+        var insertRun = harness.Execute(insertTab, "SELECT inflight");
+        await Task.WhenAny(inserting.Task, insertRun).WaitAsync(TimeSpan.FromSeconds(30));
+        var insertClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = insertTab, ["keepJob"] = true });
+        try { await insertRun.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception) when (insertRun.IsCompleted) { }
+        bq.AlsoHang = null;
+        check(inserting.Task.IsCompleted && insertClose.Code == "ok" && bq.Cancels.Count == cancelsBefore,
+            $"Leave it running during the insert never cancels the job: {insertClose.Code} cancels {bq.Cancels.Count - cancelsBefore}");
 
         // Leave it running on a re-attach that only reads a DONE job's rows is a stop: nothing is left running.
         var readTab = Tab();

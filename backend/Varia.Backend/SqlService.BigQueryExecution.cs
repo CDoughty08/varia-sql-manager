@@ -87,7 +87,7 @@ internal sealed partial class SqlService
         var cap = connection.Options.MaximumBytesBilled ?? args.MaximumBytesBilled;
 
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
-        var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation) { Detachable = true };
+        var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation) { Detachable = true, ReadsOutside = attach is { AdoptSession: false } };
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
         // Ended completes only once the tab is free (bigQueryTabs, the session's queue), so an attach that superseded this one
         // and waits for it never finds the tab still busy.
@@ -346,6 +346,9 @@ internal sealed partial class SqlService
                     }
                 };
                 sent = true;
+                // From here BigQuery may have the job: a close leaves it running (a held tail the poll settles, or drops on a
+                // 404 if it never existed) rather than cancel it.
+                session.ActiveJob = true;
                 try
                 {
                     var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
@@ -356,8 +359,10 @@ internal sealed partial class SqlService
                     BigQueryService.CaptureSession(session, inserted, location);
                     sessionJob |= session.Id is not null;
                     messages.Add("BigQuery job " + JobName(project, location, jobId) + ".");
-                    events.Job(JobEvent(project, jobId, location, "running", startState));
-                    if (BigQueryJobException.Of(inserted) is { } refused) throw refused;
+                    // A job refused at insert is already DONE with its error: main drops its record rather than keep it running.
+                    var refused = BigQueryJobException.Of(inserted);
+                    events.Job(JobEvent(project, jobId, location, refused is null ? "running" : "done", startState));
+                    if (refused is not null) throw refused;
                     session.ActiveJob = true;
                     break;
                 }

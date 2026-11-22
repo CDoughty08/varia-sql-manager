@@ -140,6 +140,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Read after SessionStore's purge, which deletes interrupted writes in the same folder.
     expect(source).toContain('void openSession.purge(retentionDays(settings)).catch(() => {}).then(() => jobRecords.load())')
     // A quit waits for the records written while the stop ends idle sessions.
+    // A run Varia timed out had its job cancelled, as Stop does: its record goes.
+    expect(source).toContain("result.status === 'cancelled' || result.status === 'timedOut'")
+    // The crash prompt's BigQuery line is decided before the reset restarts the backend.
+    expect(source).toMatch(/const hadBigQuery = backend\?\.hasProvider\('bigquery'\) \?\? false\n    resetRendererState/)
     expect(source).toContain('backend.stop().then(() => jobRecords.flush())')
   })
 

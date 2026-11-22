@@ -141,6 +141,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
         /// <summary>A BigQuery query's job may be left running (query.cancel with detach); null for every other query.</summary>
         public bool Detachable { get; set; }
+        /// <summary>A BigQuery re-attach that reads outside the tab's session (adoptSession false): the tab's close leaves
+        /// its job running, or cancels it only for Cancel the job.</summary>
+        public bool ReadsOutside { get; set; }
         /// <summary>Leave it running: the request ends with status detached and its job carries on in BigQuery.</summary>
         public bool Detached { get; private set; }
         /// <summary>A later query.attach took this attachment's job over: the request ends with status superseded.</summary>
@@ -3209,6 +3212,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A tab holding a job gets a job answer only: it is asked in the first box, never about its transaction.
         if (keepJob && cancelJob || (keepJob || cancelJob) && args.Transaction is not null)
             throw new RequestException("INVALID_PARAMS", "A job is left running or cancelled, and its transaction is not asked about.");
+        // A re-attach outside the tab's session is in no session the close below sees: it stops following its job (which
+        // belongs to another session, or to none), and only Cancel the job cancels it.
+        foreach (var query in queries.Values.Where(query => query.SessionId == args.SessionId && query.ReadsOutside))
+        {
+            if (cancelJob) query.Cancel();
+            else query.Detach();
+        }
         if (bigQuery.OwnsSession(args.SessionId))
         {
             // Cancel the job stops the tab's running job, then waits for it before ending the session; a plain close and

@@ -242,9 +242,10 @@ const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOT
 const agentPreview = agentPreviewEnabled(process.env)
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
-function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
+// Taken before a crash's reset restarts the backend (which forgets its providers), so the prompt still says what became of BigQuery jobs.
+function lossDetailsFor(generation: number, restores?: 'pins' | 'session', bigQuery = backend?.hasProvider('bigquery') ?? false) {
   const values = settings.current()
-  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores, backend?.hasProvider('bigquery') ?? false)
+  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores, bigQuery)
 }
 // Tools › Options › Environment › Shortcuts. Only main reads and writes the file; menus read current() (empty until the first load).
 const shortcuts = new ShortcutStore(join(app.getPath('userData'), 'shortcuts.json'))
@@ -508,7 +509,7 @@ function jobRecorder(queryId: string, jobKey: string) {
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey); return }
       if (result.status === 'superseded') return
-      jobRecords.drop(jobKey, record => seen.has(record.jobId) && !record.detached && (record.state === 'done' || result.status === 'cancelled'))
+      jobRecords.drop(jobKey, record => seen.has(record.jobId) && !record.detached && (record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'))
     },
     end(): void { if (requestJobKeys.get(queryId) === jobKey) requestJobKeys.delete(queryId) }
   }
@@ -729,12 +730,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
     rendererLoaded = false
     const lostPage = pageGeneration
+    const hadBigQuery = backend?.hasProvider('bigquery') ?? false
     resetRendererState({ replacePage: true })
     // What this process restored is in no other copy until a close keeps the tabs again (AutoRecover waits for its
     // interval), so the replacement page reopens previous.json as the next process would.
     sessionTaken = false
     const restores = sessionCheckpoint?.kind === 'reload' && sessionCheckpoint.record.documents.every(tab => tab.pinned) ? 'pins' : sessionCheckpoint ? 'session' : undefined
-    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
+    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores, hadBigQuery).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
       if (response === 0) reloadLostRenderer(window)
