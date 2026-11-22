@@ -64,7 +64,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 | Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too; the card's `focusSamples` entry is under § 3 + 7's catalogues. |
 | Q9 | A comparison of rows as shown going out of date: rebuild automatically like Pivots, or Update only? | **Update only.** A rebuild resets the comparison's sort, filters and scroll, which is more disruptive than a Pivot rebuild. |
 | Q10 | A global "always ignore columns named …" setting (dbForge's mask) with C2? | **No.** Ignored columns are remembered per pair. Revisit if people ask. |
-| Q11 | Should Check each statement also check that each UPDATE's row still holds the values it changes from, and that each INSERT's row is not in the target yet? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Each INSERT is preceded by `IF EXISTS (SELECT 1 FROM … WHERE <its keys>) THROW …`, so a wrong direction with only INSERT ticked, or a row already restored, inserts nothing instead of a duplicate where the key is not the table's. Without these, the wrong direction for a repair passes every check and changes nothing, or inserts the other side's rows again. Columns without `=` (xml, text, ntext, image, json) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
+| Q11 | Should Check each statement also check that each UPDATE's row still holds the values it changes from, and that each INSERT's row is not in the target yet? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Each INSERT is preceded by `IF EXISTS (SELECT 1 FROM … WHERE <its keys>) THROW …`, so a wrong direction with only INSERT ticked, or a row already restored, inserts nothing instead of a duplicate where the key is not the table's. Without these, the wrong direction for a repair passes every check and changes nothing, or inserts the other side's rows again. Columns without `=` (xml, text, ntext, image, json, vector) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
 
 ## What every feature shares
 
@@ -728,7 +728,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - **Columns:** the data columns.
     - Key columns are ticked and locked. Ignored columns are ticked, for INSERT only.
     - Unscriptable columns start unticked with the reason: rowversion and timestamp ("Not insertable"), computed per the
-      index ("Computed"), CLR types, sql_variant and vector ("Cannot be written as a literal"). Unscriptable wins over
+      index ("Computed"), CLR types and sql_variant ("Cannot be written as a literal"), and vector ("Not scripted":
+      it has a literal but no `=`, so it is left out until a lane writes and round-trips it). Unscriptable wins over
       ignored: "row_ver (ignored): Not insertable".
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While UPDATE or INSERT is ticked, a line names the unticked columns the script would otherwise write: "note is
@@ -799,6 +800,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       (U+0000–U+001F, U+007F–U+009F), U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
       rule. Escaping after the cut means a doubled quote or an escape is never split.
   - `COMMIT TRANSACTION;`.
+  - When the script turns SET IDENTITY_INSERT on, its body after `SET XACT_ABORT ON;` runs in `BEGIN TRY … END TRY
+    BEGIN CATCH IF @@TRANCOUNT > 0 ROLLBACK; SET IDENTITY_INSERT <target> OFF; THROW; END CATCH`: a rollback does not
+    undo a SET option, so a failed check or key violation would otherwise leave IDENTITY_INSERT on in the query
+    window's session, failing its next ordinary INSERT into the table and any other table's `SET IDENTITY_INSERT …
+    ON`. The header says the script leaves XACT_ABORT on.
   - The New Query Editor Window opens on the comparison's connection, as Script As does, and does not run.
 - **Generating:** the dialog shows progress. Cancel then stops generating and keeps the window open with its draft; the
   next Cancel closes it. A failure shows its sentence in the dialog.
@@ -824,7 +830,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     shown only in its sorted order (Row position) never reaches it;
   - a key column a WHERE clause cannot compare or write: "Rows are matched by notes, an xml column, which a statement
     cannot use to find its row. Choose other key columns to script differences.", with **Choose key columns…**. That is
-    xml, text, ntext, image, json and CLR types (no `=`), and sql_variant and vector (no literal);
+    xml, text, ntext, image, json, vector and CLR types (no `=`), and sql_variant (no literal);
   - a key column without a name, whose name the result repeats, or whose name holds a control character: "Result 3 has 2
     columns named id, so a statement could not name its key. Give each column its own name in the query.";
   - rows not matched by key columns the user chose (before the as-shown refusal when both apply):
@@ -993,6 +999,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
       real key and guard compared exactly, both directions; the INSERT check with NULL and composite keys;
     - identity insert, an identity column never SET, collation-only values left out under Exact text off;
+    - the TRY/CATCH body when IDENTITY_INSERT is turned on, and none otherwise;
     - float values whose text does not read back, datetime in the `T` form, char values as `N'…'`;
     - the refusals, a match that is not `columns`, and a comparison of rows as shown;
     - a lone surrogate read through `PageBuilder`, and a `_UTF8` value SqlClient could not decode, each reaching the
@@ -1014,7 +1021,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
     non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only
-    INSERT ticked, and expect the check's THROW, with the target unchanged. It is a new live `Suite(...)` with a
+    INSERT ticked, and expect the check's THROW, with the target unchanged and, in the same session, an ordinary INSERT
+    into the identity table succeeding (IDENTITY_INSERT was turned off). It is a new live `Suite(...)` with a
     `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
@@ -1251,19 +1259,19 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 | C3 | Copy as Diff, Save as Diff… (Q1) | C2 (the submenu, and the header's `ignored:` part) | M |
 | C5 | Change details card and hover | C2 (the submenu) | M |
 | C6 | Compare rows as shown, Out of date | C2 (both change `results.diff` and the pair memory) | L |
-| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), Connect in an OS window (dialog windows) | L |
+| C4 | Script Differences as T-SQL | C2 (ignored columns' INSERT rule), C3 (the match and ignored pairs it records on the diff set), Connect in an OS window (dialog windows) | L |
 | C5b | Compare Values in Tab | C5 | M |
 | (later) | C4b GoogleSQL script; side-by-side; Pivots | Q4; N4 | M; L; M |
 
 - C1 and C2 can run in parallel: they touch search and `ResultDiff`.
 - C3 and C5 can run in parallel after C2: they touch the writer and the grid's card. Both append to the submenu, and C5
   also changes `diffSeek`'s answer across the results-path files, which C3, C4 and C6 append to as well.
-- C6 and C4 can be built in parallel after C2, but both append to the results-path files (contracts.ts,
-  port-messages.ts, results-port.ts, worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`,
-  `Contracts.cs` and the fake backend), so the second to land merges main first. Whichever of them lands second also
-  adds Script Differences' refusal of a comparison of rows as shown. C4 is listed last because it is the largest and
-  riskiest lane, waits on Connect in an OS window, and its "script back a bad UPDATE" job is worth most once cross-run
-  comparison (N5) lands.
+- C6 can start after C2, and C4 after C3, whose recorded match it reads for its keys and its refusal. They can then
+  be built in parallel, but both append to the results-path files (contracts.ts, port-messages.ts, results-port.ts,
+  worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so
+  the second to land merges main first. Whichever of them lands second also adds Script Differences' refusal of a
+  comparison of rows as shown. C4 is listed last because it is the largest and riskiest lane, waits on Connect in an
+  OS window, and its "script back a bad UPDATE" job is worth most once cross-run comparison (N5) lands.
 
 ## Coordination with in-flight work
 
