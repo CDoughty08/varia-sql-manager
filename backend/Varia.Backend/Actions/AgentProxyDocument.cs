@@ -186,7 +186,7 @@ internal sealed partial class ActionService
         AgentProxyRecordDto? proxy = row is { } found
             ? new(found.Id, found.Name, found.Enabled, found.Description, found.Credential, [.. active.Order()], [.. principals.Take(Cap("proxyPrincipals"))], found.Identity) : null;
         return new(null, 0, AgentProxyDocument: new(proxy, platform, subsystems, [.. credentials.Take(Cap("credentials"))], credentialsTruncated, canAlter, [.. choices.Take(Cap("principalChoices"))],
-            proxy is null ? null : [.. references.Take(Cap("proxyReferences"))], proxy is null ? null : referencesTruncated));
+            proxy is null ? null : [.. references.Take(Cap("proxyReferences"))], proxy is null ? null : referencesTruncated, proxy is null ? null : principals.Count > Cap("proxyPrincipals")));
     }
 
     /// <summary>Delete Object's row for a proxy (sysadmin): its name and the proxy_id the Delete request names.</summary>

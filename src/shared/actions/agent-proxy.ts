@@ -50,6 +50,8 @@ export interface AgentProxyDocumentModel {
   /** Job steps that run as this proxy; absent for New Proxy. */
   readonly references?: readonly ProxyReference[]
   readonly referencesTruncated?: boolean
+  /** The proxy has more principals than the document lists (agentLimits.proxyPrincipals); the rest are not shown. */
+  readonly principalsTruncated?: boolean
 }
 
 export const agentProxyFields = ['name', 'enabled', 'description', 'credential', 'subsystems', 'principals'] as const
@@ -321,6 +323,8 @@ export const agentProxyText = {
   newCredentialIdentity: 'The new credential needs an identity: the Windows account its job steps run as.',
   descriptionTooLong: `A description holds at most ${agentLimits.descriptionChars} characters.`,
   noSubsystem: 'No job step can run as this proxy until it is active to a subsystem.',
+  principalsTruncated: (count: number) => `Only the first ${count.toLocaleString('en-US')} principals are listed; manage the rest in a query.`,
+  tooManyPrincipals: `A proxy's document lists at most ${agentLimits.proxyPrincipals.toLocaleString('en-US')} principals.`,
   sysadminOnly: 'Only sysadmin can create or change SQL Server Agent proxies.',
   noCredentialRight: 'Creating a credential needs ALTER ANY CREDENTIAL; choose an existing one.',
   batchRight: (identity: string) => `For CmdExec and PowerShell steps, ${identity || 'this Windows account'} needs “Log on as a batch job” on the server.`,
@@ -389,6 +393,7 @@ export function agentProxyProblems(model: AgentProxyDocumentModel, draft: AgentP
     problems.push(...secretProblems('credential' as const, secrets))
   }
   if (draft.subsystems.length === 0) problems.push({ field: 'subsystems', severity: 'warning', message: agentProxyText.noSubsystem })
+  if (draft.principals.length > agentLimits.proxyPrincipals) problems.push({ field: 'principals', severity: 'error', message: agentProxyText.tooManyPrincipals })
   return problems
 }
 /** The credential draft's problems: a missing name or identity, a secret not typed, confirmed or well formed, a Windows identity where

@@ -55,8 +55,8 @@ internal static class AgentProxyLiveChecks
             var record = read.AgentProxyDocument?.Proxy;
             check(record is { Description: "varia.scratch", Enabled: true } && record.Credential == credential && record.CredentialIdentity == identity && record.Subsystems.SequenceEqual([subsystem])
                 && record.Principals.Select(item => item.Kind + ":" + item.Name).Order(StringComparer.Ordinal).SequenceEqual(["msdbRole:SQLAgentOperatorRole", "serverRole:securityadmin"])
-                && read.AgentProxyDocument!.References is [] && read.AgentProxyDocument.Credentials.Any(item => item.Name == credential && item.Identity == identity),
-                "the proxy's describe reads back its credential and identity, subsystem, principals by kind and no references: " + JsonSerializer.Serialize(record));
+                && read.AgentProxyDocument!.References is [] && read.AgentProxyDocument.PrincipalsTruncated == false && read.AgentProxyDocument.Credentials.Any(item => item.Name == credential && item.Identity == identity),
+                "the proxy's describe reads back its credential and identity, subsystem, principals by kind (not truncated) and no references: " + JsonSerializer.Serialize(record));
             if (record is null) return;
 
             var wrong = await Execute(new ActionArgs("agentProxy", "", "", new ObjectRefDto("agentProxy", Name: proxy)) { AgentProxy = new(Description: "x"), ProxyId = record.Id + 100_000 });
@@ -89,7 +89,7 @@ internal static class AgentProxyLiveChecks
 
             var taken = await Execute(new ActionArgs("credential", "", "", new ObjectRefDto("server")) { Credential = new(identity, Name: credential), Secrets = new(Secret: secret) });
             check(taken.Error is { Code: "NAME_IN_USE", Field: "name" } error && !error.Message.Contains(secret, StringComparison.Ordinal),
-                "New Credential under a taken name is NAME_IN_USE on the name field, its text free of the secret: " + Steps(taken));
+                "New Credential under a taken name (SQL Server's 15530) is NAME_IN_USE on the name field: " + Steps(taken));
 
             var proxyTarget = new ObjectRefDto("agentProxy", Name: renamed);
             var deletion = await Describe("deleteObject", proxyTarget);

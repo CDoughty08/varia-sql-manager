@@ -30,7 +30,7 @@ const text: AgentObjectDocumentText = {
   backendLost: 'The backend stopped while saving; the proxy may or may not have been saved. Reload it once the backend is back.',
   savedUnread: 'The proxy was saved, but reading it again failed.',
   unsaved: 'The proxy was not saved.',
-  partlySaved: 'The proxy was saved, but not every principal change:'
+  partlySaved: 'The rest of the proxy was saved.'
 }
 
 export class ProxyDocumentService extends AgentObjectDocumentService<AgentProxyDocumentModel, AgentProxyDraft, AgentProxyField> {

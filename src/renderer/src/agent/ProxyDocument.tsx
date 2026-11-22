@@ -137,6 +137,7 @@ function PrincipalsSection(props: SectionProps) {
   const add = () => { if (!typed.trim() || twice) return; service.addPrincipal(state.id, choice(typed)); setTyped('') }
   return <div className="agent-proxy-principals">
     <p className="field-note">{agentProxyText.principalsHint}</p>
+    {model.principalsTruncated && <p className="field-note">{agentProxyText.principalsTruncated(model.proxy?.principals.length ?? 0)}</p>}
     {draft.principals.length === 0 ? <p className="field-note">{agentProxyText.principalsNone}</p>
       : <ul className="agent-proxy-chips" aria-label="Principals that may use the proxy">{draft.principals.map(principal => {
         const added = !!model.proxy && !base.has(`${principal.kind}:${principal.name}`)
@@ -195,7 +196,7 @@ export default function ProxyDocument({ documentId }: { documentId: string }) {
   }
   const sections: FrameSection[] = proxySections.map(section => ({ id: section.id, title: section.title, problem: problemSections.has(section.id), content: content(section.id) }))
   const name = model?.proxy?.name ?? (draft?.name || 'New Proxy')
-  const recovery = state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => proxyDocuments.reload(state.id) }] : []
+  const recovery = state.phase === 'loadFailed' || state.unread || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => proxyDocuments.reload(state.id) }] : []
   const field = state.error?.field as AgentProxyField | undefined
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}

@@ -812,7 +812,8 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     AgentJobDocumentDto? AgentJobDocument = null, AgentProxyDocumentDto? AgentProxyDocument = null, CredentialDocumentDto? CredentialDocument = null);
 /// <summary>The proxy document's describe (AG-8b, src/shared/actions/agent-proxy.ts AgentProxyDocumentModel).</summary>
 internal sealed record AgentProxyDocumentDto(AgentProxyRecordDto? Proxy, string Platform, List<ProxySubsystemDto> Subsystems, List<ProxyCredentialDto> Credentials, bool CredentialsTruncated,
-    bool CanCreateCredential, List<ProxyPrincipalDto> PrincipalChoices, List<ProxyReferenceDto>? References = null, bool? ReferencesTruncated = null);
+    bool CanCreateCredential, List<ProxyPrincipalDto> PrincipalChoices, List<ProxyReferenceDto>? References = null, bool? ReferencesTruncated = null,
+    bool? PrincipalsTruncated = null);
 internal sealed record AgentProxyRecordDto(int Id, string Name, bool Enabled, string Description, string Credential, List<int> Subsystems, List<ProxyPrincipalDto> Principals, string? CredentialIdentity = null);
 internal sealed record ProxySubsystemDto(int Id, string Name);
 internal sealed record ProxyCredentialDto(string Name, string Identity);

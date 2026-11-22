@@ -181,7 +181,7 @@ describe('the proxy document', () => {
     expect(await proxyDocuments.save(id)).toBe(false)
     expect(api.describeObject.mock.calls.length).toBe(reads + 1)
     expect(proxyDocuments.get(id)).toMatchObject({ phase: 'ready', changes: 0, model: { proxy: { description: 'Mine' } }, error: { field: 'principals' } })
-    expect(proxyDocuments.get(id)?.error?.message.startsWith('The proxy was saved, but not every principal change:')).toBe(true)
+    expect(proxyDocuments.get(id)?.error?.message).toBe("Granting 'securityadmin' the proxy was refused: no. The rest of the proxy was saved.")
     // A principals-only save: its one step runs without a transaction, so the grants before a refused one stay made, and the proxy is read again.
     proxyDocuments.addPrincipal(id, { name: 'securityadmin', kind: 'serverRole' })
     proxyDocuments.addPrincipal(id, { name: 'SQLAgentOperatorRole', kind: 'msdbRole' })
@@ -197,7 +197,33 @@ describe('the proxy document', () => {
     answers.push({ ok: true, value: { steps: [{ status: 'failed', title: proxyPrincipalsStep }], messages: [], elapsedMs: 1,
       error: { code: 'SQL_ERROR', message: 'Refused.', retryable: false, field: 'principals' } } })
     expect(await proxyDocuments.save(id)).toBe(false)
-    expect(proxyDocuments.get(id)?.error?.message).toBe('The proxy was saved, but not every principal change: Refused. The proxy was saved, but reading it again failed. The connection dropped.')
+    expect(proxyDocuments.get(id)?.error?.message).toBe('Refused. The rest of the proxy was saved. The proxy was saved, but reading it again failed. The connection dropped.')
+    // The model is older than the server now: nothing changes until a read succeeds.
+    expect(proxyDocuments.get(id)?.unread).toBe(true)
+    expect(proxyDocuments.canEdit(id)).toBe(false)
+    proxyDocuments.reload(id)
+    await settled()
+    expect(proxyDocuments.get(id)?.unread).toBeUndefined()
+    expect(proxyDocuments.canEdit(id)).toBe(true)
+  })
+  it('cannot create a new proxy twice when reading it after its Create fails', async () => {
+    const { proxyDocuments, api, executes } = opened()
+    const id = proxyDocuments.newProxy('c1')
+    await settled()
+    proxyDocuments.updateDraft(id, { name: 'New', credential: 'Other' })
+    expect(proxyDocuments.canSave(id)).toBe(true)
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, error: 'The connection dropped.' }))
+    expect(await proxyDocuments.save(id)).toBe(true)
+    expect(proxyDocuments.get(id)).toMatchObject({ phase: 'ready', unread: true, target: { kind: 'agentProxy', name: 'New' } })
+    expect(proxyDocuments.canSave(id)).toBe(false)
+    expect(await proxyDocuments.save(id)).toBe(false)
+    expect(executes()).toHaveLength(1)
+  })
+  it('flags more principals than the document lists', () => {
+    const model = proxyModel(), draft = initialAgentProxyDraft(model)
+    const many = Array.from({ length: agentLimits.proxyPrincipals + 1 }, (_, index) => ({ name: `login${index}`, kind: 'login' as const }))
+    expect(agentProxyProblems(model, { ...draft, principals: many })).toContainEqual(expect.objectContaining({ field: 'principals', severity: 'error' }))
+    expect(agentProxyProblems(model, { ...draft, principals: many.slice(1) }).some(problem => problem.field === 'principals')).toBe(false)
   })
   it("names the principals' step as the backend does", () => {
     expect(readFileSync('backend/Varia.Backend/Actions/AgentProxyDocument.cs', 'utf8')).toContain(`ProxyPrincipalsStep = "${proxyPrincipalsStep}"`)

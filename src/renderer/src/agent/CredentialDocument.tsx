@@ -115,7 +115,7 @@ export default function CredentialDocument({ documentId }: { documentId: string 
   const sections: FrameSection[] = credentialSections.filter(section => section.id !== 'usedBy' || !!model?.credential)
     .map(section => ({ id: section.id, title: section.title, problem: section.id === 'credential' && errorSection, content: content(section.id) }))
   const name = model?.credential?.name ?? (draft?.name || 'New Credential')
-  const recovery = state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND' || state.error?.code === 'STALE' ? [{ label: 'Reload', run: () => credentialDocuments.reload(state.id) }] : []
+  const recovery = state.phase === 'loadFailed' || state.unread || state.error?.code === 'NOT_FOUND' || state.error?.code === 'STALE' ? [{ label: 'Reload', run: () => credentialDocuments.reload(state.id) }] : []
   const field = state.error?.field as CredentialField | undefined
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}

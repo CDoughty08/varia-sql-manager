@@ -23,7 +23,7 @@ const text: AgentObjectDocumentText = {
   backendLost: 'The backend stopped while saving; the credential may or may not have been saved. Reload it once the backend is back.',
   savedUnread: 'The credential was saved, but reading it again failed.',
   unsaved: 'The credential was not saved.',
-  partlySaved: 'The credential was saved, but not all of it:'
+  partlySaved: 'The rest of the credential was saved.'
 }
 
 export class CredentialDocumentService extends AgentObjectDocumentService<CredentialDocumentModel, CredentialDraft, CredentialField> {

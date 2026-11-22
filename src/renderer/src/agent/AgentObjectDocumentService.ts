@@ -44,6 +44,9 @@ export interface AgentObjectDocumentState<Model, Draft> {
   readonly changes: number
   readonly error?: ActionError
   readonly notice?: string
+  /** A save went through but the object has not been read since (the re-read failed or was dropped): the model is older than the server,
+   *  so nothing can change until a read succeeds (a New document would otherwise create the object again). */
+  readonly unread?: boolean
   /** New Proxy opened from a subsystem's folder: the subsystem it starts active to. */
   readonly preset?: string
   readonly frame: FrameState
@@ -73,7 +76,7 @@ export interface AgentObjectDocumentText {
   readonly backendLost: string
   readonly savedUnread: string
   readonly unsaved: string
-  /** A save whose first step was made and a later one refused. */
+  /** After a refusal whose save changed the object all the same: says the rest was saved (it follows the refusal's own words). */
   readonly partlySaved: string
 }
 
@@ -161,7 +164,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
 
   canEdit(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && !!state.draft && state.phase === 'ready' && !this.readOnly(state.model)
+    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.unread && !this.readOnly(state.model)
   }
   updateDraft(id: string, patch: Partial<Draft>): void {
     const state = this.get(id)
@@ -230,7 +233,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
       this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${this.text.savedUnread} ${shown.message}` } : shown })
       return
     }
-    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
+    this.patch(id, { phase: 'ready', model, draft: this.initialDraft(model, current), revision: current.revision + 1, changes: 0, error: undefined, unread: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     this.options.documents.setDirty(id, !this.hasObject(model))
     this.schedulePreview(id, 0)
   }
@@ -271,7 +274,7 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
       const created = !this.hasObject(state.model)
       const target = this.savedTarget(state, built)
       this.emptySlot(id)
-      this.patch(id, { phase: 'loading', target, changes: 0 })
+      this.patch(id, { phase: 'loading', target, changes: 0, unread: true })
       this.options.documents.setDirty(id, false)
       this.options.documents.update(id, { name: this.tabName(target) })
       await this.describe(id, this.savedNotice(created, built.secret))
@@ -283,13 +286,13 @@ export abstract class AgentObjectDocumentService<Model, Draft, Field extends str
     if (value?.error && this.partlySaved(value)) {
       const target = this.savedTarget(state, built)
       this.emptySlot(id)
-      this.patch(id, { phase: 'loading', target, changes: 0 })
+      this.patch(id, { phase: 'loading', target, changes: 0, unread: true })
       this.options.documents.setDirty(id, false)
       this.options.documents.update(id, { name: this.tabName(target) })
       await this.describe(id)
       // A failed re-read keeps its own words too: the document then shows the model read before the save.
       const reread = this.get(id)?.error
-      this.patch(id, { error: { ...value.error, message: `${this.text.partlySaved} ${value.error.message}${reread ? ` ${this.text.savedUnread} ${reread.message}` : ''}` } })
+      this.patch(id, { error: { ...value.error, message: `${value.error.message} ${this.text.partlySaved}${reread ? ` ${this.text.savedUnread} ${reread.message}` : ''}` } })
       return false
     }
     if (value?.error) { this.patch(id, { phase: 'ready', error: value.error }); return false }
