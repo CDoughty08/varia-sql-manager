@@ -48,6 +48,7 @@ import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
+import { JobRecordStore } from './job-records'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
@@ -74,7 +75,7 @@ import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
 import { isBigQueryOptions } from '../shared/connections'
-import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryEvent, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema, memoryReport } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -218,6 +219,12 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 const recovery = new RecoveryStore(join(app.getPath('userData'), profileFiles.autoRecover.current), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), profileFiles.session.current), { pathsRefused })
+// BigQuery jobs main heard of, under their tabs' job keys (docs/bigquery.md, Re-attaching to jobs); never their SQL or secrets.
+const jobRecords = new JobRecordStore(join(app.getPath('userData'), profileFiles.session.current))
+// The job key of each running BigQuery request, so Leave it running (query.cancel detach) can mark its records.
+const requestJobKeys = new Map<string, string>()
+// From the start of a quit: the kept tabs' job keys, which bigquery.endIdleSessions leaves (keepJobKeys).
+let quitKeepJobKeys: readonly string[] | undefined
 const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending(), async () => {
   await connectionOpen?.whenCancelledWorkDrained()
 }, generation => {
@@ -486,6 +493,25 @@ function requestClose(intent: CloseIntent): void {
  *  Restart through while the backend does not answer), so main asks first when there are any, naming the run. They are
  *  counted when the prompt's turn comes (another dialog may be open first), and a request made while one is pending
  *  shares its answer, so a double-click restarts once. */
+/**
+ * A BigQuery request's job records (docs/bigquery.md, Re-attaching to jobs): each `query.job` event is recorded under the
+ * request's job key before it is forwarded, so no renderer port need be open. Once the summary reached the tab, the
+ * finished jobs it read are dropped (their results are in the tab), and a stopped request's jobs too. A request that ends
+ * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
+ */
+function jobRecorder(queryId: string, jobKey: string) {
+  requestJobKeys.set(queryId, jobKey)
+  const seen = new Set<string>()
+  return {
+    event(event: QueryEvent): void { if (event.type !== 'query.job') return; seen.add(event.jobId); jobRecords.record(jobKey, event) },
+    summary(result: QueryResult): void {
+      if (result.status === 'detached' || result.status === 'superseded') return
+      jobRecords.drop(jobKey, record => seen.has(record.jobId) && !record.detached && (record.state === 'done' || result.status === 'cancelled'))
+    },
+    end(): void { if (requestJobKeys.get(queryId) === jobKey) requestJobKeys.delete(queryId) }
+  }
+}
+
 function restartBackend(): Promise<boolean> {
   restarting ??= (async () => {
     try {
@@ -818,12 +844,15 @@ app.whenReady().then(async () => {
   const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
+  // The records are read once, early; one that cannot be read leaves none (records made meanwhile merge in).
+  void jobRecords.load().catch(() => {})
   loaded.catch(() => {})
   backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale(), userData: app.getPath('userData') }), {
     appVersion: app.getVersion(),
     // The backend starts with the result memory limit as it is at each launch: its first launch waits for the settings
     // (a read of one small file). Changes after that go to the running backend (ResultMemoryLimit).
     before: loaded,
+    keepJobKeys: () => quitKeepJobKeys,
     environment: () => resultMemoryEnvironment(settings.current()['queryResults.grid.memoryLimitGiB']),
     // Frame kinds, ids and lengths only; never bodies.
     trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
@@ -1136,7 +1165,11 @@ app.whenReady().then(async () => {
       // this renderer owns in the current generation may be named (the generation goes with it, so a restart refuses it).
       const remote = method === 'results.remoteQuery' ? validated as RpcMethods['results.remoteQuery']['params'] : undefined
       if (remote && !results.owns(remote.generation, remote.resultId)) return failure(new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable), 'Backend request failed.')
-      const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : remote?.queryId
+      // A re-attached BigQuery job (query.attach) is a query too: its events and summary go the same way.
+      const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId
+      // A BigQuery request's job key: its query.job events become job records under it, before they are forwarded.
+      const jobKey = queryId === undefined ? undefined : (validated as { jobKey?: string }).jobKey
+      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey)
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
@@ -1150,9 +1183,10 @@ app.whenReady().then(async () => {
       try {
         try {
           if (method === 'actions.execute') bindingMutation = connectionOpen?.beginBindingMutation(validated as RpcMethods['actions.execute']['params'])
-          result = await backend.request(method as RpcMethod, prepared.params as never, { ...queryId !== undefined ? { onEvent: (queryEvent: import('../shared/contracts').QueryEvent) => results.queryEvent(queryId, queryEvent) }
+          result = await backend.request(method as RpcMethod, prepared.params as never, { ...queryId !== undefined ? { onEvent: (queryEvent: import('../shared/contracts').QueryEvent) => { jobs?.event(queryEvent); results.queryEvent(queryId, queryEvent) } }
             : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {}, ...bindingMutation ? { generation: backend.current?.generation } : remote ? { generation: remote.generation } : {} })
         } finally {
+          jobs?.end()
           load?.end()
           progress?.close()
           indexing?.close()
@@ -1171,7 +1205,11 @@ app.whenReady().then(async () => {
       // History and remembered passwords for the connect methods; other methods pass through.
       outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: history, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
-      if (queryId !== undefined) results.querySummary(result as QueryResult)
+      if (queryId !== undefined) { results.querySummary(result as QueryResult); jobs?.summary(result as QueryResult) }
+      if (method === 'query.cancel' && (validated as RpcMethods['query.cancel']['params']).detach && (result as { cancelled: boolean }).cancelled) {
+        const key = requestJobKeys.get((validated as RpcMethods['query.cancel']['params']).queryId)
+        if (key !== undefined) jobRecords.markDetached(key)
+      }
       return { ok: true, value: result }
       } finally { if (bindingMutation) await connectionOpen?.finishBindingMutation(bindingMutation).catch(() => {}); prepared.release?.() }
     } catch (error) { return failure(error, 'Backend request failed.') }

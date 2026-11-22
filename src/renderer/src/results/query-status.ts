@@ -61,7 +61,7 @@ export const sessionText = (session: QueryStatusInput['session']): string => ses
 const failed: ReadonlySet<RunStatus> = new Set(['failed', 'cancelled', 'timedOut', 'lost'])
 /** The results head's icons (runSummary), so an outcome looks the same on both. */
 const icons: Readonly<Record<Exclude<RunStatus, 'running' | 'closed' | 'lost'>, QueryStatusIcon>> = {
-  completed: 'pass', completedWithErrors: 'warning', failed: 'error', cancelled: 'debug-stop', timedOut: 'watch'
+  completed: 'pass', completedWithErrors: 'warning', failed: 'error', cancelled: 'debug-stop', timedOut: 'watch', detached: 'watch', superseded: 'debug-stop'
 }
 
 export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {

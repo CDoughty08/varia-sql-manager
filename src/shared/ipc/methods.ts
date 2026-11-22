@@ -80,6 +80,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // BigQuery before connecting (the dialog's account line and project picker): main injects the credential material.
   'bigquery.account': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
+  // Before every backend stop main makes: idle sessions' ABORT_SESSION jobs in parallel, bounded so a stop never waits long.
+  'bigquery.endIdleSessions': { ...control, deadlineMs: 10_000, providers: ['bigquery'] },
+  // A saved profile's jobs without a handle: sign in, then cancel, wait for DONE and end each job's session in parallel.
+  'bigquery.cancelJobs': { ...control, deadlineMs: 60_000, sensitive: true, providers: ['bigquery'] },
   // The free estimate and dry-run diagnostics on a connected handle (docs/bigquery.md, Cost).
   // Metadata, as language.diagnostics: automatic edit-time requests must not take the pending slots kept for Cancel and closes.
   'bigquery.dryRun': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
@@ -93,6 +97,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
   'query.cancel': { ...control, ...both },
+  // A re-attached BigQuery job runs like a query, as long as BigQuery takes; Stop is query.cancel.
+  'query.attach': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: () => 0, providers: ['bigquery'] },
   // Load into memory runs like a query, as long as BigQuery takes; Stop is query.cancel.
   'results.remoteQuery': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: () => 0, providers: ['bigquery'] },
   // A commit first waits for SQL Server's log flush; a rollback is bounded inside the backend (closing the session rolls back too).
@@ -192,7 +198,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
 }
 
 /** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
-export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
+export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize', 'bigquery.endIdleSessions', 'bigquery.cancelJobs'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */
