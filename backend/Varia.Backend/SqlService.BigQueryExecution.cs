@@ -170,6 +170,8 @@ internal sealed partial class SqlService
         // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
         // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
         var stopAsked = 0;
+        // A Stop during a re-attach's identity check whose cancel could not be confirmed.
+        var unconfirmedCancel = false;
         void StopJob()
         {
             // Leave it running, or a later attach that took the job over: the job carries on in BigQuery.
@@ -295,15 +297,20 @@ internal sealed partial class SqlService
                     var ours = following || session.HasInserted(jobId);
                     try { own = await bigQuery.OwnJobAsync(connection, jobId, location, token, inserted: ours); }
                     // Stop (or Cancel the job) before the check answered: the job is cancelled once it proves to be this account's.
+                    // A close that cancels the job waits for this (it waits for the queue), and hears when it failed.
                     catch (Exception) when (!following && token.IsCancellationRequested && !running.LeavesJob && bigQuery.Find(args.ConnectionId) == connection)
                     {
-                        bigQuery.CancelOwnJob(connection, jobId, location, ours);
+                        if (!await bigQuery.CancelOwnJobAsync(connection, jobId, location, ours))
+                        {
+                            session.CancelUnconfirmed = jobId;
+                            unconfirmedCancel = true;
+                        }
                         throw;
                     }
                 }
                 sent = created = true;
                 // A Stop between the check and here found nothing sent to cancel: it is asked again now.
-                if (!following && token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
+                if (token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
                 location = KnownLocation(own.JobReference?.Location) ?? location;
                 if (attach.AdoptSession && own.Statistics?.SessionInfo?.SessionId is { } jobSession && BigQuerySql.SessionId().IsMatch(jobSession))
                 {
@@ -570,7 +577,9 @@ internal sealed partial class SqlService
                 status = stopRequested ? "cancelled" : "timedOut";
                 var sentence = stopRequested ? CancelledSentence : TimedOutSentence;
                 messages.Add(sentence, MessageKind.Error);
-                if (running.UserCancelled && !complete && sent)
+                if (unconfirmedCancel)
+                    messages.Add("Varia could not confirm that BigQuery job " + JobName(project, location, jobId) + " was started by this account, so it was not cancelled; it may still be running. Check it in BigQuery's job history.");
+                else if (running.UserCancelled && !complete && sent)
                     messages.Add((created ? "Varia asked BigQuery to cancel job " : "If BigQuery received job ") + JobName(project, location, jobId)
                         + (created ? "" : ", Varia asked it to cancel the job") + ". Cancelling is best-effort: BigQuery may still bill work done before the job stopped.");
                 failure = new(stopRequested ? "CANCELLED" : "TIMEOUT", sentence, 1, 1);

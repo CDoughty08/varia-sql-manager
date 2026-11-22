@@ -148,9 +148,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         public bool Detached { get; private set; }
         /// <summary>A later query.attach took this attachment's job over: the request ends with status superseded.</summary>
         public bool Superseded { get; private set; }
-        /// <summary>Whether the job must be left alone as the request ends.</summary>
         /// <summary>The backend is stopping: the job carries on in BigQuery for a later re-attach.</summary>
         public bool Abandoned { get; private set; }
+        /// <summary>Whether the job must be left alone as the request ends.</summary>
         public bool LeavesJob => Detached || Superseded || Abandoned;
         public void Abandon() => Abandoned = true;
         /// <summary>A query already stopped stays stopped: its job was cancelled, so there is nothing to leave running.</summary>

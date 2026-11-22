@@ -437,6 +437,36 @@ internal static partial class BigQuerySessionChecks
             $"Stop during a restored tab's identity check cancels the job once it proves this account's: {stoppedCheck?.Status} cancels {string.Join(",", bq.Cancels)}");
         bq.Release(bq.Jobs[stopJob]);
 
+        // Cancel the job on a tab closed during that check, when the re-check cannot pass (no jobs.list): the job is left, and
+        // the run and the close both say it may still be running, naming it.
+        string unsureJob;
+        using (var earlier = new Harness(bq))
+        {
+            await earlier.ConnectAsync(key);
+            var earlierTab = Tab();
+            await earlier.Execute(earlierTab, "SELECT 1");
+            (_, _, unsureJob) = await HeldAsync(earlier, earlierTab);
+        }
+        var unsureChecking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bq.AlsoHang = request =>
+        {
+            if (request.Method != "GET" || !request.Url.Contains("/jobs/" + unsureJob, StringComparison.Ordinal) || unsureChecking.Task.IsCompleted) return false;
+            unsureChecking.TrySetResult();
+            return true;
+        };
+        bq.ListDenied = true;
+        var unsureTab = Tab();
+        var unsureAttach = harness.Call("query.attach", AttachArgs(harness, unsureTab, unsureJob));
+        await Task.WhenAny(unsureChecking.Task, unsureAttach).WaitAsync(TimeSpan.FromSeconds(30));
+        var unsureClose = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = unsureTab, ["cancelJob"] = true });
+        var unsureRun = (await unsureAttach.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        bq.AlsoHang = null;
+        bq.ListDenied = false;
+        check(unsureChecking.Task.IsCompleted && unsureClose.Result is SessionCloseResult { Closed: true, Note: { Code: "outcomeUnknown" } unsureNote } && unsureNote.JobId == unsureJob
+            && !bq.Cancels.Contains(unsureJob) && Says(unsureRun, "so it was not cancelled; it may still be running"),
+            $"Cancel the job during an identity check that cannot pass leaves the job and says so: {unsureClose.Code} {(unsureClose.Result as SessionCloseResult)?.Note} {Texts(unsureRun?.Messages ?? [])}");
+        bq.Release(bq.Jobs[unsureJob]);
+
         // A rate limit answered as 403 during the identity check is QUOTA (the job kept), not another principal's job.
         var limitedTab = Tab();
         await harness.Execute(limitedTab, "SELECT 1");

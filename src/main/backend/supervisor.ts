@@ -71,7 +71,7 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
 }
 
 const connectResultSchema = z.object({ id: z.string().min(1).max(128) }).loose()
-const idOf = (params: unknown, key: 'connectionId' | 'sessionId'): string | undefined => {
+const idOf = (params: unknown, key: 'connectionId' | 'sessionId' | 'queryId'): string | undefined => {
   const value = params !== null && typeof params === 'object' ? (params as Record<string, unknown>)[key] : undefined
   return typeof value === 'string' ? value : undefined
 }
@@ -108,6 +108,8 @@ export class BackendSupervisor {
   private readonly lost = new Set<string>()
   /** Query session ids by the generation their last script ran on. */
   private readonly sessions = new Map<string, number>()
+  /** The generation each query run (execute, attach) was sent to, newest last: where a Stop during a restart's wait goes. */
+  private readonly queries = new Map<string, number>()
   private connection: BackendConnection | undefined
   /** Closes of generations that a restart replaced; stop() waits for them too, so none outlives the app. */
   private readonly retiring = new Set<Promise<void>>()
@@ -197,6 +199,12 @@ export class BackendSupervisor {
       this.sessions.delete(sessionId)
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
+    }
+    const queryId = method === 'query.execute' || method === 'query.attach' ? idOf(params, 'queryId') : undefined
+    if (queryId !== undefined) {
+      this.queries.delete(queryId)
+      this.queries.set(queryId, connection.generation)
+      if (this.queries.size > maxSessions) this.queries.delete(this.queries.keys().next().value!)
     }
     const { onEvent, onProgress, onLive, onActionProgress, onIndexProgress, onOperationProgress } = o
     let nextSeq = 0
@@ -337,8 +345,11 @@ export class BackendSupervisor {
 
   /** The generation a restart is ending idle sessions in, for a session close or state read of one of its own sessions. */
   private drainingFor(method: BackendMethod, params: unknown): BackendConnection | undefined {
-    // Stop or Leave it running meanwhile reaches the run it names: nothing runs in the next generation before it launches.
-    if (this.draining && method === 'query.cancel') return this.draining
+    // Stop or Leave it running meanwhile reaches a run the generation being ended holds; one queued for the next waits for it.
+    if (this.draining && method === 'query.cancel') {
+      const queryId = idOf(params, 'queryId')
+      return queryId !== undefined && this.queries.get(queryId) === this.draining.generation ? this.draining : undefined
+    }
     if (!this.draining || (method !== 'query.session.close' && method !== 'query.session.state')) return undefined
     const sessionId = idOf(params, 'sessionId')
     return sessionId !== undefined && this.sessions.get(sessionId) === this.draining.generation ? this.draining : undefined

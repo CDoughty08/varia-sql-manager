@@ -903,7 +903,7 @@ Varia follows BigQuery Studio: the estimate is always visible, and nothing block
   and the status bar says why. It also checks how BigQuery refuses a concurrent session query and how soon a
   cancelled job frees the session; until then the queue waits for a cancelled job to reach DONE. `ABORT_SESSION` runs
   on every session end (closing the tab, Change Connection, Disconnect, Disconnect All, a switch to another location, and `bigquery.endIdleSessions`
-  before every backend stop main makes), except when its job is left running
+  before every backend stop main makes, except of one not responding), except when its job is left running
   ([Re-attaching to jobs](#re-attaching-to-jobs-bq-3d)).
 - **Open transactions ask, as SQL Server's do** (decision 54). The backend tracks a session's transaction from the
   statement types of its executed jobs, top-level and child (children applied in creation order; dry runs, diagnostics

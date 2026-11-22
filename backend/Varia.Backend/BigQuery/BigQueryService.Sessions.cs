@@ -48,6 +48,9 @@ internal sealed class BigQueryTabSession(string tabId, BigQueryConnection connec
     public string? Location { get; set; }
     public BigQueryTransaction Transaction { get; set; }
     public BigQueryTail? Tail { get; set; }
+    /// <summary>A job a stopped re-attach could not cancel (its identity check or the cancel failed): the next close says the
+    /// outcome is unknown, naming it.</summary>
+    public string? CancelUnconfirmed { get; set; }
     readonly Queue<string> inserted = new();
     /// <summary>Records a job this session's execution inserted (the newest 64 are kept).</summary>
     public void AddInserted(string jobId) { lock (inserted) { inserted.Enqueue(jobId); if (inserted.Count > 64) inserted.Dequeue(); } }
@@ -207,32 +210,30 @@ internal sealed partial class BigQueryService
         }
     }
 
+    /// <summary>Cancels a job once the re-attach identity check proves it is this account's (a Stop that came first). True when
+    /// BigQuery took the cancel or the job had finished; false when the check or the cancel failed (the job may run on). Bounded
+    /// to fit within a close's wait, which waits for the stopped attach.</summary>
+    internal async Task<bool> CancelOwnJobAsync(BigQueryConnection connection, string jobId, string? location, bool inserted)
+    {
+        using var lease = connection.Lease();
+        if (lease is null) return false;
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+            limit.CancelAfter(OwnCancelLimit);
+            var own = await OwnJobAsync(connection, jobId, location, limit.Token, inserted);
+            if (own.Status?.State == "DONE") return true;
+            var request = connection.Client.Service.Jobs.Cancel(connection.Options.Project, jobId);
+            request.Location = own.JobReference?.Location ?? location;
+            await ReadAsync(t => request.ExecuteAsync(t), limit.Token);
+            return true;
+        }
+        catch (Exception) { return false; }
+    }
+    internal TimeSpan OwnCancelLimit { get; set; } = TimeSpan.FromSeconds(15);
+
     /// <summary>jobs.cancel, best-effort: BigQuery may already have finished the job, and may still bill work done before it
     /// stops. Leases the client, so a Stop that comes with a Disconnect still reaches BigQuery.</summary>
-    /// <summary>Cancels a job once the re-attach identity check proves it is this account's (a Stop that came first), best-effort.</summary>
-    internal void CancelOwnJob(BigQueryConnection connection, string jobId, string? location, bool inserted)
-    {
-        var lease = connection.Lease();
-        if (lease is null) return;
-        _ = Task.Run(async () =>
-        {
-            using (lease)
-            {
-                try
-                {
-                    using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
-                    limit.CancelAfter(TimeSpan.FromSeconds(30));
-                    var own = await OwnJobAsync(connection, jobId, location, limit.Token, inserted);
-                    if (own.Status?.State == "DONE") return;
-                    var request = connection.Client.Service.Jobs.Cancel(connection.Options.Project, jobId);
-                    request.Location = own.JobReference?.Location ?? location;
-                    await ReadAsync(t => request.ExecuteAsync(t), limit.Token);
-                }
-                catch (Exception) { /* Best-effort, as CancelJob: another principal's job, or one the check cannot reach, is left alone. */ }
-            }
-        });
-    }
-
     internal void CancelJob(BigQueryConnection connection, string project, string jobId, string? location)
     {
         var lease = connection.Lease();
@@ -500,7 +501,8 @@ internal sealed partial class BigQueryService
                 if (commit) throw JobRunning(true);
                 return await EndAsync(session, Note("outcomeUnknown", jobId: session.Tail?.JobId), token);
             }
-            SessionCloseNote? note = null;
+            SessionCloseNote? note = session.CancelUnconfirmed is { } unconfirmed ? Note("outcomeUnknown", jobId: unconfirmed) : null;
+            session.CancelUnconfirmed = null;
             if (session.Tail is { } tail)
             {
                 if (!tail.Cancelled)
