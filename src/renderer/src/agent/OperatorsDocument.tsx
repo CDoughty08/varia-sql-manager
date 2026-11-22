@@ -11,7 +11,7 @@ import Icon from '../Icon'
 import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
 import InlineError from '../kit/InlineError'
 import Skeleton from '../kit/Skeleton'
-import { operatorsSections, type AgentObjectState, type OperatorsDocumentService } from './AlertOperatorDocumentService'
+import { agentObjectText, operatorsSections, type AgentObjectState, type OperatorsDocumentService } from './AlertOperatorDocumentService'
 import { methodChoices } from './AlertDocument'
 
 type State = AgentObjectState<AgentOperatorsModel, AgentNotifyMatrix>
@@ -67,7 +67,7 @@ function SidePane({ state, model, operator, service, onDelete }: { readonly stat
     <p className="agent-operators-side-actions">
       <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }) }}><Icon name="go-to-file" />Open</button>
       <button type="button" title={testBlocked} disabled={!!testBlocked || !service.canReload(state.id)} onClick={() => void service.sendTest(state.id, operator)}><Icon name="agent-operator" />Send test e-mail</button>
-      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id)} onClick={onDelete}><Icon name="trash" />Delete…</button>}
+      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || state.changes > 0} title={state.changes > 0 ? agentObjectText.saveFirst : undefined} onClick={onDelete}><Icon name="trash" />Delete…</button>}
     </p>
     {testBlocked && <p className="field-note">{testBlocked}</p>}
   </aside>
@@ -170,7 +170,7 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
     {model?.readOnly && <p className="document-status"><Icon name="lock" />{model.readOnly}</p>}
   </>
   const tools = model?.sysadmin ? <span className="agent-operators-tools">
-    <button type="button" disabled={!operatorsDocuments.canReload(state.id) || !model.alerts} onClick={() => setDialog('recommended')}><Icon name="check" />Add recommended alerts…</button>
+    <button type="button" disabled={!operatorsDocuments.canReload(state.id) || !model.alerts || state.changes > 0} title={state.changes > 0 ? agentObjectText.saveFirst : undefined} onClick={() => setDialog('recommended')}><Icon name="check" />Add recommended alerts…</button>
     <button type="button" onClick={() => void commands.execute('agent.newOperator', { tabId: state.id }, 'toolbar')}><Icon name="add" />New operator</button>
   </span> : null
   return <DocumentFrame id={`agent-operators-${state.id}`} title="Operators and notifications" subtitle="SQL Server Agent"

@@ -51,6 +51,8 @@ export interface AgentObjectSpec<M, D> {
   readonly changes: (model: M, base: D, draft: D) => number
   readonly problems: (model: M, draft: D) => readonly Problem[]
   readonly requests: (model: M, base: D, draft: D) => Unsent<SaveRequest>[]
+  /** The base once the first `done` of a save's requests committed and a later one was refused, so Save resends only the rest. */
+  readonly committed?: (model: M, base: D, draft: D, done: number) => D
   /** The object as saved, which the document reads again. */
   readonly saved: (model: M, draft: D, target: ObjectRef) => ObjectRef
   readonly tabName: (target: ObjectRef) => string
@@ -74,6 +76,8 @@ export interface AgentObjectState<M = unknown, D = unknown> {
   readonly notice?: string
   /** A side action on its way (Send test e-mail, Delete operator, Add recommended alerts). */
   readonly busy?: string
+  /** Saved but not read again yet: Save waits for a read (Reload), so a create or a rename is never sent twice. */
+  readonly unread?: boolean
   /** A dialog the grid opens as it shows (Add recommended alerts from the Alerts folder). */
   readonly ask?: 'recommended'
   readonly counters?: { readonly key: string; readonly result?: AgentCounterValuesResult; readonly loading: boolean }
@@ -105,10 +109,13 @@ export const agentObjectText = {
   savedUnread: (noun: string) => `The ${noun} ${was(noun)} saved, but could not be read again:`,
   saving: (noun: string) => `The ${noun} ${noun.endsWith('s') ? 'are' : 'is'} being saved. Wait for it to finish.`,
   lost: (noun: string) => `The connection closed while the ${noun} ${was(noun)} being saved, so whether ${noun.endsWith('s') ? 'they were' : 'it was'} saved is unknown. Reload to check.`,
-  partly: (done: number, total: number) => `${done} of ${total} alerts were saved before one was refused; Reload shows what the server has now.`,
+  partly: (done: number, total: number) => `${done} of ${total} alerts were saved before one was refused; Save sends the rest.`,
+  saveFirst: 'Save or reload the changes first.',
   recommendedDone: (count: number) => `${count} recommended alert${count === 1 ? ' was' : 's were'} created.`,
   deleted: (name: string) => `Operator ${name} was deleted.`
 } as const
+/** The name a save leaves: the name read, verbatim (msdb keeps spaces around it), unless the draft renamed it to the trimmed new name. */
+const savedName = (read: string | undefined, typed: string) => read !== undefined && read === typed ? read : typed.trim()
 const fallback = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'NOT_FOUND' })
 export const alertSections = [{ id: 'when', title: 'When' }, { id: 'then', title: 'Then' }, { id: 'options', title: 'Options' }] as const
 export const operatorSections = [{ id: 'general', title: 'General' }, { id: 'duty', title: 'Pager duty' }, { id: 'notifications', title: 'Notifications' }] as const
@@ -129,7 +136,7 @@ export const alertSpec: AgentObjectSpec<AgentAlertDocumentModel, AgentAlertDraft
     const alert = model.alert
     return [alert ? { action: 'agentAlert', target: { kind: 'agentAlert', name: alert.name }, agentObjectId: alert.id, agentAlert: save } : { action: 'agentAlert', target: { kind: 'agent' }, agentAlert: save }]
   },
-  saved: (_model, draft) => ({ kind: 'agentAlert', name: draft.name.trim() }),
+  saved: (model, draft) => ({ kind: 'agentAlert', name: savedName(model.alert?.name, draft.name) }),
   tabName: target => agentAlertTabName(target.kind === 'agentAlert' ? target.name : undefined),
   readOnly: model => model.readOnly
 }
@@ -146,7 +153,7 @@ export const operatorSpec: AgentObjectSpec<AgentOperatorDocumentModel, AgentOper
     const operator = model.operator
     return [operator ? { action: 'agentOperator', target: { kind: 'agentOperator', name: operator.name }, agentObjectId: operator.id, agentOperator: save } : { action: 'agentOperator', target: { kind: 'agent' }, agentOperator: save }]
   },
-  saved: (_model, draft) => ({ kind: 'agentOperator', name: draft.name.trim() }),
+  saved: (model, draft) => ({ kind: 'agentOperator', name: savedName(model.operator?.name, draft.name) }),
   tabName: target => agentOperatorTabName(target.kind === 'agentOperator' ? target.name : undefined),
   readOnly: model => model.readOnly
 }
@@ -157,6 +164,11 @@ export const operatorsSpec: AgentObjectSpec<AgentOperatorsModel, AgentNotifyMatr
   initial: model => notifyMatrix(model),
   changes: (model, base, draft) => matrixChangeCount(model, base, draft),
   problems: () => [],
+  committed: (model, base, draft, done) => {
+    const next = new Map(base)
+    for (const { alert } of matrixChanges(model, base, draft).slice(0, done)) next.set(alert.name, new Map(draft.get(alert.name) ?? []))
+    return next
+  },
   requests: (model, base, draft) => matrixChanges(model, base, draft).map(({ alert, changes }) => ({ action: 'agentAlert', target: { kind: 'agentAlert', name: alert.name }, agentObjectId: alert.id, agentAlert: { notifications: changes } })),
   saved: (_model, _draft, target) => target,
   tabName: () => agentOperatorsTabName,
@@ -278,7 +290,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     }
     const base = this.spec.initial(model)
     const draft = this.spec.exists(model) ? base : this.spec.initial(model, current.preset)
-    this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
+    this.patch(id, { phase: 'ready', model, base, draft, revision: current.revision + 1, changes: 0, unread: false, error: undefined, notice, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined })
     this.options.documents.setDirty(id, !this.spec.exists(model))
     this.schedulePreview(id, 0)
   }
@@ -287,7 +299,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
 
   canSave(id: string): boolean {
     const state = this.get(id)
-    if (!state?.model || state.draft === undefined || !this.canEdit(id) || !this.live(id)) return false
+    if (!state?.model || state.draft === undefined || state.unread || !this.canEdit(id) || !this.live(id)) return false
     const problems = this.problems(id)
     return (!this.spec.exists(state.model) || state.changes > 0) && !problems.some(problem => problem.severity === 'error')
   }
@@ -323,6 +335,12 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
       const failure = value?.error ?? (!result.ok ? fallback(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? 'CONNECTION_LOST' : 'SQL_ERROR', result.error) : undefined)
       if (failure) {
         const message = done > 0 ? `${failure.message} ${agentObjectText.partly(done, built.length)}` : failure.message
+        const latest = this.get(id)!
+        if (done > 0 && this.spec.committed && latest.model && latest.base !== undefined && latest.draft !== undefined) {
+          const base = this.spec.committed(latest.model, latest.base, latest.draft, done)
+          this.patch(id, { base, changes: this.spec.changes(latest.model, base, latest.draft) })
+          this.options.documents.setDirty(id, this.get(id)!.changes > 0)
+        }
         this.patch(id, { phase: 'ready', error: { ...failure, message } })
         return false
       }
@@ -330,7 +348,7 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
     }
     const created = !this.spec.exists(state.model)
     const target = this.spec.saved(state.model, state.draft, state.target)
-    this.patch(id, { phase: 'loading', target, changes: 0, preset: undefined })
+    this.patch(id, { phase: 'loading', target, changes: 0, unread: true, preset: undefined })
     this.options.documents.setDirty(id, false)
     this.options.documents.update(id, { name: this.spec.tabName(target) })
     await this.describe(id, created ? agentObjectText.created(this.spec.noun) : agentObjectText.saved(this.spec.noun))
@@ -343,15 +361,16 @@ export class AlertOperatorDocumentService<M, D> extends SnapshotStore<AgentObjec
   async runAction(id: string, busy: string, request: Unsent<ActionExecuteRequest>, done: string): Promise<boolean> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId || !this.live(id) || state.busy || state.phase !== 'ready') return false
+    // Delete and Add recommended alerts change what the draft shows, so they wait for unsaved changes; Send test e-mail changes nothing.
+    if (state.changes > 0 && request.action !== 'notifyOperator') { this.patch(id, { error: fallback('SQL_ERROR', agentObjectText.saveFirst) }); return false }
     this.patch(id, { busy, error: undefined, notice: undefined })
     const result = await this.call(() => this.options.api.executeObjectAction({ ...request, connectionId, requestId: this.newId() } as ActionExecuteRequest))
     if (this.disposed || !this.get(id)) return false
     const failure = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error
     this.patch(id, { busy: undefined, ...failure ? { error: failure } : {} })
     if (failure) return false
-    const latest = this.get(id)!
-    // A draft with changes keeps them; the read waits for Reload.
-    if (latest.changes === 0) { this.patch(id, { phase: 'loading' }); await this.describe(id, done) }
+    // A draft with changes (only Send test e-mail runs beside them) keeps them; the read waits for Reload.
+    if (this.get(id)!.changes === 0) { this.patch(id, { phase: 'loading' }); await this.describe(id, done) }
     else this.patch(id, { notice: done })
     return true
   }
