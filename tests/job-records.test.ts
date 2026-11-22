@@ -154,6 +154,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     await store.flush()
     expect(errors).toHaveLength(1)
     expect((await readdir(join(directory, 'jobs.json')))).toEqual([])
+    // A burst of changes queued behind one write rides on it: one more attempt, not one per change.
+    for (let index = 0; index < 20; index++) store.record(keyA, job(`varia_burst_${index}`))
+    await store.flush()
+    expect(errors).toHaveLength(2)
     // A record made before the read finishes merges with the file's, rather than overwriting them.
     const other = await folder()
     const first = new JobRecordStore(other)
