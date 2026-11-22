@@ -28,6 +28,7 @@ import { createTableSchema, type CreateTableRequest, type TableDesignerModel } f
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 import { agentPropertiesProblems, agentPropertiesRequestSchema, type AgentPropertiesModel, type AgentPropertiesRequest } from './agent-properties.ts'
+import { agentJobFields, agentJobSaveProblems, agentJobSaveSchema, type AgentJobDocumentModel, type AgentJobField, type AgentJobSave } from './agent-job.ts'
 import { extendedPropertyOps, lockEscalationTokens, tableLimits, tableStatements, type TableChanges, type TablePropertiesModel } from './tables.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
@@ -172,9 +173,15 @@ export interface TablePropertiesRequest {
   readonly action: 'tableProperties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly tableChanges: TableChanges
   readonly identity?: DatabaseIdentity
 }
+/** The job document's Save (AG-6a, agent-job.ts): an existing job's changes under its identity and the STALE guard, or New Job on the
+ *  SQL Server Agent node (target `{ kind: 'agent' }`, no identity). */
+export interface AgentJobRequest {
+  readonly action: 'agentJob'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly agentIdentity?: AgentIdentity
+  readonly agentJob: AgentJobSave
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
-  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest
+  | LoginStateRequest | UnlockRequest | LoginPropertiesRequest | TablePropertiesRequest | StartJobRequest | StopJobRequest | AgentPropertiesRequest | AgentJobRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest | AgentServiceRequest | DeleteJobHistoryRequest
@@ -182,8 +189,9 @@ export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export type { AgentPropertiesRequest } from './agent-properties.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
-/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. */
-export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number }
+/** `column`: the table designer's column (index in the design) a refusal is about, such as a name used twice. `field`: the job document's
+ *  field a refused save is about (agent-job.ts), where the error lands. */
+export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean; readonly column?: number; readonly field?: AgentJobField }
 /** Something that stops or affects the DROP; `blocking` ones make it fail until they are dealt with. */
 export interface ActionWarning { readonly text: string; readonly blocking: boolean }
 /** The Delete Object dialog's row: SSMS's Object Name, Object Type and Owner, and what it found in the way. */
@@ -387,6 +395,8 @@ export interface ActionDescribeResult {
   readonly agentService?: AgentServiceFacts
   /** agentProperties (AG-8a): SQL Server Agent Properties' settings, the server's clock and, for sysadmin, every job's history counts. */
   readonly agentProperties?: AgentPropertiesModel
+  /** agentJob (AG-6a): the job document's model (agent-job.ts); without a job for New Job. */
+  readonly agentJobDocument?: AgentJobDocumentModel
 }
 /** One step of a job, as sp_help_jobstep lists it. */
 export interface AgentJobStepFact { readonly id: number; readonly name: string }
@@ -561,6 +571,10 @@ export const actionDescribeSchema = z.object({
         else if (systemLogin(request.target)) issue(context, 'target', 'SQL Server\'s own logins have no Securables page.')
         else for (const message of dialogTargetProblems(request.target, 'loginProperties', 'loginProperties')) issue(context, 'target', message)
         break
+      // The job document describes a job, or the SQL Server Agent node for New Job.
+      case 'agentJob':
+        if (!(request.target.kind === 'agent' && Object.keys(request.target).length === 1)) for (const message of dialogTargetProblems(request.target, 'agentJob', 'agentJob')) issue(context, 'target', message)
+        break
       default: {
         // A server action's document describes the server it makes something on.
         const action = dialogSpecs[request.dialog].action
@@ -601,6 +615,7 @@ const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), conne
 // A step name: sysjobsteps.step_name is sysname.
 const startJobSchema = z.object({ action: z.literal('startJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), stepName: ident.optional() }).strict()
 const stopJobSchema = z.object({ action: z.literal('stopJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional() }).strict()
+const agentJobRequestSchema = z.object({ action: z.literal('agentJob'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, agentIdentity: agentIdentitySchema.optional(), agentJob: agentJobSaveSchema }).strict()
 export const agentServiceRequestSchema = z.object({
   action: z.enum(['startAgent', 'stopAgent', 'restartAgent']), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('agent') }).strict()
 }).strict() satisfies z.ZodType<AgentServiceRequest>
@@ -788,13 +803,16 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   tablePropertiesSchema,
   startJobSchema,
   stopJobSchema,
-  agentPropertiesRequestSchema
+  agentPropertiesRequestSchema,
+  agentJobRequestSchema
 ]).superRefine((request, context) => {
   // A job's identity goes only with a job's verb.
   if ('agentIdentity' in request && request.agentIdentity !== undefined && request.target.kind !== 'agentJob') issue(context, 'agentIdentity', 'Only a SQL Server Agent job has an Agent identity.')
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.
-  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action)) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
+  // New Job is the job document's Save on the SQL Server Agent node.
+  const newJob = request.action === 'agentJob' && request.target.kind === 'agent' && Object.keys(request.target).length === 1
+  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action) && !newJob) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
   switch (request.action) {
     case 'createDatabase':
       for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
@@ -832,6 +850,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'agentProperties':
       for (const problem of agentPropertiesProblems(request)) issue(context, 'agentProperties', problem)
       break
+    case 'agentJob':
+      for (const problem of agentJobSaveProblems(request.agentJob, newJob)) issue(context, 'agentJob', problem)
+      break
   }
 }) satisfies z.ZodType<ActionRequest>
 /** actions.execute: the same requests, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g), with
@@ -867,7 +888,8 @@ export const actionStepSchema = z.object({
   status: z.enum(actionStepStatuses), title: z.string().max(loginLimits.stepTitle), message: z.string().max(actionLimits.messageChars).optional(),
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
-const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean(), column: z.number().int().min(0).max(designerLimits.columns - 1).optional() }).strict() satisfies z.ZodType<ActionError>
+const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean(), column: z.number().int().min(0).max(designerLimits.columns - 1).optional(),
+  field: z.enum(agentJobFields).optional() }).strict() satisfies z.ZodType<ActionError>
 const fileRefSchema = z.object({
   fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
 }).strict() satisfies z.ZodType<DatabaseFileRef>

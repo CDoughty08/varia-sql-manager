@@ -1830,6 +1830,59 @@ function agentJobsSample(live, probe) {
     tables: [{ table: 0, descriptor: describe(jobs), revision: n, ...(retired.length ? { retired } : {}), ...(tracked ? { tracked } : {}) }, { table: 1, descriptor: describe(runs), revision: n }]
   }
 }
+// The job document (AG-6a) on the fake jobs: each job's General and Notifications, its version (the STALE guard's), three steps and
+// one alert. The job-save-race control file bumps a job's version once, as another session's save would; New Job's save adds a job.
+const agentJobDocs = new Map()
+const agentOperators = [
+  { name: 'DBA Team', enabled: true, email: true, pager: true, netSend: false, pagerDays: 62, weekday: { start: 80000, end: 180000 }, saturday: { start: 0, end: 0 }, sunday: { start: 0, end: 0 } },
+  { name: 'On Call', enabled: true, email: true, pager: false, netSend: false, pagerDays: 0, weekday: { start: 0, end: 0 }, saturday: { start: 0, end: 0 }, sunday: { start: 0, end: 0 } }
+]
+function agentJobDoc(job) {
+  if (!agentJobDocs.has(job.id)) agentJobDocs.set(job.id, { description: `${job.name} maintenance.`, owner: 'sa', emailLevel: 2, emailOperator: 'DBA Team', pageLevel: 0, pageOperator: '', netSendLevel: 0, netSendOperator: '', eventLogLevel: 2, deleteLevel: 0, version: 3, modified: '2026-11-10T09:15:30.120', alerts: [{ id: 7, name: `${job.name} failed`, enabled: true, severity: 0, messageId: 50001 }] })
+  return agentJobDocs.get(job.id)
+}
+const agentJobSteps = job => Array.from({ length: job.steps }, (_, index) => ({ id: index + 1, name: ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`, subsystem: 'TSQL' }))
+function agentJobDocument(params) {
+  const base = { login: 'sa', sysadmin: true, platform: 'windows', categories: ['[Uncategorized (Local)]', 'Database Maintenance'], operators: agentOperators, owners: ['sa', 'CONTOSO\agent'], alertsEditable: true, mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Varia Mail' } }
+  if (params.target.kind === 'agent') return { agentJobDocument: { ...base, steps: [], jobs: agentJobs.map(job => job.name).sort() }, elapsedMs: 1 }
+  const job = agentJobs.find(item => item.name === params.target.name)
+  if (!job) return undefined
+  const doc = agentJobDoc(job)
+  const record = { jobId: job.id.toUpperCase(), name: job.name, enabled: job.enabled, description: doc.description, category: job.category, owner: doc.owner,
+    emailLevel: doc.emailLevel, emailOperator: doc.emailOperator, pageLevel: doc.pageLevel, pageOperator: doc.pageOperator, netSendLevel: doc.netSendLevel, netSendOperator: doc.netSendOperator,
+    eventLogLevel: doc.eventLogLevel, deleteLevel: doc.deleteLevel, created: job.created, modified: doc.modified, version: doc.version, startStepId: 1, lastRun: job.lastRun.replace(' ', 'T'), lastOutcome: job.outcome }
+  return { agentJobDocument: { ...base, job: record, steps: agentJobSteps(job), alerts: doc.alerts }, elapsedMs: 1 }
+}
+async function agentJobSave(params) {
+  const refused = (code, message, field) => ({ steps: [], messages: [], elapsedMs: 1, error: { code, message, retryable: false, ...field ? { field } : {} } })
+  const save = params.agentJob
+  const stamp = () => new Date().toISOString().slice(0, 23)
+  const fields = ['description', 'owner', 'emailLevel', 'emailOperator', 'pageLevel', 'pageOperator', 'netSendLevel', 'netSendOperator', 'eventLogLevel', 'deleteLevel']
+  if (params.target.kind === 'agent') {
+    if (agentJobs.some(job => job.name === save.name)) return refused('NAME_IN_USE', `A job named ${save.name} already exists.`, 'name')
+    const n = agentJobs.length + 1
+    const job = { id: `a1b2c3d4-0000-4000-8000-${String(n).padStart(12, '0')}`, name: save.name, enabled: save.enabled ?? true, created: `2026-11-20T10:00:${String(n).padStart(2, '0')}`, outcome: 5, lastRun: '2026-11-20 10:00:00', steps: 0, category: save.category ?? '[Uncategorized (Local)]' }
+    agentJobs.push(job)
+    const doc = agentJobDoc(job)
+    for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
+    Object.assign(doc, { alerts: [], version: 1, modified: stamp() })
+    return { steps: [{ status: 'done', title: 'Create the job' }], messages: [], elapsedMs: 1 }
+  }
+  const job = agentJobs.find(item => item.name === params.target.name)
+  if (!job) return refused('NOT_FOUND', `The job ${params.target.name} no longer exists.`)
+  if (params.agentIdentity?.created !== job.created) return refused('NOT_FOUND', `The job ${job.name} was replaced since it was listed.`)
+  const doc = agentJobDoc(job)
+  // Another session's save: its description and version change before this one lands.
+  if (await controlled('job-save-race', true)) Object.assign(doc, { description: 'Changed by someone else.', version: doc.version + 1, modified: stamp() })
+  if (save.version !== doc.version || save.modified !== doc.modified) return refused('STALE', 'Someone changed this job after it was read. Nothing was saved.')
+  if (save.name !== undefined) job.name = save.name.trim()
+  if (save.enabled !== undefined) job.enabled = save.enabled
+  if (save.category !== undefined) job.category = save.category
+  for (const field of fields) if (save[field] !== undefined) doc[field] = save[field]
+  if (save.removeAlerts) doc.alerts = doc.alerts.filter(alert => !save.removeAlerts.some(removed => removed.id === alert.id))
+  Object.assign(doc, { version: doc.version + 1, modified: stamp() })
+  return { steps: [{ status: 'done', title: 'Save the job' }], messages: [], elapsedMs: 1 }
+}
 /** A job verb (AG-2's actions.execute on an agentJob) against the fake jobs: one result per job, JOB_STATE when there is nothing to do. */
 // The Log File Viewer's history (agent.history) of the same jobs: Nightly's last run failed at its second step, an older one
 // succeeded; Backup's run succeeded. Rows follow the catalogue's columns and are grouped as AgentHistoryReader groups them;
@@ -2307,18 +2360,39 @@ async function workbench(id, method, params, credit) {
           server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 0
         }, elapsedMs: 1 })
         // The table designer: the database's schemas and default filegroup.
+        // The job document: the job's model, or New Job's (with the jobs Copy an existing job picks from).
+        case 'agentJob': {
+          const value = agentJobDocument(params)
+          // As the backend answers a job msdb no longer has: an error in the result, not a failed request.
+          return respond(id, value ?? { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The job ${params.target.name} no longer exists.`, retryable: false } })
+        }
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         default: return respond(id, { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 })
       }
     case 'actions.script':
       switch (params.action) {
         case 'createTable': return respond(id, { text: `CREATE TABLE ${params.design.schema}.${params.design.name}\r\n\t(\r\n\t)  ON [PRIMARY]\r\nGO\r\n`, database: params.target.name, warnings: [] })
+        case 'agentJob': return respond(id, { text: `USE [msdb]
+GO
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_name=N'${params.target.name ?? params.agentJob.name}'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+GO
+`, database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
     // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
     // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
+      if (params.action === 'agentJob') return respond(id, await agentJobSave(params))
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
