@@ -87,7 +87,9 @@ export interface GridShellProps {
   /** The rows are gone (a released or lost result, a stopped live view): an overlay says why, over the strips. */
   readonly gone?: string
   /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy), and a button after it that acts on it. */
-  readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead }
+  /** `quiet`: text that changes often (a load's row count) is no live region, so a screen reader is not read every tick;
+   *  its start and end are announced instead. */
+  readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction; readonly lead?: StripLead; readonly quiet?: boolean }
   /** A windowed BigQuery result whose rows BigQuery no longer keeps (a read answered REMOTE_EXPIRED): its strip says so and
    *  offers this (Re-run) in place of Retry, which cannot help. */
   readonly expired?: StripAction
@@ -214,9 +216,10 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {children}
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
-      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error" role="status">{expiredText} <button type="button" title={expired.title} onClick={expired.run}>{expired.label}</button></div>
+      : !gone && status.tileError && status.expired && expired ? <div className="rg-strip error has-action" role="status"><span className="rg-strip-text">{expiredText}</span>
+        <button type="button" className="rg-strip-action" title={expired.title} aria-keyshortcuts={expired.keys} onClick={expired.run}>{expired.icon && <Icon name={expired.icon} />}{expired.label}</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.text}>
+        : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role={strip.quiet ? undefined : 'status'} title={strip.text}>
           {action ? <><span className="rg-strip-text">{strip.text}</span>
             <button ref={actionRef} type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
               onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget || event.currentTarget.isConnected) actionFocused.current = false }}>

@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadingText, truncationText } from '../src/renderer/src/grid/ResultGrid'
+import { loadingText, loadOffer, truncationText, windowedText } from '../src/renderer/src/grid/ResultGrid'
 
 const GiB = 1024 ** 3
 const now = { usedBytes: 0, globalBytes: 1 * GiB, queryBytes: GiB / 2, generation: 1, seq: 4 }
@@ -47,5 +47,17 @@ describe('a windowed result loading into memory', () => {
     // Before the switch (and after a refused load switched back) the windowed rows are not the load's: no count.
     expect(loadingText('loading', { rowsAvailable: 5_000, rowsTotal: 5_000, residence: 'remote' })).toBe('Loading into memory…')
     expect(loadingText('stopping', { rowsAvailable: 10 })).toBe('Stopping the load: the result stays windowed in BigQuery.')
+  })
+})
+
+describe('what a windowed result strip offers about loading', () => {
+  it('offers Stop while loading, and Load only beside the windowed note', () => {
+    expect(loadOffer({ loading: 'loading', loadable: false, other: 'Loading into memory…', stopping: false })).toBe('stop')
+    expect(loadOffer({ loading: 'stopping', loadable: false, other: 'Stopping', stopping: false })).toBeUndefined()
+    expect(loadOffer({ loading: '', loadable: true, other: windowedText, stopping: false })).toBe('load')
+    // Beside a truncation, a highlight count or the run's Stop query, Load is not offered.
+    expect(loadOffer({ loading: '', loadable: true, other: 'Only the first 2,147,483,647 of 3,000,000,000 rows can be shown', stopping: false })).toBeUndefined()
+    expect(loadOffer({ loading: '', loadable: true, other: windowedText, stopping: true })).toBeUndefined()
+    expect(loadOffer({ loading: '', loadable: false, other: windowedText, stopping: false })).toBeUndefined()
   })
 })

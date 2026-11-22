@@ -345,7 +345,8 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
 - **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
   start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
   its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
-  (with its estimate and cost prompt). A cache hit's destination table is an older one, which may expire sooner, so a
+  (the editor's text, or its selection, with the estimate and cost prompt); a grid shown while another tab is active
+  does not offer it. A cache hit's destination table is an older one, which may expire sooner, so a
   windowed cache hit's caption adds "cached result: may expire early".
 - **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities and comparisons of a windowed
   result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
