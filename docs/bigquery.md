@@ -265,7 +265,7 @@ backend side of re-attaching:
   is left running (an auxiliary flag is reserved and always false), and the session's transaction state as it started. No SQL text and no secrets. The file
   has a strict schema, holds 64 records per key and 1,024 in all (the oldest finished go first; running jobs' records go
   only past 1,024 of them, newest first), is written atomically on every change and quarantined when unreadable, and
-  records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab; a job still running when the
+  records expire 24 hours after main first recorded their job. A finished job's records go once its summary reached the tab, and so do a stopped or timed-out request's; a job still running when the
   backend was lost, or left running, keeps its record. A job re-attached under another key moves to it.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
@@ -280,7 +280,7 @@ backend side of re-attaching:
 - **Idle sessions end with their connection.** A session holding no running or left-running job is ended
   (`ABORT_SESSION`) on Disconnect (`connections.disconnect` answers `failedAborts`) and before every backend stop main makes
   (`bigquery.endIdleSessions`, 10 s), which leaves a kept tab's finished-job session with an open or unknown transaction
-  (`keepJobKeys`). A failed abort is retried once the next time the handle reaches BigQuery.
+  (`keepJobKeys`). A session close or state read during that wait still reaches the old backend. A failed abort is retried once the next time the handle reaches BigQuery.
 - **`bigquery.cancelJobs`** (main only) cancels a saved profile's jobs without a connection handle, waits for DONE, and ends
   their sessions, answering `committedBeforeCancel`, `outcomeUnknown` or `abortFailed` per job.
 - The restart, reload and crash prompts say BigQuery jobs carry on and re-attach.

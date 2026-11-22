@@ -289,7 +289,8 @@ describe('BackendSupervisor restarts', () => {
   })
   it('joins a second restart to one waiting for endIdleSessions, launching one backend, and skips the wait for a hung backend', async () => {
     const { value, advance, backends } = simulated({ configure: backend => { backend.held.add('bigquery.endIdleSessions') } })
-    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    const connected = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never) as { id: string }
+    await value.request('query.execute', { connectionId: connected.id, sessionId: '33333333-3333-4333-8333-333333333333', queryId: '44444444-4444-4444-8444-444444444444', sql: 'SELECT 1', maxRows: 1, maxResultSets: 1 } as never)
     const first = value.restart('manual')
     await advance(0)
     const ending = backends[0].requests.find(request => request.method === 'bigquery.endIdleSessions')!
@@ -298,6 +299,11 @@ describe('BackendSupervisor restarts', () => {
     const second = value.restart('reload')
     await advance(0)
     expect(backends).toHaveLength(1)
+    // A tab closing meanwhile reaches its session in the generation being ended (Cancel the job is carried out there).
+    const closing = value.request('query.session.close', { sessionId: '33333333-3333-4333-8333-333333333333', cancelJob: true } as never)
+    await advance(0)
+    expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.session.close', params: { sessionId: '33333333-3333-4333-8333-333333333333', cancelJob: true } }))
+    await expect(closing).resolves.toEqual({ closed: true })
     // A Restart Backend that joins it still resets the crash breaker.
     const breaker = value as unknown as { attempts: number, losses: number[] }
     breaker.attempts = 3; breaker.losses = [1, 2]
