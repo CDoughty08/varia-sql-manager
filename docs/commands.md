@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (383)
+## Commands (386)
 
 ### File
 
@@ -212,6 +212,9 @@ keys it uses are listed below.
 | Swap Sides | `output.compareSwapSides` | — | — | — | Always | Results toolbar › More results tools › Swap Sides |
 | Go to Old Result | `output.compareGoToOld` | — | — | — | Always | Results toolbar › More results tools › Go to Old Result |
 | Go to New Result | `output.compareGoToNew` | — | — | — | Always | Results toolbar › More results tools › Go to New Result |
+| Go to Next Difference | `output.compareNextDifference` | Alt+F5 (`outputGridFocus && resultsGridComparison`) | Alt+F5 (`outputGridFocus && resultsGridComparison`) | ⌥F5 (`outputGridFocus && resultsGridComparison`) | `resultsGridComparison` | Query Output context menu › Go to Next Difference; Results toolbar › More results tools › Go to Next Difference |
+| Go to Previous Difference | `output.comparePreviousDifference` | Shift+Alt+F5 (`outputGridFocus && resultsGridComparison`) | Shift+Alt+F5 (`outputGridFocus && resultsGridComparison`) | ⌥⇧F5 (`outputGridFocus && resultsGridComparison`) | `resultsGridComparison` | Query Output context menu › Go to Previous Difference; Results toolbar › More results tools › Go to Previous Difference |
+| Go to Possible Match | `output.compareGoToPossibleMatch` | — | — | — | `comparisonRowHasPartner` | Query Output context menu › Go to Possible Match |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile; Results toolbar › More results tools › Column Profile |
 | Column Profile: Selected Columns Only | `output.toggleProfileSelectedColumns` | — | — | — | Always; checked when `resultsProfileSelectedOnly` | Results toolbar › More results tools › Profile Selected Columns Only |
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
@@ -960,6 +963,9 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | **U**pdate Pivot | `output.updatePivot` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Tra**n**spose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `3_compare` | Go to Ne**x**t Difference | `output.compareNextDifference` | `outputGridComparison` |
+| `3_compare` | Go to Previous Difference | `output.comparePreviousDifference` | `outputGridComparison` |
+| `3_compare` | Go to Possible Match | `output.compareGoToPossibleMatch` | `outputGridComparison` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid' \|\| outputView == 'live'` |
@@ -1099,6 +1105,8 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `5_compare` | Go to Ol**d** Result | `output.compareGoToOld` | `resultsGridComparison` |
 | `5_compare` | Go to New Res**u**lt | `output.compareGoToNew` | `resultsGridComparison` |
 | `5_compare` | Sa**v**e Results As… | `output.saveResultsAs` | `resultsGridComparison` |
+| `5_compare` | Go to Next D**i**fference | `output.compareNextDifference` | `resultsGridComparison` |
+| `5_compare` | Go to Previous Difference | `output.comparePreviousDifference` | `resultsGridComparison` |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 #### Peek Properties context menu (`peek.properties.context`)
@@ -1126,7 +1134,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (183)
+## Context keys (184)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1318,6 +1326,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `comparisonExactText` | boolean | state | That comparison compares text exactly: values that differ only by case or trailing spaces count as changed (its Exact text toggle). |
 | `comparisonOneRow` | boolean | state | That comparison shows one row per entry (its Layout is One row). |
 | `comparisonChangesOnly` | boolean | state | That comparison shows only its changed, added and removed rows (its Rows choice is Changes only). |
+| `comparisonRowHasPartner` | boolean | state | That comparison's active row is a removed or added row with a possible match (? in its row header), so Go to Possible Match can select it; false until the row's change marker has loaded. In a results grid's own menu, the row it was opened on. |
 
 ## Reserved keys
 

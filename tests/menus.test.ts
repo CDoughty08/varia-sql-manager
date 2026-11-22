@@ -421,6 +421,8 @@ describe('menu state', () => {
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders',
       // A comparison's toolbar controls, also in the results toolbar's More results tools.
       'output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides', 'output.compareGoToOld', 'output.compareGoToNew',
+      // Moving between a comparison's differences: keys, its toolbar, the grid's menu, More results tools and the palette.
+      'output.compareNextDifference', 'output.comparePreviousDifference', 'output.compareGoToPossibleMatch',
       // Stepping through the results' tabs: keys, the tabs' own arrow keys and the palette; Window › Go to Result… lists them.
       'output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView',
       // Browser tab keys and the palette: Go to Result 1 to 8 and the last, and the same for query tabs.

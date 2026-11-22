@@ -42,7 +42,8 @@ async function fixture() {
   const goTo = vi.fn()
   const settingsSnapshot = { values: {} }, settings = { subscribe: () => () => {}, getSnapshot: () => settingsSnapshot }
   const commands = { execute: vi.fn() }
-  const workbench = { results, compare, settings, commands } as unknown as Workbench
+  const keybindings = { subscribe: () => () => {}, getRevision: () => 0, lookup: (id: string) => id === 'output.compareNextDifference' ? { text: 'Alt+F5', aria: 'Alt+F5' } : undefined }
+  const workbench = { results, compare, settings, commands, keybindings } as unknown as Workbench
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
@@ -372,5 +373,30 @@ describe('a comparison\'s toolbar', () => {
     view.draw()
     expect(view.container.querySelector('button[data-action="changesOnly"]')).toBe(show)
     expect(document.activeElement).toBe(show)
+  })
+
+  it('steps to the previous and next difference, saying where it is, and has nowhere to go without a change', async () => {
+    const view = await fixture()
+    const navigate = vi.spyOn(view.compare, 'navigate').mockResolvedValue(undefined)
+    const nav = view.toolbar().querySelector('[role="group"][aria-label="Differences"]')!
+    // Before any move it says the comparison's change units (the fake backend's answer has 2).
+    expect(nav.textContent).toBe('2 changes')
+    expect(view.button('Next difference')!.title).toBe('Next difference (Alt+F5)')
+    expect(view.button('Next difference')!.getAttribute('aria-keyshortcuts')).toBe('Alt+F5')
+    act(() => { view.button('Next difference')!.click() })
+    expect(navigate).toHaveBeenLastCalledWith('t1', view.slot().key, 'next')
+    act(() => { view.button('Previous difference')!.click() })
+    expect(navigate).toHaveBeenLastCalledWith('t1', view.slot().key, 'previous')
+    // Where the last move landed, in what the grid shows now.
+    navigate.mockRestore()
+    const entry = view.slot().entry
+    vi.mocked(entry.handle.diffSeek).mockResolvedValueOnce({ row: 1, column: 0, index: 2, total: 2, rows: 3 })
+    view.results.registerGrid('t1', entry.key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, diff: { active: () => undefined, handle: () => entry.handle, land: () => {} } })
+    await act(async () => { await view.compare.navigate('t1', entry.key, 'next') })
+    expect(nav.textContent).toBe('Change 2 of 2')
+    // No change: both are unavailable and say why; the controls stay in the toolbar.
+    view.draw({ units: 0 })
+    expect(view.button('Next difference')!.getAttribute('aria-disabled')).toBe('true')
+    expect(view.button('Previous difference')!.title).toBe('Previous difference: no differences')
   })
 })

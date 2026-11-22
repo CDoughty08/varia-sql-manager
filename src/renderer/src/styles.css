@@ -1268,6 +1268,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    the header's description says it. Rows (paintGutter): in Changes only a dashed rule marks a hidden run of unchanged rows,
    over the row after it, or under the last row. Column Profile cards (ColumnProfilePanel): each column's changes as a
    stacked bar, coloured as the gutter's kind bars. */
+/* A comparison's overview strip (overview.ts), beside the vertical scroll bar: a lane per kind, removed, changed, added, in
+   the colours of the header's changed dot and the status texts, solid so a 2px mark shows. Only the marks take presses. */
+.rg-overview { position: absolute; z-index: 3; width: 10px; pointer-events: none; }
+.rg-overview[hidden] { display: none; }
+.rg-overview-mark { position: absolute; width: 3px; min-height: 2px; border-radius: 1px; pointer-events: auto; cursor: pointer; }
+.rg-overview-mark.is-removed { left: 0; background: var(--varia-errorForeground); }
+.rg-overview-mark.is-changed { left: 3.5px; background: var(--varia-charts-blue); }
+.rg-overview-mark.is-added { left: 7px; background: var(--varia-successForeground); }
+@media (forced-colors: active) { .rg-overview-mark { background: CanvasText; forced-color-adjust: none; } }
 .rg-ch.chg { box-shadow: inset 0 -2px 0 var(--varia-resultsGrid-diffChangedBackground); }
 .rg-ch.chg .rg-cn::after { content: '•' / ''; margin-left: 4px; color: var(--varia-charts-blue); }
 .rg-ch.key .rg-cn::before { content: '⚷' / ''; margin-right: 4px; color: var(--varia-warningForeground); }
@@ -1448,6 +1457,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rg-compare-chip[aria-pressed="true"] { border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; }
 .rg-compare-count { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
 .rg-compare-gap { flex: 1 1 auto; min-width: 0; }
+/* Previous and Next Difference with "Change 2 of 31": they never fold; the words go with the chips' when the bar is tight. */
+.rg-compare-nav { flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; }
+.rg-compare-step { flex-shrink: 0; display: inline-grid; place-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); }
+.rg-compare-step:hover:not([aria-disabled="true"]) { background: var(--varia-toolbar-hoverBackground); color: var(--varia-panelTitle-activeForeground); }
+.rg-compare-position { margin-left: 2px; white-space: nowrap; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.rg-compare-bar[data-fold~="chips"] .rg-compare-position { display: none; }
 .rg-compare-bar .results-icon-toggle { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: none; color: var(--varia-panelTitle-inactiveForeground); font: inherit; }
 .rg-compare-bar .results-icon-toggle:hover { background: var(--varia-toolbar-hoverBackground); }
 .rg-compare-bar .results-icon-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); }

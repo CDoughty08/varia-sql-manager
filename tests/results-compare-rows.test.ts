@@ -283,7 +283,7 @@ describe('a comparison\'s kind chips', () => {
 })
 
 describe('a comparison\'s notices', () => {
-  const base: CompareInfo = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto', columns: ['Id'] }, layout: 'unified', pairs: 2, columnChanges: [], exact: false, same: 4, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: false, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, leftRows: 4, rightRows: 4 }
+  const base: CompareInfo = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, match: { mode: 'auto', columns: ['Id'] }, layout: 'unified', pairs: 2, columnChanges: [], exact: false, same: 4, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: false, repeated: 0, possible: 0, possibleSkipped: false, nothingPaired: false, trailingHidden: 0, overview: [], units: 0, leftRows: 4, rightRows: 4 }
   it('say what matching found, with buttons where a choice helps', () => {
     expect(comparisonNotices({ ...base, context: 0 }).map(notice => notice.text)).toEqual(['No differences. 4 unchanged rows hidden.'])
     expect(comparisonNotices({ ...base, leftRows: 0, rightRows: 0, same: 0 }).map(notice => notice.text)).toEqual(['Both results are empty.'])
