@@ -92,7 +92,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
 function SidePane({ state, model, operator, service, onDelete }: { readonly state: State; readonly model: AgentOperatorsModel; readonly operator: AgentOperatorRecord; readonly service: OperatorsDocumentService; readonly onDelete: () => void }) {
   const { operatorDocuments, documents, commands } = useWorkbench()
   const uses = operatorUses(model, operator)
-  const testBlocked = !model.sysadmin ? agentOperatorText.testSysadmin : !operator.enabled ? agentOperatorText.testDisabled : !operator.email ? agentOperatorText.testNeedsEmail : model.mail.checked && !model.mail.agentProfile ? agentOperatorText.testNeedsProfile : undefined
+  const testBlocked = !model.sysadmin ? agentOperatorText.testSysadmin : !operator.enabled ? agentOperatorText.testDisabled : !operator.email ? agentOperatorText.testNeedsEmail : model.mail.xps === false ? agentOperatorText.testMailOff : model.mail.checked && !model.mail.agentProfile ? agentOperatorText.testNeedsProfile : undefined
   const connectionId = documents.get(state.id)?.connectionId
   return <aside className="agent-operators-side" aria-label={`Operator ${operator.name}`}>
     <h3><Icon name="agent-operator" />{operator.name}</h3>

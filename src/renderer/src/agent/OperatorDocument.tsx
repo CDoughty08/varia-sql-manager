@@ -42,6 +42,7 @@ export function testBlocked(model: AgentOperatorDocumentModel, draft: AgentOpera
   if (!model.sysadmin) return agentOperatorText.testSysadmin
   if (!model.operator.enabled) return agentOperatorText.testDisabled
   if (!model.operator.email || draft.email !== model.operator.email && changes > 0) return model.operator.email ? agentOperatorText.testUnsaved : agentOperatorText.testNeedsEmail
+  if (model.mail.xps === false) return agentOperatorText.testMailOff
   if (model.mail.checked && !model.mail.agentProfile) return agentOperatorText.testNeedsProfile
   return undefined
 }

@@ -143,6 +143,8 @@ internal static class AgentObjectChecks
             && Equals(ValueOf(recommended, "@c3_message_id"), 823) && Equals(ValueOf(recommended, "@c1_delay_between_responses"), 300),
             "Add recommended alerts creates each alert with the one delay and notifies the one operator");
         var test = ActionService.NotifyPlan(Operator, 9, "Agent profile");
+        check(ActionService.Blocked(test) == ("NOT_SUPPORTED", ActionService.MailOffTestMessage) && ActionService.Blocked(ActionService.AlertSavePlan(AlertSave(new(Enabled: false)), Alert)).Code == "AGENT_STOPPED",
+            "a component that is off (15281) is Database Mail for the test e-mail, Agent for every other write");
         check(Procedures(test) == "sp_notify_operator" && Equals(ValueOf(test, "@c1_profile_name"), "Agent profile") && AgentSql.LintObjectBatch(test.Text).Count == 0, "Send test e-mail goes through Agent's own profile");
     }
 

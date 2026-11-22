@@ -201,6 +201,7 @@ describe("the operator document's and grid's shared rules", () => {
     expect(testBlocked(operatorModel({ sysadmin: false }), draft, 0)).toContain('sysadmin')
     expect(testBlocked(operatorModel({ operator: operatorRecord(9, 'DBA', { enabled: false }) }), draft, 0)).toBe(agentOperatorText.testDisabled)
     expect(testBlocked(operatorModel({ mail: { ...mail, agentProfile: undefined } }), draft, 0)).toContain('no Database Mail profile')
+    expect(testBlocked(operatorModel({ mail: { ...mail, xps: false } }), draft, 0)).toBe(agentOperatorText.testMailOff)
     expect(testBlocked(model, { ...draft, email: 'other@example.test' }, 1)).toContain('Save the operator first')
     expect(testBlocked(operatorModel({ operator: undefined }), draft, 0)).toContain('Save the operator first')
     expect(timeValue(timeText(83000))).toBe(83000)

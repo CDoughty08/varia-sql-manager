@@ -592,12 +592,17 @@ internal sealed partial class ActionService
 
     /// <summary>What a refused AG-7 write says: 50010 NOT_FOUND (the object was replaced), 15281 AGENT_STOPPED, else msdb's own error mapped by number,
     /// with the call the THROW's state names.</summary>
+    /// <summary>15281 (a component's XPs off): the test e-mail's sp_send_dbmail needs Database Mail XPs; every other call, Agent XPs.</summary>
+    internal static (string Code, string Message) Blocked(AgentObjectBatch? batch) =>
+        batch?.Calls.Any(call => call.Procedure == "sp_notify_operator") == true ? ("NOT_SUPPORTED", MailOffTestMessage) : ("AGENT_STOPPED", AgentStoppedMessage);
+    internal const string MailOffTestMessage = "Database Mail is off on this server (Database Mail XPs), so the test e-mail cannot be sent.";
+
     internal ActionError ObjectSaveError(SqlException error, AgentObjectBatch? batch, SqlConnection? connection)
     {
         var errors = error.Errors.Cast<SqlError>().ToList();
         var first = errors.FirstOrDefault(item => item.Class > 10)?.Number ?? error.Number;
         if (first == 50010) return Error("NOT_FOUND", AgentSql.ObjectChangedMessage);
-        if (first == 15281) return Error("AGENT_STOPPED", AgentStoppedMessage);
+        if (first == 15281) { var (code, message) = Blocked(batch); return Error(code, message); }
         var mapped = ActionErrors.FromSql(catalog, error, connection, ddl: true, null);
         if (mapped.Code == "NOT_FOUND") mapped = mapped with { Code = "SQL_ERROR", Retryable = false };
         var text = string.Join(" ", errors.Where(item => item.Class > 10 && item.Number is not (50012 or 3621 or 3998)).Select(item => item.Message).Distinct());

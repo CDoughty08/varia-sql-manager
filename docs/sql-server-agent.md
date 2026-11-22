@@ -115,7 +115,7 @@ later lanes, behind the same gate until 0.11.0.
   the selected operator, sends a test e-mail or deletes it (not while the grid is read-only, when it cannot count what notifies the operator), and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
   creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if
   one is picked. **Send test e-mail** runs `sp_notify_operator` through Agent's own Database Mail profile, refused before anything
-  is sent when Agent has none or the operator is disabled; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document
+  is sent when Agent has none, the operator is disabled or Database Mail XPs is off; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document
   and among the alert's warnings. **Delete** on an operator that alerts or jobs notify offers Reassign to (`sp_delete_operator
   @reassign_to_operator`); Enable, Disable, Rename and Delete on alert and operator rows go through the same batches. Alerts are
   SQL Server on Windows only (NOT_SUPPORTED on Linux and Managed Instance), and only sysadmin writes alerts and operators: msdb

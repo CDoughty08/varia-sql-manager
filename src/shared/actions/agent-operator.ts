@@ -190,6 +190,7 @@ export const agentOperatorText = {
   pagerMissing: (alert: string) => `${alert} notifies by pager, but there is no pager address.`,
   testSent: (name: string) => `Test e-mail queued for ${name}. Database Mail sends it; its log says whether it arrived.`,
   testNeedsEmail: 'Give the operator an e-mail address and save first.',
+  testMailOff: 'Database Mail is off on this server (Database Mail XPs), so the test e-mail cannot be sent.',
   testDisabled: 'Enable the operator and save first: SQL Server Agent sends nothing to a disabled operator.',
   testNeedsProfile: 'SQL Server Agent has no Database Mail profile, so it cannot send e-mail. Set one in SQL Server Agent Properties › Alert System.',
   testSysadmin: 'Only sysadmin can send a test e-mail through SQL Server Agent\'s profile.',
