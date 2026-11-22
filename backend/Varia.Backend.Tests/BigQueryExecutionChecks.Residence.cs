@@ -63,6 +63,7 @@ internal static partial class BigQueryExecutionChecks
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
         ForkedPlans(check);
+        await CopySaveAsync(check);
     }
 
     /// <summary>Forks of one column plan decode side by side exactly as one plan decodes alone (block fetches run in parallel).</summary>
@@ -1125,20 +1126,6 @@ internal static partial class BigQueryExecutionChecks
             await RefusesDiff(memoryId, id);
             await Refuses("results.diffSeek", new JsonObject { ["viewId"] = 1, ["partnerOf"] = 0 });
             check(refusals.Count == 0, "every reader of stored pages answers REMOTE_RESULT for a windowed result: " + string.Join("; ", refusals));
-            var set = harness.Service.Results.Find(id)!;
-            string? leased;
-            using (var context = new RequestContext(3, "results.copy", RequestLane.Results, 0, 16L << 20, sendData: (owner, _, body) => owner.Grant((uint)body.Length)))
-            {
-                var copy = new JsonObject
-                {
-                    ["resultId"] = id, ["parts"] = new JsonArray(new JsonObject { ["rows"] = new JsonArray(new JsonArray(0, 1)), ["columns"] = new JsonArray(new JsonArray(0, 1)) }),
-                    ["headers"] = false, ["eol"] = "lf", ["maxBytes"] = 1000
-                };
-                using var document = JsonDocument.Parse(copy.ToJsonString());
-                try { await harness.Service.DispatchAsync("results.copy", document.RootElement.Clone(), Wire, context); leased = "ok"; }
-                catch (RequestException error) { leased = error.Code; }
-            }
-            check(leased == "REMOTE_RESULT" && set.Leases == 0, "Copy and Save's lease refuses a windowed result: " + leased);
 
             harness.Service.Results.Release([id, memoryId]);
             check(harness.Service.Results.WindowCacheBytes == 0 && harness.Service.Results.UsedBytes == 0, "closing a windowed result gives back its cache: " + harness.Service.Results.UsedBytes);
