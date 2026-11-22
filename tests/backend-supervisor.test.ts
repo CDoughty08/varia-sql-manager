@@ -323,7 +323,10 @@ describe('BackendSupervisor restarts', () => {
     expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.cancel' }))
     expect(backends).toHaveLength(1)
     void stopping.catch(() => undefined)
-    // A Stop for a run queued for the next backend waits for it rather than reach the old one.
+    // A Stop for a run queued for the next backend waits for it rather than reach the old one; so does a run on a new
+    // connection, while one on the old backend's connection is lost with it.
+    const newConnection = value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    const oldRun = failure(value.request('query.execute', { connectionId: connected.id, sessionId: '66666666-6666-4666-8666-666666666666', queryId: '77777777-7777-4777-8777-777777777777', sql: 'SELECT 1', maxRows: 1, maxResultSets: 1 } as never))
     const queued = value.request('query.cancel', { queryId: '55555555-5555-4555-8555-555555555555' } as never)
     await advance(0)
     expect(backends[0].requests.filter(request => request.method === 'query.cancel')).toHaveLength(1)
@@ -337,6 +340,11 @@ describe('BackendSupervisor restarts', () => {
     await Promise.all([first, second, third])
     await advance(0)
     expect(backends).toHaveLength(2)
+    expect(await oldRun).toMatchObject({ code: 'CONNECTION_LOST' })
+    await newConnection
+    await advance(0)
+    expect(backends[1].requests.map(request => request.method)).toEqual(expect.arrayContaining(['connections.connect', 'query.cancel']))
+    expect(backends[1].requests.map(request => request.method)).not.toContain('query.execute')
     expect(value.state).toMatchObject({ status: 'ready', generation: 2 })
     // An unresponsive backend is restarted at once, without asking it to end sessions.
     await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
