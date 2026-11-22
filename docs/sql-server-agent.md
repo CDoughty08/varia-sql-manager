@@ -112,7 +112,7 @@ later lanes, behind the same gate until 0.11.0.
   edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Alerts and Operators folders'
   menus or the palette) opens the grid (read-only past the notifications it reads at once): one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
   Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its side pane opens
-  the selected operator, sends a test e-mail or deletes it, and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
+  the selected operator, sends a test e-mail or deletes it (not while the grid is read-only, when it cannot count what notifies the operator), and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
   creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if
   one is picked. **Send test e-mail** runs `sp_notify_operator` through Agent's own Database Mail profile, refused before anything
   is sent when Agent has none; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document

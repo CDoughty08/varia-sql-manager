@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   agentAlertChangeCount, agentAlertCommandEntries, agentAlertProblems, agentAlertSavable, agentAlertSave, agentAlertSaveSchema, agentRecommendedSchema, initialAgentAlertDraft,
@@ -14,7 +15,7 @@ import { agentLimits } from '../src/shared/agent/catalog'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { agentObjectText } from '../src/renderer/src/agent/AlertOperatorDocumentService'
-import { gridStep, nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
+import { deleteBlocked, gridStep, nextMethods } from '../src/renderer/src/agent/OperatorsDocument'
 import { testBlocked, timeText, timeValue } from '../src/renderer/src/agent/OperatorDocument'
 import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -171,6 +172,10 @@ describe("the operator document's and grid's shared rules", () => {
     expect([4, 5, 7, 6].map(nextMethods)).toEqual([5, 7, 6, 4])
     // One tab stop: the arrows move it within the grid and stop at its edges; Home and End go to a row's ends, with Ctrl to the corners.
     expect(gridStep('ArrowDown', false, { row: 0, column: 1 }, 3, 2)).toEqual({ row: 1, column: 1 })
+    expect(deleteBlocked(0, gridModel())).toBeUndefined()
+    expect(deleteBlocked(1, gridModel())).toBe(agentObjectText.saveFirst)
+    expect(deleteBlocked(0, gridModel({ readOnly: 'partial' }))).toBe('partial')
+    expect(readFileSync('src/renderer/src/agent/AlertDocument.tsx', 'utf8')).toContain('id={ids.includeIn} role="group" aria-labelledby={`${ids.includeIn}-label`}')
     expect(gridStep('ArrowRight', false, { row: 0, column: 1 }, 3, 2)).toEqual({ row: 0, column: 1 })
     expect(gridStep('End', true, { row: 0, column: 0 }, 3, 2)).toEqual({ row: 2, column: 1 })
     expect(gridStep('Home', false, { row: 2, column: 1 }, 3, 2)).toEqual({ row: 2, column: 0 })

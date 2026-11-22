@@ -185,7 +185,7 @@ function OptionsSection({ state, model, draft, editable, problems, service }: Pr
   const delay = { description: agentAlertText.delayHint, ...fieldText('delay', problems) }
   return <div className="properties-fields agent-alert-options">
     <PropertyField id={ids.includeIn} label="Include the error text in" labelFor={false} description="Which notifications carry the error's own message." {...fieldText('includeIn', problems)}>
-      <span className="agent-alert-include" id={ids.includeIn}>
+      <span className="agent-alert-include" id={ids.includeIn} role="group" aria-labelledby={`${ids.includeIn}-label`}>
         {methodChoices.map(choice => <label key={choice.bit}><input type="checkbox" checked={(draft.includeIn & choice.bit) !== 0} disabled={!editable} onChange={() => update({ includeIn: draft.includeIn ^ choice.bit })} /> {choice.label}</label>)}
       </span>
     </PropertyField>

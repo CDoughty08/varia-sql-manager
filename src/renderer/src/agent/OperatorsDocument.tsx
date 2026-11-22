@@ -21,6 +21,9 @@ export const nextMethods = (methods: number): number => {
   return (paged === 0 ? notifyEmail : paged === notifyEmail ? notifyEmail | notifyPager : paged === (notifyEmail | notifyPager) ? notifyPager : 0) | (methods & notifyNetSend)
 }
 /** The grid's one tab stop moves by arrow keys, Home and End (a row's first and last cell) and Ctrl+Home and Ctrl+End (the corners). */
+/** Why Delete… waits: unsaved changes, or a grid read-only because its notifications are partial or unread, where the dialog's count of uses could say nothing notifies an operator that something does. */
+export const deleteBlocked = (changes: number, model: Pick<AgentOperatorsModel, 'readOnly'>): string | undefined => changes > 0 ? agentObjectText.saveFirst : model.readOnly
+
 export function gridStep(key: string, ctrl: boolean, at: { readonly row: number; readonly column: number }, rows: number, columns: number): { row: number; column: number } | undefined {
   const clamp = (value: number, size: number) => Math.max(0, Math.min(size - 1, value))
   switch (key) {
@@ -99,7 +102,7 @@ function SidePane({ state, model, operator, service, onDelete }: { readonly stat
     <p className="agent-operators-side-actions">
       <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }), 'The operator could not be opened.') }}><Icon name="go-to-file" />Open</button>
       <button type="button" title={testBlocked} disabled={!!testBlocked || !service.canReload(state.id)} onClick={() => void service.sendTest(state.id, operator)}><Icon name="agent-operator" />Send test e-mail</button>
-      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || state.changes > 0} title={state.changes > 0 ? agentObjectText.saveFirst : undefined} onClick={onDelete}><Icon name="trash" />Delete…</button>}
+      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || !!deleteBlocked(state.changes, model)} title={deleteBlocked(state.changes, model)} onClick={onDelete}><Icon name="trash" />Delete…</button>}
     </p>
     {testBlocked && <p className="field-note">{testBlocked}</p>}
   </aside>
