@@ -811,6 +811,33 @@ describe("the job document's Schedules section", () => {
     await jobDocuments.save(id)
     expect(executes().at(-1)).toMatchObject({ agentJob: { schedules: { attach: [{ id: 2, version: 9, modified: '2026-11-21T00:00:00.000' }] } } })
   })
+  it("holds a New Job's Save until its STALE re-read lands, so that read's picks and message belong to the next save", async () => {
+    const { jobDocuments, answers, api, executes } = jobWorkbench({ ...job, job: undefined, schedules: [] })
+    const id = jobDocuments.newJob('c1')
+    await settled()
+    jobDocuments.startBlank(id)
+    jobDocuments.updateDraft(id, { name: 'Fresh' })
+    jobDocuments.ensureShared(id)
+    await settled()
+    jobDocuments.attachSchedule(id, jobDocuments.get(id)!.shared!.model!.schedules[1])
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false, field: 'schedules' } } })
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const describe = api.describeObject.getMockImplementation()!
+    api.describeObject.mockImplementationOnce(async params => { await gate; return describe(params) })
+    expect(await jobDocuments.save(id)).toBe(false)
+    await settled()
+    expect(jobDocuments.get(id)?.rebasing).toBe(true)
+    expect(jobDocuments.canSave(id)).toBe(false)
+    const sent = executes().length
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(executes()).toHaveLength(sent)
+    release()
+    await settled()
+    expect(jobDocuments.get(id)?.rebasing).toBeUndefined()
+    expect(jobDocuments.get(id)?.error?.message).toBe(jobDocumentText.pickedChanged)
+    expect(jobDocuments.canSave(id)).toBe(true)
+  })
   it("says which of a New Job's picked schedules were deleted after a STALE save, and when they could not be read again", async () => {
     const { jobDocuments, answers, setShared, api } = jobWorkbench({ ...job, job: undefined, schedules: [] })
     const id = jobDocuments.newJob('c1')

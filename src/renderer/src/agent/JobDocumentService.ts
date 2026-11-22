@@ -73,6 +73,8 @@ export interface JobDocumentState {
   readonly scheduleSearch?: string
   readonly shared?: SharedSchedules
   readonly scheduleJobs?: Readonly<Record<number, ScheduleJobsRead>>
+  /** A New Job's STALE re-read of the shared schedules is on its way: Save waits for it, so its picks and message belong to that save. */
+  readonly rebasing?: true
 }
 /** The shared schedules a job's Schedules section offers to attach, as one `agentSchedules` describe read them. */
 export interface SharedSchedules { readonly state: 'loading' | 'ready' | 'failed'; readonly model?: AgentSchedulesModel; readonly error?: string }
@@ -334,7 +336,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   canSave(id: string): boolean {
     const state = this.get(id)
     if (!state?.model || !state.draft || !this.canEdit(id) || !this.live(id)) return false
-    return (!state.model.job || state.changes > 0) && agentJobSavable(this.problems(id))
+    return !state.rebasing && (!state.model.job || state.changes > 0) && agentJobSavable(this.problems(id))
   }
   save(id: string): Promise<boolean> {
     const running = this.saving.get(id)
@@ -395,7 +397,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     // read lands, says what moved or why nothing did; it names no field, so moving the picks does not clear it.
     if (!state.model.job) {
       this.patch(id, { phase: 'ready', error: { code: refusal.code, retryable: refusal.retryable, message: refusal.message }, ...this.restartScheduleReads(id) })
-      if (!this.ensureShared(id, true, refusal)) this.patch(id, { error: { code: refusal.code, retryable: refusal.retryable, message: jobDocumentText.pickedUnread(jobDocumentText.closed) } })
+      if (this.ensureShared(id, true, refusal)) { if (this.get(id)?.shared?.state === 'loading') this.patch(id, { rebasing: true }) }
+      else this.patch(id, { error: { code: refusal.code, retryable: refusal.retryable, message: jobDocumentText.pickedUnread(jobDocumentText.closed) } })
       return
     }
     const requestId = this.begin(id, 'describe')
@@ -652,7 +655,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       if (!this.get(id) || this.scheduleGeneration(id) !== generation) return
       const model = result.ok ? result.value.agentSchedules : undefined
       const error = !result.ok ? result.error : result.value.error?.message
-      this.patch(id, { shared: model && !error ? { state: 'ready', model } : { state: 'failed', error: error ?? jobScheduleText.listFailed } })
+      this.patch(id, { shared: model && !error ? { state: 'ready', model } : { state: 'failed', error: error ?? jobScheduleText.listFailed }, rebasing: undefined })
       const draft = this.get(id)?.draft
       let gone = 0
       if (rebase && model && !error && draft) {
@@ -687,11 +690,11 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   private scheduleGeneration(id: string): number { return this.scheduleGenerations.get(id) ?? 0 }
   /** Starts the Schedules section's reads over: cancels those on their way, drops what they would answer and forgets what was read. */
-  private restartScheduleReads(id: string): Pick<JobDocumentState, 'shared' | 'scheduleJobs'> {
+  private restartScheduleReads(id: string): Pick<JobDocumentState, 'shared' | 'scheduleJobs' | 'rebasing'> {
     this.cancel([...this.scheduleReads.get(id) ?? []])
     this.scheduleReads.get(id)?.clear()
     this.scheduleGenerations.set(id, this.scheduleGeneration(id) + 1)
-    return { shared: undefined, scheduleJobs: undefined }
+    return { shared: undefined, scheduleJobs: undefined, rebasing: undefined }
   }
   private async scheduleRead(id: string, request: { readonly connectionId: string; readonly dialog: 'agentSchedules'; readonly target: ObjectRef; readonly schedule?: number }) {
     const requestId = this.newId()
