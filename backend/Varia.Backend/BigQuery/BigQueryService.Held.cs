@@ -150,8 +150,11 @@ internal sealed partial class BigQueryService
     /// The identity check before query.attach reads a job (docs/bigquery.md, Re-attaching to jobs): jobs.list without
     /// allUsers lists only the caller's jobs, so one listing over the job's creation time must hold its id. Reading the
     /// creation time needs jobs.get, so a 403 or 404 there means another principal's job too. AUTH_IDENTITY either way.
+    /// jobs.list needs bigquery.jobs.list, which the Job User role lacks: a 403 there is PERMISSION_DENIED naming it, and the
+    /// job is left running (not AUTH_IDENTITY, which would let go of a job that may well be the user's), unless this backend
+    /// inserted the job itself (`inserted`: the tab's own held job), which the listing would only confirm.
     /// </summary>
-    internal async Task<Job> OwnJobAsync(BigQueryConnection connection, string jobId, string? location, CancellationToken token)
+    internal async Task<Job> OwnJobAsync(BigQueryConnection connection, string jobId, string? location, CancellationToken token, bool inserted = false)
     {
         var project = connection.Options.Project;
         Job job;
@@ -169,7 +172,14 @@ internal sealed partial class BigQueryService
             request.Projection = Google.Apis.Bigquery.v2.JobsResource.ListRequest.ProjectionEnum.Minimal;
             request.MaxResults = 1000;
             request.PageToken = pageToken;
-            var answer = await ReadAsync(t => request.ExecuteAsync(t), token);
+            JobList answer;
+            try { answer = await ReadAsync(t => request.ExecuteAsync(t), token); }
+            catch (GoogleApiException error) when (error.HttpStatusCode == HttpStatusCode.Forbidden)
+            {
+                // The tab's own held job, which this backend inserted on this connection: the listing only confirms it.
+                if (inserted) return job;
+                throw new RequestException("PERMISSION_DENIED", "Re-attaching checks that this account started the BigQuery job, which needs the bigquery.jobs.list permission (the BigQuery User role grants it; Job User does not). Varia left the job running.");
+            }
             if (answer.Jobs?.Any(item => item.JobReference?.JobId == jobId) == true) return job;
             pageToken = answer.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next && !next.Any(char.IsControl) ? next : null;
             if (pageToken is null) break;
