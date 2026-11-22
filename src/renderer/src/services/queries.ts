@@ -167,6 +167,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   setCostGate(gate: CostGate): void { this.costGate = gate }
   /** Stops a run still waiting on its estimate or cost prompt (nothing was sent): the tab is as it was. */
+  /** Whether the tab's run is still in its estimate or cost prompt (nothing sent yet). */
+  private isGated(tabId: string): boolean { const running = this.getSnapshot()[tabId]?.running; return !!running && this.gated.get(tabId)?.queryId === running.queryId }
   private stopGated(tabId: string, queryId: string): boolean {
     const gated = this.gated.get(tabId)
     if (gated?.queryId !== queryId) return false
@@ -214,7 +216,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const state = this.getSnapshot()[tabId], known = new Set(state?.jobs?.map(job => job.jobId))
     this.update(tabId, { ...state, jobs: [...state?.jobs ?? [], ...jobs.filter(job => !known.has(job.jobId))] })
     const running = jobs.filter(job => job.state === 'running' && !job.detached)
-    if (running.length && !this.canExecute(tabId)) this.addSessionMessage(tabId, restoredJobRunning(running.map(job => job.jobId)))
+    // Only a tab that will not reconnect by itself is told to Reconnect: one that will re-attaches as it connects.
+    const document = this.documents.get(tabId)
+    if (running.length && !this.connected(tabId) && !(isQueryDocument(document) && document?.attachWanted)) this.addSessionMessage(tabId, restoredJobRunning(running.map(job => job.jobId)))
     this.reattach()
   }
   /**
@@ -326,7 +330,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (!isQueryDocument(document) || (connection ? connection.providerId !== 'bigquery' : document?.provider !== 'bigquery')) return false
     const state = this.getSnapshot()[id]
     // A run still in its estimate or cost prompt sent nothing: the prompt stops it like any query.
-    if (state?.running && state.running.kind !== 'estimate' && this.gated.get(id)?.queryId !== state.running.queryId) return true
+    if (state?.running && state.running.kind !== 'estimate' && !this.isGated(id)) return true
     const jobs = state?.jobs ?? []
     if (!jobs.length) return false
     if (jobs.some(job => !job.detached) || !this.connected(id)) return true
@@ -709,7 +713,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     for (const tab of candidates.filter(candidate => candidate.holding)) {
       const state = this.getSnapshot()[tab.id], jobIds = this.heldJobIds(tab.id).slice(0, sessionPromptLimits.jobIds)
       // A job it does not run is one left running (detached), or a restored one not re-attached yet.
-      const following = tab.running && !!state?.running, estimateBytes = following ? state.running!.estimateBytes : undefined
+      const following = tab.running && !!state?.running && !this.isGated(tab.id), estimateBytes = following ? state.running!.estimateBytes : undefined
       tab.job = { elapsedMs: tab.running && tab.operation ? Math.max(0, this.now() - tab.operation.startedAt) : 0, ...following ? {} : state?.jobs?.length && state.jobs.every(job => job.detached) ? { detached: true as const } : { unattached: true as const }, ...estimateBytes !== undefined ? { estimateBytes } : {}, ...jobIds.length ? { jobIds } : {} }
       // Its session is asked about only through its job: Cancel the job rolls a transaction back, Leave it running keeps it.
       tab.state = nothingOpen
@@ -743,7 +747,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const answer = open.length ? await ask(open) : 'rollback'
     if (answer === 'cancel') return undefined
     // A BigQuery job is cancelled or left by its session's close (cancelJob, keepJob), never by query.cancel here.
-    const stopping = [...running.filter(tab => !tab.job), ...estimates]
+    // A run still in its estimate or cost prompt is stopped even beside held jobs: it sent nothing.
+    const stopping = [...running.filter(tab => !tab.job || this.isGated(tab.id)), ...estimates]
     return {
       plan: new Map(tabs.map(tab => [tab.id, tab.job ? first === 'leave' ? 'leave' : 'cancelJob' : !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
       stopping: stopping.map(tab => ({ id: tab.id, queryId: tab.operation!.queryId })),

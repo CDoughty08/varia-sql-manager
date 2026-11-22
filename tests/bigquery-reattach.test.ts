@@ -367,6 +367,36 @@ describe('the prompt beside a cost gate and held jobs', () => {
     await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
     gate.resolve(false)
   })
+  it('stops a run in its cost prompt beside a job the tab holds, and asks only about the held job', async () => {
+    const f = fixture(), gate = deferred<boolean>()
+    // A job left running by Close Results, which the backend still sees running.
+    const pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const first = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await first
+    f.queryApi.querySessionState.mockResolvedValue({ ok: true, value: { transactionCount: 0, checked: false, job: 'running' } })
+    f.queries.setCostGate(() => gate.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    const prepared = await f.queries.prepareSessions('disconnect', [f.tab.id])
+    expect(f.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ detached: true })
+    expect(prepared?.plan.get(f.tab.id)).toBe('cancelJob')
+    expect(prepared?.stopping.map(tab => tab.id)).toEqual([f.tab.id])
+    await f.queries.cancelPreparedSessions(prepared!)
+    await run
+    expect(f.queries.isRunning(f.tab.id)).toBe(false)
+    expect(f.queryApi.execute).toHaveBeenCalledTimes(1)
+  })
+  it('tells a restored tab to Reconnect only when it will not reconnect by itself', () => {
+    const f = fixture({ connected: false })
+    f.documents.update(f.tab.id, { attachWanted: true })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    expect(f.results.addMessage).not.toHaveBeenCalled()
+  })
   it("cancels from records only the jobs the backend does not know: never a connected tab's job left running, nor the running request's", async () => {
     const f = fixture(), cancelRestoredJobs = vi.fn<VariaApi['cancelRestoredJobs']>(async () => ({ ok: true, value: { jobs: [{ jobId: 'job_2', cancelled: false, error: 'x' }, { jobId: 'job_old', cancelled: true }], uncancellable: [] } }))
     const notifyJobs = vi.fn()
