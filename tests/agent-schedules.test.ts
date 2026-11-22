@@ -14,6 +14,7 @@ import { commandDescriptor } from '../src/shared/commands/catalog'
 import { submenus } from '../src/shared/commands/menus'
 import type { ApiResult } from '../src/shared/contracts'
 import { newScheduleKey, schedulesText, visibleSchedules } from '../src/renderer/src/agent/SchedulesService'
+import { jobDocumentText } from '../src/renderer/src/agent/JobDocumentService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
@@ -787,6 +788,28 @@ describe("the job document's Schedules section", () => {
     await settled()
     expect(jobDocuments.get(id)!.draft!.schedules.some(entry => entry.id === 2)).toBe(false)
     expect(jobDocuments.get(id)?.notice).toBe(jobScheduleText.pickedGone(1))
+  })
+  it("reads a New Job's picked schedules again after a STALE save, so the next save names their versions instead of throwing the job away", async () => {
+    const { jobDocuments, answers, setShared, executes } = jobWorkbench({ ...job, job: undefined, schedules: [] })
+    const id = jobDocuments.newJob('c1')
+    await settled()
+    jobDocuments.startBlank(id)
+    jobDocuments.updateDraft(id, { name: 'Fresh' })
+    jobDocuments.ensureShared(id)
+    await settled()
+    jobDocuments.attachSchedule(id, jobDocuments.get(id)!.shared!.model!.schedules[1])
+    const picked = jobDocuments.get(id)!.draft!.schedules[0]!
+    jobDocuments.updateSchedule(id, picked.key, { ...picked.fields, activeStartTime: 10000 })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false, field: 'schedules' } } })
+    setShared(schedulesModel({ schedules: [record(1), record(2, { version: 9, modified: '2026-11-21T00:00:00.000' })] }))
+    expect(await jobDocuments.save(id)).toBe(false)
+    await settled()
+    expect(jobDocuments.get(id)).toMatchObject({ phase: 'ready', draft: { name: 'Fresh' }, error: { code: 'STALE', message: jobDocumentText.pickedChanged } })
+    expect(jobDocuments.get(id)?.stale).toBeUndefined()
+    expect(jobDocuments.get(id)!.draft!.schedules[0]).toMatchObject({ id: 2, attached: true, base: { version: 9 }, fields: { activeStartTime: 10000 } })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
+    await jobDocuments.save(id)
+    expect(executes().at(-1)).toMatchObject({ agentJob: { schedules: { attach: [{ id: 2, version: 9, modified: '2026-11-21T00:00:00.000' }] } } })
   })
   it("neither removes nor copies a job's schedule the login cannot see, and attaches no schedule without a guard", async () => {
     const unseen = record(7, { name: 'Theirs', owner: undefined, version: undefined, modified: undefined })

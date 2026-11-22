@@ -102,7 +102,8 @@ export const jobDocumentText = {
   lost: 'The connection closed while the job was being saved, so whether it was saved is unknown. Reload the job to check.',
   backendLost: 'The SQL backend stopped while the job was being saved, so whether it was saved is unknown. Reload the job to check.',
   copyFailed: 'The job to copy could not be read:',
-  replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.'
+  replaced: 'The job was deleted and another job now has its name, so your changes were not saved. Reload opens the new job; your changes are discarded.',
+  pickedChanged: 'A schedule you attached was changed since it was read, so the job was not created. The attached schedules now show it as it is, with your edits kept: check them and save again.'
 } as const
 export const jobSections: readonly { readonly id: AgentJobSection; readonly title: string }[] = [
   { id: 'general', title: 'General' }, { id: 'schedules', title: 'Schedules' }, { id: 'notifications', title: 'Notifications' }, { id: 'targets', title: 'Targets' }, { id: 'alerts', title: 'Alerts' }
@@ -387,6 +388,14 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private async compare(id: string, refusal: ActionError, followed = false): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.model || !state.draft || !connectionId) return
+    // A new job has no version of its own: only an attached schedule's guard can refuse it. Its pick is read again and moved onto the
+    // schedules as they are now (Reload would discard the new job), so the next Save names their versions. The message names no field,
+    // so moving the picks does not clear it.
+    if (!state.model.job) {
+      this.patch(id, { phase: 'ready', error: { code: refusal.code, retryable: refusal.retryable, message: jobDocumentText.pickedChanged }, ...this.restartScheduleReads(id) })
+      this.ensureShared(id, true)
+      return
+    }
     const requestId = this.begin(id, 'describe')
     const result = await this.call(() => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentJob', target: state.target }))
     if (!this.end(id, requestId)) return

@@ -115,7 +115,8 @@ Schedules document manages the shared schedules. The job document's Steps sectio
   `sp_update_schedule` for each edited one (after the attach, which leaves the schedule's version as it is, so a picked schedule
   edited in the same save passes both guards), and `sp_add_jobschedule` for each new one. Each guard compares the schedule's
   `version_number` and `date_modified` (`sysschedules_localserver_view`, `UPDLOCK, HOLDLOCK`) and THROWs 50011 with the call's
-  index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits.
+  index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits. A new job has nothing to
+  compare: its attached schedules are read again and take the new versions, keeping your edits, and the next Save names them.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
   jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and

@@ -55,7 +55,7 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
   const changed = (...keys: (keyof AgentScheduleFields)[]) => !!base && keys.some(key => base[key] !== fields[key])
   const chosen = matchingPreset(fields)
   const recurring = recurringTypes.includes(fields.freqType)
-  const name = { description: 'Unique on this server; jobs that share the schedule show it.', ...textOf(problems, 'name') }
+  const name = { description: 'Jobs that share the schedule show it; names need not be unique.', ...textOf(problems, 'name') }
   const frequency = { description: 'How often the schedule repeats.', ...textOf(problems, 'frequency', 'interval', 'days') }
   const daily = { description: 'When in the day it runs: once, or every so often between two times.', ...textOf(problems, 'dailyFrequency', 'startTime', 'endTime') }
   const duration = { description: 'The dates the schedule is used between.', ...textOf(problems, 'startDate', 'endDate') }
