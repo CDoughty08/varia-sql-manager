@@ -41,9 +41,10 @@ export function continues(log: BackupSetRow, from: BackupSetRow): boolean {
 const basedOn = (differential: BackupSetRow, full: BackupSetRow) => differential.databaseBackupLsn === full.checkpointLsn && lsn(differential.lastLsn) > lsn(full.lastLsn) && sameFamily(differential, full)
 
 /**
- * The chain that ends with a set: a full, a differential with the latest full it is based on, or a log back through the sets
- * it continues to the latest base (a differential with its full, or a full). With `limit`, every set before the end finished
- * by it. Bases are tried before logs, as SMO prefers a differential to the logs it covers; a dead end tries the next set.
+ * The chain for the first of `ends` that has one: a full, a differential with the latest of `fulls` it is based on, or a log
+ * back through the sets it continues to the latest base (a differential with its full, or a full). With `limit`, every set
+ * before the end finished by it. Bases are tried before logs, as SMO prefers a differential to the logs it covers; a dead end
+ * tries the next set. A set that reaches no full is remembered across ends, so each set is searched at most once.
  */
 function firstChain(ends: readonly BackupSetRow[], candidates: readonly BackupSetRow[], fulls: readonly BackupSetRow[], limit?: string): BackupSetRow[] | undefined {
   // A log can continue only a predecessor ending in [firstLSN, lastLSN). Searching just that range also leaves
