@@ -66,7 +66,7 @@ Varia's backend, not SQL Tools.
 These SQL Server commands read the query's tokens, so text in strings, comments, variables, temporary tables and quoted
 names never changes. Each is one undo step, on the editor's context menu, **Edit › Advanced** and the command palette.
 
-- **Toggle Brackets** (**Ctrl+[**, **⌘[** on macOS) brackets every name in the selection, or in the whole query when
+- **Toggle Brackets** (**Ctrl+[**, **⌘[** on macOS) is available in SQL Server queries. It brackets every name in the selection, or in the whole query when
   nothing is selected: `dbo.Orders o` becomes `[dbo].[Orders] [o]`. When every name already has brackets, it takes them off
   wherever that is safe, keeping them on reserved keywords (`[Order]`), names that are not regular identifiers
   (`[Order Lines]`, `[1st]`) and `[GO]`. Keywords, built-in function names (a name a parenthesis follows, except a table a
