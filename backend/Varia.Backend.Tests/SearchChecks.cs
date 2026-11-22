@@ -88,6 +88,32 @@ internal static class SearchChecks
         check(Make("get.*s$", regex: true).Find("usp_GetOrders", 0, out at, out length) && at == 4 && length == 9, "a regular expression ignores case by default");
         check(!Make("get.*s$", caseSensitive: true, regex: true).Find("usp_GetOrders", 0, out _, out _), "a regular expression with Match Case keeps case");
         check(Make("ord\\w*", wholeWord: true, regex: true).Find("x.ord_id, ord", 0, out at, out length) && at == 2 && length == 6, "a regular expression with Whole Word keeps whole identifiers");
+        var stretch = Make("order.*?id", wholeWord: true, regex: true);
+        const string ids = "OrderIdArchiveId OrderXId";
+        check(stretch.Find(ids, 0, out at, out length) && at == 0 && length == 16
+            && Make("a.*?b", wholeWord: true, regex: true).Find("abab", 0, out var second, out var width) && second == 0 && width == 4,
+            "a whole-word regular expression stretches its first match to the word boundary");
+        check(stretch.Find(ids, 1, out at, out length) && at == 17 && length == 8 && stretch.Find(ids, 16, out at, out length) && at == 17 && length == 8 && !stretch.Find(ids, 18, out _, out _),
+            "a whole-word regular expression reports offsets in the text from any start");
+        check(Make("^Order.*?Id$", wholeWord: true, regex: true).Find("x\nOrderIdArchiveId\ny", 0, out at, out length) && at == 2 && length == 16
+            && Make("^a.*?b$", wholeWord: true, regex: true).Find("abab", 0, out at, out length) && at == 0 && length == 4
+            && !Make("^ab", wholeWord: true, regex: true).Find(" ab", 0, out _, out _),
+            "a whole-word regular expression keeps ^ and $ at line ends and the ends of the text");
+        check(Make("zz|order.*?id", wholeWord: true, regex: true).Find(ids, 0, out at, out length) && at == 0 && length == 16, "a whole-word alternation applies the boundaries to every branch");
+        check(Make("x*", wholeWord: true, regex: true).Find("ab  xx", 0, out at, out length) && at == 4 && length == 2
+            && !Make(" Id", wholeWord: true, regex: true).Find("a Id", 0, out _, out _)
+            && Make("Id ", wholeWord: true, regex: true).Find("Id  x", 0, out at, out length) && at == 0 && length == 3,
+            "a whole-word regular expression skips empty matches and judges a match's own separators by their neighbours");
+        check(Make("\\AOrder", wholeWord: true, regex: true).Find("Order x", 0, out at, out length) && at == 0 && length == 5
+            && SearchMatcher.TextAnchored("\\Ax") && !SearchMatcher.TextAnchored("a\\\\A") && Make("(?x) order # note", wholeWord: true, regex: true).Find("an order", 0, out at, out _) && at == 3,
+            "a whole-word regular expression with \\A or a (?x) comment still matches");
+        check(Make("(?-m)^Order", wholeWord: true, regex: true).Find("Order x", 0, out at, out length) && at == 0 && length == 5
+            && Make("(?i-m:Id$)", wholeWord: true, regex: true).Find("x Id\n", 0, out at, out length) && at == 2 && length == 2
+            && SearchMatcher.TextAnchored("(?s-m)a") && !SearchMatcher.TextAnchored("(?m-i)a") && !SearchMatcher.TextAnchored("\\(?-m)"),
+            "a whole-word regular expression with Multiline turned off keeps ^ and $ at the ends of the text");
+        check(SearchMatcher.Create("a(b", false, true, true, TimeSpan.FromSeconds(1)).Problem == SearchMatcher.Create("a(b", false, false, true, TimeSpan.FromSeconds(1)).Problem
+            && SearchMatcher.Create("a)|(b", false, true, true, TimeSpan.FromSeconds(1)).Problem is not null,
+            "Whole Word reports a regular expression's errors at the user's offsets and cannot close its group early");
         var (broken, problem) = SearchMatcher.Create("(abc", false, false, true, TimeSpan.FromSeconds(1));
         check(broken is null && problem is not null && problem.Contains("not closed", StringComparison.Ordinal), "an invalid regular expression is a value that says why");
         (broken, problem) = SearchMatcher.Create("(?<=a)b", false, false, true, TimeSpan.FromSeconds(1));
@@ -164,9 +190,9 @@ internal static class SearchChecks
     private static readonly ObjectIndexStatus Ready = new("ready", 2, 2, 7, 1, 0, [], true);
 
     private static ObjectSearchResult Search(ConnectionIndex index, string text, bool names = true, bool definitions = true, int limit = 200, HashSet<string>? kinds = null, string? database = null,
-        bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default, bool fuzzy = false) =>
+        bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default, bool fuzzy = false, bool regex = false) =>
         // The default budget is widened so a starved CI runner cannot turn a small search partial; Deadline sets its own.
-        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit, fuzzy), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits { SearchBudget = TimeSpan.FromMinutes(1) }, Ready, token);
+        IndexSearch.Run(index, new(text, false, wholeWord, regex, names, definitions, kinds, database, limit, fuzzy), Make(text, wholeWord: wholeWord, regex: regex), limits ?? new ObjectIndexLimits { SearchBudget = TimeSpan.FromMinutes(1) }, Ready, token);
 
     /// <summary>Fuzzy Match: how names split into words, the sound key, the bounded edit distance, and how approximate hits rank
     /// below exact ones, mark their words, honour Whole Word and dots, and leave definitions exact.</summary>
@@ -359,6 +385,9 @@ internal static class SearchChecks
         result = Search(index, "Order*s", names: false, wholeWord: true);
         check(result.Hits is [{ Definition: { Line: 3, Matches: 2 } match }] && match.Preview.Substring(match.Range[0], match.Range[1]) == "Orders",
             "a whole-word wildcard definition hit counts each whole match at its own offset: " + JsonSerializer.Serialize(result.Hits.Select(hit => hit.Definition)));
+        result = Search(index, "Order.*?s", names: false, wholeWord: true, regex: true);
+        check(result.Hits is [{ Definition: { Line: 3, Matches: 2 } regexMatch }] && regexMatch.Preview.Substring(regexMatch.Range[0], regexMatch.Range[1]) == "Orders",
+            "a whole-word regular expression definition hit counts each whole match at its own offset: " + JsonSerializer.Serialize(result.Hits.Select(hit => hit.Definition)));
         result = Search(index, "orders", kinds: ["view"]);
         check(result.Hits is [{ Object.Database: "Archive" }], "Kinds narrow a search");
         result = Search(index, "orders", database: "Sales", definitions: false);

@@ -348,21 +348,22 @@ internal sealed class SearchMatcher
     private readonly StringComparison comparison;
     private readonly Regex? regex;
     private readonly bool wholeWord;
-    private readonly bool boundedWildcard;
+    /// <summary>Whether the regex is a Whole word pattern wrapped in one separator on each side, run over padded input.</summary>
+    private readonly bool bounded;
     // Each search owns its matcher. Reuse the boundary buffer across its names and definitions.
     private char[] boundedInput = [];
     /// <summary>For a plain search, the longest run of its text without a dot or wildcard: a name the search can match with a
     /// dot must contain it, which spares building the qualified name of every object that cannot.</summary>
     private readonly string hint;
 
-    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex, bool plain)
+    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex, bool plain, bool bounded = false)
     {
         this.text = text;
         hint = plain ? text.Split(['.', '*', '?']).MaxBy(part => part.Length) ?? "" : "";
         comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         this.wholeWord = wholeWord;
         this.regex = regex;
-        boundedWildcard = plain && wholeWord && regex is not null;
+        this.bounded = bounded;
     }
 
     /// <summary>The matcher, or the reason the pattern cannot be one (a syntax error, or a construct NonBacktracking lacks).</summary>
@@ -376,17 +377,54 @@ internal sealed class SearchMatcher
             var pattern = Wildcard(literal);
             if (wholeWord)
             {
-                const string separator = @"(?-i:[^\p{L}\p{Nd}_@#$])";
                 // Only stars can match nothing. Whole Word requires a nonempty match.
                 if (literal.All(c => c == '*')) pattern = @"[\p{L}\p{Nd}_@#$]+";
-                pattern = separator + pattern + separator;
+                pattern = Separator + pattern + Separator;
             }
-            try { return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(pattern, options, timeout), true), null); }
+            try { return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(pattern, options, timeout), true, wholeWord), null); }
             catch (NotSupportedException) { return (null, "The wildcard pattern is too complex. Try a shorter pattern."); }
         }
-        try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(text, options, timeout), false), null); }
+        Regex own;
+        try { own = new Regex(text, options, timeout); }
         catch (ArgumentException error) { return (null, Problem(error)); }
         catch (NotSupportedException) { return (null, "Regular expressions here cannot use lookarounds, backreferences, atomic groups or conditionals."); }
+        // Checking each first match's neighbours would miss a longer whole-word match from the same start (Order.*?Id in
+        // OrderIdArchiveId), so the separators go in the pattern. The pattern was checked alone above, so its offsets in any
+        // error are the user's and the group cannot close early. \A, \z and \Z (and ^ or $ under (?-m)) cannot hold after a
+        // consumed separator, and a (?x) comment can swallow the group's end: those keep the neighbour check.
+        if (wholeWord && !TextAnchored(text))
+        {
+            try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(Separator + "(?:" + text + ")" + Separator, options, timeout), false, true), null); }
+            catch (ArgumentException) { }
+            catch (NotSupportedException) { }
+        }
+        return (new SearchMatcher(text, caseSensitive, wholeWord, own, false), null);
+    }
+
+    /// <summary>One character that is not an identifier character, compared exactly whatever the case option.</summary>
+    private const string Separator = @"(?-i:[^\p{L}\p{Nd}_@#$])";
+
+    /// <summary>Whether a pattern can name the ends of the whole input rather than of a line: \A, \z, \Z or \G, or an inline
+    /// option that turns Multiline off, after which ^ and $ do. A false positive only keeps the neighbour check.</summary>
+    internal static bool TextAnchored(string pattern)
+    {
+        for (var at = 0; at + 1 < pattern.Length; at++)
+        {
+            if (pattern[at] == '(' && pattern[at + 1] == '?')
+            {
+                var off = false;
+                for (var option = at + 2; option < pattern.Length && pattern[option] is 'i' or 'm' or 'n' or 's' or 'x' or '-'; option++)
+                {
+                    if (pattern[option] == '-') off = true;
+                    else if (off && pattern[option] == 'm') return true;
+                }
+                continue;
+            }
+            if (pattern[at] != '\\') continue;
+            if (pattern[at + 1] is 'A' or 'z' or 'Z' or 'G') return true;
+            at++;
+        }
+        return false;
     }
 
     /// <summary>A plain search's wildcards as a pattern: * any characters on one line (as few as reach the rest), ? one character,
@@ -437,11 +475,11 @@ internal sealed class SearchMatcher
     public bool Find(ReadOnlySpan<char> value, int start, out int index, out int length) =>
         FindPrepared(Prepare(value), start, out index, out length);
 
-    /// <summary>Whole-word wildcard patterns consume one separator on each side. Pad the true ends with separators so
-    /// the same pattern works at any offset. The span is valid until the next Prepare on this query's matcher.</summary>
+    /// <summary>Whole-word patterns consume one separator on each side. Pad the true ends with line breaks, which keep ^ and $
+    /// true there, so the same pattern works at any offset. The span is valid until the next Prepare on this query's matcher.</summary>
     internal ReadOnlySpan<char> Prepare(ReadOnlySpan<char> value)
     {
-        if (!boundedWildcard) return value;
+        if (!bounded) return value;
         var size = value.Length + 2;
         if (boundedInput.Length < size) boundedInput = new char[Math.Max(size, boundedInput.Length * 2)];
         var padded = boundedInput.AsSpan(0, size);
@@ -452,17 +490,17 @@ internal sealed class SearchMatcher
 
     internal bool FindPrepared(ReadOnlySpan<char> value, int start, out int index, out int length)
     {
-        if (boundedWildcard)
+        if (bounded)
         {
-            // In padded coordinates the preceding separator starts at the original match index.
-            if (start <= value.Length - 2)
+            // In padded coordinates the preceding separator starts at the original match index. A regex can match nothing
+            // between two separators, which Whole word does not count: look again from the next character.
+            while (start <= value.Length - 2)
             {
                 var matches = regex!.EnumerateMatches(value, start);
-                if (matches.MoveNext())
-                {
-                    (index, length) = (matches.Current.Index, matches.Current.Length - 2);
-                    return true;
-                }
+                if (!matches.MoveNext()) break;
+                (index, length) = (matches.Current.Index, matches.Current.Length - 2);
+                if (length > 0) return true;
+                start = index + 1;
             }
             (index, length) = (-1, 0);
             return false;
