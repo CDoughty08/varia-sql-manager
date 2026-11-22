@@ -19,7 +19,7 @@ export class BackendError extends Error {
 export const sentences = {
   lost: 'The SQL backend stopped before answering. The request was not retried.',
   lostQuery: "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection.",
-  lostLoad: 'The SQL backend stopped while a result was loading into memory. The load was not re-run, and the result is gone with the backend.',
+  lostLoad: 'The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter or a value list). It was not re-run, and the result is gone with the backend.',
   closing: 'The application is closing.',
   reloaded: 'The workbench was reloaded.',
   unsupportedProvider: 'This command is not available for this kind of connection.',

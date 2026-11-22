@@ -62,7 +62,9 @@ export const kindDialogActions = [
   'tableProperties',
   'agentProperties',
   'agentJob',
-  'agentSchedule'
+  'agentSchedule',
+  'agentProxy',
+  'credential'
 ] as const
 export type KindDialogAction = typeof kindDialogActions[number]
 export interface KindDialogActionSpec {
@@ -102,7 +104,9 @@ export const dialogIds = [
   'restartAgent',
   'agentProperties',
   'agentJob',
-  'agentSchedules'
+  'agentSchedules',
+  'agentProxy',
+  'credential'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -345,7 +349,16 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   },
   // The SQL Server Agent node: Start, Stop and Restart of its service, narrowed by agentServiceRules.
   // Its Properties (AG-8a) opens SQL Server Agent Properties for every login msdb lets read them; the describe says when it is read-only.
-  agent: { row: { startAgent: 'enabled', stopAgent: 'enabled', restartAgent: 'enabled', properties: 'enabled' }, dialogs: { properties: 'agentProperties' } }
+  agent: { row: { startAgent: 'enabled', stopAgent: 'enabled', restartAgent: 'enabled', properties: 'enabled' }, dialogs: { properties: 'agentProperties' } },
+  // A SQL Server Agent proxy (AG-8b): Rename (sp_update_proxy @new_name) and Delete (sp_delete_proxy) by its name and id; Properties opens the
+  // proxy document. Only sysadmin sees the Proxies folder, and msdb refuses anyone else's change as a value.
+  agentProxy: {
+    row: { rename: 'enabled', delete: 'enabled', properties: 'enabled' },
+    titles: { rename: 'Rename Proxy', delete: 'Delete Proxy' },
+    dialogs: { properties: 'agentProxy' }
+  },
+  // A credential on Security › Credentials (AG-8b): Properties opens the credential document, read-only without ALTER ANY CREDENTIAL.
+  credential: { row: { properties: 'enabled' }, dialogs: { properties: 'credential' } }
 }
 /** A verb's title on a kind: the kind's own (`titles`), else the action's. */
 export const actionTitle = (kind: NodeKind | 'folder', action: ObjectAction): string => (kind !== 'folder' && actionKindSpecs[kind]?.titles?.[action]) || objectActionSpecs[action].title
@@ -839,7 +852,11 @@ export const pageIds = [
   'schedules',
   'notifications',
   'targets',
-  'alerts'
+  'alerts',
+  'subsystems',
+  'principals',
+  'references',
+  'usedBy'
 ] as const
 export type PageId = typeof pageIds[number]
 export interface DialogPageSpec {
@@ -939,7 +956,19 @@ const dialogSpecData = {
   },
   // The Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc), which replaces SSMS's Manage Schedules: the grid of the
   // schedules the login may see, the selected one's editor and its jobs beside it. Each save is one `agentSchedule` action.
-  agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] }
+  agentSchedules: { title: 'Schedules', surface: 'document', titleFormat: 'plain', size: 'large', action: 'agentSchedule', pages: [page('schedules', 'Schedules')] },
+  // The proxy document (AG-8b, docs/agent-ui-rethink.md › rx-proxy): SSMS's Proxy Account Properties on one screen, its credential created in
+  // place. Save runs CREATE CREDENTIAL (when new), the proxy's msdb calls and its grants in one transaction.
+  agentProxy: {
+    title: 'Proxy Account Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'agentProxy',
+    pages: [page('general', 'General'), page('subsystems', 'Subsystems'), page('principals', 'Principals'), page('references', 'References')]
+  },
+  // The credential document (AG-8b, rx-credential): New Credential and Credential Properties, with what uses it. Save sends the identity and
+  // the secret together (ALTER CREDENTIAL resets the secret without one); the secret is never read back.
+  credential: {
+    title: 'Credential Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'credential',
+    pages: [page('general', 'General'), page('usedBy', 'Used by')]
+  }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -1093,7 +1122,11 @@ export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDial
   // The job document's Save (AG-6a): an existing job's changes, or New Job (target the Agent node). Agent runs on SQL Server and Managed Instance.
   agentJob: { title: 'Job Properties', dialog: 'agentJob', kind: 'agentJob', verb: 'properties', engines: onServers },
   // A schedule's save from the Schedules document or New › Schedule… (AG-6c): on the SQL Server Agent node, as New Job's.
-  agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers }
+  agentSchedule: { title: 'Schedules', dialog: 'agentSchedules', kind: 'agent', verb: 'properties', engines: onServers },
+  // The proxy document's Save (AG-8b): an existing proxy's changes, or New Proxy (target the Agent node). Managed Instance has no proxies.
+  agentProxy: { title: 'Proxy Account Properties', dialog: 'agentProxy', kind: 'agentProxy', verb: 'properties', engines: ['box'] },
+  // The credential document's Save (AG-8b): an existing credential's ALTER, or New Credential (target the server).
+  credential: { title: 'Credential Properties', dialog: 'credential', kind: 'credential', verb: 'properties', engines: onServers }
 }
 export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
 /** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */

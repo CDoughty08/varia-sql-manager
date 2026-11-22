@@ -33,6 +33,7 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultVisibilityService } from '../results/ResultVisibilityService'
 import { ResultsService } from '../results/ResultsService'
+import { RemoteViews } from '../results/remote-views'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
 import { PivotService } from '../results/PivotService'
@@ -118,7 +119,10 @@ import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
 import { SchedulesService } from '../agent/SchedulesService'
+import { ProxyDocumentService } from '../agent/ProxyDocumentService'
+import { CredentialDocumentService } from '../agent/CredentialDocumentService'
 import { agentContribution } from '../contributions/agent'
+import { agentProxyContribution } from '../contributions/agent-proxy'
 import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
@@ -282,6 +286,9 @@ export interface Workbench extends Disposable {
   readonly agentJobs: AgentJobStatusService
   readonly jobDocuments: JobDocumentService
   readonly schedules: SchedulesService
+  /** The proxy and Credential documents (AG-8b). */
+  readonly proxyDocuments: ProxyDocumentService
+  readonly credentialDocuments: CredentialDocumentService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
   /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
@@ -363,7 +370,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
   })
   const retainedPlans = new RetainedPlansService()
+  // Sorts, filters and value lists of results windowed in BigQuery, each after its estimate and the cost prompts (the cost
+  // service is built further down; the closure reads it when one runs).
+  const remoteViews = new RemoteViews({ api, client: resultClient, estimate: (tabId, remote, signal) => bigQueryCost.beforeRemote(tabId, remote, signal),
+    messages: (tabId, messages) => results.remoteMessages(tabId, messages) })
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'), memory: () => resultMemory.getSnapshot(),
+    remote: remoteViews,
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
@@ -529,6 +541,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, targetIdOf,
     focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : '[data-agent-schedules-focus]'}`)?.focus())
   })
+  // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
+  const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
+    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+  })
+  const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
+  const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
@@ -729,6 +748,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     agentJobs,
     jobDocuments,
     schedules,
+    proxyDocuments,
+    credentialDocuments,
     objectSearch,
     searchDetails,
     theme,
@@ -785,6 +806,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       agentJobs.dispose()
       jobDocuments.dispose()
       schedules.dispose()
+      proxyDocuments.dispose()
+      credentialDocuments.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
@@ -870,6 +893,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisContribution(workbench),
     activityContribution(workbench),
     agentContribution(workbench, { agentEnabled: api.agentPreview }),
+    agentProxyContribution(workbench, { agentEnabled: api.agentPreview }),
     searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)

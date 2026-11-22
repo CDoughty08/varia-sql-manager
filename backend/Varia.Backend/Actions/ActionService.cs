@@ -266,6 +266,10 @@ internal sealed partial class ActionService : IDisposable
         // New Job (AG-6a) describes the SQL Server Agent node: the job document's choices before there is a job.
         if (args.Dialog == "agentJob" && args.Target is { Kind: "agent" })
             return args.Target is { Name: null, Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } ? Target(args.Target, "agentProperties") : throw Invalid("target.");
+        // New Proxy (AG-8b) describes the SQL Server Agent node, New Credential the server.
+        if (args.Dialog == "agentProxy" && args.Target is { Kind: "agent" })
+            return args.Target is { Name: null, Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } ? Target(args.Target, "agentProperties") : throw Invalid("target.");
+        if (args.Dialog == "credential" && args.Target is { Kind: "server" }) return ServerTarget(args.Target);
         // New Login opens on the server: its action makes a login rather than acting on a row.
         if (args.Dialog == "newLogin") return ServerTarget(args.Target);
         // A server action's document (New Database) describes the server it makes something on.
@@ -279,8 +283,9 @@ internal sealed partial class ActionService : IDisposable
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
-    /// <summary>The actions whose actions.execute may carry passwords: New Login, and Login Properties (D2c).</summary>
-    private static readonly HashSet<string> SecretActions = new(["createLogin", "loginProperties"], StringComparer.Ordinal);
+    /// <summary>The actions whose actions.execute may carry passwords: New Login, and Login Properties (D2c); and a credential's secret: the
+    /// proxy document's new credential and the credential document (AG-8b).</summary>
+    private static readonly HashSet<string> SecretActions = new(["createLogin", "loginProperties", "agentProxy", "credential"], StringComparer.Ordinal);
 
     /// <summary>A password of at most loginLimits.password UTF-16 units, without U+0000 or an unpaired surrogate, here for every
     /// action that takes one, so none can forget it. The message names the member, never the value.</summary>
@@ -301,6 +306,11 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         // A schedule's save (AG-6c) validates itself.
         if (ValidateAgentSchedule(args) is { } scheduleTarget) return scheduleTarget;
+        // A credential's secret goes only with a credential's save, and is bounded there (CredentialSecret).
+        if (args.Secrets?.Secret is not null && args.Action is not ("agentProxy" or "credential")) throw Invalid("only a credential's save takes secrets.secret.");
+        // The proxy and credential documents (AG-8b) validate themselves, a proxy's Rename and Delete with them.
+        if (ValidateAgentProxy(args, script) is { } proxyTarget) return proxyTarget;
+        if (ValidateCredential(args, script) is { } credentialTarget) return credentialTarget;
         // The job document's Save (AG-6a) validates itself, before the job verbs, which take every other action on a job.
         if (ValidateAgentJob(args, script) is { } jobTarget) return jobTarget;
         // The Log File Viewer's Delete History (AG-5a) is no catalogue action and validates itself.
@@ -482,6 +492,9 @@ internal sealed partial class ActionService : IDisposable
                 _ when args.Dialog == catalog.Logins.Securables.EffectiveDescribe => DescribeEffectiveJobAsync(connection, target, args.Securable!, job),
                 "startJobAtStep" => DescribeStartJobAsync(connection, target, job),
                 "deleteObject" when target.Kind == "agentJob" => DescribeAgentJobDeleteAsync(connection, target, job),
+                "deleteObject" when target.Kind == "agentProxy" => DescribeAgentProxyDeleteAsync(connection, target, job),
+                "agentProxy" => DescribeAgentProxyDocumentAsync(connection, profile, target, job),
+                "credential" => DescribeCredentialDocumentAsync(connection, profile, target, job),
                 "agentProperties" => DescribeAgentPropertiesAsync(connection, profile, job),
                 "agentJob" => DescribeAgentJobDocumentAsync(connection, profile, target, job),
                 "agentSchedules" => DescribeAgentSchedulesAsync(connection, profile, args.Schedule, job),
@@ -496,6 +509,8 @@ internal sealed partial class ActionService : IDisposable
         if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         if (args.Action == "agentJob") return ScriptAgentJobDocument(args, target);
         if (args.Action == "agentSchedule") return ScriptAgentSchedule(args);
+        if (args.Action == "agentProxy" || target.Kind == "agentProxy") return ScriptAgentProxy(args, target);
+        if (args.Action == "credential") return ScriptCredential(args, target);
         if (target.Kind == "agentJob") return ScriptAgentJob(args, target);
         if (args.Action == "agentProperties") return ScriptAgentProperties(args);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
@@ -553,6 +568,9 @@ internal sealed partial class ActionService : IDisposable
                 "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 "tableProperties" => ExecuteTableJobAsync(connection, args, target, band, job),
                 "agentJob" => ExecuteAgentJobDocumentAsync(connection, args, target, job),
+                "agentProxy" => ExecuteAgentProxyAsync(connection, args, target, job),
+                _ when target.Kind == "agentProxy" => ExecuteAgentProxyAsync(connection, args, target, job),
+                "credential" => ExecuteCredentialAsync(connection, args, target, job),
                 _ when target.Kind == "agentJob" => ExecuteAgentJobAsync(connection, args, target, job),
                 "agentProperties" => ExecuteAgentPropertiesAsync(connection, args, job),
                 "agentSchedule" => ExecuteAgentScheduleAsync(connection, args, job),

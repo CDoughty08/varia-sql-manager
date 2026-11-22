@@ -8,6 +8,7 @@ import { operationsCommandEntries } from '../ssis/operations.ts'
 import { jobActivityCommandEntries } from '../agent/jobs.ts'
 import { agentJobCommandEntries } from '../actions/agent-job.ts'
 import { agentScheduleCommandEntries } from '../actions/agent-schedule.ts'
+import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -491,6 +492,8 @@ export const commandCatalog = {
   ...jobActivityCommandEntries(),
   // The SQL Server Agent job document (AG-6a): Open Job, New Job and the document's verbs, from src/shared/actions/agent-job.ts.
   ...agentJobCommandEntries(),
+  // The SQL Server Agent proxy and credential documents (AG-8b), from src/shared/actions/agent-proxy.ts.
+  ...agentProxyCommandEntries(),
   ...logViewerCommandEntries(),
   // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.
   ...agentScheduleCommandEntries(),

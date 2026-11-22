@@ -51,7 +51,10 @@ describe('server engines', () => {
       // The job document (AG-6a) is what a job's Properties opens.
       { action: 'agentJob', class: 'dialog', kind: 'agentJob', verb: 'properties', engines: ['box', 'managedInstance'] },
       // The Schedules document (AG-6c) acts on the Agent node.
-      { action: 'agentSchedule', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] }])
+      { action: 'agentSchedule', class: 'dialog', kind: 'agent', verb: 'properties', engines: ['box', 'managedInstance'] },
+      // The proxy document (AG-8b) on SQL Server only (Managed Instance has no proxies); the credential's on both.
+      { action: 'agentProxy', class: 'dialog', kind: 'agentProxy', verb: 'properties', engines: ['box'] },
+      { action: 'credential', class: 'dialog', kind: 'credential', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])
