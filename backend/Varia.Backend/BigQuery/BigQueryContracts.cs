@@ -160,7 +160,8 @@ internal sealed record BigQueryJobReference(string JobId, string? Location = nul
 /// <summary>bigquery.cancelJobs (main only, sensitive): cancels jobs of a saved profile with no connection handle, signed
 /// in with the credential material main resolved, and ends each job's session (docs/bigquery.md, Re-attaching
 /// to jobs).</summary>
-internal sealed record BigQueryCancelJobsArgs(string Authentication, string Project, IReadOnlyList<BigQueryJobReference> Jobs, string? KeyFile = null,
+/// (The wire's jobs list is References here: BigQuery code names a Jobs member only for the jobs resource's calls, tests/working-memory-lint.test.ts.)
+internal sealed record BigQueryCancelJobsArgs(string Authentication, string Project, [property: System.Text.Json.Serialization.JsonPropertyName("jobs")] IReadOnlyList<BigQueryJobReference> References, string? KeyFile = null,
     string? ImpersonateServiceAccount = null, BigQueryCredentialMaterial? Credential = null);
 
 /// <summary>What became of one job: Cancelled says jobs.cancel was accepted (or the job had already finished); Note is
@@ -176,7 +177,7 @@ internal static partial class BigQueryJobLimits
     public const int JobId = 1024;
     /// <summary>Job keys bigquery.endIdleSessions and session.cancelRestoredJobs take, and jobs bigquery.cancelJobs cancels.</summary>
     public const int Keys = 1024;
-    public const int Jobs = 64;
+    public const int Cancel = 64;
 
     // BigQuery's job ids: letters, digits, dashes and underscores, at most 1,024 characters.
     [GeneratedRegex(@"^[A-Za-z0-9_-]{1,1024}\z")]

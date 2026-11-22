@@ -183,7 +183,7 @@ internal sealed partial class BigQueryService
     {
         BigQueryLimits.CheckCredential(args.Authentication, args.KeyFile, args.ImpersonateServiceAccount, args.Credential, environment.Emulator);
         if (!BigQueryLimits.IsProject(args.Project)) throw new RequestException("INVALID_PARAMS", "Enter a Google Cloud project id.");
-        if (args.Jobs is not { Count: > 0 and <= BigQueryJobLimits.Jobs } || args.Jobs.Any(job => job is null || !BigQueryJobLimits.IsJobId(job.JobId) || !BigQueryJobLimits.IsLocation(job.Location)))
+        if (args.References is not { Count: > 0 and <= BigQueryJobLimits.Cancel } || args.References.Any(job => job is null || !BigQueryJobLimits.IsJobId(job.JobId) || !BigQueryJobLimits.IsLocation(job.Location)))
             throw new RequestException("INVALID_PARAMS", "The jobs to cancel are not valid.");
         BigQueryClient client;
         try
@@ -196,7 +196,7 @@ internal sealed partial class BigQueryService
         catch (Exception error) { throw BigQueryErrors.Map(error, args.Project, kind: KindOf(args.Authentication), token: token); }
         var options = new BigQueryConnectOptions(Providers.BigQuery, args.Project, args.Authentication);
         using var connection = new BigQueryConnection(Guid.NewGuid().ToString(), options, client, BigQueryIdentity.Anonymous, null);
-        var jobs = await Task.WhenAll(args.Jobs.DistinctBy(job => job.JobId).Select(job => CancelOneAsync(connection, job, token)));
+        var jobs = await Task.WhenAll(args.References.DistinctBy(job => job.JobId).Select(job => CancelOneAsync(connection, job, token)));
         return new(jobs);
     }
 
