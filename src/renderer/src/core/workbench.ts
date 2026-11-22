@@ -390,9 +390,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   // A BigQuery close's note shows in the query's Messages while it stays, else as a notification (docs/bigquery.md, Sessions).
   queries.notify = text => { notifications.notify({ severity: 'warning', message: text }) }
+  // A BigQuery job left running is no tab's any more: its id can be copied to find it in BigQuery's job history.
+  queries.notifyJobs = (text, jobIds) => { notifications.notify({ severity: 'info', message: text, actions: [{ label: jobIds.length === 1 ? 'Copy Job ID' : 'Copy Job IDs', run: () => { void api.writeClipboardText(jobIds.join('\n')) } }] }) }
   documents.sessionHooks = {
     message: (id, text, kind) => { queries.addSessionMessage(id, text, kind) },
     note: (id, note) => { queries.sessionNote(id, note) },
+    ended: (id, entry) => { queries.sessionClosed(id, entry) },
     bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
   }
   const costPrompts = new CostPromptService()

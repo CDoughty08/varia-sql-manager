@@ -8,7 +8,7 @@ import type { QueryService } from './queries'
 import { requireKeptPins, type KeptSession } from './session'
 import { quitStoppingNotes, sessionCloseNoteText, type SessionCloseNote } from '../../../shared/sessions'
 
-type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
+type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'> & Partial<Pick<VariaApi, 'keepJobsAtQuit'>>
   & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'keepSqlFile' | 'confirmReload' | 'keepSession'>>
 export interface FileServiceOptions {
   /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
@@ -37,7 +37,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   private checking: Promise<void> | undefined
   /** True once the exit flow has confirmed all documents and asked main to close the window. */
   exiting = false
-  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
+  constructor(private documents: DocumentService, private queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionNote' | 'holdsJob'>>, private api: FileApi, private readonly options: FileServiceOptions = {}) {
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
@@ -318,13 +318,15 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   async closeMany(ids: readonly string[]): Promise<void> {
     const wanted = new Set(ids)
     await this.perform(async () => {
-      const asked = new Set(ids.filter(id => !this.queries.isRunning(id)))
+      // A BigQuery query holding a job (running, or left running) stays open, as a running query does.
+      const holding = new Set((await Promise.all(ids.map(async id => await this.queries.holdsJob?.(id) ? [id] : []))).flat())
+      const asked = new Set(ids.filter(id => !this.queries.isRunning(id) && !holding.has(id)))
       const plan = await this.queries.confirmSessions('closeAll', [...asked])
       if (!plan || this.disposed) return
       let running = 0, unasked = 0
       for (const { id } of this.documents.getSnapshot().documents.filter(document => wanted.has(document.id))) {
         if (!this.documents.get(id)) continue
-        if (this.queries.isRunning(id)) { running++; continue }
+        if (this.queries.isRunning(id) || holding.has(id) && await this.queries.holdsJob?.(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         if (!await this.confirmClose(id) || this.disposed) return
         // The query may have closed while its prompt was open.
@@ -372,7 +374,14 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.disposed) return
         if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
       }
-      const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
+      // A kept BigQuery tab's job keeps running and re-attaches at the next start (docs/bigquery.md, Quitting Varia leaves
+      // jobs running): it is not asked about, and its session is not ended. Main keeps the kept tabs' records meanwhile.
+      const keptQueries = [...kept ?? []].flatMap(id => { const document = this.documents.get(id); return document && !document.kind && document.provider === 'bigquery' ? [document] : [] })
+      const keys = keptQueries.flatMap(document => document.jobKey ? [document.jobKey] : [])
+      if (keys.length && this.api.keepJobsAtQuit) { const held = await this.api.keepJobsAtQuit(keys); if (!held.ok) throw new Error(held.error) }
+      const keptHolding = new Set((await Promise.all(keptQueries.map(async document => await this.queries.holdsJob?.(document.id) ? [document.id] : []))).flat())
+      if (this.disposed) return
+      const plan = await this.queries.confirmSessions('exit', [...approved.keys()].filter(id => !keptHolding.has(id)))
       if (!plan || this.disposed) return
       refuse()
       await beforeClose()

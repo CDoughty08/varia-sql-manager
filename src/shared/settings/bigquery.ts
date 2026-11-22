@@ -37,6 +37,12 @@ export const bigQuerySettings = [
     description: 'Dollars beside every byte figure (the estimate, the Results status, Messages and the prompts), at the US on-demand rate. Projects that use reserved capacity are not billed per byte; Bytes only leaves the dollars out.'
   },
   {
+    key: 'queryExecution.bigQuery.closeRunningJob', page: 'queryExecution.bigQuery.sessions', label: 'When a closing query holds a running job', type: 'enum', default: 'ask', varia: true,
+    values: [{ value: 'ask', label: 'Ask' }, { value: 'cancel', label: 'Cancel the job' }, { value: 'leave', label: 'Leave it running' }],
+    keywords: ['bigquery', 'job', 'close', 'cancel', 'leave running', 'detach', 'quit'],
+    description: 'What closing, disconnecting or quitting does with a BigQuery query\'s running job. Ask offers Cancel the job, Leave it running or Don\'t close, and "Remember my choice" in that prompt sets this. A job left running finishes in BigQuery, where its job history lists it. A prompt that also lists SQL Server queries asks anyway, with "Leave BigQuery jobs running" checked when this is Leave it running.'
+  },
+  {
     key: 'queryResults.bigQuery.residence', page: 'queryResults.bigQuery.results', label: 'Keep results', type: 'enum', default: 'automatic', varia: true,
     values: [{ value: 'automatic', label: 'Automatically, by size' }, { value: 'memory', label: 'Always in memory' }, { value: 'windowed', label: 'Always windowed in BigQuery' }],
     applies: 'nextExecution', keywords: ['bigquery', 'memory', 'windowed', 'remote', 'large results', 'residence'],

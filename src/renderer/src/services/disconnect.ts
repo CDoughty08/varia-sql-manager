@@ -1,5 +1,5 @@
 import { targetServerName, type BackendConnectionHandle } from '../../../shared/connection-targets'
-import type { SessionCloseNote, SessionEnd } from '../../../shared/sessions'
+import type { SessionCloseNote, SessionPlanEntry } from '../../../shared/sessions'
 import type { DisconnectPromptRequest, DisconnectChoice } from '../disconnect/DisconnectPromptService'
 import type { ConnectionOperation, ConnectionTargetService } from './connection-targets'
 import type { PreparedQueryClose } from './files'
@@ -35,7 +35,7 @@ export interface DisconnectHost {
   prepareSessions(ids: readonly string[]): Promise<PreparedSessions | undefined>
   cancelSessions(plan: PreparedSessions): Promise<void>
   /** Resolves to a BigQuery close's note, shown once the disconnect has finished (`sessionNote`). */
-  endSession(id: string, transaction: SessionEnd): Promise<SessionCloseNote | undefined>
+  endSession(id: string, transaction: SessionPlanEntry): Promise<SessionCloseNote | undefined>
   /** Shows a note in the query's Messages if it is still open, else as a notification. */
   sessionNote?(id: string, note: SessionCloseNote, name: string): void
   disconnect(handle: BackendConnectionHandle): Promise<void>

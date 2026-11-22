@@ -404,3 +404,42 @@ describe('hot exit', () => {
     expect(documents.get(other.id)).toMatchObject({ connectionId: 'b', database: 'master' })
   })
 })
+
+describe('quitting with BigQuery jobs', () => {
+  it("leaves a kept BigQuery tab's running job out of the prompt and its session alone, and tells main the kept tabs' job keys first", async () => {
+    const f = fixture(), key = '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10', order: string[] = []
+    const keepJobsAtQuit = vi.fn<VariaApi['keepJobsAtQuit']>(async () => { order.push('keep'); return { ok: true, value: undefined } })
+    Object.assign(f.api, { keepJobsAtQuit })
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery', key), other = f.documents.create('other.sql', 'SELECT 2', 'master')
+    Object.assign(f.queries, { holdsJob: vi.fn(async (id: string) => id === bq.id) })
+    f.queries.confirmSessions.mockImplementation(async () => { order.push('ask'); return new Map() })
+    await f.files.closeWindow(async () => {})
+    expect(keepJobsAtQuit).toHaveBeenCalledExactlyOnceWith([key])
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('exit', [other.id])
+    expect(order).toEqual(['keep', 'ask'])
+    expect(f.api.closeWindow).toHaveBeenCalled()
+  })
+  it('asks about an unkept BigQuery tab, and keeps nothing for main when no BigQuery tab is kept', async () => {
+    const f = fixture({ hotExit: false }), keepJobsAtQuit = vi.fn<VariaApi['keepJobsAtQuit']>(async () => ({ ok: true, value: undefined }))
+    Object.assign(f.api, { keepJobsAtQuit })
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery', '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10')
+    Object.assign(f.queries, { holdsJob: vi.fn(async () => true) })
+    await f.files.closeWindow(async () => {})
+    expect(keepJobsAtQuit).not.toHaveBeenCalled()
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('exit', [bq.id])
+  })
+})
+
+describe('Close All with BigQuery jobs', () => {
+  it('keeps a tab holding a job open and unasked, as it keeps a running query', async () => {
+    const f = fixture()
+    const bq = f.documents.restore('bq.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery'), other = f.documents.create('other.sql', 'SELECT 2', 'master')
+    const holdsJob = vi.fn(async (id: string) => id === bq.id)
+    Object.assign(f.queries, { holdsJob })
+    await f.files.closeMany([bq.id, other.id])
+    expect(f.queries.confirmSessions).toHaveBeenCalledExactlyOnceWith('closeAll', [other.id])
+    expect(f.documents.get(bq.id)).toBeDefined()
+    expect(f.documents.get(other.id)).toBeUndefined()
+    expect(f.files.getSnapshot().error).toBe('1 query is still running and stayed open.')
+  })
+})

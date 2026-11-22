@@ -1,7 +1,7 @@
 import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
 import { cleanTabName } from '../../../shared/files/session'
-import { bigQueryCommitTimeout, type SessionCloseNote, type SessionEnd } from '../../../shared/sessions'
+import { bigQueryCommitTimeout, type SessionCloseNote, type SessionPlanEntry } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ProviderId } from '../../../shared/providers'
 import { afterClose, documentInfo, isCustomKind, isQueryDocument, queryLanguages, type CustomDocumentKind, type QueryDocument } from '../documents'
@@ -577,9 +577,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * A BigQuery close refused with JOB_RUNNING also leaves a Messages line in the query, saying the answer was not carried
    * out; a BigQuery commit cut off by main's deadline says its outcome is unknown.
    */
-  async endSession(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
-    const params = { ...transaction ? { transaction } : {}, ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
+  async endSession(id: string, entry?: SessionPlanEntry, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
+    // A BigQuery job is left running (keepJob: the session is not aborted) or cancelled and waited for (cancelJob).
+    const transaction = entry === 'commit' || entry === 'rollback' ? entry : undefined
+    const params = { ...transaction ? { transaction } : {}, ...entry === 'leave' ? { keepJob: true as const } : entry === 'cancelJob' ? { cancelJob: true as const } : {},
+      ...options.abortOnRefusedCommit === undefined ? {} : { abortOnRefusedCommit: options.abortOnRefusedCommit } }
     const result = Object.keys(params).length ? await this.api.closeQuerySession(id, params) : await this.api.closeQuerySession(id)
+    if (result.ok) this.sessionHooks?.ended?.(id, entry)
     if (result.ok || result.code === 'SESSION_LOST') this.events.emit({ type: 'session.ended', tabId: id })
     if (!result.ok) {
       if (result.code === 'JOB_RUNNING') this.sessionHooks?.message(id, result.error, 'error')
@@ -590,10 +594,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** What ending a BigQuery session needs from the rest of the workbench: a Messages line for a query that stays, and
    *  whether a query is on BigQuery. Set once the workbench is built. */
-  sessionHooks?: { readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void }
+  sessionHooks?: {
+    readonly message: (id: string, text: string, kind?: 'info' | 'error') => void; readonly bigQuery: (id: string) => boolean; readonly note?: (id: string, note: SessionCloseNote) => void
+    /** The session ended as planned: a BigQuery job left running is reported with its id (QueryService.sessionClosed). */
+    readonly ended?: (id: string, entry: SessionPlanEntry | undefined) => void
+  }
   // The caller holds runTask and has confirmed dirty state, open transactions (`transaction`) and running queries.
   /** Resolves to the BigQuery close's note, for the caller to show once the query has closed. */
-  async close(id: string, transaction?: SessionEnd, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
+  async close(id: string, transaction?: SessionPlanEntry, options: { readonly abortOnRefusedCommit?: boolean } = {}): Promise<SessionCloseNote | undefined> {
     if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return

@@ -49,7 +49,7 @@ import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore } from './job-records'
-import { restoredJobs } from '../shared/bigquery/jobs'
+import { jobKeySchema, jobLimits, restoredJobs } from '../shared/bigquery/jobs'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
@@ -71,7 +71,7 @@ import { agentPreviewArgument, agentPreviewEnabled } from '../shared/agent/gate'
 import { contentSecurityPolicy } from '../shared/csp'
 import { homedir, userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
-import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
+import { rememberedJobAnswer, sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
@@ -327,7 +327,15 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 }
 
 /** End the old page's sessions. A replacement page can still retry an unacknowledged restore. */
+/** A quit that stopped or whose page was replaced keeps no tab's job records any more: the drops it held apply. */
+function releaseQuitJobs(): void {
+  quitKeepJobKeys = undefined
+  jobRecords.releaseHolds()
+}
+
 function resetRendererState({ relaunch = true, replacePage = false } = {}): void {
+  // A quit abandoned by a crash or reload: its kept keys belong to a page that is gone.
+  if (!closeApproved) releaseQuitJobs()
   rendererReady = false
   reloadApproved = false
   reloadRefresh = 'waiting'
@@ -1009,6 +1017,8 @@ app.whenReady().then(async () => {
     // Even during startup: a close that kept the session and was then cancelled no longer stands behind that file.
     connectionSession.release(pageGeneration)
     void openSession.release(pageGeneration).catch(() => {})
+    // The quit stopped: the kept tabs' record drops it held apply now.
+    releaseQuitJobs()
     if (rendererReady) { closePending = false; closeIntent = undefined; updater?.disarm() }
   })
   handle('varia:updates-state', () => requireUpdater().state)
@@ -1380,6 +1390,14 @@ app.whenReady().then(async () => {
     if (sessionCheckpoint.kind === 'disk') openSession.restored()
     sessionCheckpoint = undefined
   })
+  // A tab's BigQuery job records go when no tab will re-attach to them: it closed, or its job was left running or cancelled.
+  handle('varia:job-records-drop', value => { jobRecords.drop(jobKeySchema.parse(value)) })
+  // A quit keeps these tabs: their records stay until it ends, and bigquery.endIdleSessions leaves their open sessions.
+  handle('varia:quit-keep-jobs', value => {
+    const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
+    quitKeepJobKeys = keys
+    jobRecords.holdDrops(keys)
+  })
   handle('varia:recent-files', () => recentFiles())
   handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))
   handle('varia:recent-files-clear', () => recent.clear())
@@ -1401,10 +1419,20 @@ app.whenReady().then(async () => {
   // Open transactions and running queries in sessions about to end. Main writes the prompt from validated facts, and a page
   // that reloads or crashes while it is open gets Cancel (its sessions ended with it), so a dead page cannot hold it open.
   handle('varia:confirm-sessions', async value => {
-    const prompt = sessionPrompt(sessionPromptRequestSchema.parse(value))
+    const request = sessionPromptRequestSchema.parse(value)
+    // BigQuery jobs (docs/bigquery.md, The prompt): a remembered choice answers a box that would ask only about them.
+    const closeRunningJob = (await settings.load().catch(() => ({ values: settings.current() }))).values['queryExecution.bigQuery.closeRunningJob']
+    const remembered = rememberedJobAnswer(request, closeRunningJob)
+    if (remembered) return remembered
+    const prompt = sessionPrompt(request, closeRunningJob)
     if (!prompt) return 'proceed'
-    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
-    return prompt.buttons[response]?.answer ?? 'cancel'
+    const { response, checkboxChecked } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal,
+      ...prompt.checkbox ? { checkboxLabel: prompt.checkbox.label, checkboxChecked: prompt.checkbox.checked } : {} }), { response: prompt.cancelId, checkboxChecked: false }, true)
+    const answer = prompt.buttons[response]?.answer ?? 'cancel'
+    if (!prompt.checkbox || !checkboxChecked || (answer !== 'proceed' && answer !== 'leave')) return answer
+    // "Remember my choice" sets the option; a mixed box's "Leave BigQuery jobs running" turns its Cancel into Leave for BigQuery.
+    if (prompt.checkbox.remembers) await settings.update({ 'queryExecution.bigQuery.closeRunningJob': answer === 'proceed' ? 'cancel' : 'leave' }).catch(() => {})
+    return answer === 'proceed' && !prompt.checkbox.remembers ? 'leave' : answer
   })
   // An object action's confirmation (Rename Database's Open Connections, Disable Login): main writes the box from the
   // catalogue and validated facts; a page that reloads or crashes while it is open gets the prompt's cancel answer.

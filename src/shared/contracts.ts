@@ -1097,6 +1097,13 @@ export interface VariaApi {
   /** The tabs the last close kept, opened again; files that are gone are named in `problems`. */
   takeSession(): Promise<ApiResult<RestoredSession>>
   finishSessionRestore(generation: number): Promise<ApiResult<void>>
+  /** Drops the BigQuery job records kept under a tab's job key (docs/bigquery.md, Re-attaching to jobs): its tab closed, or
+   *  its job was left running or cancelled, so no tab will re-attach to them. */
+  dropJobRecords(jobKey: string): Promise<ApiResult<void>>
+  /** From the start of a quit: the job keys of the BigQuery tabs it keeps, whose records stay (drops wait) and whose idle
+   *  sessions with an open or unknown transaction bigquery.endIdleSessions leaves for the next start. A cancelled quit
+   *  (closeWindowCancelled) ends this. */
+  keepJobsAtQuit(jobKeys: readonly string[]): Promise<ApiResult<void>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>

@@ -15,7 +15,7 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionEnded' | 'sessionNote' | 'sessionLocation' | 'confirmLocationSwitch'>>,
+    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionEnded' | 'sessionNote' | 'sessionLocation' | 'confirmLocationSwitch' | 'holdsJob'>>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
     private readonly registry?: Pick<ConnectionTargetService, 'get' | 'getSnapshot' | 'subscribe'>,
@@ -162,14 +162,17 @@ export class TargetService {
   async disconnectAll(): Promise<void> {
     await this.runDocumentTask(async () => {
       // A table designer has no session to end, and keeps its server, as SSMS's does.
-      const asked = new Set(this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId !== undefined && !this.queries.isRunning(document.id)).map(document => document.id))
+      const connected = this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId !== undefined)
+      // A BigQuery query holding a job (running, or left running) stays connected, as a running query does.
+      const holding = new Set((await Promise.all(connected.map(async document => await this.queries.holdsJob?.(document.id) ? [document.id] : []))).flat())
+      const asked = new Set(connected.filter(document => !this.queries.isRunning(document.id) && !holding.has(document.id)).map(document => document.id))
       const plan = await this.queries.confirmSessions('disconnectAll', [...asked])
       if (!plan) return
       let running = 0, unasked = 0
       for (const document of this.documents.getSnapshot().documents) {
         const { id, connectionId } = document
         if (connectionId === undefined || !isQueryDocument(document)) continue
-        if (this.queries.isRunning(id)) { running++; continue }
+        if (this.queries.isRunning(id) || holding.has(id) && await this.queries.holdsJob?.(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         const note = await this.documents.endSession(id, plan.get(id))
         if (note) this.queries.sessionNote?.(id, note)
