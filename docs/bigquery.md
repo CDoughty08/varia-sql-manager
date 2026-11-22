@@ -194,7 +194,7 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   may still bill work done before the job stopped); the execution timeout does the same. A tab runs one query at a time
   (`SESSION_BUSY`).
 
-In-memory BOOL columns sort false before true. Saving as JSON writes Boolean values; CSV and tab-delimited text keep the displayed words.
+In-memory BOOL columns order false before true when they sort, filter between values, pivot (groups, Min and Max) and profile. Saving as JSON writes Boolean values; CSV and tab-delimited text keep the displayed words.
 
 ### Scripts
 

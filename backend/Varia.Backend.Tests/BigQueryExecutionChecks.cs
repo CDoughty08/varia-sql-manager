@@ -269,6 +269,7 @@ internal static partial class BigQueryExecutionChecks
         CostText(check);
         Trace("Converter");
         Converter(check);
+        Trace("BooleanResults");
         BooleanResults(check);
         Trace("JobErrors");
         JobErrors(check);
@@ -319,12 +320,15 @@ internal static partial class BigQueryExecutionChecks
             "the Messages cost line names each figure BigQuery reported, priced, and nothing when it reported none: " + line);
     }
 
+    /// <summary>BOOL cells hold the words false and true, which every result tool reads as SQL Server's bit 0 and 1: sort,
+    /// filters, Pivot's groups and extremes, profiles and Save Results As. NULL stays a value of its own.</summary>
     private static void BooleanResults(Action<bool, string> check)
     {
         var plan = BigQueryColumnPlan.From(JsonSerializer.SerializeToElement(Schema(Field("flag", "BOOL"))))!;
         var store = new ResultStore(1L << 27, 1L << 26);
         var set = store.Open(store.BeginQuery("bool"), 0, 1, 1, "rows", plan.Columns, plan.Wires)!;
-        foreach (var value in new[] { "true", "false", "true" })
+        // Rows 0 to 3: true, false, true, NULL.
+        foreach (var value in new JsonNode?[] { "true", "false", "true", null })
         {
             set.CountRow();
             plan.ReadRow(JsonSerializer.SerializeToElement(Row(value)), set.BeginRow()!, _ => { });
@@ -334,8 +338,16 @@ internal static partial class BigQueryExecutionChecks
         var pages = set.SealedSnapshot();
         var sorted = ViewSorter.Sort(set, pages, [new(0, false, SortMode.Value)], default).Order;
         var profile = ColumnProfiler.Profile(set, pages, null, [0], true, default).Columns[0];
-        check(sorted.SequenceEqual([1, 0, 2]) && profile.Min == "false" && profile.Max == "true" && profile.Distinct == 2,
-            "BigQuery BOOL sorts and profiles false before true");
+        check(sorted.SequenceEqual([3, 1, 0, 2]) && profile.Min == "false" && profile.Max == "true" && profile.Distinct == 2 && profile.Nulls == 1,
+            "BigQuery BOOL sorts and profiles NULL, then false before true: " + string.Join(",", sorted));
+        // A Between filter resolves to its low and high ends: false (row 1) then true (row 0), keeping both values but not NULL.
+        var between = ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.Between, 0, [0, 1], false, null, [])], default);
+        check(between.Order.SequenceEqual([0, 1, 2]) && between.Filters[0].Rows is [1, 0],
+            "a Between filter over BigQuery BOOL runs from false to true: " + string.Join(",", between.Filters[0].Rows ?? []));
+        var model = ResultPivoter.Build(set, pages, null, new PivotSpec([0], -1, [new(PivotAggregate.Min, 0), new(PivotAggregate.Max, 0)]), default, _ => true);
+        var whole = ResultPivoter.Build(set, pages, null, new PivotSpec([], -1, [new(PivotAggregate.Min, 0), new(PivotAggregate.Max, 0)]), default, _ => true);
+        check(model.RowReps.SequenceEqual([3, 1, 0]) && whole.Figures[0].Best[0] == 1 && whole.Figures[1].Best[0] is 0 or 2,
+            "Pivot groups BigQuery BOOL as NULL, false, true and its Min is false and Max true: " + string.Join(",", model.RowReps));
         var output = new System.Buffers.ArrayBufferWriter<byte>();
         var writer = new ResultTextWriter(output, TextOptions.Export(TextFormat.Json, false, "empty"), set.Columns);
         writer.Begin();
@@ -347,8 +359,8 @@ internal static partial class BigQueryExecutionChecks
         }
         writer.End();
         using var saved = JsonDocument.Parse(output.WrittenMemory);
-        check(saved.RootElement.EnumerateArray().Select(row => row.GetProperty("flag").GetBoolean()).SequenceEqual([true, false, true]),
-            "Save Results As writes BigQuery BOOL cells as JSON booleans");
+        var kinds = string.Join(",", saved.RootElement.EnumerateArray().Select(row => row.GetProperty("flag").ValueKind));
+        check(kinds == "True,False,True,Null", "Save Results As writes BigQuery BOOL cells as JSON booleans and NULL as null: " + kinds);
     }
 
     /// <summary>The REST converter for every type straight into a page, as the result store reads it.</summary>
