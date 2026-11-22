@@ -9,7 +9,8 @@ import { mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { requestSchemas } from '../src/main/validation'
 
 const directories: string[] = []
-afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }) })
+// A store's last write may still be finishing on Windows when a test ends: retry the removal.
+afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 async function folder(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'varia-job-records-'))
   directories.push(directory)
@@ -116,6 +117,7 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     for (let i = 0; i <= jobLimits.records; i++) running.record(key(1 + i % 20), job(`varia_run_${i}`))
     expect(running.list()).toHaveLength(jobLimits.records)
     expect(running.list().some(record => record.jobId === `varia_run_${jobLimits.records}`)).toBe(false)
+    await Promise.all([store.flush(), running.flush()])
   })
 
   it("asks a profile delete about every running job but those the backend reported on a live connection through that profile", () => {
