@@ -61,7 +61,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
       eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
       ...document.pinned ? { pinned: true } : {},
       ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, bigQuery ? sessionLimits.datasetChars : sessionLimits.databaseChars) } : {},
-      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {}, ...bigQuery ? { provider: 'bigquery' as const } : {},
+      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {}, ...bigQuery ? { provider: 'bigquery' as const, ...document.jobKey ? { jobKey: document.jobKey } : {} } : {},
       ...!document.file || document.dirty ? { text: model.getValue() } : {}
     }
     const size = bytes(entry) + (document.file ? bytes(document.file.path) : 0) + 2
@@ -101,6 +101,8 @@ export interface SessionRestoreOptions {
   readonly groups?: Pick<EditorGroupService, 'restore'>
   readonly connectionTargets?: Pick<ConnectionTargetService, 'restore'>
   readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
+  /** A reopened BigQuery tab's jobs, to re-attach to once it connects (QueryService.restoreJobs). */
+  readonly restoredJobs?: (tabId: string, jobs: NonNullable<RestoredSession['documents'][number]['jobs']>) => void
   /** Runs inside the restore's own file task when it reopened nothing (also when it failed): the welcome query, which
    *  must come before a file the command line hands over meanwhile, since that open waits for this task. */
   readonly otherwise?: () => void
@@ -110,7 +112,7 @@ export interface SessionRestoreOptions {
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, otherwise }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, restoredJobs, otherwise }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
@@ -130,6 +132,7 @@ export async function restoreSession({ api, documents, files, groups, connection
         const id = open?.id ?? documents.reopen(document).id
         if (open && document.pinned) documents.setPinned(id, true)
         if (!open && document.recoveryId) resumeRecovery?.(id, document.recoveryId)
+        if (!open && document.jobs?.length) restoredJobs?.(id, document.jobs)
         if (!open) opened++
         ids[index] = id
         if (index === restored.activeIndex) active = id

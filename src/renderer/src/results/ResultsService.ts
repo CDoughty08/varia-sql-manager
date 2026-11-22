@@ -588,7 +588,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
    *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
    *  result), so its strip moves to the new run. */
-  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean } = {}): void {
+  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean; onJob?: (job: Extract<QueryEvent, { type: 'query.job' }>) => void } = {}): void {
     if (this.disposed) return
     // A switch of the run this replaces is not said with the new one's end.
     this.unheardSwitches.delete(tabId)
@@ -611,7 +611,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
         if (this.runs.get(tabId) === run && run.status === 'running') onSession?.(event)
-      } else if (event.type !== 'query.job') this.event(tabId, run, event)
+      } else if (event.type === 'query.job') {
+        if (this.runs.get(tabId) === run && run.status === 'running') o.onJob?.(event)
+      } else this.event(tabId, run, event)
     })
     this.runs.set(tabId, run)
     this.publishNow(tabId)

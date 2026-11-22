@@ -49,6 +49,7 @@ import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore } from './job-records'
+import { restoredJobs } from '../shared/bigquery/jobs'
 import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
@@ -1311,7 +1312,10 @@ app.whenReady().then(async () => {
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
     const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined
-    return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {} }
+    // A BigQuery copy brings its job key back, with the jobs main still has records of under it, to re-attach to.
+    const jobs = record.jobKey ? await jobRecords.load().then(() => restoredJobs(jobRecords.forKeys([record.jobKey!])), () => []) : []
+    return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {},
+      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
@@ -1360,7 +1364,10 @@ app.whenReady().then(async () => {
       const recoveryId = checkpoint.kind === 'reload' ? checkpoint.recoveryIds[index] : undefined
       const resumed = restored.dirty && checkpoint.kind === 'reload' && recoveryId && await recovery.resumeReloaded(recoveryId, checkpoint.sourceGeneration, generation, restored).catch(() => false)
       places.set(index, documents.length)
-      documents.push(resumed && recoveryId ? { ...restored, recoveryId } : restored)
+      // A BigQuery tab gets back the jobs main still has records of under its key, to re-attach to once it connects.
+      const jobs = restored.jobKey ? await jobRecords.load().then(() => restoredJobs(jobRecords.forKeys([restored.jobKey!])), () => []) : []
+      const withJobs = jobs.length ? { ...restored, jobs } : restored
+      documents.push(resumed && recoveryId ? { ...withJobs, recoveryId } : withJobs)
     }
     // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
     const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined

@@ -249,6 +249,24 @@ describe('AutoRecover in the workbench', () => {
     } finally { fixture.dispose() }
   })
 
+  it("keeps a BigQuery query's job key in its copy, and a recovered copy brings back its key and the jobs to re-attach to", async () => {
+    const fixture = workbenchFixture({ recovery: [entry('r1', 'a.sql')] })
+    try {
+      const { api, documents, recovery, queries } = fixture, jobKey = '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10'
+      const kept = documents.restore('k.sql', 'SELECT 1', 'sql', 'lf', undefined, 'bigquery', jobKey)
+      await recovery.flush()
+      expect(api.writeRecovery.mock.calls.find(([record]) => record.name === 'k.sql')?.[0]).toMatchObject({ provider: 'bigquery', jobKey })
+      await recovery.refresh()
+      const job = { jobId: 'job_1', project: 'example-project', state: 'running' as const, transaction: 'none' as const, createdAt: 1 }
+      api.takeRecovery.mockResolvedValueOnce({ ok: true, value: { text: 'SELECT 2', name: 'a.sql', kind: 'sql', eol: 'lf', provider: 'bigquery', jobKey, jobs: [job] } })
+      await recovery.recover(['r1'])
+      const recovered = documents.getSnapshot().documents.find(document => document.name === 'a.sql')!
+      expect(recovered.jobKey).toBe(jobKey)
+      expect(queries.getSnapshot()[recovered.id].jobs).toEqual([job])
+      expect(kept.jobKey).toBe(jobKey)
+    } finally { fixture.dispose() }
+  })
+
   it('says when a copy was saved as SSMS-style relative time', () => {
     const now = Date.parse('2026-10-19T12:00:00Z')
     expect(['2026-10-19T11:59:30Z', '2026-10-19T11:55:00Z', '2026-10-19T09:00:00Z', '2026-10-18T11:00:00Z', '2026-10-16T12:00:00Z', 'x'].map(at => savedAgo(at, now)))

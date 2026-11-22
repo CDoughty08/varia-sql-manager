@@ -1,0 +1,171 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/shared/contracts'
+import { heldAfter, jobStillRunning, QueryService, restoredJobRunning, type QueryApi, type TabJob } from '../src/renderer/src/services/queries'
+import type { ResultsService } from '../src/renderer/src/results/ResultsService'
+import { deferred, documentFixture } from './fixtures/documents'
+import { defaultSettings } from '../src/shared/settings/catalog'
+
+const output = (patch: Partial<QueryResult> = {}): QueryResult => ({
+  status: 'completed', resultSets: [], discardedResultSets: 0, messages: [], recordsAffected: 0, elapsedMs: 1, completedBatches: 1, totalBatches: 1, database: 'sales', messagesTruncated: false,
+  budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }, completedAt: '2026-11-21T10:00:00.0000000+00:00', ...patch
+})
+const job = (jobId: string, patch: Partial<TabJob> = {}): TabJob => ({ jobId, project: 'example-project', location: 'US', state: 'running', transaction: 'none', createdAt: 1, ...patch })
+type JobEvent = { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown' }
+
+/** A BigQuery tab on a live connection (`connected` false: a restored tab with none yet). */
+function fixture({ connected = true }: { connected?: boolean } = {}) {
+  const docs = documentFixture()
+  const connection: ConnectionInfo & { lost?: true; providerId: string; options: object } = {
+    id: 'bq-a', server: 'example-project', database: 'sales', serverVersion: 'BigQuery', commandTimeout: 0, generation: 1, providerId: 'bigquery', options: { provider: 'bigquery' }
+  }
+  const api = {
+    execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: output() })),
+    attach: vi.fn<VariaApi['attach']>(async () => ({ ok: true, value: output() })),
+    cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
+    confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
+    querySessionState: vi.fn<VariaApi['querySessionState']>(async () => ({ ok: true, value: { transactionCount: 0, checked: true, job: 'none' } }))
+  }
+  let onJob: ((event: JobEvent) => void) | undefined
+  const results = {
+    begin: vi.fn<ResultsService['begin']>((_tab, _query, _session, o) => { onJob = o?.onJob as typeof onJob }),
+    finish: vi.fn(), addMessage: vi.fn<ResultsService['addMessage']>()
+  }
+  let live = connected
+  const queries = new QueryService(docs.documents, api, id => live && id === connection.id ? connection : undefined, docs.events, results, () => 5000, undefined, () => defaultSettings)
+  const tab = docs.documents.create('orders.sql', 'SELECT 1', 'sales', connection.id)
+  return { ...docs, queries, queryApi: api, connection, tab, results, job: (event: Omit<JobEvent, 'type' | 'auxiliary' | 'project' | 'transaction'> & Partial<JobEvent>) => onJob?.({ type: 'query.job', project: 'example-project', auxiliary: false, transaction: 'none', ...event }), connect: () => { live = true } }
+}
+const settle = () => new Promise(resolve => { setTimeout(resolve, 0) })
+
+describe('BigQuery job keys', () => {
+  it("gives a BigQuery tab a job key at its first run, sends it with every run, and keeps it on the tab", async () => {
+    const f = fixture()
+    await f.queries.execute(f.tab.id)
+    const key = f.documents.get(f.tab.id)?.jobKey
+    expect(key).toMatch(/^[0-9a-f-]{36}$/)
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ jobKey: key })
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[1][0]).toMatchObject({ jobKey: key })
+  })
+  it('sends no job key for SQL Server', async () => {
+    const f = fixture()
+    Object.assign(f.connection, { providerId: 'sqlserver' })
+    await f.queries.execute(f.tab.id)
+    expect(f.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('jobKey')
+    expect(f.documents.get(f.tab.id)?.jobKey).toBeUndefined()
+  })
+})
+
+describe('BigQuery job references', () => {
+  it('keeps a running job when the backend is lost, says it carries on, and holds it for the prompt', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', location: 'US', state: 'running', transaction: 'open' })
+    // Lost backend: the connection is gone until the next start or Reconnect.
+    Object.assign(f.connection, { lost: true })
+    pending.resolve({ ok: false, error: 'The SQL backend stopped.', code: 'BACKEND_LOST' })
+    await run
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toEqual([job('job_1', { transaction: 'open', createdAt: 5000 })])
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, jobStillRunning(['job_1']), 'info')
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+  })
+  it("drops a finished run's jobs once its summary reached the tab", async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output() })
+    await run
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+  })
+  it('keeps a job left running as detached, and lets go of it once the backend sees it end', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.job({ jobId: 'job_1', location: 'US', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await run
+    await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toEqual([job('job_1', { detached: true, createdAt: 5000 })])
+    // This backend follows it already: no re-attach.
+    expect(f.queryApi.attach).not.toHaveBeenCalled()
+    f.queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 0, checked: false, job: 'running' } })
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+    // A failed read falls back to the tab's own reference.
+    f.queryApi.querySessionState.mockResolvedValueOnce({ ok: false, error: 'No answer.', code: 'TIMEOUT' })
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(true)
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+})
+
+describe('re-attaching restored tabs', () => {
+  it("re-attaches a connected tab's newest job, adopting its session with the record's transaction, and the older one only to hold the queue", async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10' })
+    f.queries.restoreJobs(f.tab.id, [job('job_old', { createdAt: 1 }), job('job_new', { createdAt: 2, transaction: 'open' })])
+    await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
+    expect(f.queryApi.attach.mock.calls[0][0]).toMatchObject({ connectionId: 'bq-a', sessionId: f.tab.id, jobKey: '6f2b8f84-2b7c-4b55-9c55-9d6f8c2a1b10', jobId: 'job_new', project: 'example-project', location: 'US', adoptSession: true, transaction: 'open' })
+    expect(f.queryApi.attach.mock.calls[0][0]).not.toHaveProperty('detached')
+    expect(f.queryApi.attach.mock.calls[1][0]).toMatchObject({ jobId: 'job_old', detached: true })
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    expect(f.results.addMessage).not.toHaveBeenCalled()
+  })
+  it('says a restored running job carries on while the tab is not connected, then re-attaches once it is, once per connection', async () => {
+    const f = fixture({ connected: false })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, restoredJobRunning(['job_1']), 'info')
+    expect(f.queryApi.attach).not.toHaveBeenCalled()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'Not connected.', code: 'NOT_CONNECTED' })
+    f.connect()
+    f.queries.reattach()
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    // The job is kept, but not tried again on the same connection.
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toEqual([job('job_1')])
+    f.queries.reattach()
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    // The next connection (Reconnect) tries again.
+    Object.assign(f.connection, { generation: 2 })
+    f.queries.reattach()
+    await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(2)
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+  it("drops a job another principal ran, and Stop on a re-attach cancels it like a query's", async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.attach.mockResolvedValueOnce({ ok: false, error: 'This job was run by another account.', code: 'AUTH_IDENTITY' })
+    f.queries.restoreJobs(f.tab.id, [job('job_1')])
+    await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    f.queryApi.attach.mockReturnValueOnce(pending.promise)
+    f.queries.restoreJobs(f.tab.id, [job('job_2')])
+    await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].running).toMatchObject({ kind: 'attach', jobId: 'job_2' })
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    await f.queries.cancel(f.tab.id)
+    expect(f.queryApi.cancel).toHaveBeenCalledWith(f.queryApi.attach.mock.calls[1][0].queryId)
+    pending.resolve({ ok: true, value: output({ status: 'cancelled' }) })
+    await settle()
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+  })
+})
+
+describe('heldAfter', () => {
+  const running = job('a'), done = job('b', { state: 'done' }), detached = job('c', { detached: true })
+  it('keeps what each ending leaves for a re-attach', () => {
+    expect(heldAfter(undefined, [], [running, done], output({ status: 'detached' }), undefined)).toEqual([{ ...running, detached: true }])
+    expect(heldAfter(undefined, [detached, running], [], output(), undefined)).toEqual([running])
+    expect(heldAfter(running, [detached], [], output(), undefined)).toEqual([detached])
+    expect(heldAfter(undefined, [], [running, done], undefined, 'BACKEND_LOST')).toEqual([running])
+    expect(heldAfter(done, [], [], undefined, 'CONNECTION_LOST')).toEqual([done])
+    expect(heldAfter(running, [detached], [], undefined, 'AUTH_IDENTITY')).toEqual([detached])
+  })
+})

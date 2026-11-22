@@ -33,6 +33,9 @@ export interface QueryDocument {
   /** A query's engine, absent for SQL Server: its connection's, or the one it last had (a query keeps it when it
    *  disconnects, and hot exit and AutoRecover keep it). Its editor language follows it (`documentInfo`). */
   readonly provider?: ProviderId
+  /** A BigQuery query's job key (docs/bigquery.md, Re-attaching to jobs): main records its jobs under it, and hot exit and
+   *  AutoRecover keep it, so a restored tab re-attaches to them. Given at its first BigQuery execution. */
+  readonly jobKey?: string
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */

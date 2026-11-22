@@ -36,7 +36,7 @@ export interface TextDocument { readonly name: string; readonly text: string; re
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
 interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly provider?: ProviderId; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics' | 'jobKey'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -321,9 +321,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * Opens a query AutoRecover kept: its text, unsaved, with no connection, its line ending, and its original file when
    * main registered it again. A large value has no bracket matching or colours, as `openText` opens it.
    */
-  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId): QueryDocument {
+  restore(name: string, text: string, kind: DocumentKind, eol: LineEnding, file?: QueryDocument['file'], provider?: ProviderId, jobKey?: string): QueryDocument {
     const value = kind === 'sql' ? undefined : kind
-    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, provider ? { provider } : {})
+    return this.add(name, text, value || provider === 'bigquery' ? '' : 'master', undefined, true, file, value, !!value && text.length > gridLimits.documentBracketChars, eol, { ...provider ? { provider } : {}, ...!value && jobKey ? { jobKey } : {} })
   }
   /**
    * Opens a value from the results as a text document: no connection, not dirty, in its language. A long text opens
@@ -345,7 +345,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
-    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.provider ? { provider: o.provider } : {}, ...!kind && o.jobKey ? { jobKey: o.jobKey } : {}, ...!kind && o.targetId ? { targetId: o.targetId, attachWanted: o.attachWanted ?? false, sessionNotice: 'restarted' as const } : {}, ...o.pinned ? { pinned: true } : {} }
     const document = this.add(o.name, o.text, kind ? '' : o.database ?? (o.provider === 'bigquery' ? '' : 'master'), undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
     // A file whose text was all deleted is still a change to save.
     if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
@@ -354,7 +354,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice' | 'provider'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned' | 'targetId' | 'attachWanted' | 'sessionNotice' | 'provider' | 'jobKey'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     // A query opened on a connection takes its engine; one without keeps the engine it was given. SQL Server is the

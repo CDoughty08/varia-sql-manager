@@ -1,5 +1,6 @@
 import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
 import type { ProviderId } from '../providers'
+import type { RestoredJob } from '../bigquery/jobs'
 
 /**
  * AutoRecover (Tools › Options › Environment › AutoRecover). Main keeps one record a query in `<userData>/WorkbenchAutoRecover/`,
@@ -34,6 +35,8 @@ export interface RecoveryWrite {
   readonly server?: string
   readonly database?: string
   readonly provider?: ProviderId
+  /** A BigQuery query's job key, so a recovered copy re-attaches to its jobs. */
+  readonly jobKey?: string
   readonly text: string
 }
 /** A kept query as the Recover dialog lists it: no text. `savedAt` is an ISO time; `path` is the file it was saved to. */
@@ -56,6 +59,9 @@ export interface RecoveredDocument {
   readonly file?: SqlFile
   /** The query's engine as kept (absent: SQL Server): it reopens in that engine's language, with no connection. */
   readonly provider?: ProviderId
+  /** Its job key, and the jobs main still has records of under it (docs/bigquery.md, Re-attaching to jobs). */
+  readonly jobKey?: string
+  readonly jobs?: readonly RestoredJob[]
 }
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */

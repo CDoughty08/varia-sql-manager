@@ -49,6 +49,13 @@ export const jobRecordSchema = z.object({
   transaction: jobTransactionSchema
 }).strict()
 export type JobRecord = z.infer<typeof jobRecordSchema>
+/** A tab's job as a restore hands it back (hot exit or AutoRecover): its record without the key or profile, newest last.
+ *  Auxiliary jobs are left out, since a sort or filter outlives no tab state. */
+export type RestoredJob = Pick<JobRecord, 'jobId' | 'project' | 'location' | 'state' | 'transaction' | 'detached' | 'createdAt'>
+export function restoredJobs(records: readonly JobRecord[]): RestoredJob[] {
+  return records.filter(record => !record.auxiliary).sort((a, b) => a.createdAt - b.createdAt)
+    .map(({ jobId, project, location, state, transaction, detached, createdAt }) => ({ jobId, project, ...location ? { location } : {}, state, transaction, ...detached ? { detached } : {}, createdAt }))
+}
 export const jobRecordsFileSchema = z.object({ version: z.literal(1), records: z.array(jobRecordSchema).max(jobLimits.records) }).strict()
 export type JobRecordsFile = z.infer<typeof jobRecordsFileSchema>
 

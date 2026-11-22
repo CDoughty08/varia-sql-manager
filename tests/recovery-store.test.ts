@@ -53,6 +53,15 @@ describe('the AutoRecover store', () => {
     expect(await records()).toEqual([])
   })
 
+  it("keeps a BigQuery query's job key, so a recovered copy re-attaches to its jobs", async () => {
+    const store = new RecoveryStore(folder), jobKey = randomUUID()
+    const kept = query({ provider: 'bigquery', jobKey, database: 'sales', server: 'example-project' })
+    await store.write(kept, 1)
+    await store.list(2)
+    expect(await store.take(kept.id, 2)).toMatchObject({ provider: 'bigquery', jobKey })
+    expect(recoveryWriteSchema.safeParse({ ...query(), jobKey: 'x' }).success).toBe(false)
+  })
+
   // sandbox-guard.ts's profilePathsRefused: a packaged smoke run's profile belongs to whoever started it.
   it('hands a record over without its file path while paths are refused', async () => {
     const kept = query({ text: 'SELECT 7' })
