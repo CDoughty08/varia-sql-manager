@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { bigQueryDatasetSchema } from '../connections'
 import { formatBytes, formatDollars } from './cost'
+import { remoteDryRunSchema, type RemoteDryRun } from './remote-view'
 
 /**
  * bigquery.dryRun (docs/bigquery.md, Cost): the free estimate a BigQuery query tab shows beside Execute, the prompts before
@@ -12,21 +13,25 @@ export const dryRunLimits = { characters: 1_000_000 } as const
 export const incompleteReasons = ['script', 'lowerBound', 'unknown', 'zeroBytes'] as const
 export type IncompleteReason = typeof incompleteReasons[number]
 
-export interface BigQueryDryRunRequest { connectionId: string; sql: string; dataset?: string }
+/** Editor text with the tab's dataset, or a results.remoteQuery request to estimate (docs/bigquery.md, Sort and filter in BigQuery). */
+export type BigQueryDryRunRequest = { connectionId: string; sql: string; dataset?: string } | { connectionId: string; remote: RemoteDryRun }
 export interface BigQueryDryRunResult {
   bytesProcessed: number
   incomplete?: IncompleteReason
   statementType?: string
   /** Emulator mode: the emulator does not dry-run, so the backend answers 0 bytes. */
   faked?: boolean
+  /** A remote estimate whose result table expired: the figure is the original query's, run again with the clauses around it. */
+  fallback?: true
 }
 
-export const bigQueryDryRunRequestSchema = z.object({
-  connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional()
-}).strict()
+export const bigQueryDryRunRequestSchema = z.union([
+  z.object({ connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional() }).strict(),
+  z.object({ connectionId: z.uuid(), remote: remoteDryRunSchema }).strict()
+])
 export const bigQueryDryRunResultSchema = z.object({
   bytesProcessed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), incomplete: z.enum(incompleteReasons).optional(),
-  statementType: z.string().max(64).regex(/^[A-Z_]+$/).optional(), faked: z.boolean().optional()
+  statementType: z.string().max(64).regex(/^[A-Z_]+$/).optional(), faked: z.boolean().optional(), fallback: z.literal(true).optional()
 }).strict()
 
 /** Why the figure may be low, for the incomplete-estimate prompt and the chip's tooltip. */

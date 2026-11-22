@@ -121,12 +121,19 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
     long? BytesBilled = null, bool? CacheHit = null, long? SlotMs = null);
 
 /// <summary>bigquery.dryRun's parameters (src/shared/bigquery/dry-run.ts): a connected handle, GoogleSQL text (the editor's,
-/// or the text Execute is about to run) and the tab's default dataset.</summary>
-internal sealed record BigQueryDryRunArgs(string ConnectionId, string Sql, string? Dataset = null);
+/// or the text Execute is about to run) and the tab's default dataset; or, instead of text, Remote: a results.remoteQuery request
+/// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery).</summary>
+internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null);
+
+/// <summary>A results.remoteQuery request (view or distinct) to estimate, without its query ID; the answer says whether running
+/// it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>
+internal sealed record RemoteDryRunArgs(uint ResultId, int Generation, string Kind, RemoteSortArgs[]? Sort = null, RemoteFilterArgs[]? Filters = null,
+    int? Column = null, RemoteFilterArgs[]? Kept = null);
 
 /// <summary>bigquery.dryRun's answer: the bytes the query would process, why the figure may be low, the statement type, and
-/// whether emulator mode faked it. A refused query is an error value (SQL_ERROR with BigQuery's <c>[line:column]</c>).</summary>
-internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incomplete = null, string? StatementType = null, bool Faked = false);
+/// whether emulator mode faked it; for a remote request, Fallback when its result table expired, so the figure is the original
+/// query's, run again. A refused query is an error value (SQL_ERROR with BigQuery's <c>[line:column]</c>).</summary>
+internal sealed record BigQueryDryRunResult(long BytesProcessed, string? Incomplete = null, string? StatementType = null, bool Faked = false, bool? Fallback = null);
 
 /// <summary>query.execute's Preview Rows target (docs/bigquery.md, Preview Rows): the table whose first rows tabledata.list reads
 /// instead of running the query text, which is the SELECT the tab shows. BigQuery handles only.</summary>

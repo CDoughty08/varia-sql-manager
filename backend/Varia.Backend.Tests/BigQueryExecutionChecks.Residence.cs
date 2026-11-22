@@ -63,6 +63,8 @@ internal static partial class BigQueryExecutionChecks
         await LoadWhileRunningAsync(check);
         Trace("ForkedPlans");
         ForkedPlans(check);
+        Trace("RemoteViews");
+        await RemoteViewsAsync(check);
         await CopySaveAsync(check);
     }
 

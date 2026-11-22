@@ -3,6 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { bigQueryDryRunRequestSchema, bigQueryDryRunResultSchema } from '../shared/bigquery/dry-run'
+import { resultsRemoteQuerySchema } from '../shared/bigquery/remote-view'
 import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
 import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
@@ -60,8 +61,8 @@ export const requestSchemas = {
     residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
-  // Only the load kind so far; main checks the renderer owns the result in that generation before sending it.
-  'results.remoteQuery': z.object({ queryId: z.uuid(), resultId: z.number().int().min(1).max(0xffffffff), generation: z.number().int().min(1).max(2 ** 31 - 1), kind: z.enum(['load']) }).strict(),
+  // Main checks the renderer owns the result, and every value list its filters name, in that generation before sending it.
+  'results.remoteQuery': resultsRemoteQuerySchema,
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional(), abortOnRefusedCommit: z.boolean().optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   // Distinct, as C# checks (SqlService.SetVisibility); an empty set says no result is shown.
