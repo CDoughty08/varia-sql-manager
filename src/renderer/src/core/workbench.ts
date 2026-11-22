@@ -81,6 +81,7 @@ import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { pivotContribution } from '../contributions/pivot'
 import { transposeContribution } from '../contributions/transpose'
+import { loadIntoMemoryContribution } from '../contributions/load-into-memory'
 import { plansContribution } from '../contributions/plans'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
@@ -360,7 +361,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onBackendState: listener => api.onBackendState(listener), backendState: () => api.getBackendState(), onLayout: listener => panes.subscribe(listener), mainPage, mainWindow: window
   })
   const retainedPlans = new RetainedPlansService()
-  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
+  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'), memory: () => resultMemory.getSnapshot(),
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
@@ -531,7 +532,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
-    api, documents, connections, settings, targetIdOf, agentEnabled: api.agentPreview,
+    api, documents, connections, settings, targetIdOf, events, agentEnabled: api.agentPreview,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({
@@ -847,6 +848,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    loadIntoMemoryContribution(workbench),
     plansContribution(workbench, api),
     paletteContribution(workbench),
     themeContribution(workbench, api),

@@ -175,7 +175,7 @@ which list in deployment order (`package_id`: a package name can be longer than 
 | `agentProxySubsystem` | any | Proxy rows (`agentProxies`) |
 | `bqProject` | any | Dataset rows (`bqDatasets`) |
 | `bqDataset` | any | Tables, Views, Materialized Views, External Tables, Routines, Models |
-| `bqTable` | none, `snapshot` | Columns |
+| `bqTable` | none, `snapshot`, `clone` | Columns |
 | `bqView` | any | Columns |
 | `bqMaterializedView` | any | Columns |
 | `bqExternalTable` | any | Columns |

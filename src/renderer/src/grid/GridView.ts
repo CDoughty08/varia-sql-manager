@@ -7,7 +7,7 @@ import { gesturesFor } from '../core/gestures'
 import { observeResize, windowOf, windows } from '../core/windows'
 import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
-import type { ResultHandle, RowWindow } from '../results/ResultClient'
+import type { ResultHandle, ResultSnapshot, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { FLAG_ERROR, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
@@ -34,6 +34,11 @@ import { diffGutter, type DiffSides } from './diff-gutter'
 import { diffSuffixOf, visibleColumnCount, type DiffSuffix } from './hidden-columns'
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
+
+/** The rows a grid draws: those available, and while a load into memory is open, the rows it showed before it. */
+export function drawnRowCount(snapshot: ResultSnapshot): number {
+  return Math.max(snapshot.rowsAvailable, snapshot.state === 'open' ? snapshot.rowsExpected ?? 0 : 0)
+}
 
 // A cell's look is one of 4,096 class strings, picked by these bits.
 // HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
@@ -128,7 +133,8 @@ interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: n
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
 /** What the React shell shows under the grid: a failed tile read, or a grid that stopped after repeated failures. */
-export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean }
+/** `expired`: a tile read failed with REMOTE_EXPIRED (BigQuery no longer keeps the windowed result), so Retry cannot help. */
+export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean; readonly expired?: boolean }
 /** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
 export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
@@ -863,7 +869,7 @@ export class GridView {
     this.scroller.replaceChildren()
   }
 
-  private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  private rows(): number { return drawnRowCount(this.handle.getSnapshot()) }
   /** Runs `callback` once the results port has had time to make room, unless the grid is disposed first. */
   private later(callback: () => void): void {
     if (this.disposed) return
@@ -1001,7 +1007,7 @@ export class GridView {
   }
 
   private setStatus(status: GridStatus): void {
-    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError) return
+    if (status.tileError === this.status.tileError && status.renderError === this.status.renderError && status.expired === this.status.expired) return
     this.status = status
     this.o.onStatus(status)
   }
@@ -1702,7 +1708,8 @@ export class GridView {
     // the other offsets; written after the paint).
     const bars = this.overview ? { right: Math.max(0, this.scroller.offsetWidth - width), bottom: Math.max(0, this.scroller.offsetHeight - height) } : undefined
     const state = this.o.state, snapshot = this.handle.getSnapshot()
-    const rows = snapshot.rowsAvailable
+    // A result loading into memory keeps drawing the rows it showed (loading past those read): reads stop at those available.
+    const rows = drawnRowCount(snapshot), available = snapshot.rowsAvailable
     // What is drawn: the rows and columns themselves, or turned. A transposed grid's columns grow as rows arrive.
     const drawnRows = this.drawnRows(rows), drawnColumns = this.drawnColumns(rows)
     if (this.uniform && this.uniform.count !== drawnColumns) this.uniform.setCount(drawnColumns)
@@ -1805,14 +1812,14 @@ export class GridView {
       // read is one across them.
       const view = this.sourceRange(range)
       const moved = this.rotated ? range.firstColumn - this.lastFirstColumn : offsets.topRow - this.lastTopRow
-      const again = this.data.ensure(view, rows, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
+      const again = this.data.ensure(view, available, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
       if (again) this.schedule()
       if (!this.rotated || view.lastRow >= view.firstRow) this.sizes?.ensure(view.firstRow, view.lastRow)
     }
     this.lastTopRow = offsets.topRow
     this.lastFirstColumn = range.firstColumn
-    const tileError = this.data.error
-    if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
+    const tileError = this.data.error, expired = tileError !== undefined && this.data.expired ? true : undefined
+    if (tileError !== this.status.tileError || expired !== this.status.expired) this.setStatus({ ...this.status, tileError, expired })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
     if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
     this.paint(range, headerRange, drawnRows, drawnColumns, rebased, columnsMoved)

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ResultClient, WindowCache, type PortMessageEvent, type RowWindow, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
+import { drawnRowCount } from '../src/renderer/src/grid/GridView'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { ApiResult, QueryResult, ResultDescriptor, ResultsDistinctResult, ResultsProfileResult } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
@@ -295,6 +296,67 @@ describe('ResultClient', () => {
     worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 5, rowsStored: 5, rowsAvailable: 5, bytesStored: 500 }] } })
     await settle()
     expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 5, state: 'open' })
+  })
+
+  it('keeps the projected size of a windowed result only while it is windowed', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 5000, rowsRead: 5000, rowsStored: 0, rowsAvailable: 5000, bytesStored: 0, state: 'complete', projectedBytes: 4_000_000 })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: windowed } })
+    await settle()
+    const handle = client.open(windowed)
+    expect(handle.getSnapshot().projectedBytes).toBe(4_000_000)
+    // Loading into memory drops it: the result is no longer windowed.
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 2, residence: 'memory', rowsRead: 0, rowsAvailable: 0, state: 'open' } } })
+    await settle()
+    expect(handle.getSnapshot().projectedBytes).toBeUndefined()
+  })
+  it('keeps the rows a windowed result showed while it loads into memory, until the load completes', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 5000, rowsRead: 5000, rowsStored: 0, rowsAvailable: 5000, bytesStored: 0, state: 'complete' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: windowed } })
+    await settle()
+    const handle = client.open(windowed)
+    expect(drawnRowCount(handle.getSnapshot())).toBe(5000)
+    // The load's residence event starts the counters again: the grid still draws the 5,000 rows (loading past those read).
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 2, residence: 'memory', rowsRead: 0, rowsAvailable: 0, state: 'open' } } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsAvailable: 0, rowsExpected: 5000, state: 'open' })
+    expect(drawnRowCount(handle.getSnapshot())).toBe(5000)
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: 3, rowsRead: 1200, rowsStored: 1200, rowsAvailable: 1200, bytesStored: 500 }] } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ rowsAvailable: 1200, rowsExpected: 5000 })
+    expect(drawnRowCount(handle.getSnapshot())).toBe(5000)
+    // A load stopped short (Maximum rows, the budget) draws only what it loaded once it completes.
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.closed', descriptor: { ...windowed, revision: 2, residence: 'memory', rowsRead: 3000, rowsStored: 3000, rowsAvailable: 3000, state: 'complete' } } })
+    await settle()
+    expect(handle.getSnapshot().rowsExpected).toBeUndefined()
+    expect(drawnRowCount(handle.getSnapshot())).toBe(3000)
+    // A load refused part way switches back to windowed: nothing is expected of it any more.
+    worker().toWorker({ t: 'query', queryId: 'query-3', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 3, residence: 'memory', rowsRead: 0, rowsAvailable: 0, state: 'open' } } })
+    worker().toWorker({ t: 'query', queryId: 'query-3', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 4 } } })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ residence: 'remote', revision: 4, rowsAvailable: 5000 })
+    expect(handle.getSnapshot().rowsExpected).toBeUndefined()
+  })
+
+  it('keeps no expected rows when a result switches from memory to windowed', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const opened = descriptor({ residence: 'memory', revision: 0, rowsTotal: 10, rowsAvailable: 8, state: 'open' })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: opened } })
+    await settle()
+    const handle = client.open(opened)
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.residence', descriptor: { ...opened, revision: 1, residence: 'remote', rowsAvailable: 0, rowsStored: 0 } } })
+    await settle()
+    expect(handle.getSnapshot().rowsExpected).toBeUndefined()
   })
 
   it('does not keep a view whose sort was answered after its result switched residence', async () => {

@@ -419,6 +419,8 @@ describe('menu state', () => {
       'output.updatePivot',
       // The grid menu's Transpose submenu, also the results toolbar's Transposed and Headers.
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders',
+      // A windowed BigQuery result's strip offers Load into Memory, also in the results toolbar's ⋯ menu.
+      'output.loadIntoMemory',
       // A comparison's toolbar controls, also in the results toolbar's More results tools.
       'output.compareMatch', 'output.compareChangesOnly', 'output.compareOneRow', 'output.compareExactText', 'output.compareSwapSides', 'output.compareGoToOld', 'output.compareGoToNew',
       // Moving between a comparison's differences: keys, its toolbar, the grid's menu, More results tools and the palette.

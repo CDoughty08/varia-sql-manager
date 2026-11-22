@@ -37,7 +37,7 @@ const explorerSelections: Partial<ContextKeys>[] = [
  * Menu items left without an access key. The result grid's menu shows more items than its titles have letters (none has
  * k, q or x), so Update Pivot takes 'u' and Pivot Results… goes without; every other item keeps the key users know.
  */
-const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…', 'Go to Previous Difference', 'Go to Possible Match'], 'output.tools': ['Go to Previous Difference'] }
+const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…', 'Go to Previous Difference', 'Go to Possible Match'], 'output.tools': ['Go to Next Difference', 'Go to Previous Difference'] }
 /** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
 function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
   const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
@@ -62,7 +62,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(386)
+    expect(commandIds).toHaveLength(387)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -243,7 +243,7 @@ describe('context keys', () => {
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
     expect(keysOfScope('target')).toEqual([
       'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'agentRole',
-      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema', 'outputGridComparison'
+      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
     ])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)

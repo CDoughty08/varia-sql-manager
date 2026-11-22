@@ -272,6 +272,9 @@ export interface ResultDescriptor {
   rowsTotal?: number
   /** Bumped by each switch between memory and windowed (resultSet.residence): pages read under an older revision are stale. */
   revision?: number
+  /** A windowed result's projected size in memory (its measured row cost times its rows): Load into memory is offered
+   *  only while it fits the result memory free at that point (docs/bigquery.md, Load into memory). */
+  projectedBytes?: number
 }
 /** Where a BigQuery result's rows live: `remote` is windowed in BigQuery. */
 export type ResultResidence = 'memory' | 'remote'

@@ -185,7 +185,7 @@ internal sealed partial class BigQueryService
         var table = await MetadataAsync(connection, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, name);
-            call.SelectedFields = "schema,type";
+            call.Fields = "schema,type";
             return call.ExecuteAsync(t);
         }, token);
         return Template(verb, table.Type, table.Schema?.Fields ?? [], BqNames.TablePath(project, dataset, name));

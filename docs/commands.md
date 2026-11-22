@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (386)
+## Commands (387)
 
 ### File
 
@@ -201,6 +201,7 @@ keys it uses are listed below.
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results…; Results toolbar › More results tools › Pivot… |
 | Update Pivot | `output.updatePivot` | — | — | — | Always | Query Output context menu › Update Pivot |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed; Results toolbar › More results tools › Transposed |
+| Load Result into Memory | `output.loadIntoMemory` | — | — | — | Always | Results toolbar › More results tools › Load into Memory |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers…; Results toolbar › More results tools › Choose Headers… |
@@ -328,7 +329,7 @@ keys it uses are listed below.
 | Open Peek as Tab | `explorer.openPeekTab` | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌘↩ (`peekFocus && !outputGridFocus`), ⌘↩ (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady` | — |
 | View Dependencies | `explorer.viewDependencies` | — | — | — | `backendReady && explorerSelectionDependencies` | Object Explorer context menu › View Dependencies |
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
-| Preview Rows | `explorer.previewRows` | — | — | — | `backendReady && explorerSelectionKind == 'bqTable' && !documentBusy` | Object Explorer context menu › Preview Rows |
+| Preview Rows | `explorer.previewRows` | — | — | — | `backendReady && explorerSelectionKind == 'bqTable' && !documentBusy` | Object Explorer context menu › Preview Rows; Search Objects result context menu › Preview Rows |
 | BigQuery Properties | `explorer.bigQueryProperties` | — | — | — | `backendReady && (explorerSelectionKind == 'bqTable' \|\| explorerSelectionKind == 'bqView' \|\| explorerSelectionKind == 'bqMaterializedView' \|\| explorerSelectionKind == 'bqExternalTable')` | Object Explorer context menu › Properties |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
@@ -1064,6 +1065,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `0_reveal` | **R**eveal in Object Explorer | `search.revealHit` | Always |
+| `1_query` | **P**review Rows | `explorer.previewRows` | `explorerSelectionKind == 'bqTable'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != ''` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != ''` |
@@ -1075,8 +1077,8 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | --- | --- | --- | --- |
 | `1_names` | **N**ame | `search.copyName` | Always |
 | `1_names` | **S**chema-Qualified Name | `search.copySchemaName` | `searchHitSchema` |
-| `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
-| `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
+| `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema \|\| searchHitBigQuery` |
+| `2_brackets` | **B**racketed Name | `search.copyBracketedName` | `!searchHitBigQuery` |
 
 #### Results toolbar › More results tools (`output.tools`)
 
@@ -1090,6 +1092,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `2_view` | **C**ompare… | `output.compare` | Always |
 | `2_view` | **T**ransposed | `output.transpose` | Always |
 | `2_view` | Choose **H**eaders… | `output.transposeChooseHeaders` | `resultsGridTransposed` |
+| `2_view` | Load **i**nto Memory | `output.loadIntoMemory` | Always |
 | `3_show` | Column Pro**f**ile | `output.toggleColumnProfile` | Always |
 | `3_show` | Profile Selected Columns **O**nly | `output.toggleProfileSelectedColumns` | Always |
 | `3_show` | Row Si**z**e | `output.toggleRowSize` | Always |
@@ -1105,7 +1108,7 @@ Click the ⋯ button at the end of the results toolbar (More results tools), or 
 | `5_compare` | Go to Ol**d** Result | `output.compareGoToOld` | `resultsGridComparison` |
 | `5_compare` | Go to New Res**u**lt | `output.compareGoToNew` | `resultsGridComparison` |
 | `5_compare` | Sa**v**e Results As… | `output.saveResultsAs` | `resultsGridComparison` |
-| `5_compare` | Go to Next D**i**fference | `output.compareNextDifference` | `resultsGridComparison` |
+| `5_compare` | Go to Next Difference | `output.compareNextDifference` | `resultsGridComparison` |
 | `5_compare` | Go to Previous Difference | `output.comparePreviousDifference` | `resultsGridComparison` |
 | `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
@@ -1134,7 +1137,7 @@ Right-click the execution plan's Properties pane, or press Shift+F10 or the cont
 | `1_copy` | **C**opy | `plan.copyProperties` | Always |
 | `1_copy` | Copy **V**alue | `plan.copyPropertyValues` | Always |
 
-## Context keys (184)
+## Context keys (185)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1320,6 +1323,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 | `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
+| `searchHitBigQuery` | boolean | target | The Search Objects result the menu is for is a BigQuery object, whose full name is its backtick-quoted path rather than a bracketed one. |
 | `resultsGridComparison` | boolean | state | The results grid that last had the focus in the active query is a comparison (Compare); in a results grid's own menu, that grid is. |
 | `comparisonInputsOpen` | boolean | state | Both results that comparison compared are still open, so its toolbar and commands can change it; while one is closed they are unavailable. |
 | `outputGridComparison` | boolean | target | The menu is for a comparison's results grid. |

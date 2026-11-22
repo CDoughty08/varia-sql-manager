@@ -208,7 +208,8 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
     documentTabFloating: target?.kind === 'documentTab' && !!target.floating,
-    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined
+    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined,
+    searchHitBigQuery: target?.kind === 'searchHit' && target.hit.object.project !== undefined
   }
 }
 /**

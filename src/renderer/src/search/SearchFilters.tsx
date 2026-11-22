@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { searchTypes, type SearchScope, type SearchType } from '../../../shared/explorer/search.ts'
+import type { ProviderId } from '../../../shared/providers.ts'
 import Icon from '../Icon'
 import { Chip, ChipGroup } from '../kit/Chip'
 import Segmented from '../kit/Segmented'
@@ -20,6 +21,12 @@ export function searchFilterSummary(scope: SearchScope, types: readonly SearchTy
 }
 
 const moreLabel = (hidden: number) => `+${hidden} more`
+/** The type filters a search over servers of `providers` shows: each engine's, and any chosen that the servers searched no longer
+ *  have (a tab moved from BigQuery to SQL Server), so a choice can always be seen and taken back. With no server, SQL Server's. */
+export function shownSearchTypes(providers: ReadonlySet<ProviderId>, types: readonly SearchType[]): readonly typeof searchTypes[number][] {
+  const engines = providers.size ? providers : new Set<ProviderId>(['sqlserver'])
+  return searchTypes.filter(type => type.providers.some(provider => engines.has(provider)) || types.includes(type.id))
+}
 
 interface Props {
   readonly id: string
@@ -29,6 +36,8 @@ interface Props {
   readonly onTypes: (types: SearchType[]) => void
   /** Controls after the scope (the tab's server picker). */
   readonly options?: ReactNode
+  /** The engines of the servers searched: their type chips show. */
+  readonly providers: ReadonlySet<ProviderId>
 }
 
 /**
@@ -37,7 +46,7 @@ interface Props {
  * a pane too narrow for the scope's segments one Filters button that names what is chosen and shows them all on demand. A
  * hidden copy of the controls is measured, so the layout follows fonts, density and the checks pressed chips draw.
  */
-export default function SearchFilters({ id, scope, types, onScope, onTypes, options }: Props) {
+export default function SearchFilters({ id, scope, types, onScope, onTypes, options, providers }: Props) {
   const scopeLabel = useId()
   const panel = useId()
   const row = useRef<HTMLDivElement>(null)
@@ -45,6 +54,8 @@ export default function SearchFilters({ id, scope, types, onScope, onTypes, opti
   const measure = useRef<HTMLDivElement>(null)
   const [layout, setLayout] = useState<FilterLayout>({ collapsed: false, shown: searchTypes.length + 1 })
   const [expanded, setExpanded] = useState(false)
+  const shown = shownSearchTypes(providers, types)
+  const engines = [...providers].sort().join()
 
   useLayoutEffect(() => {
     const element = row.current, copy = measure.current
@@ -64,16 +75,16 @@ export default function SearchFilters({ id, scope, types, onScope, onTypes, opti
     observer.observe(copy)
     if (extra.current) observer.observe(extra.current)
     return () => observer.disconnect()
-  }, [scope, types, options])
+  }, [scope, types, options, engines])
 
   const chips = [
     <Chip key="all" label={allTypes} pressed={!types.length} title="Search every kind of object" onToggle={() => { if (types.length) onTypes([]) }} />,
-    ...searchTypes.map(type => <Chip key={type.id} label={type.label} pressed={types.includes(type.id)} onToggle={() => onTypes(toggleSearchType(types, type.id))} />)
+    ...shown.map(type => <Chip key={type.id} label={type.label} pressed={types.includes(type.id)} onToggle={() => onTypes(toggleSearchType(types, type.id))} />)
   ]
   const segmented = (key: string) => <Segmented id={`${id}-scope${key}`} labelledBy={scopeLabel} segments={searchScopeSegments} value={scope} onChange={value => onScope(value as SearchScope)} />
   const all = expanded || layout.collapsed
   const hidden = all ? 0 : chips.length - layout.shown
-  const hiddenChosen = searchTypes.slice(Math.max(0, layout.shown - 1)).filter(type => types.includes(type.id)).length
+  const hiddenChosen = shown.slice(Math.max(0, layout.shown - 1)).filter(type => types.includes(type.id)).length
   const summary = searchFilterSummary(scope, types)
   return <div ref={row} className="object-search-filters" data-collapsed={layout.collapsed ? '' : undefined}>
     <div className="object-search-options">
@@ -90,7 +101,7 @@ export default function SearchFilters({ id, scope, types, onScope, onTypes, opti
       <ChipGroup label="Object types">
         {all ? chips : chips.slice(0, layout.shown)}
         {hidden > 0 && <button type="button" className="chip object-search-more-types" aria-expanded={false} aria-controls={panel} data-chosen={hiddenChosen ? '' : undefined}
-          aria-label={`${moreLabel(hidden)}${hiddenChosen ? `, ${hiddenChosen} chosen` : ''}`} title={searchTypes.slice(layout.shown - 1).map(type => type.label).join(', ')} onClick={() => setExpanded(true)}>{moreLabel(hidden)}</button>}
+          aria-label={`${moreLabel(hidden)}${hiddenChosen ? `, ${hiddenChosen} chosen` : ''}`} title={shown.slice(layout.shown - 1).map(type => type.label).join(', ')} onClick={() => setExpanded(true)}>{moreLabel(hidden)}</button>}
         {expanded && !layout.collapsed && layout.shown < chips.length && <button type="button" className="chip object-search-more-types" aria-expanded aria-controls={panel} onClick={() => setExpanded(false)}>Fewer</button>}
       </ChipGroup>
     </div>}

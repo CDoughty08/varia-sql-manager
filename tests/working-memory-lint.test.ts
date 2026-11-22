@@ -116,7 +116,7 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   // calls it: nothing else may call it with a writer of its own.
   expect(uses(/\bBigQueryFetch\b/g)).toEqual(['SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
   const residence = files.find(({ file }) => file === 'SqlService.BigQueryResidence.cs')!.code
-  expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context\);/)
+  expect(residence).toMatch(/RemoteResult\.Create\([^;]*BigQueryFetch\(context\), context, new BigQueryRemoteRows\(this, context, set\)\);/)
   // ...and that Create is the only one: no second cache with a delegate of its own.
   expect(uses(/\bRemoteResult\s*\.\s*Create\b/g)).toEqual(['SqlService.BigQueryResidence.cs'])
   // (Nor through a using: a static import or an alias would call it by another spelling.)
@@ -150,8 +150,13 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(residence).toMatch(/remote\.Seed\(seed\);\n\s*if \(!store\.Demote\(set, remote, total, bump: false\)\) return null;/)
   expect(count(residence, /\bremote\.Seed\(/g)).toBe(1)
   // Storage Read reads a query's own rows under the budget and Load into memory's: never a windowed result's rows around
-  // the cache.
-  expect(uses(/\bOpenReadSessionAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'SqlService.BigQueryStorageRead.cs'])
+  // the cache, except Save Results As (SqlService.BigQueryExport.cs), which streams them to the file, each batch charged as
+  // working memory while it is written and kept nowhere.
+  expect(uses(/\bOpenReadSessionAsync\(/g).sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryStorageRead.cs'])
+  const exporting = files.find(({ file }) => file === 'SqlService.BigQueryExport.cs')!.code
+  expect(count(exporting, /\bReserveExport\(set, /g)).toBe(3)
+  expect(count(exporting, /\bset\.ReturnWork\(/g)).toBe(2)
+  expect(exporting).not.toMatch(/\bstore\.|\bSeed\(|\bResultSetBuffer\.\w+\(|\.Demote\(|\.Promote\(/)
   expect(uses(/\bBigQueryStorageSessionAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
   expect(uses(/\bReadBigQueryArrowAsync\(/g).sort()).toEqual(['SqlService.BigQueryExecution.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryStorageRead.cs'])
   for (const reader of ['BigQueryStorageSessionAsync(', 'ReadBigQueryArrowAsync(']) {
@@ -185,9 +190,10 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(bigQueryUses(/\.\s*Jobs\b(?!\s*\.\s*(?:Insert|Get|GetQueryResults|Cancel|List)\s*\()|\bJobs\s*:(?!:)/g).sort()).toEqual(['BigQuery/BigQueryService.Sessions.cs'])
   // ...and Google's client service is reached only in BigQuery's own code.
   expect(codeUses(/\b\w*[Cc]lient\s*\.\s*Service\b/g).filter(file => !file.startsWith('BigQuery/') && !file.startsWith('SqlService.BigQuery'))).toEqual([])
-  expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
+  // Save Results As (SqlService.BigQueryExport.cs) reads a windowed result's streams straight to the file.
+  expect(codeUses(/\bReadRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryStorage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryStorageRead.cs'])
   // Google's read-session types appear only in the Storage client, its session and the reader of a session's streams.
-  expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryStorageRead.cs'])
+  expect([...new Set(codeUses(/\b(?:ReadRowsRequest|ReadRowsResponse|CreateReadSession\w*|ReadSession)\b/g))].sort()).toEqual(['BigQuery/BigQueryService.Storage.cs', 'BigQuery/BigQueryStorage.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryStorageRead.cs'])
   const jobs = files.find(({ file }) => file === 'BigQuery/BigQueryService.Jobs.cs')!.code
   const tableRows = jobs.slice(jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync('))
   // The method alone, to its own end (a blank line inside it changes nothing).
@@ -199,7 +205,12 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(uses(/\bSendRawAsync\b/g).sort()).toEqual([...Array(3).fill('BigQuery/BigQueryService.Jobs.cs'), ...Array(2).fill('SqlService.BigQueryPreview.cs')])
   expect(count(tableRowsBody, /\bSendRawAsync\(service, request, t\)/g)).toBe(1)
   expect(count(jobs.slice(jobs.indexOf('async Task<BigQueryPage> ResultsPageAsync('), jobs.indexOf('internal Task<BigQueryPage> TableRowsAsync(')), /\bSendRawAsync\(service, request, token\)/g)).toBe(1)
-  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryResidence.cs'])
+  // ...and Save Results As, which writes a windowed result's pages to the file as they come (SqlService.BigQueryExport.cs).
+  expect(uses(/\bTableRowsAsync\b/g).sort()).toEqual(['BigQuery/BigQueryService.Jobs.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs'])
+  expect(count(exporting, /\bbigQuery\.TableRowsAsync\(/g)).toBe(1)
+  // ...and one Storage Read session, read stream by stream: the allowlists name the file, these pin its calls.
+  expect(count(exporting, /\bOpenReadSessionAsync\(/g)).toBe(1)
+  expect(count(exporting, /\bReadRowsAsync\(/g)).toBe(1)
   const delegate = residence.slice(residence.indexOf('private RemoteFetch BigQueryFetch('))
   expect(delegate.slice(0, delegate.indexOf('\n    };')).includes('bigQuery.TableRowsAsync(')).toBe(true)
   // Each page it reads is written into the block's writer and disposed there: none is kept for a later block, and the
@@ -208,9 +219,12 @@ it('reads BigQuery\'s remote rows only through the block cache, and builds unlim
   expect(count(delegate.slice(0, delegate.indexOf('\n    };')), /\bpage\b/g)).toBe(6)
   expect(residence).toMatch(/internal sealed record BigQueryWindow\([^)]*long CacheBytes\);\n/)
   // Every mention of the writer type, however a writer is built (a target-typed new included), is one of these.
-  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(7).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
-  // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks.
-  expect(uses(/new RemoteBlockWriter\(/g).sort()).toEqual(['Results/RemoteResult.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
+  expect(uses(/\bRemoteBlockWriter\b/g).sort()).toEqual([...Array(7).fill('Results/RemoteResult.cs'), ...Array(3).fill('SqlService.BigQueryExport.cs'), ...Array(3).fill('SqlService.BigQueryResidence.cs')])
+  // A writer without a byte limit holds only the first page, already in memory: its measure and its seed blocks; and Save's,
+  // which holds one REST page or one Arrow batch (charged as working memory while it is written), handed to the file as it
+  // fills and never kept.
+  expect(uses(/new RemoteBlockWriter\(/g).sort()).toEqual(['Results/RemoteResult.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryExport.cs', 'SqlService.BigQueryResidence.cs', 'SqlService.BigQueryResidence.cs'])
+  expect(count(exporting, /new RemoteBlockWriter\(set\.ResultId, set\.Wires, (?:written|first)\);/g)).toBe(2)
   const decide = residence.slice(residence.indexOf('DecideResidenceAsync('), residence.indexOf('async Task<RemoteResult?> KeepInMemoryAsync()'))
   expect(count(decide, /new RemoteBlockWriter\(set\.ResultId, set\.Wires, (0|from)\);/g)).toBe(2)
   expect(count(decide, /WriteRows\(first, plan, /g)).toBe(2)
@@ -225,7 +239,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   // and assignment (two), and that one call: never passed on, copied or called another way where a read could reach it
   // unreserved.
   expect(remote.match(/\bfetch\b/g)).toHaveLength(7)
-  for (const spelling of ['private readonly RemoteFetch fetch;', 'RemoteFetch fetch, object? source = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source };', 'RemoteFetch fetch)', 'this.fetch = fetch;', 'await fetch(from, rows, writer, token);']) expect(remote).toContain(spelling)
+  for (const spelling of ['private readonly RemoteFetch fetch;', 'RemoteFetch fetch, object? source = null, IRemoteRows? export = null) => new(store, resultId, wires, rows, capped, rowBytes, cacheLimit, connectionLane, fetch) { Source = source, Export = export };', 'RemoteFetch fetch)', 'this.fetch = fetch;', 'await fetch(from, rows, writer, token);']) expect(remote).toContain(spelling)
   expect(count(fetch, /\bfetch\s*\(/g)).toBe(1)
   // A failed fetch gives its estimate back; a built one settles what it really cost, an overrun reserved like the estimate
   // (within the cache's limit, else TOO_LARGE with the estimate given back), never charged past the limit.
@@ -300,11 +314,12 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(between('private void EvictLocked(', 'private void ReadAhead(')).toMatch(/var bytes = block\.Bytes;\n\s*block\.Bytes = 0;[\s\S]*store\.ReturnCache\(ref held, bytes\);/)
   // Pages are kept in two places only: Seed's one reserved page, and a fetch's settled pages.
   expect(count(remote, /\bPages\s*\.\s*(?:Add|AddRange|Insert|InsertRange)\b|\bPages\s*\[/g)).toBe(2)
-  expect(count(between('public void Seed(', 'public async Task<long> ReadAsync('), /block\.Pages\.Add\(page\);/g)).toBe(1)
+  expect(count(between('public void Seed(', 'public Task<long> ReadAsync('), /block\.Pages\.Add\(page\);/g)).toBe(1)
   expect(count(fetch, /block\.Pages\.AddRange\(pages\);\n\s*block\.Bytes \+= cost;/g)).toBe(1)
   // No other container keeps pages (an evicted block's kept for scroll-back would grow uncounted): every mention of the page
   // type and of a block's pages is one of today's.
-  expect(count(remote, /\bRemotePage\b/g)).toBe(8)
+  // (Four more name the type without keeping one: ReadPagesAsync's and Save's callbacks, and TakeSealed's list, built and returned.)
+  expect(count(remote, /\bRemotePage\b/g)).toBe(12)
   expect(count(remote, /\bPages\b/g)).toBe(7)
   // ...nor a page's body apart from it (bodies sent kept for scroll-back would grow uncounted): its record, its cost and the
   // send.
@@ -318,7 +333,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect([writes(fetch, 'estimate'), writes(fetch, 'cost')]).toEqual([1, 1])
   expect([writes(between('private bool Reserve(', 'private void EvictLocked('), 'bytes'), writes(between('private async Task ReserveOverrunAsync(', 'private bool Reserve('), 'bytes')]).toEqual([0, 0])
   // A seeded block's charge is the sum of its pages', and the store gives back exactly what it is told on every counter.
-  expect(count(between('public void Seed(', 'public async Task<long> ReadAsync('), /block\.Bytes \+= page\.Cost;/g)).toBe(1)
+  expect(count(between('public void Seed(', 'public Task<long> ReadAsync('), /block\.Bytes \+= page\.Cost;/g)).toBe(1)
   expect(count(remote, /\bblock\.Bytes\s*(?:[-+*/%&|^]|<<|>>>?|\?\?)?=(?!=)/g)).toBe(3)
   const returnCache = storeCode.slice(storeCode.indexOf('public void ReturnCache(ref long held, long bytes)'))
   expect(returnCache.slice(0, returnCache.indexOf('\n    }\n'))).toMatch(/\{\n\s*if \(bytes <= 0\) return;\n\s*Interlocked\.Add\(ref held, -bytes\);\n\s*Interlocked\.Add\(ref windowCacheUsed, -bytes\);\n\s*Interlocked\.Add\(ref used, -bytes\);\n\s*RoomChanged\(\);\n\s*Freed\(bytes\);$/)
@@ -360,7 +375,7 @@ it('reserves a block cache\'s bytes before it fetches or keeps a page', () => {
   expect(reserve).toMatch(/while \(!store\.TryReserveCache\(ref held, limit, bytes, out var full\)\)/)
   expect(reserve).toMatch(/block\.Waiters == 0 && block\.Fetching is null/)
   expect(reserve).toMatch(/private RequestException BudgetFull\(\) => new\("TOO_LARGE", store\.IsSystemMemoryLow\(\) \? SqlService\.LowMemory\n/)
-  const seed = between('public void Seed(', 'public async Task<long> ReadAsync(')
+  const seed = between('public void Seed(', 'public Task<long> ReadAsync(')
   expect(seed.indexOf('store.TryReserveCache(ref held, CacheLimit, page.Cost)')).toBeGreaterThan(0)
   // A refused reservation keeps no page.
   expect(seed).toMatch(/if \(!store\.TryReserveCache\(ref held, CacheLimit, page\.Cost\)\) (?:return|continue|break);/)
