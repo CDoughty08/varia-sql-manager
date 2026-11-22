@@ -64,7 +64,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 | Q8 | Show Change Details key: Ctrl+I (⌘I on macOS), only in a comparison's grid or card? | **Yes.** VS Code's Show Hover is the chord Ctrl+K Ctrl+I, but Varia's two-part chords work only in editor text (Monaco dispatches them), so a grid key must be one keystroke. Ctrl+I is free in Varia's catalogue and keeps the "I" for information. ⌘I is already Properties in Object Explorer on macOS, so the two share it by focus, as ⌘I and Get Info do in Finder. Monaco binds both to Trigger Suggest in editor text, so `monacoShadowAllowlist` gains `ctrl+i` and its `cmd+i` reason names the grid too; the card's `focusSamples` entry is under § 3 + 7's catalogues. |
 | Q9 | A comparison of rows as shown going out of date: rebuild automatically like Pivots, or Update only? | **Update only.** A rebuild resets the comparison's sort, filters and scroll, which is more disruptive than a Pivot rebuild. |
 | Q10 | A global "always ignore columns named …" setting (dbForge's mask) with C2? | **No.** Ignored columns are remembered per pair. Revisit if people ask. |
-| Q11 | Should Check each statement also check that each UPDATE's row still holds the values it changes from? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Without it, the wrong direction for a repair passes every check and changes nothing, since each UPDATE finds its row. Columns without `=` (xml, text, ntext, image, json), float and real (a literal may not compare equal to the stored value) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
+| Q11 | Should Check each statement also check that each UPDATE's row still holds the values it changes from, and that each INSERT's row is not in the target yet? | **Yes, as part of that check.** Each UPDATE's WHERE also compares the columns it SETs with the values the target should hold now, NULL-safe (`AND [status] = N'Open'`), so a wrong direction, or a row changed since the comparison, updates no row and the check THROWs. Each INSERT is preceded by `IF EXISTS (SELECT 1 FROM … WHERE <its keys>) THROW …`, so a wrong direction with only INSERT ticked, or a row already restored, inserts nothing instead of a duplicate where the key is not the table's. Without these, the wrong direction for a repair passes every check and changes nothing, or inserts the other side's rows again. Columns without `=` (xml, text, ntext, image, json) and values that were truncated or hold U+FFFD are left out of the comparison. Values compare in the target column's collation, so a case-only change under a case-insensitive collation is not caught. |
 
 ## What every feature shares
 
@@ -75,8 +75,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     `notIn` and `between` by representative rows, distinct snapshots), which a replace does not keep.
   - Ignore and Stop ignoring keep the columns, so they also keep the sort keys, as a rebuilt Pivot does. Because they
     keep the sort, someone could expect them to keep value filters too, so they alone say when those were cleared.
+    They also keep the active column and, while the active row's entry is still shown, that entry, found again by its
+    stored rows (`results.findRows`), and scroll it into view; otherwise the top, as today. Toggling columns while
+    scanning keeps the place.
   - The announcement, in order: the shipped sentence ("Comparison updated: matched by id, 4 changed, 3 added, 1
-    removed."); "Result 1's current filters were applied." (a comparison of rows as shown that was out of date, § 6);
+    removed."); "Result 1's current filters were applied." (a comparison of rows as shown that was out of date, § 6,
+    in the caption's forms);
     "Value filters were removed." (Ignore and Stop ignoring, when there were any); the notices it newly shows; and the
     shipped sentence for each chip left with no rows ("No changed rows are left, so that filter was turned off.").
 - **Remembered per pair.** The match memory (the last 64 pairs of names, one way round, per tab) also keeps ignored
@@ -349,7 +353,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     elsewhere could not be dismissed without moving the pointer. With the focus elsewhere, the grid's own tooltip shows,
     as today. Over that cell the card replaces the tooltip and repeats its truncation sentence.
   - **By key**, **Show Change Details** (Ctrl+I, ⌘I on macOS; Q8), the Comparison submenu or the palette opens it
-    on the active cell. From the grid menu it opens on the cell the menu was opened on, passed through `argsFor` as
+    on the active cell. From the palette or More results tools, where the focus is elsewhere, it first shows the
+    pane and focuses the comparison's grid on that cell, so Escape and Tab reach the card. From the grid menu it opens
+    on the cell the menu was opened on, passed through `argsFor` as
     Ignore This Column's column is: a right press inside a selection keeps the active cell elsewhere. Opened on a cell
     that is not the active cell, the card describes that cell, which gets `aria-details`, and does not follow; it
     closes when the active cell moves. It is available on any comparison cell; cells with nothing to mark open the
@@ -380,7 +386,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     '9' became '10', and 1 more."; "1 edit: ' Rush' was removed."). An edit reads "'x' became 'y'", "'x' was removed" or
     "'y' was added". The same summary is what the live region says, so:
     - a quoted run is cut at 40 characters with "…";
-    - a run made only of whitespace is named, not quoted: "a trailing space was added", "2 line breaks were removed",
+    - a run made only of whitespace is named, not quoted: "a space was added", "2 line breaks were removed",
       "a tab became a space";
     - a change from or to NULL is not an edit: "NULL became 'Net 30'.", "'Net 30' became NULL."
   - **− Old** and **+ New**, wrapped in the mono font. A value up to 4,000 characters shows whole. A longer one shows a
@@ -685,7 +691,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - When the index knows the table it says so ("Search Objects knows [Sales_Test].[dbo].[Orders] on this connection,
       with all 6 columns. id is its identity column."). It warns, never refuses, when the index lacks the table or a
       column, or marks a ticked column computed or identity.
-  - **Direction**, naming the target as typed:
+  - **Direction**, naming the target as resolved ("The target table" before one is chosen):
     - "[Sales_Test].[dbo].[Orders] holds Result 1's rows: change them to Result 3's";
     - "[Sales_Test].[dbo].[Orders] holds Result 3's rows: change them to Result 1's".
 
@@ -707,7 +713,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - A line names columns only one result has ("note2 is only in Result 1, so INSERTs leave it out").
     - While UPDATE or INSERT is ticked, a line names the unticked columns the script would otherwise write: "note is
       unticked: UPDATEs leave its changes out, and inserted rows get its default or NULL." ("note and memo are
-      unticked: … their changes …"), each clause only while its statement is ticked. Columns the target fills itself
+      unticked: … their changes …"), each clause only while its statement is ticked and naming only the columns it
+      would write (an ignored column only in the INSERT clause). Columns the target fills itself
       (rowversion, computed, an identity left out) have their own lines instead.
     - A data column without a name, whose name the result repeats, or whose name holds a line break starts unticked
       and locked ("No name", "Name repeated", "Name has a line break"), since an INSERT could not name it: a query
@@ -732,10 +739,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     rows are the grid's selection, which always holds at least the active cell's row. The preview reads them as it shows,
     and Script reads them again.
   - **Options:** Wrap in a transaction (on), Check each statement changes one row (on; Q2), with the line "UPDATEs
-    also check that the row still holds the values they change from." (Q11). Turning off the transaction warns
-    "Without a transaction, statements before a failure stay applied.", since a failed check, a key violation or a
-    trigger's error all leave earlier statements in place. Turning off the checks warns "Without the checks, a
-    statement runs even when its row is missing, repeated or changed, and nothing says so."
+    also check that the row still holds the values they change from, and INSERTs that the row is not there yet."
+    (Q11). Turning off the transaction warns "Without a transaction, statements before a failure stay applied.", since
+    a failed check, a key violation or a trigger's error all leave earlier statements in place. Turning off the checks
+    warns "Without the checks, a statement runs even when its row is missing, repeated or changed, and nothing says
+    so."
   - **Destination:** New Query Editor Window (default) or Clipboard.
   - A **preview** of the first 30 lines, a summary beside Script ("Deletes 2 rows, updates 5 rows and inserts 1 row in
     [Sales_Test].[dbo].[Orders] to match Result 3.", with singulars, naming only ticked statements and leaving out zero
@@ -762,9 +770,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       also holds each of those columns' current value, written as the key values are (`AND [status] = N'Open'`, or
       `[status] IS NULL`), except the columns Q11 leaves out.
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
-      once.', 1;` (an UPDATE's says "…exactly once with the values it changes from."). THROW takes only a literal or
-      a variable, so the key text there is one plain literal: the raw key text is cut to 200 code points first (never
-      inside a surrogate pair), then escaped by the script's comment escape: quotes doubled, `\\`, `\t`, `\r` and `\n`
+      once.', 1;` (an UPDATE's says "…exactly once with the values it changes from."), and each INSERT is preceded by
+      `IF EXISTS (SELECT 1 FROM [Sales_Test].[dbo].[Orders] WHERE [id] = 1011) THROW 50000, N'Row id = 1011 is already
+      in the target.', 1;` (Q11). DELETEs run first, so a reused key is gone before its INSERT checks. THROW takes
+      only a literal or a variable, so the key text there is one plain literal: the raw key text is cut to 200 code
+      points first (never inside a surrogate pair), then escaped by the script's comment escape: quotes doubled, `\\`, `\t`, `\r` and `\n`
       for backslash, tab, CR and LF, and `\uXXXX` for every other control character (U+0000–U+001F, U+007F–U+009F),
       U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
       rule. Escaping after the cut means a doubled quote or an escape is never split.
@@ -776,14 +786,15 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   window's description, read when it opens, and the focus starts on its first button. The rest are found on Script:
   the window's live region says the refusal, Script keeps the focus, marked unavailable (`aria-disabled`), and it is
   available again on any change the preview follows: the form, or the comparison's sort, filters, chips, selection or
-  a replace. When a refusal clears, after its own button or a replace, the focus moves to Target table and the live
-  region says the shipped sentence ("Comparison updated: matched by updated_at, …"); a replace that fails says its
+  a replace. When a refusal clears, after its own button or a replace, the dialog's focused element becomes Target
+  table (the window is activated only when Choose key columns… opens it again) and the live region says the shipped
+  sentence ("Comparison updated: matched by updated_at, …"); a replace that fails says its
   sentence in the dialog and keeps the refusal and its focus. When several apply, the first in this list shows. Each
   refusal says what to do:
   - a comparison of rows as shown (§ 6): "Result 1 is compared as shown, so rows its filters hide show as added or
-    removed, and a script would insert or delete them. Compare whole results to script differences.", with **Compare
-    whole results** ("Result 1 and Result 3 are compared as shown, so rows their filters hide …" for both). This holds
-    even when both sides have the same filters, since a row that changes out of a filter shows as removed. It shows
+    removed, and a script would insert or delete them. Compare whole results to script differences. To script only
+    some rows, filter the comparison itself.", with **Compare whole results** ("Result 1 and Result 3 are compared as
+    shown, so rows their filters hide …" for both). This holds even when both sides have the same filters, since a row that changes out of a filter shows as removed. It shows
     only under key columns the user chose: under any other match the not-matched-by-key refusal shows instead, since
     comparing whole results alone would not help, so a side shown only in its sorted order (Row position) never
     reaches it;
@@ -810,8 +821,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       The as-shown refusal does the same: "Result 1 is closed, so the comparison cannot be rebuilt."
   - chosen rows with a repeated key (≈): "12 rows share a key, so a statement could change several rows. Choose key
     columns that are unique, or rows without a repeated key.";
-  - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full, so the script
-    would not be exact. Choose rows without them, or untick note." (Q3). One value reads "1 value in note was not kept
+  - a needed value truncated, or compared by its stored part: "3 values in note were not kept in full (rows id = 1002,
+    1007 and 1 more), so the script would not be exact. Choose rows without them, or untick note." (Q3), the keys
+    written as the THROW text is, each cut at 40 characters. One value reads "1 value in note was not kept
     in full", and several columns "5 values in note and memo were not kept in full, … or untick those columns.";
     unticking says what it costs (Columns above);
   - a needed text value holding U+FFFD: "2 values in note cannot be written exactly. Choose rows without them, or untick
@@ -831,14 +843,20 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   - A replace of the comparison refreshes the counts and keeps the draft. So does any change to the comparison's sort,
     filters, chips or selection: the counts, summary and preview follow the grid, as the preview follows the form, so
     what Script writes is what the window shows.
+  - A replace drops the comparison's value filters (shipped), so when one did, a line by Rows says "Value filters were
+    removed, so Rows in the grid now holds 31 rows." and the dialog's live region adds that sentence after the shipped
+    one: a refusal's button never widens the rows unannounced.
   - The comparison closing (re-run, Close Results, backend loss) says "The comparison was closed." and disables Script.
   - The draft (target, direction, rows, columns, options) is remembered per pair in the tab, in the same 64-pair memory as
-    the match.
+    the match. It keeps the target as resolved, three parts, so a later run never moves it to another database; when
+    that is not the query document's current database, the line under the field says so ("In Sales_Test.
+    SQLQuery3.sql's database is now Sales_Dev.").
   - Invoked from another comparison, the open window switches to it, with that pair's draft; the first pair's draft stays
     remembered.
   - It works while an input is closed: the script reads only the comparison.
 - **Keyboard and screen readers:** a labelled form in its own window, Tab order top to bottom. The focus starts in
-  Target table, or on a refusal's first button, or on Cancel when a refusal has none.
+  Target table, or on a refusal's first button, or on Cancel when a refusal has none or its buttons are unavailable
+  (an input closed).
   - Enter on a button presses that button. In the target box it picks a suggestion while the list is open. Elsewhere it
     presses Script, the default button.
   - Escape closes an open suggestion list first. Otherwise it is Cancel, with Cancel's two steps while generating (stop,
@@ -895,7 +913,7 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | Type | Literal |
   | --- | --- |
   | Integers; decimal, numeric, money, smallmoney | As stored; decimals exactly |
-  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly |
+  | float, real | Stored as G15 and G7 text: that text when it reads back as the value, else the exact value kept beside it (`CellLengths.TryExact`), written round-trip. Always with an exponent (`3.0000000000000004E-1`, `1E0`): without one, T-SQL reads the text as a numeric literal, whose conversion to float may not round correctly. A real is written `CAST(<that> AS real)`: a bare literal is a float, and comparing it with a real column widens the real, which then differs, so a real key or Q11's guard would find no row |
   | bit | 0 or 1 |
   | char, varchar, text; nchar, nvarchar, ntext | `N'…'` with `''` escaping. A non-N literal is read in the database's default code page, so even char columns get `N'…'`, converted to the column's collation on assignment. CR, LF, U+0085, U+2028, U+2029 and every other control character but tab are written as `NCHAR(n)` joins (`N'a' + NCHAR(13) + NCHAR(10) + N'b'`): the query window's model normalizes line breaks and the clipboard may convert them. A joined value over 4,000 characters starts with `CAST(N'…' AS nvarchar(max))`, since joining shorter strings stops at 4,000. A value that would need more than 64 joins (pretty-printed JSON or XML, a long multi-line note) is written instead as one exact term, `CAST(0x<its UTF-16LE bytes> AS nvarchar(max))`: a chain of thousands of `+` terms risks SQL Server's nesting and expression limits (errors 191, 8631, 8632), which would fail the statement and roll the script back. The size estimate counts its 4 hex digits a code unit |
   | date, time(n), datetime2(n), datetimeoffset(n) | ISO 8601 text in a `CAST('…' AS <type>)` of the column's own type and precision |
@@ -940,8 +958,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - every SQL Server type in `sortKind`'s table;
     - quoting, NULL keys, composite keys;
     - both directions, statement order, the row checks and their cut key text;
-    - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, both
-      directions;
+    - Q11's old values in an UPDATE's WHERE: NULL, each type it leaves out, a truncated or U+FFFD value left out, a
+      real compared through its cast, both directions; the INSERT check with NULL and composite keys;
     - identity insert, an identity column never SET, collation-only values left out under Exact text off;
     - float values whose text does not read back, datetime in the `T` form, char values as `N'…'`;
     - the refusals, a match that is not `columns`, and a comparison of rows as shown;
@@ -962,9 +980,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     text, a value with 10,000 line breaks, an xml value stored with style 1, and 17-digit floats, included), compare
     their SELECTs, script,
     run the script on the target, then compare again and expect no differences. Run it in both directions, and under a
-    non-English language and DATEFORMAT. Then run a script of the wrong direction and expect the check's THROW, with
-    the target unchanged. It is a new live `Suite(...)` with a `LiveGroups.Suites` entry, and its CI
-    seconds go in docs/ci.md's table.
+    non-English language and DATEFORMAT. Then run a script of the wrong direction, once whole and once with only
+    INSERT ticked, and expect the check's THROW, with the target unchanged. It is a new live `Suite(...)` with a
+    `LiveGroups.Suites` entry, and its CI seconds go in docs/ci.md's table.
   - vitest for the dialog: states, counts per direction, locked and unticked columns, warnings, the comparison replaced
     or closed while open, switching to another comparison, Enter and Escape in the suggestion list and on buttons, the
     draft memory, multipart target names, the Automatic and as-shown refusals and their buttons, the closed-input form
@@ -1065,7 +1083,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     inputs. It is remembered per pair.
   - The choice defaults to Whole result, as today; the pair's remembered choice wins.
   - When the run already has the popover's pair, the button reads **Update** when Compare each result differs from that
-    comparison's, as it does for Exact text, and **Show It** otherwise.
+    comparison's, as it does for Exact text, or when As shown is chosen and that comparison is out of date, and
+    **Show It** otherwise.
   - The shipped notice ("Filters and sorts on the inputs were not applied: …") gains **Compare rows as shown** when
     there is something to apply. A comparison read as shown never shows that notice: its own notice replaces it.
   - **Compare Rows as Shown** is a checkbox in the Comparison submenu, More results tools and the palette. Unticked, it
@@ -1091,7 +1110,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
 - **Other changes.** Match, Ignore, Layout, Rows, Exact text and Swap read the inputs as shown now. While it is not out
   of date, that is the same rows. While it is out of date, they also update it, and their announcement says so after
   the shipped sentence: "Comparison updated: matched by id, 4 changed, 3 added, 1 removed. Result 1's current filters
-  were applied." Swap swaps which view each side reads.
+  were applied." ("Result 1's current sort was applied.", "…filters and sort were applied.", "Both results' current
+  filters were applied.", as the caption reads). Swap swaps which view each side reads.
 - **Memory:** when All rows is refused for memory and an input has filters, the refusal also offers Compare rows as
   shown.
 - **States:**
