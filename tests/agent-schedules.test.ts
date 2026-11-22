@@ -532,6 +532,20 @@ describe('the Schedules document', () => {
     expect(schedules.get(id)?.busy).toBeUndefined()
     expect(schedules.canClose(id)).toBeUndefined()
   })
+  it("keeps a STALE save's own message with the read's failure when the read after it fails, and does not claim to show their change", async () => {
+    const { schedules, api, answers } = schedulesWorkbench()
+    const id = schedules.open('c1')
+    await settled()
+    schedules.select(id, '1')
+    schedules.update(id, { ...schedules.draft(id)!.fields, name: 'Mine' })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'Changed.', retryable: false } } })
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, code: 'SQL_ERROR', error: 'Read refused.' }))
+    expect(await schedules.save(id)).toBe(false)
+    await settled()
+    expect(schedules.get(id)?.error).toMatchObject({ code: 'STALE', message: 'Changed. Read refused.' })
+    expect(schedules.get(id)?.busy).toBeUndefined()
+    expect(schedules.draft(id)?.fields.name).toBe('Mine')
+  })
   it("starts New › Schedule…'s untouched draft on the server's date once read, not the local one", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

@@ -166,20 +166,21 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined })
     void this.describe(id)
   }
-  private async describe(id: string, notice?: string, select?: string): Promise<void> {
+  /** Reads the schedules; true when this read landed (not failed, dropped for a later one, or closed). */
+  private async describe(id: string, notice?: string, select?: string): Promise<boolean> {
     const connectionId = this.connectionOf(id)
-    if (!this.get(id) || !connectionId) return
+    if (!this.get(id) || !connectionId) return false
     // Only the latest read lands: one started before a later one (a Refresh and then a toggle's read) is dropped.
     const read = (this.reads.get(id) ?? 0) + 1
     this.reads.set(id, read)
     const result = await this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' } }))
     const current = this.get(id)
-    if (!current || !result || this.reads.get(id) !== read) return
+    if (!current || !result || this.reads.get(id) !== read) return false
     const model = result.ok && !result.value.error ? result.value.agentSchedules : undefined
     if (!model) {
       const error = !result.ok ? fallback('SQL_ERROR', result.error) : result.value.error ?? fallback('SQL_ERROR', schedulesText.readFailed)
       this.patch(id, { phase: current.model ? 'ready' : 'loadFailed', error: notice ? { ...error, message: `${schedulesText.savedUnread} ${error.message}` } : error })
-      return
+      return false
     }
     const ids = new Set(model.schedules.map(record => String(record.id)))
     const drafts = Object.fromEntries(Object.entries(current.drafts).filter(([key]) => key === newScheduleKey || ids.has(key)))
@@ -197,6 +198,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
       this.options.focus?.(id, 'name')
     }
     if (selected && selected !== newScheduleKey) this.ensureScheduleJobs(id, Number(selected))
+    return true
   }
   /** One schedule's jobs, where the read has no links (below sysadmin): read once per schedule and read. */
   ensureScheduleJobs(id: string, scheduleId: number): void {
@@ -429,9 +431,11 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
    *  each job change guarded by the job's version as read now. The next Save is the user's. */
   private async keepStale(id: string, key: string): Promise<void> {
     const error = this.get(id)?.error
-    await this.readAfter(id, 'saving')
+    const read = await this.readAfter(id, 'saving')
     const current = this.get(id), draft = current?.drafts[key], record = this.record(id, key)
     if (!current || !error) return
+    // Not read again: nothing moved, so the STALE stands with why the read failed, and the next Save is STALE until a read lands.
+    if (!read) { this.patch(id, { error: { ...error, message: `${error.message} ${current.error && current.error !== error ? current.error.message : ''}`.trim() } }); return }
     const jobs = draft?.jobs.map(change => ({ ...change, version: this.job(id, change.jobId)?.version ?? change.version })) ?? []
     // A new schedule's STALE can only be a chosen job's version: those are read again.
     if (draft && key === newScheduleKey) { this.patch(id, { drafts: { ...current.drafts, [key]: { ...draft, jobs } }, error: { ...error, message: schedulesText.staleJobs } }); return }
@@ -458,9 +462,9 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   }
   /** The read after a save, toggle, delete or STALE, with the document still busy: neither an edit begun from the schedules as they
    *  were nor another toggle (whose read would drop this one) can start until it lands. */
-  private async readAfter(id: string, busy: NonNullable<SchedulesState['busy']>, notice?: string, select?: string): Promise<void> {
+  private async readAfter(id: string, busy: NonNullable<SchedulesState['busy']>, notice?: string, select?: string): Promise<boolean> {
     this.patch(id, { busy })
-    try { await this.describe(id, notice, select) } finally { this.patch(id, { busy: undefined }) }
+    try { return await this.describe(id, notice, select) } finally { this.patch(id, { busy: undefined }) }
   }
   private async execute(id: string, busy: NonNullable<SchedulesState['busy']>, save: AgentScheduleSave): Promise<boolean> {
     const connectionId = this.connectionOf(id)
