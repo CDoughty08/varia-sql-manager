@@ -139,7 +139,7 @@ describe('BackendSupervisor restarts', () => {
     await settle()
     backends[0].exit(1)
     expect(await run).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostBigQuery })
-    expect(await attach).toMatchObject({ code: 'BACKEND_LOST' })
+    expect(await attach).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostBigQuery })
     expect(sentences.lostBigQuery).not.toContain('SQL Server')
   })
   it('replaces an exited backend after 0, 1 and 2 s, losing its connections and running queries', async () => {
@@ -323,6 +323,11 @@ describe('BackendSupervisor restarts', () => {
     expect(backends[0].requests.at(-1)).toEqual(expect.objectContaining({ method: 'query.cancel' }))
     expect(backends).toHaveLength(1)
     void stopping.catch(() => undefined)
+    // A Stop for a run queued for the next backend waits for it rather than reach the old one.
+    const queued = value.request('query.cancel', { queryId: '55555555-5555-4555-8555-555555555555' } as never)
+    await advance(0)
+    expect(backends[0].requests.filter(request => request.method === 'query.cancel')).toHaveLength(1)
+    void queued.catch(() => undefined)
     // A Restart Backend that joins it still resets the crash breaker.
     const breaker = value as unknown as { attempts: number, losses: number[] }
     breaker.attempts = 3; breaker.losses = [1, 2]
