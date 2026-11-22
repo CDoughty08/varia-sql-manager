@@ -358,7 +358,8 @@ Searching and hits:
 - **Kinds.** Datasets, tables, views, materialized views, external tables, routines, models and columns. Tables,
   Views, Columns and Procedures are shared with SQL Server's chips; Materialized views, External tables, Snapshots,
   Clones, Routines, Table functions, Models and Datasets show when a BigQuery connection is searched. Each server is sent
-  only its own engine's kinds; a server none of the chosen types apply to answers no hits.
+  only its own engine's kinds; a server none of the chosen types apply to answers no hits. A clone in a project read by
+  name only is listed as a table (only its details say it is a clone).
 - **Names and definitions.** Name search covers dataset, object and column names (a column by its field path); definition
   search covers view and materialized view text and routine bodies. A Database scope does not apply to BigQuery.
 - **A hit's row** shows its name without the dataset, and the project, dataset and folder, then a column's type or a

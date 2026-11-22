@@ -440,7 +440,8 @@ Properties on a table-like object opens a read-only document tab from one `table
 physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
 expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters.
 
-Refresh on a project or dataset node also re-reads it in the Search Objects index ([Search Objects › BigQuery](object-search.md#bigquery)).
+Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
+and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
 
 ## Errors
 
