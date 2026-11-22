@@ -436,7 +436,7 @@ interface Run {
   loads: ReadonlyMap<EntryKey, RunningLoad>
 }
 /** A Load into memory: its own query id (query.cancel stops it) and the subscription to its events. */
-interface RunningLoad { readonly queryId: string; readonly subscription: Disposable; stopping: boolean }
+interface RunningLoad { readonly queryId: string; readonly subscription: Disposable; readonly stopping: boolean }
 /** `handle` and `done`: a save's result, and when it ends (a rebuilt Pivot releases the old one only after its saves). */
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown; handle?: ResultSetEntry['handle']; done?: Promise<void> }
 
@@ -779,6 +779,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const load: RunningLoad = { queryId, subscription, stopping: false }
     run.loads = new Map(run.loads).set(key, load)
     this.publishNow(tabId)
+    // The strip's count is no live region (it changes every tick): the start is said once here.
+    this.announce(tabId, 'Loading into memory…')
     const { generation, resultId } = set.descriptor
     let refusal: string | undefined
     try {
@@ -793,7 +795,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       refusal = `Could not load the result into memory: ${error instanceof Error ? error.message : String(error)}`
     } finally {
       subscription.dispose()
-      if (run.loads.get(key) === load) { const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
+      if (run.loads.get(key)?.queryId === queryId) { const loads = new Map(run.loads); loads.delete(key); run.loads = loads }
       if (this.runs.get(tabId) === run) this.schedule(tabId)
     }
     if (refusal && this.runs.get(tabId) === run && run.entries.get(key) === set) {
@@ -815,9 +817,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   stopLoad(tabId: string, key: EntryKey): void {
     const run = this.runs.get(tabId), load = run?.loads.get(key)
     if (!run || !load || load.stopping || !this.api.cancel) return
-    load.stopping = true
-    run.loads = new Map(run.loads)
+    run.loads = new Map(run.loads).set(key, { ...load, stopping: true })
     this.schedule(tabId)
+    this.announce(tabId, 'Stopping the load: the result stays windowed in BigQuery.')
     void this.api.cancel(load.queryId).catch(() => {})
   }
 

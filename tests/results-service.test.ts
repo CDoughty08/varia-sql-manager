@@ -550,8 +550,14 @@ describe('results service', () => {
     service.stopLoad('t1', key)
     expect(api.cancel).toHaveBeenCalledTimes(1)
     expect(api.cancel).toHaveBeenCalledWith('job-1')
+    const before = tab()!.loads
     flush()
     expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: true }))
+    // Snapshots share the entries: Stop replaces this one rather than changing it in place.
+    expect(before).not.toBe(tab()!.loads)
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('Stopping the load')
     const loaded = { ...windowed, residence: 'memory' as const, revision: 1, rowsStored: 5_000, state: 'complete' as const }
     answer.resolve({ ok: true, value: { ...summaryOf([loaded]), messages: [{ text: 'The result was loaded into memory.', kind: 'info' }] } })
     expect(await loading).toBeUndefined()

@@ -169,7 +169,7 @@ internal sealed partial class SqlService
         {
             Apache.Arrow.RecordBatch decoded;
             try { decoded = session.Plan.Decode(bytes.Span); }
-            catch (Exception error) when (error is InvalidDataException or ArgumentException or IndexOutOfRangeException) { throw Unreadable(); }
+            catch (Exception error) when (error is not (RequestException or OperationCanceledException)) { throw Unreadable(); }
             using (decoded)
             {
                 var more = ArrowColumnPlan.DecodedBytes(decoded);
