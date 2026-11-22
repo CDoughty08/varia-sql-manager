@@ -882,10 +882,11 @@ and that its previous transaction was rolled back, unless the query moves to ano
 `changeConnection`, `disconnectQuery`, `disconnect`, `disconnectAll`, `exit` or `switchLocation`; ≤ 1,024 tabs `{ name ≤
 512, transactions, running, unchecked?, provider?, job? }`, only those with an open or unchecked transaction, a running
 script or a BigQuery job). `provider` (`sqlserver` or `bigquery`) picks the "not checked" note's causes. `job` (BigQuery
-only: `{ elapsedMs, estimateBytes?, detached?, jobIds? ≤ 8 }`) asks about the tab's job instead of its transaction, and
+only: `{ elapsedMs, estimateBytes?, detached?, unattached?, jobIds? ≤ 8 }`) asks about the tab's job instead of its transaction, and
 the answer may be `leave` ([The prompt](bigquery.md#re-attaching-to-jobs)); a box that would ask only about jobs is
 answered from `queryExecution.bigQuery.closeRunningJob` when that remembers a choice. `varia:confirm-running-job { name,
-job }` asks Close Results' three choices for one tab, whose session stays. A BigQuery tab switching to a
+job }` answers Close Results for one tab, whose session stays: `proceed` (Cancel the job), `leave` or `cancel`, asked
+unless the setting remembers a choice. A BigQuery tab switching to a
 dataset in another location first sends `location: { dataset, from, to }` with that one tab, which asks "Switch this tab
 to …?" (Switch or Don't Switch). Main composes the box (`src/shared/sessions.ts`) in its dialog queue; a crashed page
 gets Cancel.
@@ -903,8 +904,8 @@ gets Cancel.
   that finished after the prompt opened is read then, and if it may hold a transaction it stays open and is reported. A
   run that settles after its tab closed still has its results released. Wording details: `src/shared/sessions.ts`.
 - BigQuery job records, all main-only: `varia:job-records-drop` (a job key), `varia:quit-keep-jobs` (the job keys a quit
-  keeps, ≤ 1,024; their drops wait until the quit ends or stops), `varia:jobs-cancel-restored` (job keys; cancels their
-  running jobs through their saved profiles with `bigquery.cancelJobs`, ≤ 64 per call, answering each job's outcome and
+  keeps, ≤ 1,024; their drops wait until the quit ends or stops), `varia:jobs-cancel-restored` (≤ 1,024 job keys; cancels
+  their running jobs through their saved profiles with `bigquery.cancelJobs`, 64 jobs per call, answering each job's outcome and
   the ids that cannot be cancelled without a connection) and `varia:jobs-without-tab` (the open tabs' job keys; main
   adds AutoRecover's, asks Cancel Jobs or Keep for running jobs no tab holds, and answers what it did, or null). Main
   sends `varia:failed-aborts` (a count) for idle sessions whose end failed at a Reload or backend restart, once the page is

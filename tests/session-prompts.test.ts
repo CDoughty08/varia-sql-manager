@@ -150,7 +150,7 @@ describe('BigQuery job prompts', () => {
       expect(prompt.buttons.map(button => button.label).slice(0, 2)).toEqual(['Cancel the Job', 'Leave It Running'])
       expect(prompt.buttons[2].label).toMatch(/^Don't /)
       expect([prompt.defaultId, prompt.cancelId]).toEqual([2, 2])
-      expect(prompt.checkbox).toEqual({ label: 'Remember my choice', checked: false, remembers: true })
+      expect(prompt.checkbox).toEqual(action === 'exit' ? undefined : { label: 'Remember my choice', checked: false, remembers: true })
       expect(prompt.detail).toContain('• a.sql (running 12 minutes, estimated 3.0 GiB)')
       expect(prompt.detail).toContain('stays open until the session ends')
     }

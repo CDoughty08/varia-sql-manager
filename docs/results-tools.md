@@ -24,7 +24,8 @@ commands can be given shortcuts in Tools > Options > Environment > Shortcuts.
   Headers** are unchanged.
 - **Fit Column**: fits the column to its header and widest measured value, as double-clicking its right border does
   (first 4,096 rows plus visible rows, within width limits). From the keyboard menu, the active column.
-- **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages.
+- **Close Results** (grid menu, results toolbar, palette): releases all the query's result sets, keeps Messages. While a
+  BigQuery job runs it asks whether to cancel the job or leave it running ([BigQuery](bigquery.md#re-attaching-to-jobs)).
   Unavailable while executing. Hiding the results pane keeps results. The toolbar never switches or closes documents.
 
 ## Sorting, filtering and highlighting

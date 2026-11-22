@@ -169,8 +169,12 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toMatch(/\{ response: -1, checkboxChecked: false \}, true\)\n    \/\/ A box a reload[^\n]*\n    if \(response < 0\) return null/)
     // Connect's chosen entry wins over a twin with the same settings.
     expect(source).toContain('const profile = matching.find(item => item.id === selected) ?? matching[0]')
-    // A new window (macOS) holds no earlier quit's keys.
-    expect(source).toMatch(/closeIntent = undefined\n  \/\/ A macOS window close[^\n]*\n  releaseQuitJobs\(\)/)
+    // A new window (macOS) holds no earlier quit's keys; a close that went through discards its held drops, so the tabs it
+    // kept reopen with their records.
+    expect(source).toMatch(/releaseQuitJobs\(!closeApproved\)\n  closeApproved = false/)
+    // Only jobs recorded before the review asked; a disconnected handle forgets its profile.
+    expect(source).toContain('const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)')
+    expect(source).toContain('if (value.disconnected) connectionProfiles.delete(connectionId)')
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
     expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
@@ -191,6 +195,14 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     store.drop(keyB)
     expect(store.list().map(record => record.jobKey)).toEqual([keyA])
     store.releaseHolds()
+    expect(store.list()).toEqual([])
+    // A close that went through (macOS) discards the held drops: the kept tab reopens with its record.
+    store.record(keyA, job('varia_3', 'done'))
+    store.holdDrops([keyA])
+    store.drop(keyA)
+    store.releaseHolds(false)
+    expect(store.list().map(record => record.jobId)).toEqual(['varia_3'])
+    store.drop(keyA)
     expect(store.list()).toEqual([])
   })
 

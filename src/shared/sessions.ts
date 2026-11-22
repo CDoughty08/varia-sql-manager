@@ -204,7 +204,8 @@ function jobPrompt(action: SessionAction, jobs: readonly SessionTab[], running: 
     detail: [listed(jobs, jobNote(action)), cancelNote, leaveNote, quitNote].filter(Boolean).join('\n\n'),
     defaultId: 2, cancelId: 2,
     buttons: [{ label: one ? 'Cancel the Job' : 'Cancel the Jobs', answer: 'proceed' }, { label: 'Leave It Running', answer: 'leave' }, { label: dont[action], answer: 'cancel' }],
-    checkbox: { label: 'Remember my choice', checked: false, remembers: true }
+    // A quit always asks (rememberedJobAnswer), so its box remembers nothing.
+    ...action === 'exit' ? {} : { checkbox: { label: 'Remember my choice', checked: false, remembers: true } }
   }
 }
 

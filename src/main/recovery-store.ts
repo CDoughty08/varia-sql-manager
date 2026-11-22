@@ -184,7 +184,8 @@ export class RecoveryStore {
       const keys: string[] = []
       for (const file of await this.records()) {
         if (!file.canonical) continue
-        const record = await this.read(file.id).catch(() => undefined)
+        // A copy that cannot be read now may still reopen: the caller asks about nothing rather than about its jobs.
+        const record = await this.read(file.id)
         if (record?.jobKey) keys.push(record.jobKey)
       }
       return keys

@@ -1029,7 +1029,7 @@ export const commandCatalog = {
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy', providers: both, methods: ['results.close'],
-    unavailableHint: 'There are no results to close, or a SQL Server query is still running.',
+    unavailableHint: 'There are no results to close, or the query is still running (a BigQuery job can be closed once it has started).',
     menus: [{ menu: 'output.context', group: 'z_close', order: 2, mnemonic: 'l', when: "outputView != 'live' && !outputGridBare" }, { menu: 'output.tools', group: 'z_close', order: 1, mnemonic: 'l' }]
   },
   // Closes the view the grid shows (ResultsService.removeEntry): a Table closes its group, its Pivot with it; a Pivot or a

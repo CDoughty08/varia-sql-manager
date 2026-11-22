@@ -127,10 +127,12 @@ export class JobRecordStore {
 
   /** From the start of quit: drops for these keys wait (`releaseHolds`). */
   holdDrops(keys: Iterable<string>): void { this.held = new Set([...keys].slice(0, jobLimits.keys)) }
-  /** A quit stopped or abandoned: the drops it held are applied. */
-  releaseHolds(): void {
+  /** A quit stopped or abandoned: the drops it held are applied. A close that went through (macOS keeps the app running)
+   *  discards them instead (`apply` false): its kept tabs reopen in the next window and need their records. */
+  releaseHolds(apply = true): void {
     this.held = new Set()
-    for (const drop of this.deferred.splice(0)) drop()
+    const deferred = this.deferred.splice(0)
+    if (apply) for (const drop of deferred) drop()
   }
 
   /** Waits for the writes so far (quit, tests). */

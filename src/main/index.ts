@@ -386,9 +386,9 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 
 /** End the old page's sessions. A replacement page can still retry an unacknowledged restore. */
 /** A quit that stopped or whose page was replaced keeps no tab's job records any more: the drops it held apply. */
-function releaseQuitJobs(): void {
+function releaseQuitJobs(apply = true): void {
   quitKeepJobKeys = undefined
-  jobRecords.releaseHolds()
+  jobRecords.releaseHolds(apply)
 }
 
 function resetRendererState({ relaunch = true, replacePage = false } = {}): void {
@@ -696,11 +696,12 @@ function applyAppearance(state: ThemeState): void {
 /** `bounds` and `maximized` place a window that replaces one whose renderer was lost. */
 function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
+  // A macOS window close kept its tabs' records through the backend stop. They reopen in this window, so the drops it held
+  // are discarded, not applied; this window's page settles the records itself.
+  releaseQuitJobs(!closeApproved)
   closeApproved = false
   closePending = false
   closeIntent = undefined
-  // A macOS window close kept its tabs' records through the backend stop; the next window's page settles them itself.
-  releaseQuitJobs()
   windowActive = true
   rendererLoaded = false
   rendererReady = false
@@ -1255,7 +1256,9 @@ app.whenReady().then(async () => {
 
       if (method === 'connections.disconnect') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
-        return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
+        const connectionId = (validated as { connectionId: string }).connectionId, value = await connectionOpen.disconnect(connectionId)
+        if (value.disconnected) connectionProfiles.delete(connectionId)
+        return { ok: true, value }
       }
       const prepared = await prepareConnection(method, validated, context, { savedPasswords, authentication: connectionAuthentication })
       let bindingMutation: string | undefined
@@ -1485,11 +1488,13 @@ app.whenReady().then(async () => {
   // After a restore: running jobs no open tab will re-attach to are asked about once (a decision, so main's box).
   handle('varia:jobs-without-tab', async value => {
     const keys = z.array(jobKeySchema).max(jobLimits.keys).parse(value)
+    // Only jobs from before this review: one a tab started meanwhile has a tab the page's list did not have yet.
+    const asked = Date.now()
     await jobRecords.load().catch(() => {})
     // A query AutoRecover kept (offered, or left for a later start) may still reopen and re-attach: its jobs are not asked about.
     const kept = await recovery.jobKeys().catch(() => undefined)
     if (!kept) return null
-    const orphans = jobRecords.withoutTab([...keys, ...kept])
+    const orphans = jobRecords.withoutTab([...keys, ...kept]).filter(record => record.createdAt < asked)
     // A finished job without a tab has nothing to decide: its result table expires by itself.
     jobRecords.dropJobs(orphans.filter(record => record.state !== 'running' || record.auxiliary).map(record => record.jobId))
     const running = orphans.filter(record => record.state === 'running' && !record.auxiliary)

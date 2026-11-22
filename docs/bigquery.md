@@ -303,9 +303,9 @@ In the workbench:
   cancelled through its saved connection's credentials (`session.cancelRestoredJobs`). Leave it running drops the tab's
   records and shows the job ids with Copy Job IDs. Close All and Disconnect All keep tabs that hold jobs open without
   asking.
-- **Quitting Varia leaves jobs running.** Tabs hot exit keeps are not asked about, their records stay, and their
+- **Quitting Varia leaves jobs running.** Kept tabs that hold a job are not asked about, their records stay, and their
   sessions stay open while a transaction may be open. Tabs that will not be restored are always asked, even with a
-  remembered choice, and the box lists their job ids.
+  remembered choice, and the box lists their job ids (up to 8 per tab, for the first 10 tabs).
 - **Close Results while a job runs.** It is available for a BigQuery job and asks the same three choices (Don't Close is the
   default), or follows the remembered choice. Cancel the job stops it as Stop does. Leave it running sends `query.cancel` with `detach`: the results close,
   the job keeps the tab's session, the next Execute waits for it (Stop cancels it), and closing the tab asks about it
