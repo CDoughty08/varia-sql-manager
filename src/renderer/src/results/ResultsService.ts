@@ -20,7 +20,7 @@ import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
-import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
+import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteStop, remoteOrderable, remoteSelectionText, unorderableText, type RemoteViews } from './remote-views'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -1882,7 +1882,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       // nothing builds again (refreshSorts skipped it while this ran): the notice says so, as Save Results As does.
       const partial = !!current?.view && current.stale && set.handle.getSnapshot().state === 'complete'
       ticket?.end(partial ? { cancelled: `${action === 'sort' ? 'Sort' : 'Filter'} cancelled. The grid kept the view of the rows that had arrived; sort or filter again to include every row.` } : 'cancelled')
-      controller.abort()
+      controller.abort(remoteStop)
       this.keepLastView(tabId, run, index, set)
     }
     ticket = this.operations.begin(tabId, { kind: action, target: distinctName(set, run.sets), entry: index, column: action === 'sort' ? sort[0]?.column : changedColumn(current?.applied ?? [], filters), cancel })

@@ -27,6 +27,9 @@ export const unorderableText = (column: Pick<ResultColumn, 'dataType' | 'name'>)
 export const isRemoteHandle = (handle: Pick<ResultHandle, 'getSnapshot'>): boolean => handle.getSnapshot().residence === 'remote'
 
 /** The user declined a cost prompt, or the work was given up: nothing ran and nothing needs saying. */
+/** The reason a grid's Stop aborts a query over BigQuery with: its lines still reach Messages. */
+export const remoteStop = 'stop'
+
 export class RemoteDeclined extends Error {
   constructor() { super('The query over BigQuery was not run.') }
 }
@@ -102,7 +105,8 @@ export class RemoteViews {
       if (!answer.ok) throw new ResultError((answer.code ?? 'BACKEND_ERROR') as ResultError['code'], answer.error)
       const summary = answer.value
       // A stop's lines are information (the grid kept its view); only a failure's error opens Messages as an error.
-      if (summary.messages.length) this.deps.messages?.(tabId, summary.status === 'failed' ? summary.messages : summary.messages.map(message => message.kind === 'error' ? { ...message, kind: 'info' as const } : message))
+      // Given up (newer work, the tab run again or closed): its lines are not this tab's now. A Stop's are (what was billed).
+      if (summary.messages.length && (!signal.aborted || signal.reason === remoteStop)) this.deps.messages?.(tabId, summary.status === 'failed' ? summary.messages : summary.messages.map(message => message.kind === 'error' ? { ...message, kind: 'info' as const } : message))
       if (signal.aborted) {
         for (const set of summary.resultSets) void this.deps.client.open(set).close()
         throw new RemoteDeclined()

@@ -3,7 +3,7 @@ import type { ResultColumn, VariaApi } from '../src/shared/contracts'
 import type { BigQueryDryRunResult } from '../src/shared/bigquery/dry-run'
 import { remoteDryRunSchema, remoteResultIds, resultsRemoteQuerySchema, type RemoteDryRun } from '../src/shared/bigquery/remote-view'
 import { validateRequest } from '../src/main/validation'
-import { RemoteDeclined, RemoteViews, isRemoteView, remoteFilter, remoteHeader, remoteOrderable, remoteSelectionText, unorderableText } from '../src/renderer/src/results/remote-views'
+import { RemoteDeclined, RemoteViews, isRemoteView, remoteStop, remoteFilter, remoteHeader, remoteOrderable, remoteSelectionText, unorderableText } from '../src/renderer/src/results/remote-views'
 import { ResultError, type DistinctList, type ResultHandle } from '../src/renderer/src/results/ResultClient'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -181,6 +181,22 @@ describe('remote views', () => {
     const failing = new RemoteViews({ api: failed.api, client: failed.client, estimate: async () => estimate(), messages: (tabId, messages) => said.push([tabId, messages]) })
     await expect(failing.view('t1', failed.source, [{ column: 0, descending: false, mode: 'value' }], [], new AbortController().signal)).rejects.toThrow('No.')
     expect(said).toEqual([['t1', lines]])
+  })
+  it('keeps a given-up query\'s lines out of Messages, but says what a Stop left billed', async () => {
+    for (const [reason, kept] of [[undefined, false], [remoteStop, true]] as const) {
+      const said: unknown[] = []
+      const f = remoteFixture()
+      const views = new RemoteViews({ api: f.api, client: f.client, estimate: async () => estimate(), messages: (_tabId, messages) => said.push(...messages) })
+      const stop = new AbortController()
+      let answer!: (value: Awaited<ReturnType<VariaApi['remoteQuery']>>) => void
+      f.api.remoteQuery.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      const running = views.view('t1', f.source, [{ column: 0, descending: false, mode: 'value' }], [], stop.signal)
+      await vi.waitFor(() => expect(f.api.remoteQuery).toHaveBeenCalled())
+      stop.abort(reason)
+      answer({ ok: true, value: summaryOf([], { status: 'cancelled', messages: [{ text: 'Varia asked BigQuery to cancel job j.', kind: 'error' }] }) })
+      await expect(running).rejects.toBeInstanceOf(RemoteDeclined)
+      expect(said.length > 0, String(reason)).toBe(kept)
+    }
   })
   it('refuses a filter that names rows of the grid before estimating anything', async () => {
     const f = remoteFixture()
