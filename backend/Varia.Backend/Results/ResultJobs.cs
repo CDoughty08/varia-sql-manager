@@ -589,7 +589,7 @@ internal sealed class ResultJobs(ResultStore store)
     {
         var set = store.Find(resultId);
         // A windowed result is leased too: Copy reads it through its block cache and Save from its remote table
-        // (docs/bigquery.md, Copy and Save). One that switches residence under a job is refused by the reader it uses.
+        // (docs/bigquery.md, Copy). One that switches residence under a job is refused by the reader it uses.
         if (set is not null && set.TryLease()) return set;
         throw store.WasReleased(resultId)
             ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")

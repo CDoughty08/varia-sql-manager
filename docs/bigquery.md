@@ -318,20 +318,41 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   deadline), then the grid shows the rows it has and asks again, waiting longer each time; rows that still do not come
   after a few tries show Retry (a screen reader hears their cells as not loaded); a block only read ahead stops where the cache is full, never evicting the rows on screen,
   and read-ahead counts blocks at the widest their rows have come out.
-- **Load into memory.** No command runs it yet: the backend's `results.remoteQuery` kind `load` reads the whole table into memory under the budget (REST, or
-  Storage Read when it qualifies; a script statement's rows always through REST, which keeps their order), so the in-memory features work on it. A refusal part way, a failure or Stop leaves the
-  result windowed, whole, with an empty cache that reads its rows from BigQuery again (Messages says whether it did not fit
-  or the computer was low on memory); a load after BigQuery's temporary
-  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while another result of the same query loads (they share its budget). Closing the result stops the load,
-  which then says the result was closed. Reads under way when it starts
-  answer with the rows they have, and the grid reads again from memory.
-- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities, comparisons, Copy and Save
-  of a windowed result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to windowed while it runs gets the same answer, and a grid's sort and
-  filters are removed when its result switches (the screen reader hears so). The grid does not offer them where it can tell
-  first: Save Results As refuses before its file dialog (even while the result still loads), Copy before it stops the copy
-  running, a transposed grid's strip does not suggest filtering, the Pivot builder says the result cannot be pivoted yet, the
-  Compare popover leaves it out, and Search skips it. A destination table lasts
-  about 24 hours: once it has expired, a read answers with the cached rows from the start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`.
+- **Load into memory.** A windowed result of a finished run offers Load into memory on its grid's strip and in the results
+  toolbar's ⋯ menu (Load Result into Memory in the palette). It runs `results.remoteQuery` kind `load`, which reads the whole
+  table into memory under the budget (REST, or Storage Read when it qualifies; a script statement's rows always through
+  REST, which keeps their order), so the in-memory features work on it. While it runs the strip counts the rows read and
+  offers Stop, and the grid keeps the rows it showed and its place, drawing those not yet read as loading. A refusal part
+  way, a failure or Stop leaves the result windowed, whole, with an empty cache that reads its rows from BigQuery again
+  (Messages says whether it did not fit or the computer was low on memory); a load after BigQuery's temporary
+  result table expired fails with `REMOTE_EXPIRED`. A second load of a result already loading is refused, and so is a load while
+  another result of the same query loads (they share its budget) or while its query still runs.
+  Closing the result stops the load, which then says the result was closed. Reads under way when it starts answer with the rows they have, and the
+  grid reads again from memory.
+- **Copy.** Copy of a windowed result reads the selected rows through its block cache (blocks not cached are fetched,
+  outside the grid's read-ahead) and writes them through `ResultTextWriter` within the usual Copy limit: a selection
+  whose text passes it is refused, before anything reaches the clipboard, with a pointer to Save Results As; one whose
+  separators alone pass it is refused before any read. A transposed Copy reads its rows the same way. A sorted or filtered
+  view of a windowed result is not copied yet (`VIEW_NOT_FOUND`). Rows already cached copy after the table expired; others
+  answer `REMOTE_EXPIRED`. A result that starts loading into memory under a Copy refuses it (try again once loaded), and
+  one released under it says so.
+- **Save.** Save Results As streams every row the query keeps (Maximum rows honoured) from BigQuery to the file, never
+  through the block cache or the store: through Storage Read when it qualifies (each stream in turn, a transient stream
+  fault resumed at its offset without repeating rows), else `tabledata.list` pages, each page reserved from the result
+  budget while it is written. It has the usual progress and Cancel, so the rows touch disk only in the file the user chose
+  (written to a temporary file and renamed). A transposed Save reads its rows as Copy does. An expired table answers
+  `REMOTE_EXPIRED` and leaves no file. A sorted or filtered view's Save waits for windowed sort and filter.
+- **Expiry.** A destination table lasts about 24 hours: once it has expired, a read answers with the cached rows from the
+  start of its window, and one that starts on rows not cached answers `REMOTE_EXPIRED`. The grid keeps the rows it has, and
+  its strip says BigQuery no longer keeps the result and offers Re-run…, which runs the tab's query again through Execute
+  (with its estimate and cost prompt). A cache hit's destination table is an older one, which may expire sooner, so a
+  windowed cache hit's caption adds "cached result: may expire early".
+- **What waits.** Filters, sorts, search, profiles, distinct values, pivots, row identities and comparisons of a windowed
+  result answer "This result is windowed in BigQuery" (`REMOTE_RESULT`) for now; a request whose result switches to
+  windowed while it runs gets the same answer, and a grid's sort and filters are removed when its result switches (the
+  screen reader hears so). The grid does not offer them where it can tell first: a transposed grid's strip does not
+  suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, and Search
+  skips it.
 
 ### Cost
 

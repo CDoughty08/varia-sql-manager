@@ -137,13 +137,14 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   named?: boolean
   onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
 }) {
-  const { commands } = useWorkbench()
+  const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
+  const cached = useSyncExternalStore(results.subscribe, () => results.getSnapshot()[tabId]?.summary?.job?.cacheHit === true)
   const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
   // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
   const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.
-  const facts = [...number ? [number] : [], rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const facts = [...number ? [number] : [], rowsFact(snapshot, sort, cached), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
   const held = snapshot.state !== 'lost' && snapshot.state !== 'released'

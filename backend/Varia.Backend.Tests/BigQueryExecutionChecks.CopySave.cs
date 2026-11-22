@@ -7,7 +7,7 @@ using Varia.Backend.Results;
 namespace Varia.Backend.Tests;
 
 /// <summary>
-/// Copy and Save of a windowed result offline (docs/bigquery.md, Copy and Save): Copy reads its rows through the block cache
+/// Copy and Save of a windowed result offline (docs/bigquery.md, Copy): Copy reads its rows through the block cache
 /// within the Copy limit (a selection whose separators alone pass it is refused before any read; one whose text passes it
 /// stops before the chunk that does), transposed too; Save streams every row the query keeps from the destination table,
 /// through Storage Read or free REST pages, never through the cache; the table gone is REMOTE_EXPIRED. No request leaves

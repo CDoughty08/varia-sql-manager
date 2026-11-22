@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, ResultsRemoteQueryParams, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -782,7 +782,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const { generation, resultId } = set.descriptor
     let refusal: string | undefined
     try {
-      const answer = await this.api.remoteQuery({ queryId, generation, resultId, kind: 'load' })
+      const params: ResultsRemoteQueryParams = { queryId, generation, resultId, kind: 'load' }
+      const answer = await this.api.remoteQuery(params)
       if (this.runs.get(tabId) !== run || this.disposed) return undefined
       if (answer.ok) this.loaded(tabId, run, answer.value)
       else refusal = `Could not load the result into memory: ${answer.error}`

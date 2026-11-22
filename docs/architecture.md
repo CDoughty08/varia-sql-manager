@@ -228,7 +228,8 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   `ResultSetBuffer.Promote`, bumps the descriptor's `revision` and sends `resultSet.residence`, after which the renderer
   drops every page and window of the older revision. Only `results.read` and `results.rowBytes` (cache only) read a
   windowed result, and only `results.remoteQuery` loads it; every other reader of stored pages finds its set through
-  `SqlService.Stored`, and Copy and Save through `ResultJobs.Lease`, which answer `REMOTE_RESULT` before any work; a
+  `SqlService.Stored`, which answers `REMOTE_RESULT` before any work, while Copy and Save (`ResultJobs`, whose `Lease` holds
+  either kind) read a windowed set's rows through `RemoteResult.ReadPagesAsync` and its `IRemoteRows` export, never its pages; a
   switch after that check is refused where the hold is taken (`SealedSnapshot`, `AddView`, `AddSnapshot`, the lease,
   `Released`); `Demote` marks the set windowed before it drops views and snapshots, so a hold finished meanwhile is refused
   or dropped, and searches and operations stop on any revision change, even one loaded back

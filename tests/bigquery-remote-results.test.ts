@@ -74,6 +74,9 @@ describe('BigQuery remote results', () => {
   it('says in the caption that a result is windowed in BigQuery', () => {
     expect(rowsFact({ rowsAvailable: 5_000_000, state: 'complete', residence: 'remote' })).toBe('5,000,000 rows · windowed in BigQuery')
     expect(rowsFact({ rowsAvailable: 1, state: 'complete', residence: 'memory' })).toBe('1 row')
+    // A cache hit's destination table is an older one, which may expire sooner than a day after this run.
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'remote' }, undefined, true)).toBe('5 rows · windowed in BigQuery · cached result: may expire early')
+    expect(rowsFact({ rowsAvailable: 5, state: 'complete', residence: 'memory' }, undefined, true)).toBe('5 rows')
     expect(rowsFact({ rowsAvailable: 2, state: 'open' })).toBe('2 rows')
   })
 
