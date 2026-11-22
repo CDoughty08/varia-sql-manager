@@ -33,6 +33,8 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
         expect(await value.commands.execute(id, args, 'toolbar'), id).toBe(false)
       }
       expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+      // This editor cannot apply edits, so a transform that ran would fail into the command banner rather than change the text.
+      expect(value.commands.getSnapshot().error).toBe('')
       // A SQL Server query keeps both commands, with no reason to grey them.
       const tsql = value.documents.restore('commas-tsql.sql', 'SELECT a,\n  b\nFROM t', 'sql', 'lf')
       expect(value.documents.boundEditor?.getModel()).toBe(value.documents.getModel(tsql.id))
