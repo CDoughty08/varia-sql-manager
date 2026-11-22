@@ -263,6 +263,30 @@ describe('BackendSupervisor restarts', () => {
     await value.request('query.session.close', { sessionId: 'tab-1' })
     expect(backends[1].requests.map(request => request.method)).toEqual(['query.execute', 'query.session.close'])
   })
+  it('ends idle BigQuery sessions before a restart and a stop, with the kept tab job keys, and only when a BigQuery handle is open', async () => {
+    const failed: number[] = []
+    let keep: readonly string[] | undefined
+    const { value, advance, backends } = simulated({ configure: backend => { backend.failedAborts = 2 }, deps: { keepJobKeys: () => keep, onFailedAborts: count => failed.push(count) } })
+    const sqlServer = await value.request('connections.connect', options)
+    // No BigQuery handle: a restart sends nothing first.
+    await value.restart('manual')
+    await advance(0)
+    expect(backends[0].requests.map(request => request.method)).toEqual(['connections.connect'])
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    await value.restart('reload')
+    await advance(0)
+    expect(backends[1].requests.map(request => [request.method, request.params])).toEqual([['connections.connect', expect.anything()], ['bigquery.endIdleSessions', {}]])
+    expect(failed).toEqual([2])
+    expect(backends[1].alive).toBe(false)
+    expect(sqlServer.id).toBeTruthy()
+    // A quit keeps two tabs: their keys go with the stop's call, which reaches the backend before stdin ends.
+    await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never)
+    keep = ['11111111-1111-4111-8111-111111111111']
+    await value.stop()
+    expect(backends[2].requests.at(-1)).toEqual(expect.objectContaining({ method: 'bigquery.endIdleSessions', params: { keepJobKeys: keep } }))
+    // A stop's failures cannot be shown.
+    expect(failed).toEqual([2])
+  })
   it('stop closes stdin, then kills a backend that does not exit within the grace period', async () => {
     const { value, advance, last } = simulated({ configure: backend => { backend.exitOnEnd = false } })
     await value.request('system.health', {})
