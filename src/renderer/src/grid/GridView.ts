@@ -699,12 +699,12 @@ export class GridView {
    * A comparison row's tone once its tile is read, so a quick repeat steps within the row it landed on. Only a landing still
    * waiting for its row's tone (whose scroll brings the row's tile in) is waited for, and only while the grid is drawn.
    * Undefined at once otherwise, or later when it cannot come: the landing settled elsewhere or the active cell left the
-   * row, the tile's read failed, the pane hid, the grid went, or the move was given up.
+   * row, the tile's read failed, the pane hid, the grid stopped or went, or the move was given up (its result replaced).
    */
   toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined> {
     const tone = this.diffTone(row)
     if (tone !== undefined || this.disposed || !this.diff || signal.aborted) return Promise.resolve(tone)
-    if (this.landing?.row !== row || this.scroller.clientWidth <= 0 || this.scroller.clientHeight <= 0) return Promise.resolve(undefined)
+    if (this.stopped || this.landing?.row !== row || this.scroller.clientWidth <= 0 || this.scroller.clientHeight <= 0) return Promise.resolve(undefined)
     return new Promise(resolve => {
       const waiter = { row, resolve: (value: string | null | undefined) => { signal.removeEventListener('abort', abort); resolve(value) } }
       const abort = () => { this.toneWaiters = this.toneWaiters.filter(item => item !== waiter); waiter.resolve(undefined) }
@@ -959,7 +959,12 @@ export class GridView {
       this.failures = 0
     } catch (error) {
       this.o.onError(error)
-      if (++this.failures >= 3) { this.stopped = true; this.setStatus({ ...this.status, renderError: true }) }
+      if (++this.failures >= 3) {
+        this.stopped = true
+        this.setStatus({ ...this.status, renderError: true })
+        // A stopped grid paints no more until Retry: no tone a move waits for will come.
+        for (const waiter of this.toneWaiters.splice(0)) waiter.resolve(undefined)
+      }
       else this.schedule()
     }
     this.o.stats?.frame(performance.now() - started)

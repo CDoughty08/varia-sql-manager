@@ -253,7 +253,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   /** Each comparison grid's active row and its tone (GridView's onDiffRow), with the result it was read from. */
   private readonly activeRows = new Map<EntryKey, { readonly set: string; readonly row: number; readonly tone: string | null }>()
   /** The move between differences in flight per comparison: a newer one gives it up. */
-  private readonly navigating = new Map<EntryKey, AbortController>()
+  /** The move running in each comparison, with the result it reads: given up when that result is replaced or goes, so the
+   *  moves queued behind it are not held by an answer that no longer applies. */
+  private readonly navigating = new Map<EntryKey, { readonly tabId: string; readonly set: string; readonly abort: AbortController }>()
   /** Each comparison's moves between differences, run one after another so a quick repeat starts where the last landed. */
   private readonly moves = new Map<EntryKey, { readonly done: Promise<void>; readonly waiting: number }>()
 
@@ -290,6 +292,10 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
    *  again (or runs), its Table closed, or the tab's results went. A target that closed leaves it with nothing picked. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
+    for (const [key, move] of this.navigating) {
+      const entry = entryOf(snapshot[move.tabId]?.sets, key)
+      if (!entry || setKey(entry.descriptor) !== move.set) { move.abort.abort(); this.navigating.delete(key) }
+    }
     for (const [tabId, items] of this.inFlight) {
       const tab = snapshot[tabId]
       for (const item of items.values()) {
@@ -928,7 +934,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       // Given up, or the comparison (or its view) went: there is nothing to move in. Any other failure is said.
       this.sayFailure(tabId, key, target, error)
     } finally {
-      if (this.navigating.get(key) === abort) this.navigating.delete(key)
+      if (this.navigating.get(key)?.abort === abort) this.navigating.delete(key)
     }
   }
 
@@ -957,7 +963,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     } catch (error) {
       this.sayFailure(tabId, key, target, error)
     } finally {
-      if (this.navigating.get(key) === abort) this.navigating.delete(key)
+      if (this.navigating.get(key)?.abort === abort) this.navigating.delete(key)
     }
   }
   private publishPosition(key: EntryKey, entry: ResultSetEntry, handle: ResultHandle, row: number, text: string): void {
@@ -968,14 +974,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (!this.stillShown(tabId, key, target)) return
     this.say(key, undefined, `Could not move to the difference: ${error instanceof Error ? error.message : String(error)}`)
   }
-  /** A comparison's mounted grid and what a move in it reads, giving up the move in flight there. */
+  /** A comparison's mounted grid and what a move in it reads (moves run one at a time, so none is in flight there). */
   private diffTarget(tabId: string, key: EntryKey): DiffTarget | undefined {
     const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, key), grid = this.results.diffControls?.(tabId, key)
     const info = entry ? this.getSnapshot().info.get(setKey(entry.descriptor)) : undefined
     if (!entry || !grid || !info) return undefined
-    this.navigating.get(key)?.abort()
     const abort = new AbortController()
-    this.navigating.set(key, abort)
+    this.navigating.set(key, { tabId, set: setKey(entry.descriptor), abort })
     return { entry, grid, handle: grid.handle(), info, abort }
   }
   /** Whether a move's answer still applies: not given up, the same grid showing the same handle. */

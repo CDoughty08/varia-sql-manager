@@ -286,6 +286,12 @@ describe('a comparison\'s grid', () => {
       const given = fresh.view.toneWhenRead(390, abort.signal)
       abort.abort()
       expect(await given).toBeUndefined()
+      // A grid stopped after repeated render failures paints no more until Retry: nothing to wait for.
+      fresh.view.landDiff(390, { column: 1, whole: false }, () => ({ column: 1, whole: false }), false)
+      const internals = fresh.view as unknown as { stopped: boolean }
+      internals.stopped = true
+      expect(await fresh.view.toneWhenRead(390, new AbortController().signal)).toBeUndefined()
+      internals.stopped = false
       fresh.view.landDiff(300, { column: 1, whole: false }, () => ({ column: 1, whole: false }), false)
       const disposed = fresh.view.toneWhenRead(300, new AbortController().signal)
       fresh.view.dispose()

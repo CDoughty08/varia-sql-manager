@@ -203,6 +203,18 @@ describe('moving between a comparison\'s differences', () => {
     expect(view.seek).toHaveBeenLastCalledWith({ partnerOf: 2 }, expect.any(AbortSignal))
   })
 
+  it('gives up a move whose comparison went, so the moves behind it are not held', async () => {
+    const view = await fixture()
+    view.seek.mockImplementationOnce((_seek, signal) => new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))))
+    const move = view.compare.navigate('t1', view.entry.key, 'next')
+    await vi.waitFor(() => expect(view.seek).toHaveBeenCalledTimes(1))
+    expect(view.results.removeEntry('t1', view.entry.key)).toBe(true)
+    await move
+    expect(vi.mocked(view.seek).mock.calls[0][1]?.aborted).toBe(true)
+    expect(view.land).not.toHaveBeenCalled()
+    expect(view.said()).toBeUndefined()
+  })
+
   it('says why a move failed, unless the comparison went', async () => {
     const view = await fixture()
     view.seek.mockRejectedValueOnce(new Error('The backend stopped.'))
