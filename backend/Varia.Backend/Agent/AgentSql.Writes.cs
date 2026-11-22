@@ -68,7 +68,8 @@ internal static partial class AgentSql
         var procedure = match.Groups["proc"].Value;
         if (!catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which is not an Agent write procedure"); return problems; }
         var seen = new HashSet<string>(StringComparer.Ordinal) { "@job_id" };
-        if (!allowed.Contains("@job_id")) problems.Add("passes @job_id to " + procedure);
+        // sp_purge_jobhistory lists @job_id for Delete History, whose batch has its own lint (LintHistoryDelete); a job verb never purges.
+        if (!allowed.Contains("@job_id") || procedure == "sp_purge_jobhistory") problems.Add("passes @job_id to " + procedure);
         for (var i = 0; i < match.Groups["arg"].Captures.Count; i++)
         {
             var argument = match.Groups["arg"].Captures[i].Value;
@@ -94,5 +95,7 @@ internal static partial class AgentSql
         yield return ("service host", LintRead(ServiceHost, null));
         // SQL Server Agent Properties' server-scope writes and reads (AG-8a, AgentSql.Properties.cs).
         foreach (var item in LintServerWrites()) yield return item;
+        // Delete History's batches (AG-5a, AgentSql.History.cs).
+        foreach (var item in LintHistoryWrites()) yield return item;
     }
 }

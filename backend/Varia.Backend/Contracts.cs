@@ -589,7 +589,7 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -597,6 +597,13 @@ internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, 
 /// weeks or months (Unit 1, 2 or 3) before the server's clock, which the batch computes.</summary>
 /// <summary>Before: the cut-off the confirmation showed (server time, yyyy-MM-ddTHH:mm:ss), which the purge never deletes past.</summary>
 internal sealed record AgentHistoryPurgeDto(int Count, int Unit, string? Before = null);
+/// <summary>The Log File Viewer's Delete History (AG-5a, src/shared/agent/history.ts agentHistoryDeleteSchema): the checked jobs by id (1 to
+/// agentLimits.historyJobs, each once), and either All (true) or OlderThan, a cut-off as Agent Properties' purge takes it.</summary>
+internal sealed record AgentHistoryDeleteDto(List<string>? Jobs, bool? All = null, AgentHistoryPurgeDto? OlderThan = null);
+/// <summary>agent.historyMessage (AG-5a): one job history row's whole message, by its job and instance_id.</summary>
+internal sealed record AgentHistoryMessageArgs(string ConnectionId, string RequestId, string JobId, int InstanceId);
+/// <summary>The row's message (null when the row has none), or why it could not be read.</summary>
+internal sealed record AgentHistoryMessageResult(string? Message, long ElapsedMs, ActionError? Error = null);
 /// <summary>A SQL Server Agent job's verbs (AG-2: startJob, stopJob, a job's disable, enable, rename and delete) name the job they act on by
 /// its sysjobs date_created to the second (yyyy-MM-ddTHH:mm:ss), as the tree lists it; the batch refuses a job that has taken the name since.
 /// startJob may name a StepName (sysname); a job's delete may set DeleteUnusedSchedule. startAgent, stopAgent and restartAgent take only the

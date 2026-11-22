@@ -11,6 +11,7 @@ import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
 import { activityLiveArgsSchema } from '../activity/schema'
 import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { agentJobsArgsSchema } from '../agent/jobs'
+import { agentHistoryArgsSchema } from '../agent/history'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -55,7 +56,9 @@ export const liveArgsSchemas = {
   'ssis.operations': ssisOperationsArgsSchema,
   // SQL Server Agent's jobs (AG-3): the job whose last run Job Activity Monitor shows, the jobs the status bar watches, and the
   // list's column value filters. Each args replaces the last whole.
-  'agent.jobs': agentJobsArgsSchema
+  'agent.jobs': agentJobsArgsSchema,
+  // SQL Server Agent's job history (AG-5a): the Log File Viewer's filters and its selected run. Each args replaces the last whole.
+  'agent.history': agentHistoryArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 
