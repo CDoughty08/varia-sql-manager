@@ -463,9 +463,10 @@ export const writeProcedures: readonly WriteProcedure[] = [
     '@notify_level_netsend', '@notify_level_page', '@notify_email_operator_name', '@notify_netsend_operator_name', '@notify_page_operator_name', '@delete_level', '@job_id'] },
   { name: 'sp_add_jobserver', lane: 'AG-6a', database: 'msdb', arguments: ['@job_id'] },
   // The job's Alerts section's Remove (sysadmin): the alert by name, its job set to none (the zero uniqueidentifier). The alert document (AG-7)
-  // adds the rest: a rename, Enable and Disable, When, Then and Options, and Reset count (@occurrence_count = 0).
+  // adds the rest: a rename, Enable and Disable, When, Then and Options, and Reset count (@occurrence_count = 0, stamped with
+  // the server's date and time, which msdb never sets itself).
   { name: 'sp_update_alert', lane: 'AG-6a', database: 'msdb', arguments: ['@name', '@job_id', '@new_name', '@enabled', '@message_id', '@severity', '@delay_between_responses', '@notification_message',
-    '@include_event_description_in', '@database_name', '@event_description_keyword', '@occurrence_count', '@performance_condition'] },
+    '@include_event_description_in', '@database_name', '@event_description_keyword', '@occurrence_count', '@count_reset_date', '@count_reset_time', '@performance_condition'] },
   { name: 'sp_add_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_update_jobstep', lane: 'AG-6b', database: 'msdb' },
   { name: 'sp_delete_jobstep', lane: 'AG-6b', database: 'msdb' },

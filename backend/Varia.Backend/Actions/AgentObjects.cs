@@ -180,7 +180,8 @@ internal sealed partial class ActionService
     /// <summary>The alert save's batch: each new operator's sp_add_operator, then New Alert's sp_add_alert with every argument it sets (or an existing
     /// alert's sp_update_alert with only the changed ones, '' clearing a text and the job detached by the zero id), then each notification change by
     /// the alert's name as saved.</summary>
-    internal static AgentObjectBatch AlertSavePlan(ActionArgs args, ObjectRefDto target)
+    /// <param name="now">The server's clock, for Reset count's stamp (sp_update_alert keeps the old reset date unless given one).</param>
+    internal static AgentObjectBatch AlertSavePlan(ActionArgs args, ObjectRefDto target, DateTime? now = null)
     {
         var save = args.AgentAlert!;
         var create = target.Kind == "agent";
@@ -211,6 +212,11 @@ internal sealed partial class ActionService
         Set("@event_description_keyword", save.Keyword, skipEmpty: true);
         Set("@job_id", save.JobId is null ? null : save.JobId.Length == 0 ? (create ? null : Guid.Empty) : Guid.ParseExact(save.JobId, "D"));
         Set("@occurrence_count", save.ResetCount == true ? 0 : null);
+        if (save.ResetCount == true && now is { } stamp)
+        {
+            Set("@count_reset_date", stamp.Year * 10000 + stamp.Month * 100 + stamp.Day);
+            Set("@count_reset_time", stamp.Hour * 10000 + stamp.Minute * 100 + stamp.Second);
+        }
         Set("@performance_condition", save.Condition);
         if (create) calls.Add(new("sp_add_alert", alert));
         else if (alert.Count > 1) calls.Add(new("sp_update_alert", alert));
@@ -560,7 +566,14 @@ internal sealed partial class ActionService
     {
         switch (args.Action)
         {
-            case "agentAlert": return AlertSavePlan(args, target);
+            case "agentAlert":
+            {
+                if (args.AgentAlert?.ResetCount != true) return AlertSavePlan(args, target);
+                var (clock, errors) = await new AgentReader().ReadAsync(connection, null, [AgentSql.ServerClock], (_, _) => null, token);
+                if (errors.FirstOrDefault() is { } failed) throw new StepRefusedException(ReadFailure(failed)!);
+                var rows = clock[AgentSql.ServerClock.Id];
+                return AlertSavePlan(args, target, rows.Rows.Count > 0 && rows.Value(rows.Rows[0], "server_now") is DateTime serverNow ? serverNow : null);
+            }
             case "agentOperator": return OperatorSavePlan(args, target);
             case AddRecommendedAlertsAction: return RecommendedPlan(args.AgentRecommended!);
             case NotifyOperatorAction:
@@ -625,7 +638,8 @@ internal sealed partial class ActionService
     {
         var batch = args.Action switch
         {
-            "agentAlert" => AlertSavePlan(args, target),
+            // Script reads nothing, so Reset count's stamp is this machine's clock at scripting time.
+            "agentAlert" => AlertSavePlan(args, target, DateTime.Now),
             "agentOperator" => OperatorSavePlan(args, target),
             AddRecommendedAlertsAction => RecommendedPlan(args.AgentRecommended!),
             _ => ObjectVerbPlan(args, target, 0)

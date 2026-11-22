@@ -46,6 +46,7 @@ internal static partial class AgentSql
         ["@email_address"] = (SqlDbType.NVarChar, 100), ["@pager_address"] = (SqlDbType.NVarChar, 100), ["@netsend_address"] = (SqlDbType.NVarChar, 100),
         ["@weekday_pager_start_time"] = (SqlDbType.Int, 0), ["@weekday_pager_end_time"] = (SqlDbType.Int, 0), ["@saturday_pager_start_time"] = (SqlDbType.Int, 0),
         ["@saturday_pager_end_time"] = (SqlDbType.Int, 0), ["@sunday_pager_start_time"] = (SqlDbType.Int, 0), ["@sunday_pager_end_time"] = (SqlDbType.Int, 0),
+        ["@count_reset_date"] = (SqlDbType.Int, 0), ["@count_reset_time"] = (SqlDbType.Int, 0),
         ["@pager_days"] = (SqlDbType.TinyInt, 0), ["@reassign_to_operator"] = (SqlDbType.NVarChar, 128), ["@alert_name"] = (SqlDbType.NVarChar, 128),
         ["@operator_name"] = (SqlDbType.NVarChar, 128), ["@notification_method"] = (SqlDbType.TinyInt, 0), ["@profile_name"] = (SqlDbType.NVarChar, 128),
         ["@subject"] = (SqlDbType.NVarChar, 256), ["@body"] = (SqlDbType.NVarChar, 4000)

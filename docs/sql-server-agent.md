@@ -527,7 +527,7 @@ Writes (from AG-2) call only these, each followed by a return-code check:
 | `msdb.dbo.sp_purge_jobhistory` | `@oldest_date`, `@job_id` | AG-8a |
 | `msdb.dbo.sp_add_job` | `@job_name`, `@enabled`, `@description`, `@category_name`, `@owner_login_name`, `@notify_level_eventlog`, `@notify_level_email`, `@notify_level_netsend`, `@notify_level_page`, `@notify_email_operator_name`, `@notify_netsend_operator_name`, `@notify_page_operator_name`, `@delete_level`, `@job_id` | AG-6a |
 | `msdb.dbo.sp_add_jobserver` | `@job_id` | AG-6a |
-| `msdb.dbo.sp_update_alert` | `@name`, `@job_id`, `@new_name`, `@enabled`, `@message_id`, `@severity`, `@delay_between_responses`, `@notification_message`, `@include_event_description_in`, `@database_name`, `@event_description_keyword`, `@occurrence_count`, `@performance_condition` | AG-6a |
+| `msdb.dbo.sp_update_alert` | `@name`, `@job_id`, `@new_name`, `@enabled`, `@message_id`, `@severity`, `@delay_between_responses`, `@notification_message`, `@include_event_description_in`, `@database_name`, `@event_description_keyword`, `@occurrence_count`, `@count_reset_date`, `@count_reset_time`, `@performance_condition` | AG-6a |
 | `msdb.dbo.sp_add_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_update_jobstep` | later lanes | AG-6b |
 | `msdb.dbo.sp_delete_jobstep` | later lanes | AG-6b |

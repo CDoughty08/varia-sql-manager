@@ -85,6 +85,11 @@ internal static class AgentObjectLiveChecks
         var dropped = await scalar("SELECT CONVERT(nvarchar(9), COUNT(*)) FROM msdb.dbo.sysnotifications AS n JOIN msdb.dbo.sysoperators AS o ON o.id = n.operator_id WHERE o.name = " + Quote(other) + ";");
         check(changed.Error is null && methods == "3" && dropped == "0", "an alert save updates one notification and deletes another: " + Said(changed) + " " + methods + " " + dropped);
 
+        var reset = await execute(args("agentAlert", new ObjectRefDto("agentAlert", Name: alert)) with { AgentObjectId = read.Id, AgentAlert = new(ResetCount: true) });
+        var resetOn = await scalar("SELECT CONVERT(nvarchar(9), count_reset_date) FROM msdb.dbo.sysalerts WHERE name = " + Quote(alert) + ";");
+        check(reset.Error is null && (resetOn == DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture) || resetOn == DateTime.Now.AddDays(-1).ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture)),
+            "Reset count stamps today's reset date, which msdb keeps from the last reset otherwise: " + Said(reset) + " " + resetOn);
+
         // A save whose later call fails commits nothing: the notification to an operator that does not exist fails after the delay's change.
         var failed = await execute(args("agentAlert", new ObjectRefDto("agentAlert", Name: alert)) with { AgentObjectId = read.Id, AgentAlert = new(Delay: 60, Notifications: [new("VariaNoSuchOperator_" + Guid.NewGuid().ToString("N")[..8], 1, "add")]) });
         check(failed.Error is not null && await scalar("SELECT CONVERT(nvarchar(9), delay_between_responses) FROM msdb.dbo.sysalerts WHERE name = " + Quote(alert) + ";") == "600",

@@ -109,6 +109,9 @@ internal static class AgentObjectChecks
         check(Equals(ValueOf(renamed, "@name"), Alert.Name) && Equals(ValueOf(renamed, "@expected_id"), 7) && Equals(ValueOf(renamed, "@c1_new_name"), "Renamed") && Equals(ValueOf(renamed, "@c1_job_id"), Guid.Empty)
             && Equals(ValueOf(renamed, "@c1_occurrence_count"), 0) && Equals(ValueOf(renamed, "@c2_alert_name"), "Renamed"),
             "a rename goes as @new_name, the identity guard binds the name and id read, a detached job is the zero id, Reset count is 0 occurrences, and later calls use the new name");
+        var stamped = ActionService.AlertSavePlan(AlertSave(new(ResetCount: true)), Alert, new DateTime(2026, 11, 22, 9, 5, 7));
+        check(Equals(ValueOf(stamped, "@c1_occurrence_count"), 0) && Equals(ValueOf(stamped, "@c1_count_reset_date"), 20261122) && Equals(ValueOf(stamped, "@c1_count_reset_time"), 90507) && AgentSql.LintObjectBatch(stamped.Text).Count == 0,
+            "Reset count stamps the reset date and time from the server's clock, which sp_update_alert would otherwise keep from the last reset");
         var notifyOnly = ActionService.AlertSavePlan(AlertSave(new(Notifications: [new("DBA", 2, "update")])), Alert);
         check(Procedures(notifyOnly) == "sp_update_notification", "an alert save that only changes notifications calls no sp_update_alert");
         var job = ActionService.AlertSavePlan(AlertSave(new(JobId: JobId)), Alert);
