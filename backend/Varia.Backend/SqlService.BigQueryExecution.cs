@@ -410,7 +410,9 @@ internal sealed partial class SqlService
                 session.ActiveJob = false;
                 session.FollowsJob = false;
                 var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
-                BigQueryService.CaptureSession(session, finished, location);
+                // A re-attach that did not adopt the job's session (another tab uses it, or adoptSession was false) never takes
+                // it over when the job finishes: closing this tab would end the other tab's session.
+                if (attach is null || sessionJob) BigQueryService.CaptureSession(session, finished, location);
                 summary = JobSummary(project, location, jobId, finished);
                 var statement = summary.StatementType;
                 // A script's children: the rest are read now, and the full listing decides the transaction.

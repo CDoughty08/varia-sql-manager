@@ -24,7 +24,7 @@ export interface JobRecordStoreOptions {
  * `query.job` events, under their tab's job key, so a restore, a backend restart or a crash of the whole app can re-attach
  * to them. Written atomically on every change whatever the hot exit setting; an unreadable file is quarantined, never
  * overwritten. 64 records per key and 1,024 in all, past which the oldest finished records go first (a running job's
- * record is never dropped for space); records expire 24 hours after their job was created. No secrets and no SQL text.
+ * record is never dropped for space); records expire 24 hours after main first heard of their job. No secrets and no SQL text.
  *
  * While a quit is deciding, drops for the keys it will keep (`holdDrops`) are deferred, so a result that reaches a kept tab
  * after the prompt cannot drop the record the next start needs; `releaseHolds` applies them when the quit stops.

@@ -101,6 +101,8 @@ export class BackendSupervisor {
   private readonly waiting: Waiter[] = []
   /** Connection ids by generation; a loss moves them to `lost`, which is bounded and oldest-first. */
   private readonly live = new Map<string, number>()
+  // The previous generation while a restart ends its idle BigQuery sessions (endingIdle).
+  private draining?: BackendConnection
   /** Each live connection's provider, from the options its connect sent (absent: SQL Server). */
   private readonly providers = new Map<string, ProviderId>()
   private readonly lost = new Set<string>()
@@ -188,7 +190,7 @@ export class BackendSupervisor {
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']
     if (o.generation !== undefined && this.readyGeneration !== o.generation) throw new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable)
-    const connection = this.connection ?? await this.upcoming()
+    const connection = this.drainingFor(method, params) ?? this.connection ?? await this.upcoming()
     const sessionId = method === 'query.execute' || method === 'query.attach' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
       ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
@@ -249,8 +251,9 @@ export class BackendSupervisor {
     // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
     if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
-    if (this.endingIdle) return this.endingIdle
+    // Before the join: a Restart Backend that joins a pending Reload still resets the breaker.
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
+    if (this.endingIdle) return this.endingIdle
     this.clock.clearTimeout(this.restartTimer)
     const previous = this.connection
     this.connection = undefined
@@ -264,11 +267,13 @@ export class BackendSupervisor {
       this.retiring.add(marker)
       // Another restart meanwhile (a Reload during Restart Backend) joins this one rather than launching a second backend.
       this.endingIdle = marker
+      // Its sessions are still open meanwhile: a close (Cancel the job, a commit) reaches them rather than being answered here.
+      this.draining = previous
       try {
         const failedAborts = await ending
         if (failedAborts > 0) this.deps.onFailedAborts?.(failedAborts)
         if (this.closing) { await previous.close(undefined, new BackendError('BACKEND_UNAVAILABLE', sentences.closing)); return }
-      } finally { this.retiring.delete(marker); this.endingIdle = undefined; finished() }
+      } finally { this.retiring.delete(marker); this.endingIdle = undefined; this.draining = undefined; finished() }
     }
     if (previous) this.setState({ status: 'restarting', generation: previous.generation, lost: this.retire(previous, reason), retryInMs: 0 })
     this.launch()
@@ -320,6 +325,13 @@ export class BackendSupervisor {
     } catch { return 0 }
   }
 
+  /** The generation a restart is ending idle sessions in, for a session close or state read of one of its own sessions. */
+  private drainingFor(method: BackendMethod, params: unknown): BackendConnection | undefined {
+    if (!this.draining || (method !== 'query.session.close' && method !== 'query.session.state')) return undefined
+    const sessionId = idOf(params, 'sessionId')
+    return sessionId !== undefined && this.sessions.get(sessionId) === this.draining.generation ? this.draining : undefined
+  }
+
   /** Requests that need no backend: cleanup of what a lost generation held, and refusals. */
   private answerLocally(method: BackendMethod, params: unknown): { value: unknown } | undefined {
     const unavailable = this.closing || this.snapshot.status === 'failed'
@@ -328,6 +340,7 @@ export class BackendSupervisor {
     if (method === 'query.session.close' || method === 'query.session.state') {
       const sessionId = idOf(params, 'sessionId')
       const generation = sessionId === undefined ? undefined : this.sessions.get(sessionId)
+      if (!unavailable && generation !== undefined && generation === this.draining?.generation) return undefined
       if (unavailable || (generation !== undefined && generation !== (this.connection?.generation ?? this.generation + 1))) {
         // The session ended with its generation; reading its state would only start a backend to say so.
         if (method === 'query.session.state') throw new BackendError('SESSION_LOST', sentences.sessionEnded)
