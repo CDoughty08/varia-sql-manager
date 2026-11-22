@@ -184,7 +184,8 @@ and leaves out SQL Server's options whatever the tab and Tools › Options hold.
   (binary), DATE (`2026-11-15`), TIME and DATETIME (`2026-11-15T09:30:00.5`, the fraction without trailing zeros),
   INTERVAL in canonical form (`1-2 3 4:05:06.5`), TIMESTAMP as `2026-11-15 09:30:00.000000 UTC`,
   RANGE, GEOGRAPHY (WKT), and JSON, STRUCT and ARRAY as compact JSON documents. Column types read as GoogleSQL writes them
-  (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind.
+  (`ARRAY<STRUCT<a INT64>>`, `NUMERIC(10, 2)`), from REST's legacy names too, and each sorts by its kind. Timestamp sorting,
+  grouping, profile distinct counts and profile minimum and maximum values use the UTC instant down to its microsecond.
 - **Summary.** Messages name the job (`project:LOCATION.job_id`), the rows (`(N rows affected)`, DML's affected rows),
   a DDL statement's completion, and the job's statistics: bytes processed and billed with their price, slot time and
   cache hit. The summary's `job` carries the same figures, and the Results status shows the bytes processed beside the
