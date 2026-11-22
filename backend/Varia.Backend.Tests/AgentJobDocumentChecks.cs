@@ -264,13 +264,16 @@ internal static class AgentJobDocumentChecks
         static object? ValueOf(AgentSaveBatch batch, string name) => batch.Parameters.First(parameter => parameter.Parameter.Name == name).Value;
         static string Order(AgentSaveBatch batch) => string.Join(",", batch.Calls.Select(call => call.Procedure switch
         {
-            "sp_delete_jobstep" => "D", "sp_add_jobstep" => "A", "sp_update_jobstep" => call.Arguments.Count == 3 ? "T" : "W", "sp_update_job" => call.Part is null ? "J" : "S", "sp_update_alert" => "X", _ => "?"
+            "sp_delete_jobstep" => "D", "sp_add_jobstep" => "A", "sp_update_jobstep" => call.Arguments.Count == 3 + AgentSql.TemporaryStepContent.Count ? "T" : "W", "sp_update_job" => call.Part is null ? "J" : "S", "sp_update_alert" => "X", _ => "?"
         }));
 
         // A swap of two steps with a rename: survivors renamed, then each step written whole into its final id, then the Start step.
         var swap = new AgentStepsSaveDto(Temporary: [new(1, Temp(1)), new(2, Temp(2))], Writes: [StepWrite(1, "B", onSuccess: 4, onSuccessTarget: 2), StepWrite(2, "A", proxy: 4, subsystem: "CmdExec", flags: 96, priority: 15)], StartStepId: 2);
         var swapped = ActionService.AgentJobSavePlan(Save(Changed(new(Description: "x", RemoveAlerts: [new(11, "Log full")], Steps: swap))), Job);
         check(Order(swapped) == "J,X,T,T,W,W,S" && AgentSql.LintJobSave(swapped.Text).Count == 0, "a swap saves the job, the alerts, temporary names, whole contents and the Start step, in that order: " + Order(swapped));
+        check((string?)ValueOf(swapped, "@subsystem_3") == "TSQL" && (string?)ValueOf(swapped, "@database_name_3") == "master" && (string?)ValueOf(swapped, "@proxy_name_3") == ""
+            && (string?)ValueOf(swapped, "@output_file_name_3") == "" && (int?)ValueOf(swapped, "@flags_3") == 0,
+            "a temporary name's call sets neutral content, so msdb does not re-check the stored step's before the whole write");
         check((int?)ValueOf(swapped, "@step_id_3") == 1 && (string?)ValueOf(swapped, "@step_name_3") == Temp(1) && (string?)ValueOf(swapped, "@step_name_5") == "B"
             && ValueOf(swapped, "@on_success_action_5") is (byte)4 && (int?)ValueOf(swapped, "@on_success_step_id_5") == 2 && (int?)ValueOf(swapped, "@proxy_id_6") == 4
             && (int?)ValueOf(swapped, "@flags_6") == 96 && (int?)ValueOf(swapped, "@os_run_priority_6") == 15 && (string?)ValueOf(swapped, "@proxy_name_5") == ""

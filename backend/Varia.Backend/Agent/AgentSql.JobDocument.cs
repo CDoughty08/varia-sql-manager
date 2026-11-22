@@ -118,9 +118,20 @@ internal static partial class AgentSql
     /// <summary>Planner step (1): sp_delete_jobstep of described step <paramref name="stepId"/> (call <paramref name="index"/>).</summary>
     public static AgentSaveCall DeleteStep(int index, AgentParameter jobId, int stepId) =>
         new("sp_delete_jobstep", [JobOf(jobId), Indexed(index, "@step_id", SqlDbType.Int, 0, stepId)], Part: "the delete of step " + stepId.ToString(CultureInfo.InvariantCulture));
-    /// <summary>Planner step (2): a surviving step's temporary name, at its id after the deletes.</summary>
+    /// <summary>What a temporary name's call sets besides the name. sp_update_jobstep fills every argument it is not given from the stored
+    /// step and checks the result (sp_verify_jobstep), so a rename alone is refused for content the draft already fixed (a dropped database,
+    /// an output file below sysadmin, a proxy or server gone). This content always passes; planner step (4) writes every step's own over it.</summary>
+    internal static readonly IReadOnlyList<(string Argument, SqlDbType Type, int Size, object Value)> TemporaryStepContent =
+    [
+        ("@subsystem", SqlDbType.NVarChar, 40, "TSQL"), ("@database_name", SqlDbType.NVarChar, 128, "master"), ("@database_user_name", SqlDbType.NVarChar, 128, ""),
+        ("@server", SqlDbType.NVarChar, 128, ""), ("@output_file_name", SqlDbType.NVarChar, 200, ""), ("@proxy_name", SqlDbType.NVarChar, 128, ""), ("@flags", SqlDbType.Int, 0, 0),
+        ("@os_run_priority", SqlDbType.Int, 0, 0), ("@on_success_action", SqlDbType.TinyInt, 0, (byte)1), ("@on_success_step_id", SqlDbType.Int, 0, 0),
+        ("@on_fail_action", SqlDbType.TinyInt, 0, (byte)2), ("@on_fail_step_id", SqlDbType.Int, 0, 0)
+    ];
+    /// <summary>Planner step (2): a surviving step's temporary name, at its id after the deletes, with <see cref="TemporaryStepContent"/>.</summary>
     public static AgentSaveCall RenameStep(int index, AgentParameter jobId, int stepId, string name) =>
-        new("sp_update_jobstep", [JobOf(jobId), Indexed(index, "@step_id", SqlDbType.Int, 0, stepId), Indexed(index, "@step_name", SqlDbType.NVarChar, 128, name)], Part: "the renumbered steps");
+        new("sp_update_jobstep", [JobOf(jobId), Indexed(index, "@step_id", SqlDbType.Int, 0, stepId), Indexed(index, "@step_name", SqlDbType.NVarChar, 128, name),
+            .. TemporaryStepContent.Select(entry => Indexed(index, entry.Argument, entry.Type, entry.Size, entry.Value))], Part: "the renumbered steps");
     /// <summary>Planner step (3): a new step inserted at its final id under a temporary name (msdb shifts the later steps up).</summary>
     public static AgentSaveCall InsertStep(int index, AgentParameter jobId, int stepId, string name) =>
         new("sp_add_jobstep", [JobOf(jobId), Indexed(index, "@step_id", SqlDbType.Int, 0, stepId), Indexed(index, "@step_name", SqlDbType.NVarChar, 128, name)],
@@ -219,10 +230,11 @@ internal static partial class AgentSql
             // The step calls' shapes (AG-6b): an id and name only (a temporary name, or a step inserted under one), a delete by id, or the whole content.
             var whole = seen.IsSupersetOf(stepWhole) && seen.Count == stepWhole.Count + 1 && seen.Contains("@proxy_id") != seen.Contains("@proxy_name");
             var named = seen.SetEquals(["@job_id", "@step_id", "@step_name"]);
+            var renamed = seen.SetEquals(TemporaryStepContent.Select(entry => entry.Argument).Concat(["@job_id", "@step_id", "@step_name"]));
             var startOnly = procedure == "sp_update_job" && seen.SetEquals(["@job_id", "@start_step_id"]);
             if (procedure == "sp_update_job" && seen.Contains("@start_step_id") && !startOnly) problems.Add("sets the Start step with other job settings");
             if (procedure == "sp_delete_jobstep" && !seen.SetEquals(["@job_id", "@step_id"])) problems.Add("deletes a step without its job and id alone");
-            if (procedure == "sp_update_jobstep" && !whole && !named) problems.Add("updates a step with neither its whole content nor only a temporary name");
+            if (procedure == "sp_update_jobstep" && !whole && !renamed) problems.Add("updates a step with neither its whole content nor only a temporary name");
             if (procedure == "sp_add_jobstep" && !(create ? whole : named)) problems.Add(create ? "adds a new job's step without its whole content" : "inserts a step with more than its id and temporary name");
             phases.Add(create
                 ? procedure switch { "sp_add_job" => 0, "sp_add_jobstep" => 1, "sp_add_jobserver" => 2, _ => startOnly ? 3 : -1 }
@@ -231,7 +243,7 @@ internal static partial class AgentSql
                     "sp_update_job" => startOnly ? 6 : 0,
                     "sp_update_alert" => 1,
                     "sp_delete_jobstep" => 2,
-                    "sp_update_jobstep" => named ? 3 : 5,
+                    "sp_update_jobstep" => renamed ? 3 : 5,
                     "sp_add_jobstep" => 4,
                     _ => -1
                 });

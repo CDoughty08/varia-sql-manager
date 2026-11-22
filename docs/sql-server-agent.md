@@ -115,7 +115,8 @@ a later lane, behind the same gate until 0.11.0.
   nothing is created until Create, which runs `sp_add_job` and `sp_add_jobserver` in one transaction. The save batches have
   their own exact-shape lint, `AgentSql.LintJobSave`. **Steps** save inside the same transaction after the job and its
   alerts, in the planner's order (`planAgentSteps`, `src/shared/agent/steps.ts`): deleted steps highest id first, every
-  surviving step renamed to a temporary `__varia_step_<32 hex>` name at its id, new steps inserted at their final ids under
+  surviving step renamed to a temporary `__varia_step_<32 hex>` name at its id (with neutral T-SQL content, since
+  `sp_update_jobstep` re-checks every argument it is not given against the stored step), new steps inserted at their final ids under
   temporary names, then each step's whole content written into its final id (`sp_update_jobstep` with every argument), and
   `sp_update_job @start_step_id` last when the Start step moved. Writing whole contents by id means a swap or rotation never
   depends on msdb's renumbering of go-tos, and the temporary names keep `sp_verify_jobstep`'s unique-name check (14261) from

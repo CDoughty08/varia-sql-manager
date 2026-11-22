@@ -176,6 +176,14 @@ internal static class AgentJobDocumentLiveChecks
         var deletedRows = await Rows();
         check(deleted?.Error is null && deletedRows == "1:First:2/0:8:master:1",
             "a job document save deletes a step, retargeting the step that went to it: " + (deleted is null ? "no job" : Said(deleted)) + " " + deletedRows);
+        // A step whose database is gone (sp_verify_jobstep refuses it, 14262): the draft's fix saves with an insert, since the temporary name's
+        // call sets neutral content instead of re-checking the stored step's.
+        await sql("UPDATE s SET database_name = N'VariaNoSuchDatabase' FROM msdb.dbo.sysjobsteps AS s JOIN msdb.dbo.sysjobs AS j ON j.job_id = s.job_id WHERE j.name = " + Quote(job) + " AND s.step_id = 1;", "msdb");
+        var fixedUp = await Save(new(Temporary: [new(1, Temp())], Adds: [new(1, Temp())], Writes: [Write(1, "Zero", 2, 0, 0), Write(2, "First", 2, 0, 8)], StartStepId: 2));
+        var fixedRows = await Rows();
+        check(fixedUp?.Error is null && fixedRows == "1:Zero:2/0:0:master:2|2:First:2/0:8:master:2",
+            "a job document save renumbers a step whose stored database is gone, writing the draft's fix: " + (fixedUp is null ? "no job" : Said(fixedUp)) + " " + fixedRows);
+        await Save(new(Deletes: [1], Temporary: [new(1, Temp())], Writes: [Write(1, "First", 2, 0, 8)], StartStepId: 1));
 
         // A command longer than stepCommandChars (written outside Varia) is cut in the describe and marked, so the document never saves it back.
         var limit = (int)AgentCatalog.Current.Limit("stepCommandChars");

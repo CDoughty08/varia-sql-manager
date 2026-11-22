@@ -187,9 +187,9 @@ export function withSubsystem(step: AgentStepDraft, subsystem: string): AgentSte
   else if (step.subsystem !== 'TSQL' && tsql && (flags & includeAllOutput)) flags = (flags & ~includeAllOutput) | stepFlags.includeStepOutputInHistory
   if (subsystem !== 'CmdExec') flags &= ~cmdExecAbortEvent
   if (!tableLogSubsystems.has(subsystem)) flags &= ~(stepFlags.logToTable | stepFlags.logToTableAppend)
-  // msdb refuses an output file on a type that cannot log to one (14545).
+  // msdb refuses an output file on a type that cannot log to one (14545), and a server outside sysservers on any but Analysis Services (14234).
   return { ...step, subsystem, flags, databaseName: tsql ? step.databaseName || 'master' : subsystem === 'CmdExec' ? '' : step.databaseName, databaseUserName: tsql ? step.databaseUserName : '', proxyId: tsql ? 0 : step.proxyId,
-    outputFileName: tableLogSubsystems.has(subsystem) ? step.outputFileName : '' }
+    outputFileName: tableLogSubsystems.has(subsystem) ? step.outputFileName : '', server: serverSubsystems.has(subsystem) ? step.server : '' }
 }
 
 // --- Flags (docs/agent-plan.md › Step dialog Advanced) ----------------------------------------------------------------------

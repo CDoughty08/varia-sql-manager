@@ -393,6 +393,7 @@ describe('the step problems of what msdb already holds', () => {
     expect(agentStepProblems({ ...olap, steps: [{ ...olap.steps[0]!, server: 'olap01' }] }, context(draft)).filter(item => item.field === 'server')).toEqual([])
     expect(withSubsystem(draft.steps[0]!, 'Snapshot').outputFileName).toBe('')
     expect(withSubsystem(draft.steps[0]!, 'PowerShell').outputFileName).toBe('C:\out.txt')
+    expect(withSubsystem({ ...olap.steps[0]!, server: 'olap01' }, 'TSQL').server).toBe('')
   })
   it('keeps a go-to past the last step over a reload, as msdb keeps it', () => {
     const openedModel = model(), draft = initialAgentJobDraft(openedModel)
