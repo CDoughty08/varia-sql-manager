@@ -83,6 +83,14 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     if (mode === 'none') { commands.reportWarning(sqlTransformMessages.nothingToBracket(!!ranges)); return }
     applyTextOp(target, 'varia.toggleBrackets', sqlTransformOp(model, text, edits, current))
   })
+  // Toggle Brackets and the comma commands read T-SQL tokens (`#` starts a GoogleSQL comment, not a temporary table), so they
+  // edit only a SQL Server query. An object target can supply another engine's context, so the bound model's language decides.
+  const boundModelIsTsql = () => {
+    const model = documents.boundEditor?.getModel()
+    return !model || model.getLanguageId() === 'sql'
+  }
+  // In a GoogleSQL query the catalogue's "Open a query first" would mislead; other documents keep it.
+  const commasUnavailable = () => documents.boundEditor?.getModel()?.getLanguageId() === 'googlesql' ? 'Move Commas works only in SQL Server queries.' : undefined
   const moveCommas = (position: 'front' | 'end') => withEditor((target, model) => {
     const text = transformText(model), current = selections(target), selected = selectedRanges(model, current)
     const tokens = lexSql(text)
@@ -127,13 +135,9 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     commands.register('edit.makeLowercase', { run: changeCase('lower') }),
     commands.register('edit.increaseIndent', { run: indent('increase') }),
     commands.register('edit.decreaseIndent', { run: indent('decrease') }),
-    // An object target can supply another engine's context. This transform always edits the bound text model.
-    commands.register('edit.toggleBrackets', { run: toggleBrackets, when: () => {
-      const model = documents.boundEditor?.getModel()
-      return !model || model.getLanguageId() === 'sql'
-    } }),
-    commands.register('edit.commasToFront', { run: moveCommas('front') }),
-    commands.register('edit.commasToEnd', { run: moveCommas('end') }),
+    commands.register('edit.toggleBrackets', { run: toggleBrackets, when: boundModelIsTsql }),
+    commands.register('edit.commasToFront', { run: moveCommas('front'), when: boundModelIsTsql, unavailable: commasUnavailable }),
+    commands.register('edit.commasToEnd', { run: moveCommas('end'), when: boundModelIsTsql, unavailable: commasUnavailable }),
     commands.register('editor.toggleWhitespace', { run: () => editorOptions.toggleWhitespace() }),
     commands.register('editor.toggleLineNumbers', { run: () => editorOptions.toggleLineNumbers() }),
     commands.register('edit.toggleBookmark', { run: () => { focusedEditor(documents); bookmarks.toggle() } }),
