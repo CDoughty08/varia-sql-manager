@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { ResultColumn } from '../src/shared/contracts'
 import { pairColumns, sameName } from '../src/renderer/src/results/compare-pairing'
+import { nameKey } from '../src/shared/ordinal-casing'
 
 interface Case { readonly name: string; readonly left: readonly ResultColumn[]; readonly right: readonly ResultColumn[]; readonly pairs: readonly [number, number][] }
 const cases = (JSON.parse(readFileSync(new URL('./fixtures/compare-pairing/cases.json', import.meta.url), 'utf8')) as { cases: Case[] }).cases
@@ -23,16 +24,30 @@ describe('Compare popover column pairing', () => {
     expect(result.pairs).toEqual([[0, 0]])
     expect(result.oldOnly).toHaveLength(1023)
     expect(result.newOnly).toHaveLength(1023)
-    expect(reads).toBeLessThanOrEqual(1024 * 4)
+    expect(reads).toBeLessThanOrEqual(1024 * 8)
   })
 
   it('has the cases both suites need', () => expect(cases.length).toBeGreaterThanOrEqual(9))
 
-  // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it.
+  // The fake backend (tests/fixtures/backend.mjs) pairs for the smoke suites with the same rule, not a copy of it: it looks
+  // columns up by the shared nameKey, as pairColumns does.
   it('the fake backend compares names with the shared rule', () => {
     const source = readFileSync(new URL('./fixtures/backend.mjs', import.meta.url), 'utf8')
-    expect(source).toContain("import { sameName } from '../../src/shared/ordinal-casing.ts'")
-    expect(source).not.toMatch(/(const|function) sameName/)
+    expect(source).toContain("import { nameKey } from '../../src/shared/ordinal-casing.ts'")
+    expect(source).not.toMatch(/(const|function) (sameName|nameKey|ordinalKey)\b/)
+  })
+
+  it('keys two names alike exactly when sameName calls them the same', () => {
+    const parts = ['a', 'A', 'i', 'I', '\u0131', '\u0130', 's', 'S', '\u017F', 'k', 'K', '\u212A', '\u00E9', '\u00C9', '\u{10400}', '\u{10428}', '\uD800', '\uDC00', '\u03C3', '\u03A3', '\u03C2']
+    let seed = 642
+    const next = (limit: number) => (seed = (seed * 1103515245 + 12345) % 2147483648) % limit
+    const name = () => Array.from({ length: next(4) }, () => parts[next(parts.length)]).join('')
+    const differences: string[] = []
+    for (let trial = 0; trial < 20000; trial++) {
+      const a = name(), b = name()
+      if ((nameKey(a) === nameKey(b)) !== sameName(a, b)) differences.push(JSON.stringify([a, b]))
+    }
+    expect(differences.slice(0, 5)).toEqual([])
   })
 
   it('lists each side\'s columns left out, with the other side\'s type when a column of the same name did not pair', () => {

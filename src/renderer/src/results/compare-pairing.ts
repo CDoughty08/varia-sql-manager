@@ -1,5 +1,5 @@
 import type { ResultColumn } from '../../../shared/contracts'
-import { ordinalKey, sameName } from '../../../shared/ordinal-casing'
+import { nameKey, sameName } from '../../../shared/ordinal-casing'
 import { isHiddenColumn } from '../grid/hidden-columns'
 
 export { sameName }
@@ -23,8 +23,7 @@ function indexColumns(columns: readonly PairableColumn[]) {
   const names = new Map<string, SameName>()
   const keys = columns.map((column, i) => {
     if (isHiddenColumn(column)) return undefined
-    let key = ''
-    for (const point of column.name) key += String.fromCodePoint(ordinalKey(point.codePointAt(0)!))
+    const key = nameKey(column.name)
     let named = names.get(key)
     if (!named) names.set(key, named = { first: column, wires: new Map() })
     let wire = named.wires.get(column.wire)

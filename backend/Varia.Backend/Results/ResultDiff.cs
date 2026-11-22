@@ -341,19 +341,24 @@ internal static class ResultDiffer
     /// result's cells take the second result's wire, which a first result's binary value could not be stored in.</summary>
     public static (int Left, int Right)[] Pairs(IReadOnlyList<ResultColumn> left, IReadOnlyList<ResultColumn> right, IReadOnlyList<WireKind>? leftWires = null, IReadOnlyList<WireKind>? rightWires = null)
     {
-        var used = new bool[right.Count];
+        // Each visible right column queued under its name's key (and wire, when both sides have wires), in order: the first
+        // unused one of a left column's key is the queue's next, as the first match of a scan of the right side would be,
+        // so wide results that share few names pair in linear time.
+        var wired = leftWires is not null && rightWires is not null;
+        var queues = new Dictionary<(string Name, WireKind Wire), Queue<int>>();
+        for (var r = 0; r < right.Count; r++)
+        {
+            if (ResultTextWriter.Hidden(right[r])) continue;
+            var key = (OrdinalNames.KeyOf(right[r].Name), wired ? rightWires![r] : WireKind.Text);
+            if (!queues.TryGetValue(key, out var queue)) queues.Add(key, queue = new Queue<int>());
+            queue.Enqueue(r);
+        }
         var pairs = new List<(int, int)>();
         for (var l = 0; l < left.Count; l++)
         {
             if (ResultTextWriter.Hidden(left[l])) continue;
-            for (var r = 0; r < right.Count; r++)
-            {
-                if (used[r] || ResultTextWriter.Hidden(right[r]) || !OrdinalNames.Same(left[l].Name, right[r].Name)) continue;
-                if (leftWires is not null && rightWires is not null && leftWires[l] != rightWires[r]) continue;
-                used[r] = true;
+            if (queues.TryGetValue((OrdinalNames.KeyOf(left[l].Name), wired ? leftWires![l] : WireKind.Text), out var queue) && queue.TryDequeue(out var r))
                 pairs.Add((l, r));
-                break;
-            }
         }
         return [.. pairs];
     }

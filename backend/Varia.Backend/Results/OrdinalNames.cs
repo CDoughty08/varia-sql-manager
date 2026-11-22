@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Results;
@@ -47,6 +48,21 @@ internal static partial class OrdinalNames
             at += size;
         }
         return true;
+    }
+
+    /// <summary>A name's key: each code point replaced by its key, so two names are <see cref="Same"/> exactly when their keys
+    /// are ordinally equal (the table keeps each code point in its plane, and never maps to or from a surrogate).</summary>
+    public static string KeyOf(string name)
+    {
+        var key = new StringBuilder(name.Length);
+        for (var at = 0; at < name.Length;)
+        {
+            var code = CodeAt(name, at, out var size);
+            if (size == 1) key.Append((char)Key(code));
+            else key.Append(char.ConvertFromUtf32(Key(code)));
+            at += size;
+        }
+        return key.ToString();
     }
 
     private static int CodeAt(string text, int at, out int size)
