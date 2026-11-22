@@ -320,7 +320,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   after a few tries show Retry (a screen reader hears their cells as not loaded); a block only read ahead stops where the cache is full, never evicting the rows on screen,
   and read-ahead counts blocks at the widest their rows have come out.
 - **Load into memory.** A windowed result of a finished run offers Load into memory on its grid's strip and in the results
-  toolbar's ⋯ menu (Load Result into Memory in the palette). It runs `results.remoteQuery` kind `load`, which reads the whole
+  toolbar's ⋯ menu (Load Result into Memory in the palette) while its projection (the descriptor's `projectedBytes`, its
+  measured row cost times its rows) fits the result memory free at that point; otherwise the strip says it is too large to
+  load now and to close other results to make room. It runs `results.remoteQuery` kind `load`, which reads the whole
   table into memory under the budget (REST, or Storage Read when it qualifies; a script statement's rows always through
   REST, which keeps their order), so the in-memory features work on it. While it runs the strip counts the rows read and
   offers Stop, and the grid keeps the rows it showed and its place, drawing those not yet read as loading. A refusal part

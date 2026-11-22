@@ -1101,7 +1101,8 @@ and the backend reads them in blocks as the grid asks (docs/bigquery.md, Residen
 
 - `residence`: `memory` or `remote` (absent for SQL Server and for Preview Rows, which always reads into memory); `rowsTotal`: BigQuery's own total, which may pass
   `rowsAvailable` (at most 2,147,483,647 rows, the grid's 32-bit indexes; a Messages line says so);
-  `revision`: 0, bumped by every switch.
+  `revision`: 0, bumped by every switch; `projectedBytes` (windowed only): the result's projected size in memory, its
+  measured row cost times its rows, which the renderer offers Load into memory under.
 - **Choosing.** `query.execute` takes `residence` (`automatic`, the default; `memory`; `windowed`) and `windowCacheMiB`
   (16 – 4,096, default 64), BigQuery only: main (`optionsAllow`) and the backend refuse them for SQL Server. The backend
   decides after the first page, before `resultSet.opened`: memory when the rows arrived whole, under `memory`, or when

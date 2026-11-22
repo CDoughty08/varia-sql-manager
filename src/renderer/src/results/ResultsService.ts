@@ -20,6 +20,7 @@ import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
 import { isHiddenColumn, visibleColumnCount } from '../grid/hidden-columns'
+import type { MemoryUsage } from './memory'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -493,6 +494,13 @@ function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
  * frame; the summary is authoritative when the run ends. Results are released when the tab runs again, closes, or the
  * user closes them; changing the connection or database keeps them, as SSMS does.
  */
+/** Whether a windowed result's projected size fits the result memory free now. With no projection or no report yet
+ *  (globalBytes 0) nothing is held back: the load itself switches back to windowed if the rows do not fit. */
+export function fitsFreeMemory(projected: number | undefined, memory: Pick<MemoryUsage, 'usedBytes' | 'globalBytes'> | undefined): boolean {
+  if (projected === undefined || !memory || memory.globalBytes <= 0) return true
+  return projected <= Math.max(0, memory.globalBytes - memory.usedBytes)
+}
+
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
   private readonly events: EventBus
@@ -501,6 +509,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly retainedPlans?: RetainedPlansService
   /** How text columns sort (queryResults.grid.sortText). */
   private readonly sortText: () => ViewSortMode
+  private readonly memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
   private readonly frame: (callback: () => void) => void
@@ -566,6 +575,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
     sortText?: () => ViewSortMode
+    /** Result memory's latest report (MemoryUsageService): Load into memory is offered only while a windowed result's
+     *  projection fits the room it has free. Without it (or before a report) nothing is held back. */
+    memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
     /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
     onSortTextChange?: (listener: () => void) => () => void
   }) {
@@ -576,6 +588,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.documents = o.documents
     this.retainedPlans = o.retainedPlans
     this.sortText = o.sortText ?? (() => 'value')
+    this.memory = o.memory
     let sortText = this.sortText()
     if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
@@ -805,12 +818,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return undefined
   }
 
-  /** Whether Load into memory can start for this entry: a windowed BigQuery result whose run has finished, not loading. */
-  canLoadIntoMemory(tabId: string, key: EntryKey): boolean {
+  /** Whether Load into memory can start for this entry: a windowed BigQuery result whose run has finished, not loading,
+   *  whose projected size fits the result memory free now (docs/bigquery.md, Load into memory). */
+  canLoadIntoMemory(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'ready' }
+  /** Whether the one thing keeping Load into memory back is the room: the result's projection does not fit the memory free. */
+  loadNeedsRoom(tabId: string, key: EntryKey): boolean { return this.loadState(tabId, key) === 'room' }
+  private loadState(tabId: string, key: EntryKey): 'ready' | 'room' | undefined {
     const run = this.runs.get(tabId), set = run?.entries.get(key)
-    if (!run || !set || !this.api.remoteQuery || run.status === 'running' || run.loads.has(key)) return false
+    if (!run || !set || !this.api.remoteQuery || run.status === 'running' || run.loads.has(key)) return undefined
     const snapshot = set.handle.getSnapshot()
-    return snapshot.residence === 'remote' && snapshot.state === 'complete'
+    if (snapshot.residence !== 'remote' || snapshot.state !== 'complete') return undefined
+    return fitsFreeMemory(snapshot.projectedBytes, this.memory?.()) ? 'ready' : 'room'
   }
 
   /** Stops a Load into memory (query.cancel with its own id): the result stays windowed, whole. */

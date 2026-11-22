@@ -56,6 +56,8 @@ export function diffSidesOf(info: Pick<CompareInfo, 'left' | 'right' | 'leftNumb
 const lostText = 'These results are no longer available because the SQL backend restarted.'
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 export const windowedText = 'This result is windowed in BigQuery: rows are read as you scroll. Load it into memory to sort, filter, search or pivot it.'
+/** A windowed result too large for the result memory free now: Load into memory is not offered until there is room. */
+export const windowedFullText = 'This result is windowed in BigQuery: rows are read as you scroll. It is too large to load into the result memory free now; close other results to make room.'
 /** What a windowed result's strip offers about loading: Stop while a load runs, Load into memory only beside the note
  *  that the result is windowed (not beside a truncation, a highlight count or a Stop query), else nothing. */
 export function loadOffer(o: { loading: string; loadable: boolean; other: string | undefined; stopping: boolean }): 'stop' | 'load' | undefined {
@@ -105,7 +107,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility, documents } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries, resultVisibility, documents, resultMemory } = useWorkbench()
   // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
   // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
   const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
@@ -260,11 +262,17 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   // A windowed result loading into memory says how far it has got, with Stop; a finished one offers to load (and when it
   // has nothing else to say, says it is windowed).
   const loading = useSyncExternalStore(results.subscribe, () => { const load = results.getSnapshot()[tabId]?.loads?.get(key); return load ? load.stopping ? 'stopping' : 'loading' : '' })
-  const loadable = useSyncExternalStore(results.subscribe, () => results.canLoadIntoMemory(tabId, key))
+  // Load into memory is offered while the projection fits the result memory free, so it follows memory's reports too.
+  const loadSubscribe = useCallback((listener: () => void) => {
+    const unsubscribe = results.subscribe(listener), memory = resultMemory?.subscribe(listener)
+    return () => { unsubscribe(); memory?.() }
+  }, [results, resultMemory])
+  const loadable = useSyncExternalStore(loadSubscribe, () => results.canLoadIntoMemory(tabId, key))
+  const needsRoom = useSyncExternalStore(loadSubscribe, () => results.loadNeedsRoom(tabId, key))
   // Re-run is Execute, which runs the active query tab: a grid shown for another (a popped-out pane) does not offer it.
   const activeTab = useSyncExternalStore(documents.subscribe, () => documents.getSnapshot().activeId === tabId)
   const loadNote = lost ? undefined : loadingText(loading, snapshot)
-  const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : undefined))
+  const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : needsRoom ? windowedFullText : undefined))
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
   const rootEl = useRef<HTMLDivElement | null>(null), hadFocus = useRef(false)

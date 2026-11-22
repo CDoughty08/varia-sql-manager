@@ -298,6 +298,21 @@ describe('ResultClient', () => {
     expect(handle.getSnapshot()).toMatchObject({ residence: 'memory', revision: 2, rowsStored: 5, state: 'open' })
   })
 
+  it('keeps the projected size of a windowed result only while it is windowed', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const windowed = descriptor({ residence: 'remote', revision: 1, rowsTotal: 5000, rowsRead: 5000, rowsStored: 0, rowsAvailable: 5000, bytesStored: 0, state: 'complete', projectedBytes: 4_000_000 })
+    worker().toWorker({ t: 'query', queryId: 'query-1', event: { type: 'resultSet.opened', descriptor: windowed } })
+    await settle()
+    const handle = client.open(windowed)
+    expect(handle.getSnapshot().projectedBytes).toBe(4_000_000)
+    // Loading into memory drops it: the result is no longer windowed.
+    worker().toWorker({ t: 'query', queryId: 'query-2', event: { type: 'resultSet.residence', descriptor: { ...windowed, revision: 2, residence: 'memory', rowsRead: 0, rowsAvailable: 0, state: 'open' } } })
+    await settle()
+    expect(handle.getSnapshot().projectedBytes).toBeUndefined()
+  })
   it('keeps the rows a windowed result showed while it loads into memory, until the load completes', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

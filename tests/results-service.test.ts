@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { entryName, filterLabel, filteredColumns, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
+import { entryName, filterLabel, filteredColumns, fitsFreeMemory, kindLabel, ResultsService, resultLimits, transposedView } from '../src/renderer/src/results/ResultsService'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
@@ -12,7 +12,7 @@ import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixt
 import { manualTimers } from './fixtures/workbench'
 import { keyAt, noEntry } from './fixtures/entries'
 
-function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void } = {}) {
+function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void; memory?: () => { usedBytes: number; globalBytes: number } } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const frames: (() => void)[] = []
   const progress = new Set<(value: ResultsJobProgress) => void>()
@@ -567,6 +567,30 @@ describe('results service', () => {
     expect(tab()!.messages.at(-1)).toEqual({ text: 'The result was loaded into memory.', kind: 'info' })
     expect(tab()!.settled.get('1:1')).toEqual(expect.objectContaining({ rows: 5_000 }))
     service.dispose()
+  })
+  it('offers Load into memory only while the projection fits the result memory free', () => {
+    let memory = { usedBytes: 900, globalBytes: 1_000 }
+    const { service, flush } = fixture({ memory: () => memory })
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000, projectedBytes: 200 })]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(service.loadNeedsRoom('t1', key)).toBe(true)
+    memory = { usedBytes: 800, globalBytes: 1_000 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    expect(service.loadNeedsRoom('t1', key)).toBe(false)
+    // Before memory's first report nothing is held back: the load itself switches back if the rows do not fit.
+    memory = { usedBytes: 0, globalBytes: 0 }
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    service.dispose()
+  })
+  it('compares a projection with the room free', () => {
+    expect(fitsFreeMemory(undefined, { usedBytes: 10, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(5, undefined)).toBe(true)
+    expect(fitsFreeMemory(5, { usedBytes: 5, globalBytes: 10 })).toBe(true)
+    expect(fitsFreeMemory(6, { usedBytes: 5, globalBytes: 10 })).toBe(false)
+    expect(fitsFreeMemory(1, { usedBytes: 12, globalBytes: 10 })).toBe(false)
   })
   it('says nothing of a load the user stopped by closing its result, nor of one a new run replaced', async () => {
     const { api, service, tab, flush } = fixture()

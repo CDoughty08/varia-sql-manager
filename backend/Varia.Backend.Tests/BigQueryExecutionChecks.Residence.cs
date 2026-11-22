@@ -973,7 +973,7 @@ internal static partial class BigQueryExecutionChecks
             await harness.ConnectAsync();
             var (code, result, _) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
-            check(code == "ok" && set is { Residence: "memory", RowsTotal: 1200, RowsStored: 1200, Revision: 0 } && harness.Service.Results.Find(set.ResultId)?.SwitchesOnRefusal == true
+            check(code == "ok" && set is { Residence: "memory", RowsTotal: 1200, RowsStored: 1200, Revision: 0, ProjectedBytes: null } && harness.Service.Results.Find(set.ResultId)?.SwitchesOnRefusal == true
                 && harness.Jobs.TableReads.IsEmpty, $"Automatic keeps a result that fits in memory: {set?.Residence} {set?.RowsStored}");
         }
         // Too large for half the room: windowed, its first page cached, nothing read from the table yet.
@@ -989,6 +989,10 @@ internal static partial class BigQueryExecutionChecks
                 $"Automatic windows a result too large for half the room, its first page cached: {code} {message} {set?.Residence} {set?.RowsAvailable} {set?.Truncated}");
             check(store.WindowCacheBytes > 0 && store.WindowCacheBytes == buffer?.Remote?.CachedBytes && store.MemoryDetail().WindowCacheBytes == store.WindowCacheBytes,
                 "the window cache is charged to the store and shown in the memory detail: " + store.WindowCacheBytes);
+            // Load into memory is offered under the projection: the measured row cost times the rows.
+            var projected = buffer?.Remote is { } windowed ? (long)Math.Ceiling(windowed.RowCost * windowed.Rows) : -1;
+            check(set?.ProjectedBytes == projected && projected > 0 && buffer?.Describe().ProjectedBytes == projected,
+                $"a windowed result's descriptor carries its projected size in memory: {set?.ProjectedBytes} {projected}");
         }
         // Always in memory truncates at the budget as before.
         using (var harness = new Harness(Lines(3000), new ResultStore(4L << 20, 32 * 1024)))

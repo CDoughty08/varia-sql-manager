@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadingText, loadOffer, truncationText, windowedText } from '../src/renderer/src/grid/ResultGrid'
+import { loadingText, loadOffer, truncationText, windowedFullText, windowedText } from '../src/renderer/src/grid/ResultGrid'
 
 const GiB = 1024 ** 3
 const now = { usedBytes: 0, globalBytes: 1 * GiB, queryBytes: GiB / 2, generation: 1, seq: 4 }
@@ -55,6 +55,9 @@ describe('what a windowed result strip offers about loading', () => {
     expect(loadOffer({ loading: 'loading', loadable: false, other: 'Loading into memory…', stopping: false })).toBe('stop')
     expect(loadOffer({ loading: 'stopping', loadable: false, other: 'Stopping', stopping: false })).toBeUndefined()
     expect(loadOffer({ loading: '', loadable: true, other: windowedText, stopping: false })).toBe('load')
+    // Too large for the memory free: the strip says so and offers nothing.
+    expect(loadOffer({ loading: '', loadable: false, other: windowedFullText, stopping: false })).toBeUndefined()
+    expect(windowedFullText).toContain('too large to load')
     // Beside a truncation, a highlight count or the run's Stop query, Load is not offered.
     expect(loadOffer({ loading: '', loadable: true, other: 'Only the first 2,147,483,647 of 3,000,000,000 rows can be shown', stopping: false })).toBeUndefined()
     expect(loadOffer({ loading: '', loadable: true, other: windowedText, stopping: true })).toBeUndefined()
