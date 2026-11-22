@@ -159,7 +159,7 @@ internal sealed partial class BigQueryService
         var project = connection.Options.Project;
         Job job;
         try { job = await GetJobAsync(connection, project, jobId, location, token); }
-        catch (GoogleApiException error) when (error.HttpStatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound) { throw NotOwn(); }
+        catch (GoogleApiException error) when (error.HttpStatusCode is HttpStatusCode.NotFound || Refused(error)) { throw NotOwn(); }
         // The emulator lists no jobs by creation time; its single principal owns every job.
         if (environment.Emulator) return job;
         if (job.Statistics?.CreationTime is not { } created || created <= 0) throw NotOwn();
@@ -174,7 +174,7 @@ internal sealed partial class BigQueryService
             request.PageToken = pageToken;
             JobList answer;
             try { answer = await ReadAsync(t => request.ExecuteAsync(t), token); }
-            catch (GoogleApiException error) when (error.HttpStatusCode == HttpStatusCode.Forbidden)
+            catch (GoogleApiException error) when (Refused(error))
             {
                 // The tab's own held job, which this backend inserted on this connection: the listing only confirms it.
                 if (inserted) return job;
@@ -186,12 +186,15 @@ internal sealed partial class BigQueryService
         }
         throw NotOwn();
 
+        // BigQuery answers a rate limit or quota with 403 too: that is QUOTA (a passing failure that keeps the job), not a refusal.
+        static bool Refused(GoogleApiException error) => error.HttpStatusCode == HttpStatusCode.Forbidden
+            && error.Error?.Errors?.Any(item => item.Reason is "rateLimitExceeded" or "quotaExceeded") != true;
         static RequestException NotOwn() => new("AUTH_IDENTITY", "This BigQuery job was not started by the account this connection signs in as, or it no longer exists. Varia left it alone.");
     }
 
     /// <summary>
     /// bigquery.cancelJobs (main only; docs/bigquery.md, Re-attaching to jobs): signs in with the profile's
-    /// credential, then for each job in parallel cancels it, waits for its DONE (within the call's 30 s deadline) and lists
+    /// credential, then for each job in parallel cancels it, waits for its DONE (up to 30 s, within the call's deadline) and lists
     /// its final children (committedBeforeCancel, or outcomeUnknown when that does not finish), and ends its session
     /// (statistics.sessionInfo) outside the session, since no tab will.
     /// </summary>

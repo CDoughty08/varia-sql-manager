@@ -124,7 +124,7 @@ describe('long runs in main (varia:long-runs)', () => {
   it('names the runs first in the Restart prompt, which the page lets through while the backend does not answer', () => {
     expect(restartDetail(noLongRuns, 1)).toBe('The connection closes and uncommitted transactions are rolled back.')
     expect(restartDetail(noLongRuns, 3)).toBe('All 3 connections close and uncommitted transactions are rolled back.')
-    expect(restartDetail(noLongRuns, 1, true)).toBe('The connection closes and uncommitted transactions are rolled back.\n\nRunning BigQuery jobs carry on in BigQuery and are re-attached once their tabs reconnect.')
+    expect(restartDetail(noLongRuns, 1, true)).toBe('The connection closes and uncommitted transactions are rolled back.\n\nRunning BigQuery jobs carry on in BigQuery and are re-attached once their tabs reconnect; a BigQuery session running a job keeps its transaction open until the session ends.')
     expect(restartDetail({ runs: [restore], total: 1 }, 2)).toBe('A restore is running on sql-prod-01: restarting the backend stops it part way.\n\nAll 2 connections close and uncommitted transactions are rolled back.')
     expect(restartDetail({ runs: [restore], total: 3 }, 0)).toBe('A restore is running on sql-prod-01, with 2 more runs: restarting the backend stops them part way.')
     const main = readFileSync('src/main/index.ts', 'utf8')

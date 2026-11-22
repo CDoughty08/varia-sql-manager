@@ -395,6 +395,21 @@ internal static partial class BigQuerySessionChecks
             && listAnswer is { Status: "completed" } && !bq.Cancels.Contains(listJob),
             $"without jobs.list a tab re-attaches to its own held job, and another tab's re-attach names the permission: {deniedAttach?.Status} {deniedAttach?.Error?.Code} {listAnswer?.Status} {Texts(listAnswer?.Messages ?? [])}");
 
+        // A rate limit answered as 403 during the identity check is QUOTA (the job kept), not another principal's job.
+        var limitedTab = Tab();
+        await harness.Execute(limitedTab, "SELECT 1");
+        var (limitedArgs, limitedRun, limitedJob) = await HeldAsync(harness, limitedTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = limitedArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await limitedRun.WaitAsync(TimeSpan.FromSeconds(30));
+        var limiting = true;
+        harness.Fake.On("GET", Base + "/jobs/[^/]+", request => limiting && request.Url.Contains("/jobs/" + limitedJob, StringComparison.Ordinal)
+            ? new(403, Bq.Error(403, "Exceeded rate limits: too many api requests.", "rateLimitExceeded")) : bq.GetReply(request));
+        var limited = (await harness.Call("query.attach", AttachArgs(harness, Tab(), limitedJob, args => args["adoptSession"] = false))).Result as QueryResult;
+        limiting = false;
+        check(limited is { Status: "failed", Error.Code: "QUOTA" } && !bq.Cancels.Contains(limitedJob),
+            $"a rate-limited identity check is QUOTA, not another principal's job: {limited?.Status} {limited?.Error?.Code}");
+        bq.Release(bq.Jobs[limitedJob]);
+
         // A re-attach from a tab with no session, to a job whose session another tab still holds, does not adopt that session,
         // nor take it over when the job finishes: closing the attaching tab never ends the other tab's session.
         var keeperTab = Tab();

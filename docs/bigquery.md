@@ -283,7 +283,7 @@ backend and main:
 - **Idle sessions end with their connection.** A session holding no running or left-running job is ended
   (`ABORT_SESSION`) on Disconnect (`connections.disconnect` answers `failedAborts`) and before every backend stop main makes
   (`bigquery.endIdleSessions`, 10 s), which leaves a kept tab's finished-job session with an open or unknown transaction
-  (`keepJobKeys`). A session close or state read during that wait still reaches the old backend. A failed abort is retried once the next time the handle reaches BigQuery.
+  (`keepJobKeys`). A session close or state read during that wait still reaches the old backend. A failed abort on Disconnect is retried once the next time a handle reaches BigQuery; one before a stop or restart is not (that backend ends).
 - **`bigquery.cancelJobs`** (main only) cancels a saved profile's jobs without a connection handle, waits for DONE, and ends
   their sessions, answering `committedBeforeCancel`, `outcomeUnknown` or `abortFailed` per job.
 - The restart, reload and crash prompts say BigQuery jobs carry on and re-attach.
