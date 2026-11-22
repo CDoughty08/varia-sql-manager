@@ -341,8 +341,8 @@ function gridHTML(m, o = {}) {
   const tpl = '92px ' + COLS.map(c => c[2] + 'px').join(' ')
   let head = `<div class="cell gut" style="background:none" title="Change, row number: not data"><span class="mk">&nbsp;</span><span class="n">#</span></div>`
   COLS.forEach((c, i) => {
-    const ign = S.ignore.has(i), chg = m.changedCols.has(i) && !ign
-    head += `<div class="cell${chg ? ' chgcol' : ''}${ign ? ' ign' : ''}" role="columnheader" aria-label="${esc(c[0])}${i === 0 ? ', key column' : ''}${chg ? ', has changes' : ''}${ign ? ', ignored' : ''}" title="${ign ? 'Ignored in this comparison' : ''}">${i === 0 ? '<span title="Key column" style="color:var(--warn)">⚷</span>' : ''}${ign ? '<span class="eye" aria-hidden="true">⊘</span>' : ''}<span>${esc(c[0])}</span> <small>${ign ? 'ignored' : esc(c[1])}</small>${chg ? '<span class="pip" title="Has changes"></span>' : ''}</div>`
+    const ign = S.ignore.has(i), chg = m.changedCols.has(i) && !ign, key = i === 0 && !ign
+    head += `<div class="cell${chg ? ' chgcol' : ''}${ign ? ' ign' : ''}" role="columnheader" aria-label="${esc(c[0])}${key ? ', key column' : ''}${chg ? ', has changes' : ''}${ign ? ', ignored' : ''}" title="${ign ? 'Ignored in this comparison' : ''}">${key ? '<span title="Key column" style="color:var(--warn)">⚷</span>' : ''}${ign ? '<span class="eye" aria-hidden="true">⊘</span>' : ''}<span>${esc(c[0])}</span> <small>${ign ? 'ignored' : esc(c[1])}</small>${chg ? '<span class="pip" title="Has changes"></span>' : ''}</div>`
   })
   let html = '', marks = ''
   const rows = rowsOf(m)
@@ -393,7 +393,7 @@ function sceneIgnore() {
   const menu = S.ignoreMenu ? `<div class="menu" id="ignMenu" role="dialog" aria-label="Ignore columns" style="top:28px;left:0">
       <input class="mfind" id="ignFind" placeholder="Find a column" value="${esc(S.ignoreFind)}" aria-label="Find a column">
       ${list.map(({ c, i }) => i === 0 && !auto
-        ? `<label class="mi off" title="Rows are matched by id, so it cannot be ignored"><input type="checkbox" disabled> ⚷ ${esc(c[0])} <small>${esc(c[1])}</small><span class="acc">Matched by: cannot be ignored</span></label>`
+        ? `<label class="mi off" title="Rows are matched by this column, so it cannot be ignored."><input type="checkbox" disabled> ⚷ ${esc(c[0])} <small>${esc(c[1])}</small><span class="acc">Rows are matched by this column, so it cannot be ignored.</span></label>`
         : `<label class="mi"><input type="checkbox" data-ign="${i}"${draft.has(i) ? ' checked' : ''}> ${esc(c[0])} <small>${esc(c[1])}</small>${i === 0 ? '<span class="acc">Chosen automatically: ignoring it matches rows another way</span>' : ''}</label>`).join('')}
       <div class="msep"></div><div class="mnote">A ticked column is ignored: it stays in the grid, muted, but its differences are not counted, coloured or stepped through. Remembered for ${RES[0]} → ${RES[1]}.</div>
       ${allTicked ? '<div class="mnote" style="color:var(--rem)">Compare at least one column.</div>' : ''}
@@ -409,39 +409,64 @@ function sceneIgnore() {
 }
 
 /* ---------- 3 + 7 Change details ---------- */
+// The collation's flags, then trailing spaces, which SQL Server's padding ignores under every collation.
+const SOFTSUM = 'Equal by collation: case-insensitive, trailing spaces ignored'
+const editText = ([x, y]) => x && y ? `'${x}' became '${y}'` : x ? `'${x}' was removed` : `'${y}' was added`
+// One rule for the card's first line and the live region: the count, the first edit, then how many more.
+const editSummary = d => `${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'}: ${editText(d.hunks[0])}${d.hunks.length > 1 ? `, and ${d.hunks.length - 1} more` : ''}`
+// A ? row and its partner, either way round: the removed side is old, the added side new.
+function lookAlike(e) {
+  const p = e.poss, rem = e.kind === 'removed' ? e : p, add = e.kind === 'removed' ? p : e
+  const cmpCols = COLS.map((c, i) => i).filter(i => i !== 0 && !S.ignore.has(i)), diffs = cmpCols.filter(i => rem.a[i] !== add.b[i])
+  const where = e.kind === 'removed' ? `row ${p.bi} in ${RES[1]}` : `row ${p.ai} in ${RES[0]}`
+  return { old: rem.a, neu: add.b, diffs, text: `looks like ${where}: ${cmpCols.length - diffs.length} of ${cmpCols.length} compared columns equal` }
+}
+// What a cell's card says in one line, without the column (the short cards' sentences, or the edit summary).
+function cellSummary(e, c) {
+  if (e.kind === 'added') return e.poss ? `added row, ${lookAlike(e).text}` : `added row: only in ${RES[1]}`
+  if (e.kind === 'removed') return e.poss ? `removed row, ${lookAlike(e).text}` : `removed row: only in ${RES[0]}`
+  if (S.ignore.has(c)) return 'this column is ignored'
+  if (e.soft.includes(c)) return SOFTSUM
+  if (!e.cells.includes(c)) return 'unchanged'
+  return editSummary(charDiff(plain(e.a[c]), plain(e.b[c])))
+}
 function cardSummary(rows, r, c) {
-  const e = rows[r] && rows[r].e; if (!e || !e.a || !e.b) return COLS[c][0]
-  if (e.soft.includes(c)) return `${COLS[c][0]}, equal by collation`
-  const d = charDiff(plain(e.a[c]), plain(e.b[c]))
-  return `${COLS[c][0]}, ${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'}: ${d.hunks.slice(0, 1).map(([x, y]) => x && y ? `'${x}' became '${y}'` : x ? `'${x}' was removed` : `'${y}' was added`).join('')}`
+  const e = rows[r] && rows[r].e; if (!e) return COLS[c][0]
+  return `${COLS[c][0]}, ${cellSummary(e, c)}`
+}
+const cap = t => t[0].toUpperCase() + t.slice(1)
+// A cell with nothing to mark, opened by key: one sentence.
+function shortCard(rows, r, c) {
+  const e = rows[r].e, kind = e.kind === 'added' ? 'added row' : e.kind === 'removed' ? 'removed row' : S.ignore.has(c) ? 'ignored' : 'unchanged'
+  return `<div class="card" id="card" role="dialog" aria-label="Change details: ${esc(COLS[c][0])}" style="top:${Math.min(24 + 21 * (r + 1) + 4, 380)}px;left:${S.pane === 'narrow' ? 8 : 200}px;width:min(340px,calc(100% - 16px))">
+    <header><b>${esc(COLS[c][0])}</b><small>${esc(COLS[c][1])} · ${kind}</small><button class="x" id="cardX" title="Close (Escape)">✕</button></header>
+    <div class="sum" style="padding-bottom:8px">${esc(cap(cellSummary(e, c)))}.</div></div>`
 }
 function cardHTML(m, r, c, by, rows, variant) {
-  const { e, side } = rows[r] || {}
-  if (!e || !e.a || !e.b || !(e.cells.includes(c) || e.soft.includes(c)) || S.ignore.has(c)) return ''
+  const { e } = rows[r] || {}
+  if (!e) return ''
+  if (!e.a || !e.b || !(e.cells.includes(c) || e.soft.includes(c)) || S.ignore.has(c)) return by === 'key' ? (e.poss ? scenePossible(m, rows, r) : shortCard(rows, r, c)) : ''
   const o = plain(e.a[c]), n = plain(e.b[c]), d = charDiff(o, n), sf = e.soft.includes(c)
-  const sum = sf ? (variant === 'closed' ? `Equal by collation (case-insensitive). The old value is not kept (${RES[0]} is closed).` : 'Equal by collation (case-insensitive).')
-    : `${d.hunks.length} edit${d.hunks.length > 1 ? 's' : ''}: ${d.hunks.slice(0, 2).map(([x, y]) => x && y ? `‘${esc(x)}’ became ‘${esc(y)}’` : x ? `‘${esc(x)}’ was removed` : `‘${esc(y)}’ was added`).join('; ')}.`
+  const sum = sf ? (variant === 'closed' ? `${SOFTSUM}. The old value is not kept (${RES[0]} is closed).` : `${SOFTSUM}.`) : `${esc(editSummary(d))}.`
   const top = Math.min(24 + 21 * (r + 1) + 4, 330)
   return `<div class="card" id="card" role="dialog" aria-label="Change details: ${esc(COLS[c][0])}" tabindex="-1" style="top:${top}px;left:${Math.min(40 + COLS.slice(0, c).reduce((s, x) => s + x[2], 92), 9999)}px;${S.pane === 'narrow' ? 'left:8px;' : ''}">
     <header><b>${esc(COLS[c][0])}</b><small>${esc(COLS[c][1])} · ${sf ? 'equal by collation' : 'changed'} · row ${e.ai} in ${RES[0]} → row ${e.bi} in ${RES[1]}</small>${by === 'key' ? '<button class="x" id="cardX" title="Close (Escape)">✕</button>' : ''}</header>
     <div class="sum">${variant === 'reading' ? 'Reading…' : variant === 'toodiff' ? `Too many differences to mark.${/char|xml|json/.test(COLS[c][1]) ? ' Compare them in a tab.' : ''}` : sum}</div>
     <div class="vals">${variant === 'reading' ? '<span class="k o">− Old</span><span class="v"><span class="progress" style="display:block;width:140px;margin-top:6px"><i></i></span></span><span class="k n">+ New</span><span class="v"></span>'
       : `<span class="k o">− Old</span><span class="v">${variant === 'toodiff' ? esc(o) : variant === 'closed' ? '<span style="color:var(--muted);font-family:var(--ui)">Not kept</span>' : d.o}</span><span class="k n">+ New</span><span class="v">${variant === 'toodiff' ? esc(n) : d.n}</span>`}</div>
-    <footer><span>${variant === 'reading' ? '' : sf ? 'Equal by collation' : `${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'} · ${o.length} → ${n.length} characters`}</span><span>${by === 'key' ? 'Follows the active cell (Alt+F5)' : 'Ctrl+I opens it by key'}</span><span class="sp"></span>${/char|xml|json/.test(COLS[c][1]) ? '<button class="link" id="inTab">Compare Values in Tab</button>' : ''}</footer></div>`
+    <footer><span>${variant === 'reading' ? '' : sf ? 'Equal by collation' : `${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'} · ${o.length} → ${n.length} characters`}</span><span>${by === 'key' ? 'Follows the active cell (Alt+F5)' : 'Ctrl+I opens it by key'}</span><span class="sp"></span>${/char|xml|json/.test(COLS[c][1]) && !(sf && variant === 'closed') ? '<button class="link" id="inTab">Compare Values in Tab</button>' : ''}</footer></div>`
 }
 function sceneKeyOnly(m, rows) {
   const ri = rows.findIndex(r => r.e.kind === 'added' && !r.e.poss); if (ri < 0) return ''
-  return `<div class="card" id="card" role="dialog" aria-label="Change details: customer" style="top:${24 + 21 * (ri + 1) + 4}px;left:200px;width:min(340px,calc(100% - 16px))">
-    <header><b>customer</b><small>nvarchar(64) · added row</small><button class="x" id="cardX" title="Close (Escape)">✕</button></header>
-    <div class="sum" style="padding-bottom:8px">Added row: only in ${RES[1]}.</div></div>`
+  return shortCard(rows, ri, 1)
 }
-function scenePossible(m, rows) {
-  const ri = rows.findIndex(r => r.e.kind === 'removed' && r.e.poss); if (ri < 0) return ''
-  const e = rows[ri].e, p = e.poss, cmpCols = COLS.map((c, i) => i).filter(i => i !== 0 && !S.ignore.has(i)), diffs = cmpCols.filter(i => e.a[i] !== p.b[i])
+function scenePossible(m, rows, at) {
+  const ri = at ?? rows.findIndex(r => r.e.kind === 'removed' && r.e.poss); if (ri < 0) return ''
+  const e = rows[ri].e, { old, neu, diffs, text } = lookAlike(e)
   return `<div class="card" role="dialog" aria-label="Possible match" style="top:${Math.min(24 + 21 * (ri + 1) + 4, 380)}px;left:40px;width:min(440px,calc(100% - 16px))">
-    <header><b>? Possible match</b><small>removed row ${e.ai} in ${RES[0]}</small></header>
-    <div class="sum">Looks like row ${p.bi} in ${RES[1]}: ${cmpCols.length - diffs.length} of ${cmpCols.length} compared columns equal. Counts and colours are unchanged.</div>
-    <div class="vals" style="grid-template-columns:90px 1fr">${diffs.map(i => { const d = charDiff(plain(e.a[i]), plain(p.b[i])); return `<span class="k">${esc(COLS[i][0])}</span><span class="v">${d.o} <span style="color:var(--muted)">→</span> ${d.n}</span>` }).join('')}</div>
+    <header><b>? Possible match</b><small>${e.kind === 'removed' ? `removed row ${e.ai} in ${RES[0]}` : `added row ${e.bi} in ${RES[1]}`}</small></header>
+    <div class="sum">${cap(text)}.</div>
+    <div class="vals" style="grid-template-columns:90px 1fr">${diffs.map(i => { const d = charDiff(plain(old[i]), plain(neu[i])); return `<span class="k">${esc(COLS[i][0])}</span><span class="v">${d.o} <span style="color:var(--muted)">→</span> ${d.n}</span>` }).join('')}</div>
     <footer><button class="link">Go to Possible Match</button></footer></div>`
 }
 function sceneDetails() {
@@ -470,13 +495,17 @@ function sceneDetails() {
   const g = act ? gridHTML(m, { act }) : g0
   frame(tabs() + resultsBar() + compBar(m, { position: act ? posText(m, rows, act) : undefined }) + stdBody(g, 'rows matched by id', overlay))
   notes([
-    ['What to try', `<ul><li><b>Opened by key</b>: Ctrl+I on a changed cell. The card stays, follows the active cell, and Alt+F5 here steps to the next change with it. Escape closes it.</li><li><b>Hover</b>: with the grid focused, rest the pointer on any changed cell, such as status, amount or note. With the focus elsewhere the grid keeps its own tooltip, since Escape could not reach the card.</li><li>Row 1007's note differs only by a trailing space: it is underlined (soft), and hovering it says it is equal by collation.</li><li>Escape also closes a hover card. Opened by key, the live region says the summary: "Change details: note, 2 edits: …. Tab to read it, Escape to close."</li><li>The other states: reading, too different to mark, and a soft cell whose old input is closed.</li></ul>`, 'Build'],
+    ['What to try', `<ul><li><b>Opened by key</b>: Ctrl+I on a changed cell. The card stays, follows the active cell, and Alt+F5 here steps to the next change with it. Escape closes it.</li><li><b>Hover</b>: with the grid focused, rest the pointer on any changed cell, such as status, amount or note. With the focus elsewhere the grid keeps its own tooltip, since Escape could not reach the card.</li><li>Row 1007's note differs only by a trailing space: it is underlined (soft), and hovering it says it is equal by collation.</li><li>Escape also closes a hover card. Opened by key, the live region says the column and the card\'s summary, then "Tab to read it, Escape to close.": "Change details: note, 1 edit: \'9\' became \'10\'. Tab to read it, Escape to close."</li><li>Alt+F5 also lands on added and removed rows, keeping the column: the card shrinks to one sentence ("Added row: only in Result 3."), or becomes the look-alike card on a ? row.</li><li>The other states: reading, too different to mark, and a soft cell whose old input is closed.</li></ul>`, 'Build'],
     ['What the card shows', `<ul><li>Whole old and new values, up to 4,000 characters each.</li><li>Changes are found word-first and then by character, so "9" → "10" reads as one edit. A "change" is what Alt+F5 steps to; an "edit" is a run of characters in the card.</li><li>Deleted text is struck through on red and inserted text is bold on green. In forced colours they are outlined instead.</li></ul>`],
     ['Screen readers', '<p>The cell name is unchanged ("note, changed from … to …"). Opened by key, the card is a non-modal dialog named "Change details: note" that does not take focus. The live region says its summary, and Tab moves into it. Hover never opens it for keyboard users.</p>']])
 }
+// Changed cells, and added or removed rows (which keep the active column), in the grid's order.
+function changeList(rows) {
+  const list = []; rows.forEach((r, ri) => { if (r.e.kind === 'changed' && r.side !== 'a') r.e.cells.forEach(c => list.push([ri, c])); else if (r.e.kind === 'added' || r.e.kind === 'removed') list.push([ri, null]) })
+  return list
+}
 function posText(m, rows, act) {
-  const list = []; rows.forEach((r, ri) => { if (r.e.kind === 'changed' && r.side !== 'a') r.e.cells.forEach(c => list.push(ri + ':' + c)); else if (r.e.kind === 'added' || r.e.kind === 'removed') list.push(ri + ':0') })
-  const i = list.indexOf(act.r + ':' + act.c); return i >= 0 ? `Change ${i + 1} of ${list.length}` : undefined
+  const list = changeList(rows), i = list.findIndex(([r, c]) => r === act.r && (c === null || c === act.c)); return i >= 0 ? `Change ${i + 1} of ${list.length}` : undefined
 }
 
 /* ---------- 4a Copy as Diff ---------- */
@@ -529,7 +558,20 @@ function lit(v, t) {
   if (t.startsWith('datetime2')) return `CAST('${v.replace(' ', 'T')}' AS datetime2(7))`
   return `N'${String(v).replace(/'/g, "''")}'`
 }
-const quoteTarget = t => t.trim() ? t.trim().split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.') : ''
+// A SQL Server multipart name: parts plain, [bracketed] (]] inside) or "quoted".
+function nameParts(t) {
+  const parts = []; let cur = '', i = 0; t = t.trim()
+  while (i < t.length) {
+    const ch = t[i]
+    if (ch === '[' || ch === '"') {
+      const close = ch === '[' ? ']' : '"'; i++
+      while (i < t.length) { if (t[i] === close) { if (t[i + 1] === close) { cur += close; i += 2; continue } i++; break } cur += t[i++] }
+    } else if (ch === '.') { parts.push(cur); cur = ''; i++ } else cur += t[i++]
+  }
+  parts.push(cur)
+  return parts.map(p => p.trim())
+}
+const quoteTarget = t => t.trim() ? nameParts(t).map(p => `[${p.replace(/]/g, ']]')}]`).join('.') : ''
 function scriptText(m, target) {
   const sc = S.script, cols = (sc.cols || COLS.map((_, i) => i)), tgt = quoteTarget(target) || '[schema].[table]'
   const toOld = sc.dir === 'toOld', from = toOld ? RES[1] : RES[0], to = toOld ? RES[0] : RES[1]
@@ -551,7 +593,7 @@ function scriptText(m, target) {
   return out
 }
 function sceneScript() {
-  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['first', 'First time'], ['generating', 'Generating'], ['nokey', 'Not matched by key'], ['auto', 'Matched automatically'], ['dup', 'Repeated key'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['closed', 'Comparison closed']])
+  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['first', 'First time'], ['generating', 'Generating'], ['nokey', 'Not matched by key'], ['auto', 'Matched automatically'], ['inputclosed', 'Automatic, input closed'], ['shown', 'Compared as shown'], ['dup', 'Repeated key'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['closed', 'Comparison closed']])
   const st = S.scriptState, first = st === 'first'
   const m = model(), g = gridHTML(m), sc = S.script, target = first ? '' : sc.target, cols = sc.cols || COLS.map((_, i) => i), toOld = sc.dir === 'toOld'
   const n = k => m.count(k), dels = n(toOld ? 'added' : 'removed'), ins = n(toOld ? 'removed' : 'added')
@@ -563,11 +605,16 @@ function sceneScript() {
   const refusal = {
     nokey: [`Rows are not matched by key columns, so a statement could not find its row. Choose key columns to script differences.`, keyBtn],
     auto: [`Rows were matched automatically by id. Choose key columns to script differences.`, `<button class="btn p">Use id as key columns</button>${keyBtn}`],
-    dup: [`2 rows share a key, so a statement could change several rows.`, ''],
+    inputclosed: [`Rows were matched automatically by id. Choose key columns to script differences. ${RES[0]} is closed, so rows cannot be matched again. Run the query again to script differences.`, '<button class="btn p" disabled>Use id as key columns</button><button class="btn o" disabled>Choose key columns…</button>'],
+    shown: [`${RES[0]} is compared as shown, so rows its filters hide show as added or removed, and a script would insert or delete them. Compare whole results to script differences.`, '<button class="btn p">Compare whole results</button>'],
+    dup: [`2 rows share a key, so a statement could change several rows. Choose key columns that are unique, or rows without a repeated key.`, ''],
     trunc: [`3 values in <b>note</b> were not kept in full, so the script would not be exact. Untick note, or choose rows without them.`, ''],
     big: [`The script would be about 2,400,000 characters. Scripts are limited to 1,000,000 characters, the most a query window runs. Choose fewer rows.`, ''],
     closed: [`The comparison was closed.`, '']
   }[st]
+  // Known when the window opens: the refusal is its description and the focus starts on its first button. The rest are
+  // found on Script and said in the window's live region.
+  const onOpen = ['nokey', 'auto', 'inputclosed', 'shown'].includes(st)
   const sugg = first ? `<div class="sugg" role="listbox" aria-label="Tables on this connection">${['dbo.Orders', 'dbo.OrdersArchive', 'sales.Orders'].map((t, i) => `<div role="option" aria-selected="${i === 0}"${i === 0 ? ' class="on"' : ''}>${t} <small>Search Objects</small></div>`).join('')}</div>` : ''
   const form = `
     <div class="sec"><div class="row2 infol">Rows matched by key columns: id</div></div>
@@ -580,7 +627,7 @@ function sceneScript() {
       <label class="row2"><input type="checkbox" data-sc="del"${sc.del ? ' checked' : ''}> DELETE <small>(${dels})</small></label>
       <label class="row2"><input type="checkbox" data-sc="upd"${sc.upd ? ' checked' : ''}> UPDATE <small>(${upds}; only changed, compared columns)</small></label>
       <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT <small>(${ins})</small></label>
-      ${sc.del ? '<div class="row2 infol" style="font-size:11px">ⓘ DELETEs fire the target\'s delete triggers and ON DELETE cascades.</div>' : ''}</div>
+      ${sc.del ? '<div class="row2 infol" style="font-size:11px">ⓘ DELETEs fire the target\'s delete triggers and ON DELETE cascades. A row missing from a result is deleted, even when the query only left it out (a WHERE or TOP).</div>' : ''}</div>
     <div class="sec"><div class="h">Columns</div><div class="cols">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked disabled> ⚷ ${c[0]} <small>key</small></label>`
       : `<label><input type="checkbox" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]} <small>${S.ignore.has(i) ? 'ignored: INSERT only' : c[1]}</small></label>`).join('')}</div>
       <label class="row2"><input type="checkbox" checked> SET IDENTITY_INSERT <small>(id is the target's identity column)</small></label>
@@ -591,19 +638,19 @@ function sceneScript() {
       <div class="row2"><span>Destination</span><select class="txt" style="width:auto;font-family:var(--ui)" aria-label="Destination"><option>New Query Editor Window</option><option>Clipboard</option></select></div></div>
     <div class="sec"><div class="h">Preview</div><pre aria-label="Script preview">${esc(scriptText(m, target).slice(0, 30).join('\n'))}</pre></div>`
   const body = refusal
-    ? `<div class="sec"><div class="${st === 'closed' ? 'row2 infol' : 'err'}">${st === 'closed' ? 'ⓘ' : '⚠'} <span>${refusal[0]}</span></div>${refusal[1] ? `<div class="row2" style="margin-top:6px">${refusal[1]}</div>` : ''}</div>` + (['dup', 'trunc', 'big', 'closed'].includes(st) ? form : '')
+    ? `<div class="sec"><div class="${st === 'closed' ? 'row2 infol' : 'err'}"${onOpen ? ' id="scrRefusal"' : ' role="status"'}>${st === 'closed' ? 'ⓘ' : '⚠'} <span>${refusal[0]}</span></div>${refusal[1] ? `<div class="row2" style="margin-top:6px">${refusal[1]}</div>` : ''}</div>` + (onOpen ? '' : form)
     : form
   const parts = [sc.del && dels && `deletes ${rowsN(dels)}`, sc.upd && upds && `updates ${rowsN(upds)}`, sc.ins && ins && `inserts ${rowsN(ins)}`].filter(Boolean)
   const list = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0] || ''
   const summary = first ? 'Choose the target table.' : parts.length ? `${list[0].toUpperCase() + list.slice(1)} in ${esc(tgtq)}.` : 'No statements are ticked.'
   const canScript = !refusal && !first && parts.length > 0
   const gen = st === 'generating'
-  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]} (SQLQuery3.sql)</span><button class="x" title="Close (Cancel)">✕</button></div>
+  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"${refusal && onOpen ? ' aria-describedby="scrRefusal"' : ''}><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]} (SQLQuery3.sql)</span><button class="x" title="Close (Cancel)">✕</button></div>
     <div class="wbody">${body}</div>
     <div class="acts">${gen ? '<span class="lbl" style="margin-right:auto;display:flex;gap:8px;align-items:center;flex:1">Writing statements… <span class="progress" style="flex:1"><i></i></span></span><button class="btn o">Cancel</button>' : `${refusal && st !== 'closed' ? '' : `<span class="lbl" style="margin-right:auto;align-self:center" aria-live="polite">${summary}</span>`}<button class="btn o">Cancel</button><button class="btn p"${canScript ? '' : ' disabled'}>Script</button>`}</div></div>`
   frame(tabs() + resultsBar() + compBar(m) + stdBody(g, 'rows matched by id', win))
-  notes([['What to try', '<ul><li>It is an OS dialog window of its own, modeless, beside the grid (drawn here inside the frame). A stray click does not lose the form.</li><li>Untick statements or columns, or switch <b>Direction</b>, and watch the preview and the summary beside Script. The comparison is not swapped.</li><li>Turn off the transaction with the checks on: it warns.</li><li><b>First time</b>: the target is empty, with suggestions from Search Objects, and Script waits for it. After that the pair\'s draft is remembered.</li><li><b>Generating</b>: Cancel stops generating and keeps the window open with its draft. The next Cancel closes it.</li><li><b>Not matched by key</b> and <b>Matched automatically</b> are known when the window opens. <b>Choose key columns…</b> opens the Match menu in the main window, and the window stays open. <b>Use id as key columns</b> replaces the comparison with that match.</li><li><b>Repeated key</b>, <b>Truncated value</b> and <b>Too large</b> are found on Script. Script is available again once the form changes.</li><li>On BigQuery the command is unavailable, so the window never opens.</li></ul>', 'Build'],
-    ['After Script', '<ul><li>New Query Editor Window: the window closes, a query document opens on the comparison\'s connection without running, and the live region says "Script opened in a new query editor window: 14 statements."</li><li>Clipboard: the window closes and the live region says "Script copied to the clipboard: 14 statements." Focus returns to where it was.</li></ul>'],
+  notes([['What to try', '<ul><li>It is an OS dialog window of its own, modeless, beside the grid (drawn here inside the frame). A stray click does not lose the form.</li><li>Untick statements or columns, or switch <b>Direction</b>, and watch the preview and the summary beside Script. The comparison is not swapped.</li><li>Turn off the transaction with the checks on: it warns.</li><li><b>First time</b>: the target is empty, with suggestions from Search Objects, and Script waits for it. After that the pair\'s draft is remembered.</li><li><b>Generating</b>: Cancel stops generating and keeps the window open with its draft. The next Cancel closes it.</li><li><b>Not matched by key</b>, <b>Matched automatically</b> and <b>Compared as shown</b> are known when the window opens: the refusal is read with the window, and the focus starts on its first button. With an input closed, rows cannot be matched again, so the buttons are unavailable. <b>Choose key columns…</b> opens the Match menu in the main window, and the window stays open. <b>Use id as key columns</b> replaces the comparison with that match.</li><li><b>Repeated key</b>, <b>Truncated value</b> and <b>Too large</b> are found on Script: the live region says them, and Script keeps the focus, unavailable until the form changes.</li><li>The target accepts <code>[dbo].[Orders]</code> or <code>[my.schema].Orders</code>, parsed as SQL Server parses names.</li><li>On BigQuery the command is unavailable, so the window never opens.</li></ul>', 'Build'],
+    ['After Script', '<ul><li>New Query Editor Window: the window closes, a query document opens on the comparison\'s connection without running, and the live region says "Script opened in a new query editor window." and the summary ("It deletes 2 rows, updates 5 rows and inserts 2 rows in [dbo].[Orders].").</li><li>Clipboard: the window closes and the live region says "Script copied to the clipboard." and the summary. Focus returns to where it was.</li></ul>'],
     ['Safety', '<ul><li>Varia does not run the script.</li><li>XACT_ABORT, a transaction and the row checks roll everything back if the target does not hold what the comparison saw.</li><li>A script is written only under key columns the user chose, never under a match Automatic chose.</li><li>A live test runs scripts over every type, in both directions, and expects no differences after.</li></ul>'],
     ['Literals and columns', '<p>Each value is written from its column\'s type: exact decimals, round-trip floats, <code>N\'…\'</code> with doubled quotes, typed casts at the column\'s own precision (datetimeoffset included), and <code>0x…</code> binary. rowversion, computed columns, CLR types, sql_variant and vector start unticked, with the reason. An identity column is never SET. Columns only one result has are named, since INSERTs leave them out.</p>']])
 }
@@ -621,11 +668,11 @@ function sceneSearch() {
   const cur = hits.length ? hits[(S.hitIndex % hits.length + hits.length) % hits.length] : null
   const [cr, cc] = cur ? cur.split(':').map(Number) : [0, 0]
   const status = cur ? `${hits.indexOf(cur) + 1} of ${hits.length} matches${old.has(cur) ? ', old value ' + plain(rows[cr].e.a[cc]) : ''}` : q ? 'No matches' : ''
-  const sb = `<span class="search"><span class="lbl">⌕</span><input id="srch" value="${esc(S.search)}" aria-label="Search all results"><span class="cnt">${hits.length ? `${hits.indexOf(cur) + 1} of ${hits.length}` : ''}</span><button class="btn" id="sPrev" title="Previous match (Shift+F3)">↑</button><button class="btn" id="sNext" title="Next match (F3)">↓</button></span><span class="lbl" id="sStatus">${esc(status)}</span>`
+  const sb = `<span class="search"><span class="lbl">⌕</span><input id="srch" value="${esc(S.search)}" aria-label="Search all results"><span class="cnt">${hits.length ? `${hits.indexOf(cur) + 1} of ${hits.length}` : ''}</span><button class="btn" id="sPrev" title="Previous match (Shift+F3)">↑</button><button class="btn" id="sNext" title="Next match (F3)">↓</button></span>`
   const g = gridHTML(m, { hits: new Set(hits), cur })
   frame(tabs() + resultsBar(sb) + compBar(m) + stdBody(g, 'rows matched by id'))
   announce(status)
-  notes([['What to try', `<ul><li>"Open" also finds row 1002's status, whose <b>old</b> value was Open (drawn struck through). Step with ↓ or F3: the status says "2 of 10 matches, old value Open", the shipped status with the old value added.</li><li>Search "9 am" to find a note that only the old value contains.</li><li>Switch to <b>Two rows</b>: old values are on − rows, so they were always found, and nothing changes there.</li></ul>`, 'Build'],
+  notes([['What to try', `<ul><li>"Open" also finds row 1002's status, whose <b>old</b> value was Open (drawn struck through). Step with ↓ or F3: the box still shows "2 of 10", since the cell draws old → new, and the live region says "2 of 10 matches, old value Open", the shipped sentence with the old value added.</li><li>Search "9 am" to find a note that only the old value contains.</li><li>Switch to <b>Two rows</b>: old values are on − rows, so they were always found, and nothing changes there.</li></ul>`, 'Build'],
     ['Rules', '<ul><li>One hit per cell, even when old and new both match.</li><li>Only changed cells\' old values are searched, never an unchanged cell\'s empty previous value.</li><li>Column filters still filter by the shown value. Column-name search ignores old values.</li></ul>']])
 }
 
@@ -647,7 +694,7 @@ function sceneFiltered() {
     frame(tabs() + resultsBar(undefined, { active: 'Result 3' }) + `<div class="tb"><span class="title">Result 3</span><span class="lbl">4,980 rows</span><span style="margin-left:auto"></span><button class="btn o" aria-expanded="true">⇄ Compare</button></div>` + stdBody({ html: '<div style="padding:20px;color:var(--muted)">Result 3\'s grid</div>', marks: '', rows: [] }, '', pop))
   } else {
     const stale = S.filtState === 'stale'
-    const caption = stale ? `<div class="caption" role="status"><b>Out of date</b><span>Result 1's filters changed since this comparison was made.</span><button class="btn o" style="margin-left:auto">Update</button></div>` : ''
+    const caption = stale ? `<div class="caption" role="status"><b>Out of date:</b><span>Result 1's filters changed since this comparison was made.</span><button class="btn o" style="margin-left:auto" title="Compare the rows the results show now">Update</button></div>` : ''
     const notice = `<div class="notice">ⓘ ${empty ? `${RES[0]}'s filters leave no rows, so every row shows as added.` : `Compared as shown: ${RES[0]} shows 120 of 5,000 rows.`}<button class="btn o">Compare whole results</button><button class="x sp" title="Dismiss">✕</button></div>`
     frame(tabs() + resultsBar(undefined, { label: `⇄ ${RES[0]} (as shown) → ${RES[1]}`, title: `Differences: ${RES[0]} (as shown) → ${RES[1]}`, dot: stale })  + compBar(m, { filtered: [empty ? '0 of 5,000' : '120 of 5,000', ''] }) + caption + notice + stdBody(g, `rows matched by id · ${RES[0]} as shown`))
   }
@@ -743,12 +790,11 @@ addEventListener('keydown', e => {
   if (S.scene === 'details' && S.detailState === 'key') {
     if (e.key === 'Escape') { S.detailState = 'hover'; S.hover = { r: -1, c: -1 }; return render() }
     if (e.key === 'F5' && e.altKey) {
-      e.preventDefault(); const m = model(), rows = rowsOf(m), list = []
-      rows.forEach((r, ri) => { if (r.e.kind === 'changed' && r.side !== 'a') r.e.cells.forEach(c => list.push([ri, c])) })
-      const i = list.findIndex(([r, c]) => r === S.cardOpen.r && c === S.cardOpen.c), n = list[(i + (e.shiftKey ? -1 : 1) + list.length) % list.length]
+      e.preventDefault(); const m = model(), rows = rowsOf(m), list = changeList(rows)
+      const i = list.findIndex(([r, c]) => r === S.cardOpen.r && (c === null || c === S.cardOpen.c)), k = list[(i + (e.shiftKey ? -1 : 1) + list.length) % list.length], n = [k[0], k[1] ?? S.cardOpen.c]
       S.cardOpen = { r: n[0], c: n[1], by: 'key' }; render()
-      // One live message: navigation's position, then the card's summary.
-      announce(`${posText(m, rows, { r: n[0], c: n[1] }) || ''}: ${cardSummary(rows, n[0], n[1])}`)
+      // One live message: navigation's position, then the column and the card's summary, as on opening.
+      announce(`${posText(m, rows, { r: n[0], c: n[1] }) || ''}: ${cardSummary(rows, n[0], n[1])}.`)
     }
   }
   if (S.scene === 'search' && e.key === 'F3') { e.preventDefault(); S.hitIndex += e.shiftKey ? -1 : 1; render() }
