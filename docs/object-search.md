@@ -339,8 +339,10 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   once.
 - **Refresh.** A rebuild lists everything again and reuses what an earlier read knew about an object whose creation time
   (and, for routines and models, last change) is unchanged, since `tables.list` reports no change time. Refresh on a
-  project or dataset in Object Explorer re-reads that project or dataset whole, and on a node below a dataset, that dataset.
-  DDL run from a query tab (CREATE, ALTER, DROP or UNDROP, or a script) marks the datasets it changed, which are re-read
+  project or dataset in Object Explorer re-reads that project or dataset whole, on a node below a dataset, that dataset, and
+  on the connection's node, everything (a rebuild).
+  DDL run from a query tab (CREATE, ALTER, DROP or UNDROP) marks the dataset it changed, and a script the tab's default
+  dataset (DDL in a script that names another dataset, or with no default dataset, waits for a Refresh); they are re-read
   whole once the query ends, or by a build already running when it reaches them; a query that failed re-reads whatever DDL
   before the failure marked. A refresh asked while a build runs waits for it; after a rebuild fails, only another rebuild
   runs.

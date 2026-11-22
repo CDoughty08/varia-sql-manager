@@ -143,6 +143,8 @@ internal static class BigQueryIndexChecks
             "DDL marks its target's dataset, a script's DDL the tab's dataset, and DML or SELECT nothing");
         var restored = new Google.Apis.Bigquery.v2.Data.Job { Statistics = new() { Query = new() { DdlTargetDataset = new() { ProjectId = "varia-alpha", DatasetId = "archive" } } } };
         check(SqlService.DdlDatasets(restored, "UNDROP_SCHEMA", null, "varia-alpha", null).ToList() is [("varia-alpha", "archive")], "UNDROP SCHEMA marks the dataset it restored");
+        check(SqlService.DdlDatasets(none, "SCRIPT", null, "varia-alpha", "sales").ToList() is [("varia-alpha", "sales")] && SqlService.DdlDatasets(none, "SELECT", null, "varia-alpha", "sales").ToList().Count == 0,
+            "a script whose child jobs could not be listed marks the tab's dataset; a SELECT still marks nothing");
     }
 
     /// <summary>A dataset that does not fit with its columns is read again without them, and one that still does not fit is refused, giving back what it took.</summary>
@@ -172,6 +174,13 @@ internal static class BigQueryIndexChecks
         var again = new BigQueryReader(limits, pool, null).Read("p", "d", [entries[0] with { Detail = known[("bqView", "v")].Detail }], true, true)!;
         check(read.Cut == 1 && known[("bqView", "v")].Detail is { DefinitionCut: true, Columns.Count: 1 } && again.Cut == 1 && again.Table.DefinitionCut(1),
             $"a definition cut at the limit is still cut when an unchanged view is reused ({read.Cut}, {again.Cut})");
+        // A held read lets go of the read it took its share from, so reads replaced build after build are freed.
+        var held = new ConnectionIndex(pool.Budget, pool: pool);
+        held.Put(read);
+        var next = new BigQueryReader(limits, pool, read).Read("p", "d", entries, true, true)!;
+        var creditedFrom = next.CreditFrom is not null;
+        held.Put(next);
+        check(creditedFrom && next.CreditFrom is null && held.Get("pd") == next, "a held read keeps no reference to the read it replaced");
         var names = new BigQueryReader(limits, pool, null).Read("p", "d", entries, false, true)!;
         var bare = new BigQueryReader(limits, pool, null).Read("p", "d", entries, true, false)!;
         check(BigQueryEntries.Known(names, true).Count == 0 && BigQueryEntries.Known(bare, true).Count == 0 && BigQueryEntries.Known(bare, false).Count == 1,
@@ -249,6 +258,10 @@ internal static class BigQueryIndexChecks
         var extra = await harness.Index(more => more["extraDetails"] = true);
         check(extra.Status.NamesOnly is null && harness.Gets(Beta + "/datasets/census/tables/population") == 1 && (await harness.Search("population.address.city")).Hits.Count == 1,
             "extraDetails reads the extra projects' schemas too");
+        var refreshed = await harness.Index(more => more["scope"] = new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales" });
+        var bare = await harness.Index(more => { more["stale"] = true; more["definitions"] = false; });
+        check(refreshed.Status.NamesOnly is null && bare.Status.NamesOnly is null && bare.Status.Definitions,
+            "a refresh leaves what the index as a whole holds as the last full build said: extra projects' details, definitions");
         var used = harness.Service.Search.MemoryUsed;
         await harness.Call("connections.disconnect", new JsonObject { ["connectionId"] = harness.ConnectionId });
         check(used > 0 && harness.Service.Search.MemoryUsed == 0 && harness.Service.Search.IndexOf(harness.ConnectionId) is null,

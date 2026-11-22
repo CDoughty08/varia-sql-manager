@@ -65,8 +65,12 @@ internal sealed partial class ObjectSearchService
             state.Building = true;
             state.BigQuery = true;
             state.Phase = "names";
-            state.Definitions = definitions;
-            state.NamesOnly = [.. projects.Where(project => !detailed.Contains(project))];
+            // What the index as a whole holds is a full build's to say: a refresh re-reads part of it with whatever Options says now.
+            if (scope is null && !staleOnly)
+            {
+                state.Definitions = definitions;
+                state.NamesOnly = [.. projects.Where(project => !detailed.Contains(project))];
+            }
             state.Indexed = 0;
             // A full build starts its skip list afresh; a scoped or stale-only one keeps the skips outside what it reads.
             var kept = state.Skipped.ToList().Where(skip => !InScope(skip)).ToList();
@@ -119,9 +123,9 @@ internal sealed partial class ObjectSearchService
                     targets.AddRange(listed.Select(name => (project, name)));
                 }
             lock (state.Gate) state.Databases = targets.Count;
-            // Pass 2's datasets: their objects as listed, and how many to read. Details reused from an earlier read are found again in the
-            // read pass 1 held, so pass 1 keeps no expanded copies of them outside the budget.
-            var pending = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int Wanted)>();
+            // Pass 2's datasets: their objects as listed, the ones to read (by position), and whether the listing was cut. Details reused
+            // from an earlier read are found again in the read pass 1 held, so pass 1 keeps no expanded copies of them outside the budget.
+            var pending = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)>();
             var progressed = Stopwatch.StartNew();
             var reported = TimeSpan.MinValue;
             var progressGate = new object();
@@ -167,8 +171,10 @@ internal sealed partial class ObjectSearchService
                     lock (state.Gate) state.Indexed++;
                     if (held is not null) Skip(held);
                     if (listing.Cut) Skip(new(dataset, "TOO_LARGE", "The dataset has more objects than the index lists; it keeps the first ones.", Project: project));
-                    var wanted = detailed.Contains(project) ? entries.Count(item => item.Detail is null && BigQueryEntries.HasDetails(item)) : 0;
-                    if (wanted > 0) pending[target] = (listed, wanted);
+                    // A read that fit only without columns reads no details: they would not fit either, and its reused ones are gone.
+                    int[] read = detailed.Contains(project) && held is null
+                        ? [.. Enumerable.Range(0, entries.Count).Where(at => entries[at].Detail is null && BigQueryEntries.HasDetails(entries[at]))] : [];
+                    if (read.Length > 0) pending[target] = (listed, read, listing.Cut);
                     else if (!listing.Cut) Clear(target);
                 }
                 Report(Interlocked.Increment(ref listedDone), targets.Count, "names", false);
@@ -176,7 +182,7 @@ internal sealed partial class ObjectSearchService
             Report(listedDone, targets.Count, "names", true);
             // Pass 2: each pending dataset's objects without details, then the dataset's read swapped in again.
             lock (state.Gate) state.Phase = "details";
-            var wanted = pending.Sum(pair => pair.Value.Wanted);
+            var wanted = pending.Sum(pair => pair.Value.Read.Length);
             var detailsDone = 0;
             Report(0, wanted, "details", true);
             using var slots = new SemaphoreSlim(BigQueryIndexLimits.Details);
@@ -190,10 +196,10 @@ internal sealed partial class ObjectSearchService
                 ObjectIndexSkip? failed = null;
                 var failures = 0;
                 var tasks = new List<Task>();
-                for (var at = 0; at < entries.Length; at++)
+                // Only what pass 1 counted: an object whose reused details pass 1 could not keep stays as it was held.
+                foreach (var at in pair.Value.Read)
                 {
                     var item = entries[at];
-                    if (item.Detail is not null || !BigQueryEntries.HasDetails(item)) continue;
                     var index = at;
                     tasks.Add(Task.Run(async () =>
                     {
@@ -228,7 +234,7 @@ internal sealed partial class ObjectSearchService
                 if (held is not null) Skip(held);
                 if (failed is { } first)
                     Skip(first with { Details = true, Message = failures == 1 ? "The details of 1 object could not be read: " + first.Message : "The details of " + failures.ToString(System.Globalization.CultureInfo.InvariantCulture) + " objects could not be read: " + first.Message });
-                else if (held is null or { Code: ChildrenLeftOut }) Clear(pair.Key);
+                else if (held is null or { Code: ChildrenLeftOut } && !pair.Value.Cut) Clear(pair.Key);
             });
             Report(detailsDone, wanted, "details", true);
             lock (state.Gate)

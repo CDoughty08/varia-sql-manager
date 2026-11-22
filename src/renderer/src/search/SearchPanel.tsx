@@ -81,6 +81,9 @@ const fuzzyTitle = 'Fuzzy Match: names also match with typos or by sound (not wi
  */
 export { searchHitLabel }
 
+/** How many databases (BigQuery: datasets) an index read, for Object Explorer's search band. */
+export const indexedCount = (index: ObjectIndexStatus): string => count(index.indexed, index.provider === 'bigquery' ? 'dataset' : 'database')
+
 export function searchHitPath(hit: ObjectSearchHit): string {
   const object = hit.object
   if (object.project !== undefined) {
@@ -144,7 +147,7 @@ function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndex
   const namesOnly = status.namesOnly?.length ?? 0
   const skipped = (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
-    + (namesOnly ? ` · ${count(namesOnly, 'project')} by name only` : '')
+    + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}`
 }
@@ -469,7 +472,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     snapshot.indexes, spanning ? undefined : result?.index)
   const buildIndex = unbuilt.length ? <> <button type="button" className="object-search-build" onClick={() => { for (const id of unbuilt) objectSearch.build(id) }}>{unbuilt.length > 1 ? 'Build indexes' : 'Build index'}</button></> : null
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
-    ? `${count(result.total, 'result')} · ${count(result.index.indexed, 'database')}` : summary
+    ? `${count(result.total, 'result')} · ${indexedCount(result.index)}` : summary
   const showHits = !pane || !!state.text.trim()
   // Object Explorer's band: a splitter under the hits sizes it; until it moves the band sizes by its content.
   const sized = pane && showHits && snapshot.paneSize !== undefined

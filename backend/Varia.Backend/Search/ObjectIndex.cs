@@ -49,7 +49,9 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
     /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
     public long Credited { get; } = credited;
-    public DatabaseIndex? CreditFrom { get; } = creditFrom;
+    /// <summary>Let go once the read is held (or dropped), so a held read does not keep every read before it alive.</summary>
+    public DatabaseIndex? CreditFrom { get; private set; } = creditFrom;
+    internal void Credit() => CreditFrom = null;
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
@@ -282,13 +284,16 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private void Settle(DatabaseIndex? old, DatabaseIndex value)
     {
         // The new read already holds its own references, so texts both reads hold stay in the pool.
-        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { Drop(old, old.Bytes - value.Credited); return; }
+        var from = value.CreditFrom;
+        value.Credit();
+        if (old is not null && ReferenceEquals(old, from)) { Drop(old, old.Bytes - value.Credited); return; }
         if (old is not null) Drop(old, old.Bytes);
         if (value.Credited > 0) budget.Force(value.Credited);
     }
 
     private void Drop(DatabaseIndex value, long bytes)
     {
+        value.Credit();
         budget.Release(bytes);
         value.Dropped(budget);
         pool?.Release(value.Pooled);

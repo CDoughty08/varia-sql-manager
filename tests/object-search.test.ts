@@ -20,7 +20,7 @@ import { bigQueryChangesObjects, explorerSearchId, hitServer, mergeAnswers, Obje
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -1130,7 +1130,9 @@ describe('ObjectSearchService', () => {
     expect(indexSummary(undefined, bq({ namesOnly: ['varia-beta'], skipped: [
       { database: 'census', project: 'varia-beta', code: 'PERMISSION_DENIED', message: 'm' }, { database: '', project: 'varia-gamma', code: 'API_DISABLED', message: 'm' },
       { database: 'sales', project: 'varia-alpha', code: 'CATALOG_ERROR', message: 'm', details: true }, { database: 'big', project: 'varia-alpha', code: childrenLeftOut, message: 'm' }
-    ] }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 project skipped · 1 dataset skipped · details missing in 1 dataset · columns left out of 1 large dataset · 1 project by name only')
+    ] }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 project skipped · 1 dataset skipped · details missing in 1 dataset · columns left out of 1 large dataset · names only in 1 project')
+    expect(indexedCount(status({ provider: 'bigquery', indexed: 3 }))).toBe('3 datasets')
+    expect(indexedCount(status({ indexed: 1 }))).toBe('1 database')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: 'census', project: 'varia-beta', code: 'NOT_FOUND', message: 'm' }, { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', message: 'm', details: true }] }) }))
       .toBe('1 dataset skipped, details missing')
   })

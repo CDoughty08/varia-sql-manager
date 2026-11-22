@@ -641,7 +641,8 @@ internal sealed partial class SqlService
             else if (query?.DdlTargetDataset is { ProjectId: { } datasetProject, DatasetId: { } targetDataset }) found.Add((datasetProject, targetDataset));
             else if (dataset is not null) found.Add((project, dataset));
         }
-        if (dataset is not null && children is not null && children.Any(child => ChangesObjects(child.StatementType))) found.Add((project, dataset));
+        // A script whose child jobs could not be listed (the Job User role cannot list them) may hold DDL: its dataset is marked too.
+        if (dataset is not null && (children is null ? statement == "SCRIPT" : children.Any(child => ChangesObjects(child.StatementType)))) found.Add((project, dataset));
         return found;
     }
 
