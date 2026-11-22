@@ -187,13 +187,14 @@ the reads held when it is made:
 - **Match Case.** Off by default; matching is ordinal and ignores case.
 - **Wildcards.** Without regex, `*` is any characters on one line and `?` one character; the rest is literal. A search
   matches anywhere in a name, so `Cust*` and `Cust` find the same; under Match Whole Word an outer `*` matches the rest of
-  the identifier (`Cust*` finds `Customers`).
+  the identifier (`Cust*` finds `Customers`). An internal star can stretch to the word boundary, so `Order*Id` finds `OrderIdArchiveId`.
 - **Dots.** A name search with a dot matches the qualified name `database.schema.name` (a child's
   `database.schema.parent.name`) with a dot at each end. `.Sales` and `Sales.` find schema `Sales` and its contents
   (`.Sales` also finds names starting `Sales`, such as `dbo.SalesOrders`); `AppData.dbo.Orders` finds that table in
   AppData only; `PartialSchema*.Orders` finds `Orders` in every schema starting `PartialSchema`. Only the
   schema-qualified part is marked. A regex with a dot matches `schema.name` as it is.
-- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side.
+- **Match Whole Word.** No identifier character (letter, digit, `_`, `@`, `#`, `$`) on either side. A regex may stretch
+  to the word's end to get there (`Order.*?Id` finds `OrderIdArchiveId`).
 - **Use Regular Expression.** .NET's `NonBacktracking` engine (linear time). Lookarounds and backreferences are refused
   with a message.
 - **Scope.** All (names and definitions), Names or Definitions.
