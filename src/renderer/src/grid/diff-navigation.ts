@@ -50,11 +50,12 @@ export function stepWithin(units: DiffRowUnits, at: { readonly column: number; r
 }
 
 /** Where a seek's answer lands once its row's tone is read: an added or removed row, or a cut row reached going back (its
- *  whole-row unit is its last), selects the row; any other lands on the answer's cell. */
+ *  whole-row unit is its last) or one whose only unit is its cut, selects the row; any other lands on the answer's cell. */
 export function landingFor(tone: string | null | undefined, column: number, direction: 'next' | 'previous', columns: number): DiffUnit {
   const units = rowUnits(tone, columns)
   if (units.row) return { column: 0, whole: true }
-  if (direction === 'previous' && units.units.length > 0 && units.units[units.units.length - 1].whole) return { column: 0, whole: true }
+  // Going back a cut row's last unit is its whole row; a cut row with no listed change (only soft cells) has only that one.
+  if (units.units.length > 0 && (direction === 'previous' ? units.units[units.units.length - 1].whole : units.units[0].whole)) return { column: 0, whole: true }
   return { column, whole: false }
 }
 

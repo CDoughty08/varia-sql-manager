@@ -43,6 +43,8 @@ describe('a row\'s change units', () => {
     expect(landingFor('removed', 0, 'next', 6)).toEqual({ column: 0, whole: true })
     expect(landingFor('changedNew 1 …', 0, 'previous', 6)).toEqual({ column: 0, whole: true })
     expect(landingFor('changedNew 1 …', 1, 'next', 6)).toEqual({ column: 1, whole: false })
+    // A cut row whose listed cells are all soft has only its cut: the whole row, either way.
+    expect(landingFor('changed ~0-3 …', 0, 'next', 6)).toEqual({ column: 0, whole: true })
   })
 
   it('are counted as "Change 2 of 31", "… shown" under a filter', () => {
@@ -85,10 +87,11 @@ async function fixture() {
   let active: ReturnType<DiffGridControls['active']>
   let shown: ResultHandle = entry.handle
   const land = vi.fn<DiffGridControls['land']>()
-  const grid: DiffGridControls = { active: () => active, handle: () => shown, land }
+  const tones = new Map<number, string>()
+  const grid: DiffGridControls = { active: () => active, handle: () => shown, land, tone: row => tones.get(row) }
   results.registerGrid('t1', entry.key, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, diff: grid })
   const said = () => compare.getSnapshot().announcements.get(entry.key)?.text
-  return { results, compare, entry, seek, land, said, setActive: (value: typeof active) => { active = value }, show: (handle: ResultHandle) => { shown = handle } }
+  return { results, compare, entry, seek, land, said, tones, setActive: (value: typeof active) => { active = value }, show: (handle: ResultHandle) => { shown = handle } }
 }
 
 describe('moving between a comparison\'s differences', () => {
@@ -147,18 +150,28 @@ describe('moving between a comparison\'s differences', () => {
     expect(view.land).toHaveBeenCalledTimes(1)
   })
 
-  it('gives up a move a newer one overtakes', async () => {
+  it('runs a quick repeat after the move in flight, from where that one landed', async () => {
     const view = await fixture()
+    view.land.mockImplementation((row, first) => view.setActive({ row, column: first.column, whole: first.whole, tone: undefined }))
     let release: (value: ResultsDiffSeekResult) => void = () => {}
     view.seek.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     const first = view.compare.navigate('t1', view.entry.key, 'next')
     view.seek.mockResolvedValueOnce({ row: 7, column: 0, index: 3, total: 9, rows: 12 })
-    await view.compare.navigate('t1', view.entry.key, 'next')
+    const second = view.compare.navigate('t1', view.entry.key, 'next')
+    await vi.waitFor(() => expect(view.seek).toHaveBeenCalledTimes(1))
     release({ row: 2, column: 0, index: 1, total: 9, rows: 12 })
-    await first
-    expect(view.land).toHaveBeenCalledTimes(1)
-    expect(view.land.mock.calls[0][0]).toBe(7)
+    await Promise.all([first, second])
+    expect(view.land.mock.calls.map(call => call[0])).toEqual([2, 7])
+    expect(view.seek).toHaveBeenLastCalledWith({ from: 2, direction: 'next' }, expect.any(AbortSignal))
     expect(view.said()).toBe('Change 3 of 9')
+  })
+
+  it('says why a move failed, unless the comparison went', async () => {
+    const view = await fixture()
+    view.seek.mockRejectedValueOnce(new Error('The backend stopped.'))
+    await view.compare.navigate('t1', view.entry.key, 'next')
+    expect(view.said()).toBe('Could not move to the difference: The backend stopped.')
+    expect(view.land).not.toHaveBeenCalled()
   })
 
   it('selects a possible match\'s row, and says when a filter hides it', async () => {
@@ -168,6 +181,13 @@ describe('moving between a comparison\'s differences', () => {
     await view.compare.goToPossibleMatch('t1', view.entry.key, { focus: true })
     expect(view.seek).toHaveBeenLastCalledWith({ partnerOf: 2 }, expect.any(AbortSignal))
     expect(view.land).toHaveBeenLastCalledWith(8, { column: 0, whole: true }, undefined, true)
+    // The toolbar says where it landed, until the active cell leaves that row.
+    expect(view.compare.positionOf(view.entry, view.entry.handle)).toBe('Change 4 of 9')
+    const set = `${view.entry.descriptor.generation}:${view.entry.descriptor.resultId}`
+    view.compare.activeRow('t1', view.entry.key, set, 8, 'added poss=1')
+    expect(view.compare.positionOf(view.entry, view.entry.handle)).toBe('Change 4 of 9')
+    view.compare.activeRow('t1', view.entry.key, set, 9, null)
+    expect(view.compare.positionOf(view.entry, view.entry.handle)).toBeUndefined()
     // A menu's row is used over the active one.
     view.seek.mockResolvedValueOnce({ hidden: true })
     await view.compare.goToPossibleMatch('t1', view.entry.key, { row: 5 })
@@ -194,6 +214,11 @@ describe('moving between a comparison\'s differences', () => {
     }
     chip(['removed'])
     expect(view.compare.partnerUnavailable('t1', view.entry.key)).toBe(partnerHiddenText)
+    // A menu's row is judged by its own tone, read from the grid.
+    view.tones.set(5, 'added poss=2')
+    expect(view.compare.partnerUnavailable('t1', view.entry.key, 5)).toBeUndefined()
+    view.tones.set(5, 'removed poss=2')
+    expect(view.compare.partnerUnavailable('t1', view.entry.key, 5)).toBe(partnerHiddenText)
     chip(['removed', 'added'])
     expect(view.compare.partnerUnavailable('t1', view.entry.key)).toBeUndefined()
     // With another filter only the backend can tell.

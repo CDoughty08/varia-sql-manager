@@ -123,8 +123,8 @@ export function compareContribution({ commands, compare, results, documents, men
     commands.register('output.comparePreviousDifference', navigation('previous')),
     // The menu's row, else the active one; a partner only the chips hide is known at once, others when the backend answers.
     commands.register('output.compareGoToPossibleMatch', {
-      when: args => { const target = comparisonOf(args); return !!target && (outputOf(args)?.row !== undefined || compare.partnerUnavailable(target.tabId, target.key) === undefined) },
-      unavailable: args => { const target = comparisonOf(args); return target && outputOf(args)?.row === undefined ? compare.partnerUnavailable(target.tabId, target.key) : undefined },
+      when: args => { const target = comparisonOf(args); return !!target && compare.partnerUnavailable(target.tabId, target.key, outputOf(args)?.row) === undefined },
+      unavailable: args => { const target = comparisonOf(args); return target ? compare.partnerUnavailable(target.tabId, target.key, outputOf(args)?.row) : undefined },
       run: async args => {
         const target = comparisonOf(args), row = outputOf(args)?.row
         if (target) await compare.goToPossibleMatch(target.tabId, target.key, { ...row === undefined ? {} : { row }, focus: true })

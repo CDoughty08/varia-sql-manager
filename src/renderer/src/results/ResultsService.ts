@@ -371,6 +371,8 @@ export interface DiffGridControls {
   active(): { readonly row: number; readonly column: number; readonly whole: boolean; readonly tone: string | null | undefined } | undefined
   handle(): ResultHandle
   land(row: number, first: DiffUnit, settle: ((tone: string | null) => DiffUnit) | undefined, focus: boolean): void
+  /** A row's tone, once its tile has loaded (undefined until then). */
+  tone(row: number): string | null | undefined
 }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }

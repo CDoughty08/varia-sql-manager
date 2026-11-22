@@ -247,8 +247,8 @@ describe('default keybindings', () => {
     const macResultTabs = ['output.nextResult', 'output.previousResult', ...resultJumps, 'output.nextResultView', 'output.previousResultView', 'output.goToResult']
     // Ctrl/⌘+1 to 9 pick query tabs outside the output panes.
     const queryJumps = ['document.goToQuery1', 'document.goToQuery2', 'document.goToQuery3', 'document.goToQuery4', 'document.goToQuery5', 'document.goToQuery6', 'document.goToQuery7', 'document.goToQuery8', 'document.goToLastQuery']
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...resultTabs]
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', ...macResultTabs]
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', 'output.compareNextDifference', 'output.comparePreviousDifference', ...resultTabs]
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.filterColumnValues', 'output.clearFilters', 'output.highlightRows', 'output.compareNextDifference', 'output.comparePreviousDifference', ...macResultTabs]
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName', 'plan.copyOperator']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']

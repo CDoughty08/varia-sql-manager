@@ -124,7 +124,7 @@ export interface CompareSnapshot {
 }
 /** Where moving between a comparison's differences last landed: the result (its set key) and the handle (the comparison's,
  *  or its sorted or filtered view) it counted in, so a replace or another view shows it no more, and what it says. */
-export interface DiffPosition { readonly set: string; readonly handle: ResultHandle; readonly text: string }
+export interface DiffPosition { readonly set: string; readonly handle: ResultHandle; readonly row: number; readonly text: string }
 /** A first run refused for memory (DIFF_ROWS_TOO_LARGE), said in the results area until it is acted on, dismissed, either
  *  input closes, the query runs again or a comparison of the pair is shown: its button runs it again with Changes only. */
 export interface ActionableNotice {
@@ -161,6 +161,8 @@ export interface CompareChange { readonly layout?: DiffLayout; readonly exact?: 
 export interface CompareTarget { readonly entry: ResultSetEntry; readonly pairing: ColumnPairing }
 
 const maxPairs = wire.page.maxColumns - 4
+/** Moves between differences one comparison queues behind the one running (a held Alt+F5); more presses wait for them. */
+const maxQueuedMoves = 4
 
 /** A comparison's identity: its ordered pair of inputs, old then new (D9). Its options (layout, rows, match, exact text)
  *  are its state, so the run shows one comparison per ordered pair, and one first run of it at a time. */
@@ -252,6 +254,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   private readonly activeRows = new Map<EntryKey, { readonly set: string; readonly row: number; readonly tone: string | null }>()
   /** The move between differences in flight per comparison: a newer one gives it up. */
   private readonly navigating = new Map<EntryKey, AbortController>()
+  /** Each comparison's moves between differences, run one after another so a quick repeat starts where the last landed. */
+  private readonly moves = new Map<EntryKey, { readonly done: Promise<void>; readonly waiting: number }>()
 
   constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number; layout?: () => DiffLayout; rows?: () => CompareRows; carry?: CarryHighlights } = {}) {
     super({ info: new Map(), pickers: {}, running: {}, notices: new Map(), announcements: new Map(), refused: new Set(), dismissed: new Map(), actionable: {}, positions: new Map() })
@@ -832,6 +836,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const was = this.activeRows.get(key)
     if (was && was.set === set && was.row === row && was.tone === tone) return
     this.activeRows.set(key, { set, row, tone })
+    // "Change 2 of 31" describes the row a move landed on; once the active cell leaves it the toolbar shows the total again.
+    const position = this.getSnapshot().positions.get(key)
+    if (position && (position.set !== set || position.row !== row)) {
+      const positions = new Map(this.getSnapshot().positions)
+      positions.delete(key)
+      this.publish({ ...this.getSnapshot(), positions })
+    }
     if (this.results.comparing.getSnapshot()[tabId]?.entry === key) this.refreshToggles()
   }
   /** A comparison's active row, as its grid last said for the result it shows now. */
@@ -842,8 +853,9 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   /** Why Go to Possible Match is unavailable on a comparison's active row although it has a possible match: while only the
    *  chips filter the comparison, its partner's kind (added for a removed row, removed for an added one) is known to be
    *  hidden when its chip is not pressed. Under other filters only results.diffSeek can tell (it answers `hidden`). */
-  partnerUnavailable(tabId: string, key: EntryKey): string | undefined {
-    const kind = partnerKind(this.activeRowOf(tabId, key)?.tone), filters = this.results.sortOf(tabId, key)?.filters ?? []
+  partnerUnavailable(tabId: string, key: EntryKey, row?: number): string | undefined {
+    const tone = row === undefined ? this.activeRowOf(tabId, key)?.tone : this.results.diffControls?.(tabId, key)?.tone(row)
+    const kind = partnerKind(tone), filters = this.results.sortOf(tabId, key)?.filters ?? []
     if (!kind || filters.length === 0 || filters.some(item => item.filter.op !== 'kind')) return undefined
     return this.pressedKinds(tabId, key).includes(kind) ? undefined : partnerHiddenText
   }
@@ -861,7 +873,20 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
    * live region says "Change 2 of 31" (counted among the rows shown, "… shown" under a filter), as the toolbar does.
    * `focus` (the keys, the palette and menus) gives the grid the focus; the toolbar's buttons keep it.
    */
-  async navigate(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean } = {}): Promise<void> {
+  navigate(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean } = {}): Promise<void> {
+    // A held key queues at most a few moves; past that, presses wait for the moves already queued.
+    const queued = this.moves.get(key)
+    if (queued && queued.waiting >= maxQueuedMoves) return queued.done
+    const done = (queued?.done ?? Promise.resolve()).then(() => this.move(tabId, key, direction, o))
+    this.moves.set(key, { done, waiting: (queued?.waiting ?? 0) + 1 })
+    void done.finally(() => {
+      const now = this.moves.get(key)
+      if (now?.done === done) this.moves.delete(key)
+      else if (now) this.moves.set(key, { ...now, waiting: now.waiting - 1 })
+    })
+    return done
+  }
+  private async move(tabId: string, key: EntryKey, direction: 'next' | 'previous', o: { readonly focus?: boolean }): Promise<void> {
     const target = this.diffTarget(tabId, key)
     if (!target) return
     const { entry, grid, handle, info, abort } = target, columns = info.pairs
@@ -885,10 +910,11 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       if (!this.stillShown(tabId, key, target)) return
       grid.land(landed.row, landed.first, landed.settle, !!o.focus)
       const text = positionText(landed.index, landed.total, shown)
-      this.publish({ ...this.getSnapshot(), positions: new Map(this.getSnapshot().positions).set(key, { set: setKey(entry.descriptor), handle, text }) })
+      this.publishPosition(key, entry, handle, landed.row, text)
       this.say(key, undefined, text)
-    } catch {
-      // Given up for a newer move, or the comparison (or its view) went: there is nothing to move in.
+    } catch (error) {
+      // Given up, or the comparison (or its view) went: there is nothing to move in. Any other failure is said.
+      this.sayFailure(tabId, key, target, error)
     } finally {
       if (this.navigating.get(key) === abort) this.navigating.delete(key)
     }
@@ -901,19 +927,30 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   async goToPossibleMatch(tabId: string, key: EntryKey, o: { readonly row?: number; readonly focus?: boolean } = {}): Promise<void> {
     const target = this.diffTarget(tabId, key)
     if (!target) return
-    const { grid, handle, abort } = target, row = o.row ?? grid.active()?.row
+    const { entry, grid, handle, abort } = target, row = o.row ?? grid.active()?.row
     try {
       if (row === undefined) return
       const answer = await handle.diffSeek({ partnerOf: row }, abort.signal)
       if (!this.stillShown(tabId, key, target)) return
       if ('hidden' in answer) this.say(key, undefined, partnerHiddenText)
       else if ('none' in answer) this.say(key, undefined, noPartnerText)
-      else grid.land(answer.row, { column: 0, whole: true }, undefined, !!o.focus)
-    } catch {
-      // Given up, or the comparison went.
+      else {
+        grid.land(answer.row, { column: 0, whole: true }, undefined, !!o.focus)
+        this.publishPosition(key, entry, handle, answer.row, positionText(answer.index, answer.total, this.viewFiltered(tabId, key, entry, handle)))
+      }
+    } catch (error) {
+      this.sayFailure(tabId, key, target, error)
     } finally {
       if (this.navigating.get(key) === abort) this.navigating.delete(key)
     }
+  }
+  private publishPosition(key: EntryKey, entry: ResultSetEntry, handle: ResultHandle, row: number, text: string): void {
+    this.publish({ ...this.getSnapshot(), positions: new Map(this.getSnapshot().positions).set(key, { set: setKey(entry.descriptor), handle, row, text }) })
+  }
+  /** A move that failed while its grid still shows what it asked about (not given up, not released) says why. */
+  private sayFailure(tabId: string, key: EntryKey, target: DiffTarget, error: unknown): void {
+    if (!this.stillShown(tabId, key, target)) return
+    this.say(key, undefined, `Could not move to the difference: ${error instanceof Error ? error.message : String(error)}`)
   }
   /** A comparison's mounted grid and what a move in it reads, giving up the move in flight there. */
   private diffTarget(tabId: string, key: EntryKey): DiffTarget | undefined {
