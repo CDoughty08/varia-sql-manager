@@ -174,7 +174,7 @@ internal sealed partial class BigQueryService
     }
 
     /// <summary>
-    /// bigquery.cancelJobs (main only; docs/bigquery.md, Cancelling without a connection): signs in with the profile's
+    /// bigquery.cancelJobs (main only; docs/bigquery.md, Re-attaching to jobs): signs in with the profile's
     /// credential, then for each job in parallel cancels it, waits for its DONE (within the call's 30 s deadline) and lists
     /// its final children (committedBeforeCancel, or outcomeUnknown when that does not finish), and ends its session
     /// (statistics.sessionInfo) outside the session, since no tab will.

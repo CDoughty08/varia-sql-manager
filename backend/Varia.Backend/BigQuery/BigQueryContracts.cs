@@ -158,8 +158,8 @@ internal sealed record BigQueryEndIdleResult(int FailedAborts);
 internal sealed record BigQueryJobReference(string JobId, string? Location = null);
 
 /// <summary>bigquery.cancelJobs (main only, sensitive): cancels jobs of a saved profile with no connection handle, signed
-/// in with the credential material main resolved, and ends each job's session (docs/bigquery.md, Cancelling without a
-/// connection).</summary>
+/// in with the credential material main resolved, and ends each job's session (docs/bigquery.md, Re-attaching
+/// to jobs).</summary>
 internal sealed record BigQueryCancelJobsArgs(string Authentication, string Project, IReadOnlyList<BigQueryJobReference> Jobs, string? KeyFile = null,
     string? ImpersonateServiceAccount = null, BigQueryCredentialMaterial? Credential = null);
 

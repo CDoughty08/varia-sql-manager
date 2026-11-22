@@ -41,7 +41,7 @@ describe('BigQuery remote results', () => {
     expect(owned).toBeGreaterThan(0)
     expect(owned).toBeLessThan(sent)
     // Its events and summary go the way query.execute's do, pinned to the generation named.
-    expect(source).toContain("const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : remote?.queryId")
+    expect(source).toContain("const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId")
     expect(source).toContain('remote ? { generation: remote.generation }')
   })
 

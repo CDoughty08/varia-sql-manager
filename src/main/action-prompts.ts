@@ -22,6 +22,6 @@ export const reloadDetail = (runs: LongRunState, loss: string): string => [longR
 export const restartDetail = (runs: LongRunState, connections: number, bigQuery = false): string => [
   longRunMessages.restart(runs),
   connections === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : connections > 1 ? `All ${connections} connections close and uncommitted transactions are rolled back.` : undefined,
-  // docs/bigquery.md, Re-attaching to jobs: a restart never cancels a BigQuery job.
+  // A restart never cancels a BigQuery job (docs/bigquery.md, Re-attaching to jobs).
   bigQuery ? 'Running BigQuery jobs carry on in BigQuery and are re-attached once their tabs reconnect.' : undefined
 ].filter(Boolean).join('\n\n')
