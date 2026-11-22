@@ -67,11 +67,11 @@ export class JobRecordStore {
   }
 
   /** Every record, oldest first (a copy). */
-  list(): readonly JobRecord[] { return this.records.map(record => ({ ...record })) }
-  forKeys(keys: Iterable<string>): readonly JobRecord[] { const set = new Set(keys); return this.records.filter(record => set.has(record.jobKey)).map(record => ({ ...record })) }
-  forProfile(profileId: string): readonly JobRecord[] { return this.records.filter(record => record.profileId === profileId).map(record => ({ ...record })) }
-  /** Records whose job key no open tab carries. */
-  withoutTab(keys: Iterable<string>): readonly JobRecord[] { const set = new Set(keys); return this.records.filter(record => !set.has(record.jobKey)).map(record => ({ ...record })) }
+  list(): readonly JobRecord[] { return this.expire(this.records).map(record => ({ ...record })) }
+  forKeys(keys: Iterable<string>): readonly JobRecord[] { const set = new Set(keys); return this.expire(this.records).filter(record => set.has(record.jobKey)).map(record => ({ ...record })) }
+  forProfile(profileId: string): readonly JobRecord[] { return this.expire(this.records).filter(record => record.profileId === profileId).map(record => ({ ...record })) }
+  /** Records whose job key no open tab carries. Readers never see a record past its 24 hours, recorded or not since. */
+  withoutTab(keys: Iterable<string>): readonly JobRecord[] { const set = new Set(keys); return this.expire(this.records).filter(record => !set.has(record.jobKey)).map(record => ({ ...record })) }
 
   /**
    * A request's `query.job` event: the job's record under `jobKey`, created or updated. A job already recorded under

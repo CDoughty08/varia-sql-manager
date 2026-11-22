@@ -2334,8 +2334,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 `BackendState`: `starting`, `ready` (pid, runtime, platform), `unresponsive`, `restarting` (with the losses), `failed`
 (`crashLoop`, `spawn` or `incompatible`, with a message and Copy details), or `stopped`.
 
-- **Binding.** A request is bound to the current generation when made (the next one while a restart is pending) and
-  written only to it; if that generation ends first it fails `BACKEND_LOST`. Nothing is re-sent or re-run, and the
+- **Binding.** A request is bound to the current generation when made (the next one while a restart is pending; during
+  a restart's idle-session wait a session close or state read, and a Stop of a run the old generation holds, still go to
+  it: [Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) and written only to it; if that generation ends first it fails `BACKEND_LOST`. Nothing is re-sent or re-run, and the
   backend never retries commands (query sessions use `ConnectRetryCount = 0`).
 - **Ids never cross generations.** `ConnectionInfo` and result keys carry the generation; main refuses a lost
   connection's id (`CONNECTION_LOST`) before sending and answers its disconnect and session close locally.

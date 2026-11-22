@@ -273,7 +273,8 @@ Stop pressed while a restart waits for idle sessions to end reaches the backend 
   it, Job User does not): without it a re-attach answers `PERMISSION_DENIED` naming the permission and leaves the job
   running, except to a job the tab's session inserted in this backend. A running job shows "Re-attached to BigQuery job … started N
   ago" and Stop cancels it (a Stop during the identity check cancels it once the check passes; when the check or the
-  cancel fails, the run and the closing tab's note say the job may still be running); a finished one reads its result table (free) by the usual residence rule; a script's children
+  cancel fails, the run says the job may still be running, and so does the closing tab's note when the re-attach adopts
+  the job's session; Leave it running during the check leaves the job alone); a finished one reads its result table (free) by the usual residence rule; a script's children
   are listed again. `adoptSession` takes over the session the job ran in, with the record's transaction state. Results
   gone answer `REMOTE_EXPIRED`. `detached` only holds the session's queue until the job is DONE and reads no results. One
   attachment per job: a second `query.attach` takes over and the first answers `superseded`.
