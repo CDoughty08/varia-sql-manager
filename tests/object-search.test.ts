@@ -405,6 +405,49 @@ describe('ObjectSearchService', () => {
     expect(fresh.calls.index).toHaveLength(0)
   })
 
+  it('re-reads after a failed BigQuery run, keeps a failed refresh off the index, queues the server\'s Refresh, and drops waiting refreshes on Stop', async () => {
+    const { service, calls, connections, pendingIndex, documents, events } = harness()
+    const ok = { ok: true as const, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } }
+    connections.set([bigQueryConnection('bq')])
+    pendingIndex[0](ok)
+    await settle()
+    // A run that failed reports no statement type, but DDL before the failure may have run.
+    vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: 'bq' })) as never)
+    events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', error: 'boom' } as never)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
+    // That refresh failing leaves the index it refreshed searchable: no error on it.
+    pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
+    await settle()
+    expect(service.getSnapshot().indexes.bq.error).toBeUndefined()
+    expect(service.getSnapshot().indexes.bq.status?.state).toBe('ready')
+    // The server's Refresh during a build waits for it, then reads everything.
+    service.build('bq')
+    service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
+    const during = calls.index.length
+    pendingIndex.at(-1)!(ok)
+    await settle()
+    expect(calls.index.slice(during)).toEqual([{ connectionId: 'bq', requestId: expect.any(String), definitions: true, extraDetails: false }])
+    pendingIndex.at(-1)!(ok)
+    await settle()
+    // Stop ends the refreshes waiting behind the build, and so does a build cancelled another way.
+    service.build('bq')
+    service.refreshBigQuery('bq', { stale: true })
+    service.stopBuild('bq')
+    pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    service.build('bq')
+    service.refreshBigQuery('bq', { scope: { project: 'varia-alpha' } })
+    const cancelled = calls.index.length
+    pendingIndex.at(-1)!({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    expect(calls.index).toHaveLength(cancelled)
+    // A whole build's failure is the index's.
+    service.build('bq')
+    pendingIndex.at(-1)!({ ok: false, code: 'TIMEOUT', error: 'slow' })
+    await settle()
+    expect(service.getSnapshot().indexes.bq.error).toBe('slow')
+  })
+
   it('builds nothing until the user asks when Options turns indexing on connect off', () => {
     const { service, calls, connections, timers } = harness({ indexOnConnect: false })
     connections.set([connection('a'), connection('b')])

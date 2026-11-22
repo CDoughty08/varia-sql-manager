@@ -23,14 +23,14 @@ internal sealed partial class ObjectSearchService
     {
         if (!BqNames.IsProject(project) || !BqNames.IsDataset(dataset) || !states.TryGetValue(connectionId, out var state)) return;
         lock (state.Gate)
-            if (state.BigQuery) state.Stale.Add((project, dataset));
+            if (state.BigQuery) state.Stale[(project, dataset)] = ++state.StaleMarks;
     }
 
     /// <summary>The datasets marked stale on a connection (the checks read it).</summary>
     internal IReadOnlyCollection<(string Project, string Dataset)> StaleOf(string connectionId)
     {
         if (!states.TryGetValue(connectionId, out var state)) return [];
-        lock (state.Gate) return [.. state.Stale];
+        lock (state.Gate) return [.. state.Stale.Keys];
     }
 
     public async Task<ObjectIndexResult> IndexBigQueryAsync(ObjectIndexArgs args, IBigQueryIndexSource source, CancellationToken token, Action<object>? progress = null)
@@ -52,9 +52,14 @@ internal sealed partial class ObjectSearchService
         var stop = source2.Token;
         var finishedBuild = false;
         HashSet<(string Project, string Dataset)> stale;
-        bool InScope(ObjectIndexSkip skip) => scope is null ? !staleOnly : skip.Project == scope.Project && (scope.Dataset is null || skip.Database == scope.Dataset || skip.Database == "");
+        // A stale-only build's skips are its targets' (an earlier skip of a dataset it reads again goes); a scoped one's are the scope's.
+        bool InScope(ObjectIndexSkip skip) => scope is not null ? skip.Project == scope.Project && (scope.Dataset is null || skip.Database == scope.Dataset || skip.Database == "")
+            : !staleOnly || skip.Project is { } skipProject && stale.Contains((skipProject, skip.Database));
+        // The mark each dataset had when this build began reading it: only that mark is cleared, so DDL that lands mid-read stays marked.
+        var seen = new System.Collections.Concurrent.ConcurrentDictionary<(string, string), long>();
         lock (state.Gate)
         {
+            stale = [.. state.Stale.Keys];
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
             state.Build = source2;
             state.Building = true;
@@ -67,7 +72,15 @@ internal sealed partial class ObjectSearchService
             var kept = state.Skipped.ToList().Where(skip => !InScope(skip)).ToList();
             state.Skipped = new(MaxSkipped);
             for (var at = 0; at < kept.Count; at++) state.Skipped.Add(at, kept[at]);
-            stale = [.. state.Stale];
+        }
+        void Seen((string, string) target)
+        {
+            lock (state.Gate) seen[target] = state.Stale.GetValueOrDefault(target);
+        }
+        void Clear((string, string) target)
+        {
+            lock (state.Gate)
+                if (state.Stale.TryGetValue(target, out var mark) && mark == seen.GetValueOrDefault(target)) state.Stale.Remove(target);
         }
         void Skip(ObjectIndexSkip skip)
         {
@@ -124,6 +137,7 @@ internal sealed partial class ObjectSearchService
             await Parallel.ForEachAsync(targets, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop }, async (target, loop) =>
             {
                 var (project, dataset) = target;
+                Seen(target);
                 BigQueryListing listing;
                 try { listing = await source.ObjectsAsync(args.ConnectionId, project, dataset, loop); }
                 catch (Exception error) when (!loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
@@ -137,10 +151,12 @@ internal sealed partial class ObjectSearchService
                 }
                 var key = project + "\u0001" + dataset;
                 var force = scope is not null || stale.Contains(target);
-                var known = force ? [] : BigQueryEntries.Known(state.Index.Get(key));
+                var known = force ? [] : BigQueryEntries.Known(state.Index.Get(key), definitions);
                 var entries = BigQueryEntries.FromListing(listing).Select(item =>
                     known.TryGetValue((item.Kind, item.Name), out var earlier) && earlier.Created == item.Created && (item.Modified is null || item.Modified == earlier.Modified)
                         ? item with { Detail = earlier.Detail } : item).ToList();
+                // A superseded build writes nothing more: the newer one has reset the counters and skips.
+                loop.ThrowIfCancellationRequested();
                 var held = Hold(state, project, dataset, entries, definitions);
                 if (held is { Code: not ChildrenLeftOut }) Skip(held);
                 else
@@ -149,7 +165,7 @@ internal sealed partial class ObjectSearchService
                     if (held is not null) Skip(held);
                     if (listing.Cut) Skip(new(dataset, "TOO_LARGE", "The dataset has more objects than the index lists; it keeps the first ones.", Project: project));
                     if (detailed.Contains(project) && entries.Any(item => item.Detail is null && BigQueryEntries.HasDetails(item))) pending[target] = entries;
-                    else if (!listing.Cut) lock (state.Gate) state.Stale.Remove(target);
+                    else if (!listing.Cut) Clear(target);
                 }
                 Report(Interlocked.Increment(ref listedDone), targets.Count, "names", false);
             });
@@ -201,11 +217,12 @@ internal sealed partial class ObjectSearchService
                     }, loop));
                 }
                 await Task.WhenAll(tasks);
+                loop.ThrowIfCancellationRequested();
                 var held = Hold(state, project, dataset, entries, definitions);
                 if (held is not null) Skip(held);
                 if (failed is { } first)
                     Skip(first with { Details = true, Message = failures == 1 ? "The details of 1 object could not be read: " + first.Message : "The details of " + failures.ToString(System.Globalization.CultureInfo.InvariantCulture) + " objects could not be read: " + first.Message });
-                else if (held is null or { Code: ChildrenLeftOut }) lock (state.Gate) state.Stale.Remove(pair.Key);
+                else if (held is null or { Code: ChildrenLeftOut }) Clear(pair.Key);
             });
             Report(detailsDone, wanted, "details", true);
             lock (state.Gate)

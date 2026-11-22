@@ -108,7 +108,7 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 | `agentAlert` | — | Script Alert as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Alert` | `agentObject` |
 | `agentOperator` | — | Script Operator as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Operator` | `agentObject` |
 | `agentProxy` | — | Script Proxy as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `ProxyAccount` | `agentObject` |
-| `bqTable` | none | Script Table as | ✓ | – | – | ✓ | – | ✓ | ✓ | ✓ | ✓ | – | – | `BigQuery` | `bigquery` |
+| `bqTable` | none, `clone` | Script Table as | ✓ | – | – | ✓ | – | ✓ | ✓ | ✓ | ✓ | – | – | `BigQuery` | `bigquery` |
 | `bqTable` | `snapshot` | Script Table Snapshot as | ✓ | – | – | ✓ | – | ✓ | ○ | ○ | ○ | – | – | `BigQuery` | `bigquery` |
 | `bqView` | — | Script View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |
 | `bqMaterializedView` | — | Script Materialized View as | ✓ | – | – | ✓ | – | ✓ | – | – | – | – | – | `BigQuery` | `bigquery` |

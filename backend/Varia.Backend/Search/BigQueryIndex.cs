@@ -46,10 +46,12 @@ internal sealed record BigQueryColumn(string Path, bool Record, string Type, boo
 
 /// <summary>What pass 2 read of an object: a clone's subtype, its last change, its view or routine text, columns, size and layout.</summary>
 internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? Definition, IReadOnlyList<BigQueryColumn> Columns, long? Rows = null, long? Bytes = null,
-    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false);
+    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false);
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
-internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null, string? Signature = null);
+/// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for the names' reserve), so a later build may reuse it.
+internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null, string? Signature = null,
+    bool Whole = true, bool ColumnsCut = false);
 
 /// <summary>
 /// A BigQuery read's facts beside its <see cref="ObjectTable"/> (by entry): creation times and whether details were read, rows, size,
@@ -159,14 +161,14 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 var partitioning = detail?.Partitioning is { } part ? Clip(part) : null;
                 var clustering = detail?.Clustering is { } cluster ? Clip(cluster) : null;
                 Charge(BigQueryFacts.ObjectBytes + Strings(signature, partitioning, clustering));
-                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature);
+                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true);
                 if (entry.Shards is { } group)
                 {
                     Charge(BigQueryFacts.ShardBytes + Strings(group.Prefix, group.First, group.Last));
                     shards[at] = group;
                 }
                 if (detail is null) continue;
-                if (definitions && detail.Definition is { Length: > 0 } text) Definition(at, text);
+                if (definitions && detail.Definition is { Length: > 0 } text && !Definition(at, text, detail.DefinitionCut)) facts[at] = facts[at] with { Whole = false };
                 if (detail.ColumnsCut) cut++;
                 if (!children) continue;
                 short ordinal = 0;
@@ -178,6 +180,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                     var typeName = Intern(column.Type);
                     if (!types.TryGetValue(typeName, out var type))
                     {
+                        // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts keeps its names only.
+                        if (types.Count >= MaxTypes) throw new TooLarge();
                         Charge(IndexMemory.TypeBytes);
                         type = types[typeName] = objects.Details.AddType(objects.Id(typeName), -1, types.Count, 0, userDefined: true, tableType: false);
                     }
@@ -205,17 +209,28 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
             Abandon();
             return null;
         }
+        catch
+        {
+            // Whatever else went wrong, the read's charges and pooled names are given back.
+            Abandon();
+            throw;
+        }
     }
 
+    /// <summary>The most distinct column type texts one dataset's read keeps (ObjectDetails' 16-bit type ids, with room to spare).</summary>
+    internal const int MaxTypes = 60_000;
+
     /// <summary>A view's or routine's text, cut at the per-definition limit, pooled while the names' reserve is free (counted as cut otherwise).</summary>
-    private void Definition(int at, string text)
+    /// <summary><paramref name="wasCut"/>: the text is an earlier read's, already cut. False when it was left out for the reserve.</summary>
+    private bool Definition(int at, string text, bool wasCut)
     {
-        var longer = text.Length > limits.DefinitionChars;
-        var kept = longer ? text[..limits.DefinitionChars] : text;
-        if (Pooled(DefinitionText.Hold(kept), limits.NamesReserveBytes) is not { } copy) { cut++; return; }
+        var longer = wasCut || text.Length > limits.DefinitionChars;
+        var kept = text.Length > limits.DefinitionChars ? text[..limits.DefinitionChars] : text;
+        if (Pooled(DefinitionText.Hold(kept), limits.NamesReserveBytes) is not { } copy) { cut++; return false; }
         objects.SetDefinition(at, copy, longer);
         modules++;
         if (longer) cut++;
+        return true;
     }
 
     private static string Clip(string text) => text.Length <= BigQueryIndexLimits.FactChars ? text : text[..(BigQueryIndexLimits.FactChars - 1)] + "…";
@@ -299,11 +314,12 @@ internal static partial class BigQueryEntries
     /// <summary>Whether pass 2 reads the object: tables, views, materialized views, external tables and routines; models have nothing it keeps.</summary>
     public static bool HasDetails(BigQueryEntry entry) => entry.Kind != "bqModel";
 
-    /// <summary>What an earlier read of the dataset knows, by kind and name, for the objects it read details of.</summary>
-    public static Dictionary<(string Kind, string Name), (long Created, long? Modified, BigQueryDetail Detail)> Known(DatabaseIndex? read)
+    /// <summary>What an earlier read of the dataset knows, by kind and name, for the objects it read details of whole: nothing from a
+    /// read that left its columns out, or its text when this build keeps <paramref name="definitions"/>, which pass 2 then reads again.</summary>
+    public static Dictionary<(string Kind, string Name), (long Created, long? Modified, BigQueryDetail Detail)> Known(DatabaseIndex? read, bool definitions)
     {
         var known = new Dictionary<(string, string), (long, long?, BigQueryDetail)>();
-        if (read?.Facts is not { } facts) return known;
+        if (read?.Facts is not { } facts || read.ChildrenLeftOut || definitions && read.DefinitionsLeftOut) return known;
         var table = read.Table;
         var columns = new Dictionary<int, List<BigQueryColumn>>();
         for (var at = 0; at < table.Count; at++)
@@ -315,11 +331,11 @@ internal static partial class BigQueryEntries
         }
         for (var at = 0; at < table.Count; at++)
         {
-            if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true } fact) continue;
+            if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true, Whole: true } fact) continue;
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
             known[(table.Kind(at), table.Name(at))] = (fact.Created, modified, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
-                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature));
+                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at)));
         }
         return known;
     }

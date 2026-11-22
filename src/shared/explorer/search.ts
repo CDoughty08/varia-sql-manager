@@ -167,7 +167,7 @@ export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 /** A BigQuery refresh's scope: one of the connection's projects, or one of its datasets. */
 export interface BigQueryIndexScope { readonly project: string; readonly dataset?: string }
 /** BigQuery only (SQL Server refuses them): `extraDetails` reads the extra projects' schemas too
- *  (`textEditor.googleSql.indexExtraProjects`), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and
+ *  (`objectExplorer.search.bigQueryExtraProjects`), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and
  *  `stale` re-reads only the datasets DDL run from a tab marked. */
 export interface ObjectIndexParams {
   readonly connectionId: string
@@ -259,6 +259,18 @@ export interface ObjectSearchHit {
   /** A BigQuery table that stands for its date-sharded group (it is the newest shard). */
   readonly shards?: BigQueryShards
 }
+/** A hit's name as its row shows it, with the match's range in it: a BigQuery object's or column's label without its dataset,
+ *  which the path names (orders, orders.address.city). */
+export function searchHitLabel(hit: ObjectSearchHit): { readonly text: string; readonly range?: readonly [number, number] } {
+  const dataset = hit.object.project !== undefined && hit.object.kind !== 'bqDataset' ? hit.object.dataset : undefined
+  if (dataset === undefined || !hit.label.startsWith(dataset + '.')) return { text: hit.label, ...hit.range ? { range: hit.range } : {} }
+  const cut = dataset.length + 1, text = hit.label.slice(cut)
+  if (!hit.range) return { text }
+  // A match inside the dataset name is not in the text shown: what is left of it, if any, is marked.
+  const start = Math.max(0, hit.range[0] - cut), end = Math.max(0, hit.range[0] + hit.range[1] - cut)
+  return end > start ? { text, range: [start, end - start] } : { text }
+}
+
 /** Whether a hit is a BigQuery object (its ref names a project). */
 export const isBigQueryHit = (hit: ObjectSearchHit): boolean => hit.object.project !== undefined
 /** A search hit's names as Copy gives them: `qualified` brackets only the parts that need it, `bracketed` every part. */

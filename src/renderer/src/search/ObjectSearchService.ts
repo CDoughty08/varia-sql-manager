@@ -108,8 +108,9 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   /** The workbench's events: a BigQuery query whose DDL may have changed objects re-reads the datasets it marked (`stale`). */
   readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
 }
-/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), or the datasets DDL marked. */
-export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true }
+/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
+ *  (Refresh on the server's node). */
+export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true } | { readonly full: true }
 /** Statement types whose job may have changed what a BigQuery index lists (SqlService.ChangesObjects), and a script, whose
  *  statements may have. */
 export const bigQueryChangesObjects = (statement: string | undefined): boolean => !!statement && (/^(CREATE|DROP|ALTER)_/.test(statement) || statement === 'SCRIPT')
@@ -324,7 +325,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.registrations.push({ dispose: unsubscribe }, { dispose: unlisten })
     const unlistenDocuments = o.documents.subscribe?.(() => this.syncDocuments())
     if (unlistenDocuments) this.registrations.push({ dispose: unlistenDocuments })
-    if (o.events) this.registrations.push(o.events.subscribe(event => { if (event.type === 'query.finished') this.queryFinished(event.tabId, event.summary?.job?.statementType) }))
+    if (o.events) this.registrations.push(o.events.subscribe(event => { if (event.type === 'query.finished') this.queryFinished(event.tabId, event.summary?.job?.statementType, event.error !== undefined) }))
     this.sync()
   }
 
@@ -336,20 +337,27 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const connection = this.o.connections.get(connectionId)
     if (this.disposed || !live(connection)) return
     const bigQuery = isBigQueryConnection(connection)
-    if (!refresh) this.refreshes.delete(connectionId)
+    const partial = refresh && !('full' in refresh) ? refresh : undefined
+    if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
     const previous = this.getSnapshot().indexes[connectionId]
     this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...previous?.status ? { status: previous.status } : {} })
     void this.o.api.explorerIndex({
       connectionId, requestId, definitions: this.o.settings.get('objectExplorer.search.definitions'),
-      ...bigQuery ? { extraDetails: this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') } : {}, ...bigQuery && refresh ? refresh : {}
+      ...bigQuery ? { extraDetails: this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') } : {}, ...bigQuery && partial ? partial : {}
     }).then(result => {
       const entry = this.getSnapshot().indexes[connectionId]
       if (this.disposed || entry?.requestId !== requestId) return
       if (result.ok) {
         this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
         this.refresh(connectionId)
-      } else this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...result.code === 'CANCELLED' ? {} : { error: result.error } })
+      } else {
+        // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
+        const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
+        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
+        // Stop (or a disconnect) ends the refreshes waiting behind the build too.
+        if (result.code === 'CANCELLED') this.refreshes.delete(connectionId)
+      }
       this.nextRefresh(connectionId)
     }, onUnexpectedError)
   }
@@ -375,11 +383,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    *  server's node re-reads every project. Other nodes leave the index as it is. */
   refreshNode(connectionId: string, ref: ExplorerNodeRef): void {
     const object = ref.type === 'object' ? ref.object : ref.owner
-    if (object.kind === 'server') {
-      const connection = this.o.connections.get(connectionId)
-      if (connection && isBigQueryConnection(connection) && !this.getSnapshot().indexes[connectionId]?.requestId && this.getSnapshot().indexes[connectionId]?.status) this.build(connectionId)
-      return
-    }
+    if (object.kind === 'server') { this.refreshBigQuery(connectionId, { full: true }); return }
     if (object.kind === 'bqProject' && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.name } })
     else if (object.kind === 'bqDataset' && object.project && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.name } })
     else if (object.project && object.dataset) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.dataset } })
@@ -387,12 +391,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /** Stops a running build: what it read so far stays searchable. */
   stopBuild(connectionId: string): void {
+    this.refreshes.delete(connectionId)
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
     if (requestId) void this.o.api.explorerCancel([requestId]).catch(onUnexpectedError)
   }
 
   /** Stops every running build (the status bar's Stop). */
   stopAll(): void {
+    this.refreshes.clear()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
     if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
   }
@@ -657,9 +663,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     })
   }
 
-  /** A BigQuery query tab's run ended: DDL in it (or a script, which may hold some) marked datasets the backend re-reads now. */
-  private queryFinished(tabId: string, statement: string | undefined): void {
-    if (!bigQueryChangesObjects(statement)) return
+  /** A BigQuery query tab's run ended: DDL in it (or a script, which may hold some) marked datasets the backend re-reads now. A run
+   *  that failed reports no statement type, but DDL before the failure may have run: the stale-only build reads whatever was
+   *  marked, and nothing when nothing was. */
+  private queryFinished(tabId: string, statement: string | undefined, failed: boolean): void {
+    if (!failed && !bigQueryChangesObjects(statement)) return
     const connectionId = this.o.documents.get(tabId)?.connectionId
     if (connectionId) this.refreshBigQuery(connectionId, { stale: true })
   }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, searchKindBadge, type DefinitionMatch, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, searchHitLabel, searchKindBadge, type DefinitionMatch, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
@@ -79,6 +79,8 @@ const fuzzyTitle = 'Fuzzy Match: names also match with typos or by sound (not wi
  * Where a hit is, for its row: a server object's folders below the server (Security › Logins), a database's Databases folder,
  * and anything else its database and folder (Sales › Columns; the label names a child's parent).
  */
+export { searchHitLabel }
+
 export function searchHitPath(hit: ObjectSearchHit): string {
   const object = hit.object
   if (object.project !== undefined) {
@@ -100,18 +102,6 @@ export function searchHitPath(hit: ObjectSearchHit): string {
 /** The engines of the servers a search asks. */
 export function searchProviders(connections: readonly { readonly providerId?: string; readonly options?: { readonly provider?: string } }[]): ReadonlySet<ProviderId> {
   return new Set(connections.map((connection): ProviderId => isBigQueryConnection(connection) ? 'bigquery' : 'sqlserver'))
-}
-
-/** A hit's name as its row shows it, with the match's range in it: a BigQuery object's or column's label without its dataset,
- *  which the path names (orders, orders.address.city). */
-export function searchHitLabel(hit: ObjectSearchHit): { readonly text: string; readonly range?: readonly [number, number] } {
-  const dataset = hit.object.project !== undefined && hit.object.kind !== 'bqDataset' ? hit.object.dataset : undefined
-  if (dataset === undefined || !hit.label.startsWith(dataset + '.')) return { text: hit.label, ...hit.range ? { range: hit.range } : {} }
-  const cut = dataset.length + 1, text = hit.label.slice(cut)
-  if (!hit.range) return { text }
-  // A match inside the dataset name is not in the text shown: what is left of it, if any, is marked.
-  const start = Math.max(0, hit.range[0] - cut), end = Math.max(0, hit.range[0] + hit.range[1] - cut)
-  return end > start ? { text, range: [start, end - start] } : { text }
 }
 
 /** The note after a definition match for the matches past it: "+N more", "+N+ more" when the count is only a lower bound (it

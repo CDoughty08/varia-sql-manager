@@ -28,6 +28,7 @@ internal static class BigQueryIndexChecks
         Entries(check);
         Ddl(check);
         Budget(check);
+        Reuse(check);
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var key = BigQueryCredentialChecks.Key(rsa.ExportPkcs8PrivateKeyPem());
         await BuildAsync(check, key);
@@ -156,6 +157,35 @@ internal static class BigQueryIndexChecks
             $"a read past the budget gives back what it took ({used}) and fits without columns: {names?.Table.Count} entries, {pool.Budget.Used} bytes");
     }
 
+    /// <summary>What a later build reuses: nothing from a read without columns or (when text is wanted) without definitions, nor an
+    /// object whose text the reserve left out; a reused cut definition stays cut. Too many distinct types is a read too large, not a fault.</summary>
+    static void Reuse(Action<bool, string> check)
+    {
+        var limits = new ObjectIndexLimits { DefinitionChars = 10 };
+        var pool = new StringPool(new IndexBudget(limits.MemoryBytes));
+        var view = new BigQueryDetail(null, null, "SELECT 1 AS a, 2 AS b FROM t", [new BigQueryColumn("a", false, "INT64", true, null)]);
+        List<BigQueryEntry> entries = [new("bqView", "bqViews", null, "v", 1, null, Detail: view)];
+        var read = new BigQueryReader(limits, pool, null).Read("p", "d", entries, true, true)!;
+        var known = BigQueryEntries.Known(read, true);
+        var again = new BigQueryReader(limits, pool, null).Read("p", "d", [entries[0] with { Detail = known[("bqView", "v")].Detail }], true, true)!;
+        check(read.Cut == 1 && known[("bqView", "v")].Detail is { DefinitionCut: true, Columns.Count: 1 } && again.Cut == 1 && again.Table.DefinitionCut(1),
+            $"a definition cut at the limit is still cut when an unchanged view is reused ({read.Cut}, {again.Cut})");
+        var names = new BigQueryReader(limits, pool, null).Read("p", "d", entries, false, true)!;
+        var bare = new BigQueryReader(limits, pool, null).Read("p", "d", entries, true, false)!;
+        check(BigQueryEntries.Known(names, true).Count == 0 && BigQueryEntries.Known(bare, true).Count == 0 && BigQueryEntries.Known(bare, false).Count == 1,
+            "a read that left columns out is never reused, nor one without definitions by a build that wants them");
+        var reserved = new ObjectIndexLimits { NamesReserveBytes = long.MaxValue / 4 };
+        var tight = new BigQueryReader(reserved, new StringPool(new IndexBudget(reserved.MemoryBytes)), null).Read("p", "d", entries, true, true)!;
+        check(tight.Cut == 1 && BigQueryEntries.Known(tight, true).Count == 0, "a view whose text the names' reserve left out is read again by the next build");
+        var columns = Enumerable.Range(0, BigQueryReader.MaxTypes + 1).Select(at => new BigQueryColumn("c" + at, false, "STRING(" + at + ")", true, null)).ToList();
+        List<BigQueryEntry> wide = [new("bqTable", "bqTables", null, "wide", 1, null, Detail: new BigQueryDetail(null, null, null, columns))];
+        var budget = new StringPool(new IndexBudget(limits.MemoryBytes));
+        var whole = new BigQueryReader(limits, budget, null).Read("p", "d", wide, true, true);
+        var used = budget.Budget.Used;
+        var kept = new BigQueryReader(limits, budget, null).Read("p", "d", wide, false, true);
+        check(whole is null && used == 0 && kept is { ChildrenLeftOut: true }, $"more distinct column types than a read numbers is too large for columns, giving back what it took ({used})");
+    }
+
     static async Task BuildAsync(Action<bool, string> check, JsonObject key)
     {
         using var harness = new Harness();
@@ -256,6 +286,23 @@ internal static class BigQueryIndexChecks
         await harness.Index(more => more["stale"] = true);
         check(marked == 1 && harness.Gets(Sales + "/tables/daily") == daily + 1 && harness.Gets(Alpha + "/datasets") == datasets && harness.Service.Search.StaleOf(harness.ConnectionId).Count == 0,
             "a stale-only build re-reads the dataset DDL marked, lists nothing else, and spends the mark");
+        // DDL that lands while a build reads the dataset keeps its mark: the build read the listing from before it.
+        harness.Fake.On("GET", Sales + "/tables", _ =>
+        {
+            harness.Service.Search.MarkStale(harness.ConnectionId, "varia-alpha", "sales");
+            return new BigQueryFake.Reply(200, recreated);
+        });
+        await harness.Index();
+        check(harness.Service.Search.StaleOf(harness.ConnectionId).Contains(("varia-alpha", "sales")), "a dataset marked stale while a build read it stays marked for the next stale-only build");
+        // A stale-only build replaces its target's old skip: failing again lists it once, succeeding lists it no more.
+        harness.Fake.On("GET", Sales + "/tables", BigQueryFake.Fixture("error-access-denied", 403));
+        await harness.Index(more => more["stale"] = true);
+        var failedTwice = await harness.Index(more => more["stale"] = true);
+        harness.Fake.On("GET", Sales + "/tables", new BigQueryFake.Reply(200, recreated));
+        var recovered = await harness.Index(more => more["stale"] = true);
+        check(failedTwice.Status.Skipped.Count(skip => skip.Database == "sales") == 1 && !recovered.Status.Skipped.Any(skip => skip.Database == "sales"),
+            "a stale-only build's skip of a dataset replaces the earlier one, and goes once the dataset is read: "
+            + string.Join(" | ", failedTwice.Status.Skipped.Select(skip => skip.Database + " " + skip.Code)));
         // A dataset gone from the listing leaves the index.
         harness.Fake.On("GET", Alpha + "/datasets", new BigQueryFake.Reply(200, "{\"datasets\":[{\"datasetReference\":{\"projectId\":\"varia-alpha\",\"datasetId\":\"staging\"}}]}"));
         await harness.Index();
@@ -265,6 +312,17 @@ internal static class BigQueryIndexChecks
 
     static async Task FailuresAsync(Action<bool, string> check, JsonObject key)
     {
+        // A build without definitions, then one with them: unchanged views are read again for their text.
+        using (var texts = new Harness())
+        {
+            await texts.ConnectAsync(key);
+            await texts.Index(more => more["definitions"] = false);
+            var before = texts.Gets(Sales + "/tables/daily");
+            await texts.Index();
+            var found = await texts.Search("GROUP BY day", more => more["in"] = "definitions");
+            check(texts.Gets(Sales + "/tables/daily") == before + 1 && found.Hits.Any(hit => hit.Object.Name == "daily"),
+                "turning definitions on reads unchanged views again, so their text is searchable");
+        }
         using var harness = new Harness();
         harness.Fake.On("GET", Alpha + "/datasets/archive/tables", BigQueryFake.Fixture("error-access-denied", 403));
         harness.Fake.On("GET", Sales + "/tables/totals", BigQueryFake.Fixture("error-access-denied", 403));

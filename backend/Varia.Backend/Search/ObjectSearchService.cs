@@ -77,7 +77,9 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// <summary>BigQuery's projects indexed by name only (extra projects unless their details were asked for).</summary>
         public List<string>? NamesOnly;
         /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>
-        public readonly HashSet<(string Project, string Dataset)> Stale = [];
+        public readonly Dictionary<(string Project, string Dataset), long> Stale = [];
+        /// <summary>Numbers each stale mark (under Gate), so a build clears only the marks it saw before it read the dataset.</summary>
+        public long StaleMarks;
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
