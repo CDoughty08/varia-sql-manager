@@ -189,7 +189,13 @@ internal sealed partial class ActionService
         {
             var arguments = new List<(string, object?)> { ("@name", added.Name) };
             if (added.Email is { Length: > 0 } email) arguments.Add(("@email_address", email));
-            if (added.Pager is { Length: > 0 } pager) arguments.Add(("@pager_address", pager));
+            if (added.Pager is { Length: > 0 } pager)
+            {
+                // sp_add_operator's @pager_days defaults to 0 (never on duty); New Operator's every day, 08:00 to 18:00, so its pages are sent.
+                arguments.Add(("@pager_address", pager));
+                arguments.Add(("@pager_days", (byte)127));
+                foreach (var day in new[] { "weekday", "saturday", "sunday" }) { arguments.Add(($"@{day}_pager_start_time", 80000)); arguments.Add(($"@{day}_pager_end_time", 180000)); }
+            }
             calls.Add(new("sp_add_operator", arguments));
         }
         var alert = new List<(string, object?)> { ("@name", create ? save.Name : target.Name) };

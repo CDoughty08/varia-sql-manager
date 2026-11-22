@@ -322,7 +322,7 @@ export const agentAlertText = {
   newOperatorTaken: (name: string) => `${name} is already an operator on this server.`,
   newOperatorEmail: (name: string) => `${name} is notified by e-mail but has no e-mail address.`,
   newOperatorPager: (name: string) => `${name} is notified by pager but has no pager address.`,
-  newOperatorHint: 'Created when you save, with the alert.',
+  newOperatorHint: 'Created when you save, with the alert; with a pager address, on pager duty every day from 08:00 to 18:00.',
   resetPending: 'The count goes back to 0 when you save.',
   resetSysadmin: 'Only sysadmin can reset the count.',
   countersTyped: 'This login cannot read the server\'s performance counters (VIEW SERVER STATE), so type the object, counter and instance.',

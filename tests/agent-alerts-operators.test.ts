@@ -5,7 +5,7 @@ import {
   notificationChanges, notifyEmail, notifyPager, parseCondition, recommendedAlertStates, conditionOf, type AgentAlertDocumentModel, type AgentAlertRecord
 } from '../src/shared/actions/agent-alert'
 import {
-  agentOperatorChangeCount, agentOperatorCommandEntries, agentOperatorProblems, agentOperatorSave, agentOperatorSaveSchema, initialAgentOperatorDraft, matrixChangeCount, matrixChanges,
+  agentOperatorChangeCount, agentOperatorCommandEntries, agentOperatorText, agentOperatorProblems, agentOperatorSave, agentOperatorSaveSchema, initialAgentOperatorDraft, matrixChangeCount, matrixChanges,
   matrixProblems, notifyMatrix, operatorUses, withCell, type AgentOperatorDocumentModel, type AgentOperatorRecord, type AgentOperatorsModel
 } from '../src/shared/actions/agent-operator'
 import type { AgentJobOperator } from '../src/shared/actions/agent-job'
@@ -185,6 +185,7 @@ describe("the operator document's and grid's shared rules", () => {
     const model = operatorModel(), draft = initialAgentOperatorDraft(model)
     expect(testBlocked(model, draft, 0)).toBeUndefined()
     expect(testBlocked(operatorModel({ sysadmin: false }), draft, 0)).toContain('sysadmin')
+    expect(testBlocked(operatorModel({ operator: operatorRecord(9, 'DBA', { enabled: false }) }), draft, 0)).toBe(agentOperatorText.testDisabled)
     expect(testBlocked(operatorModel({ mail: { ...mail, agentProfile: undefined } }), draft, 0)).toContain('no Database Mail profile')
     expect(testBlocked(model, { ...draft, email: 'other@example.test' }, 1)).toContain('Save the operator first')
     expect(testBlocked(operatorModel({ operator: undefined }), draft, 0)).toContain('Save the operator first')

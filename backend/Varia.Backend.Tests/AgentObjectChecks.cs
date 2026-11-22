@@ -92,6 +92,10 @@ internal static class AgentObjectChecks
             NewOperators: [new("On call", Email: "oncall@example.test")], Notifications: [new("On call", 1, "add"), new("DBA", 3, "add")]), AgentNode), AgentNode);
         check(created.Head == AgentObjectHead.None && Procedures(created) == "sp_add_operator,sp_add_alert,sp_add_notification,sp_add_notification" && AgentSql.LintObjectBatch(created.Text).Count == 0,
             "New Alert creates its inline operators first, then the alert, then its notifications, in one linted batch: " + Procedures(created));
+        var paged = ActionService.AlertSavePlan(AlertSave(new(Name: "New", Enabled: true, MessageId: 0, Severity: 19, NewOperators: [new("Pager", Pager: "p@example.test")], Notifications: [new("Pager", 2, "add")]), AgentNode), AgentNode);
+        check(Equals(ValueOf(paged, "@c1_pager_days"), (byte)127) && Equals(ValueOf(paged, "@c1_weekday_pager_start_time"), 80000) && Equals(ValueOf(paged, "@c1_sunday_pager_end_time"), 180000) && AgentSql.LintObjectBatch(paged.Text).Count == 0
+            && !created.Calls[0].Arguments.Any(argument => argument.Argument == "@pager_days"),
+            "an inline operator with a pager is on duty every day, 08:00 to 18:00, as New Operator sets, since sp_add_operator's default is never");
         var add = created.Calls[1];
         check(add.Arguments.Select(argument => argument.Argument).SequenceEqual(["@name", "@enabled", "@message_id", "@severity", "@delay_between_responses", "@include_event_description_in"]),
             "New Alert leaves empty texts and no job to sp_add_alert's defaults: " + string.Join(",", add.Arguments.Select(argument => argument.Argument)));

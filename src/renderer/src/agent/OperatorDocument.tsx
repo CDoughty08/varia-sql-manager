@@ -40,6 +40,7 @@ const days = [{ bit: 2, label: 'Monday' }, { bit: 4, label: 'Tuesday' }, { bit: 
 export function testBlocked(model: AgentOperatorDocumentModel, draft: AgentOperatorDraft, changes: number): string | undefined {
   if (!model.operator) return agentOperatorText.testUnsaved
   if (!model.sysadmin) return agentOperatorText.testSysadmin
+  if (!model.operator.enabled) return agentOperatorText.testDisabled
   if (!model.operator.email || draft.email !== model.operator.email && changes > 0) return model.operator.email ? agentOperatorText.testUnsaved : agentOperatorText.testNeedsEmail
   if (model.mail.checked && !model.mail.agentProfile) return agentOperatorText.testNeedsProfile
   return undefined
