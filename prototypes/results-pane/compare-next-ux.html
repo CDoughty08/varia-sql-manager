@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comparison, next round: UX mock</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    --bg: light-dark(#fff, #16181d); --chrome: light-dark(#f7f8fa, #111317); --input: light-dark(#fff, #101216);
+    --text: light-dark(#1c1f26, #d9dce3); --secondary: light-dark(#3a404b, #bcc1cb); --muted: light-dark(#5c6370, #9298a4);
+    --border: light-dark(#e3e6eb, #262a31); --gridline: light-dark(#eceef2, #1f2228); --control: light-dark(#878e9b, #6a7184);
+    --hover: light-dark(#dfe2e7, #262a32); --active: light-dark(#e7ebfc, #21273b); --badge: light-dark(#d6dae0, #30343e);
+    --accent: light-dark(#4453d0, #8f9cff); --on-accent: light-dark(#fff, #0e1230);
+    --add: light-dark(#146f3b, #74d19c); --rem: light-dark(#b42229, #f39a9a); --chg: light-dark(#2a78d6, #5b9cf0);
+    --warn: light-dark(#875800, #e4bb6a); --menu: light-dark(#fff, #1d2026);
+    --page: light-dark(#eef0f3, #0c0d10);
+    --ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+    margin: 0; padding: 20px 24px 48px; background: var(--page); color: var(--text); font: 13px/1.5 var(--ui);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 14px; margin: 22px 0 8px; }
+  .lede { color: var(--muted); max-width: 980px; margin: 0 0 14px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; margin: 0 0 12px; }
+  .bar label { color: var(--muted); font-size: 12px; margin-right: 6px; }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+  button, select, input { font: inherit; color: inherit; }
+  .seg button { height: 22px; padding: 0 9px; border: 0; background: transparent; border-radius: 3px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--active); color: var(--text); font-weight: 600; }
+  .seg button.def { font-style: italic; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---- the Varia frame ---- */
+  .app { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; height: 600px; display: flex; flex-direction: column; overflow: hidden; font-size: 12px; line-height: 16px; position: relative; max-width: 100%; }
+  .app.narrow { max-width: 540px; }
+  .doctabs { display: flex; background: var(--chrome); border-bottom: 1px solid var(--border); height: 30px; padding: 3px 6px 0; gap: 2px; flex: none; overflow: hidden; }
+  .doctab { padding: 0 12px; display: flex; align-items: center; gap: 6px; color: var(--muted); border-radius: 4px 4px 0 0; white-space: nowrap; cursor: default; }
+  .doctab.on { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-bottom: 0; box-shadow: inset 0 2px var(--accent); }
+  .dotmark { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .rtabs { display: flex; gap: 2px; padding: 3px 6px 0; border-bottom: 1px solid var(--border); flex: none; overflow: hidden; }
+  .rtab { padding: 2px 10px; color: var(--muted); border-radius: 4px 4px 0 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .rtab.on { color: var(--text); background: var(--bg); box-shadow: inset 0 -2px var(--accent); }
+  .win { position: absolute; z-index: 45; top: 46px; right: 18px; width: min(560px, calc(100% - 24px)); max-height: calc(100% - 60px); display: flex; flex-direction: column; background: var(--menu); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 18px 48px rgba(0,0,0,.55); font-family: var(--ui); overflow: hidden; }
+  .win .titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 4px 0 12px; background: var(--chrome); border-bottom: 1px solid var(--border); font-weight: 600; cursor: move; flex: none; }
+  .win .titlebar .x { margin-left: auto; width: 40px; height: 28px; border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 4px; }
+  .win .titlebar .x:hover { background: color-mix(in srgb, var(--rem) 30%, transparent); }
+  .win .wbody { overflow: auto; flex: 1; }
+  .progress { height: 3px; background: var(--gridline); border-radius: 2px; overflow: hidden; } .progress i { display: block; height: 100%; width: 42%; background: var(--accent); }
+  .rtb { min-height: 32px; padding: 4px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; flex: none; background: var(--chrome); }
+  .search { display: inline-flex; align-items: center; gap: 4px; height: 24px; border: 1px solid var(--control); border-radius: 4px; background: var(--input); padding: 0 6px; min-width: 220px; }
+  .search input { border: 0; background: transparent; outline: 0; width: 140px; }
+  .search .cnt { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .tb { min-height: 36px; padding: 5px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
+  .tb .title { font-weight: 600; display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 0; }
+  .sides { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 4px; height: 24px; overflow: hidden; }
+  .sides .side { padding: 0 8px; display: flex; align-items: center; gap: 5px; height: 100%; white-space: nowrap; }
+  .sides .side b { font-weight: 600; }
+  .sides .side .filt { color: var(--warn); font-size: 11px; display: inline-flex; gap: 3px; align-items: center; }
+  .sides .dot { width: 8px; height: 8px; border-radius: 2px; }
+  .sides .swap { border: 0; border-left: 1px solid var(--border); border-right: 1px solid var(--border); height: 100%; width: 28px; background: transparent; cursor: pointer; color: var(--accent); font-size: 14px; }
+  .btn { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+  .btn:hover, .sides .swap:hover { background: var(--hover); }
+  .btn.o { border-color: var(--border); }
+  .btn.p { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+  .btn[aria-pressed="true"], .btn[aria-expanded="true"] { background: var(--active); font-weight: 600; }
+  .btn[disabled] { opacity: .45; cursor: default; }
+  .btn kbd, kbd { font: 10px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; }
+  .lbl { color: var(--muted); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap;
+    border-color: color-mix(in srgb, var(--c) 55%, var(--border)); background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .chip i { font-style: normal; font-weight: 700; color: var(--c); }
+  .chip b { font-weight: 600; }
+  .chip.changedn b { transition: color .3s; }
+  .menu { position: absolute; z-index: 30; min-width: 280px; background: var(--menu); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35); padding: 4px; font-family: var(--ui); }
+  .mi { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .mi:hover { background: var(--hover); } .mi.off { opacity: .5; cursor: default; } .mi small, .mnote { color: var(--muted); }
+  .mi .acc { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .mi.hot { background: var(--active); }
+  .msep { height: 1px; background: var(--border); margin: 4px 0; } .mnote { padding: 2px 8px 4px; font-size: 11px; line-height: 15px; white-space: normal; }
+  .mfind { margin: 2px 4px 4px; height: 24px; width: calc(100% - 8px); border: 1px solid var(--control); border-radius: 4px; background: var(--input); padding: 0 6px; }
+  .mfoot { display: flex; gap: 6px; justify-content: flex-end; padding: 4px; }
+  .notice { display: flex; align-items: center; gap: 8px; padding: 3px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent); flex: none; min-height: 28px; }
+  .notice.warn { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .notice .sp { margin-left: auto; }
+  .notice .x { border: 0; background: transparent; cursor: pointer; color: var(--muted); }
+  .caption { display: flex; align-items: center; gap: 8px; padding: 3px 10px; border-bottom: 1px solid var(--border); flex: none; min-height: 28px; background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .caption b { color: var(--warn); }
+  .body { flex: 1; min-height: 0; display: flex; position: relative; }
+  .gridwrap { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+  .scroller { flex: 1; overflow: auto; position: relative; padding-right: 10px; }
+  .mini { position: absolute; right: 0; top: 24px; bottom: 26px; width: 10px; background: var(--chrome); border-left: 1px solid var(--border); }
+  .mini span { position: absolute; left: 2px; right: 2px; height: 3px; border-radius: 1px; }
+  .grid { min-width: max-content; font-family: var(--mono); font-size: 12px; }
+  .row { display: grid; height: 20px; align-items: stretch; border-bottom: 1px solid var(--gridline); }
+  .row.head { position: sticky; top: 0; z-index: 3; height: 24px; background: var(--chrome); font-family: var(--ui); border-bottom: 1px solid var(--border); }
+  .cell { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; border-right: 1px solid var(--gridline); line-height: 19px; position: relative;
+    background-color: var(--d, transparent);
+    background-image: linear-gradient(var(--hl, transparent), var(--hl, transparent)), linear-gradient(var(--hit, transparent), var(--hit, transparent)), linear-gradient(var(--sl, transparent), var(--sl, transparent)); }
+  .cell > span.t { overflow: hidden; text-overflow: ellipsis; }
+  .head .cell { gap: 5px; color: var(--secondary); font-weight: 500; background: none; }
+  .head .cell small { color: var(--muted); font-weight: 400; }
+  .head .cell.chgcol { box-shadow: inset 0 -2px var(--chg); }
+  .head .cell .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--chg); flex: none; }
+  .head .cell.ign { color: var(--muted); font-weight: 400; }
+  .head .cell.ign .eye { font-size: 11px; }
+  .cell.ign { color: var(--muted); }
+  @media (forced-colors: active) { .cell.ign, .head .cell.ign { color: GrayText; } }
+  .row.sel { --sl: color-mix(in srgb, var(--accent) 17%, transparent); }
+  .cell.act { outline: 1.5px solid var(--accent); outline-offset: -1.5px; z-index: 1; --sl: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .cell.hit { --hit: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .cell.hit.cur { --hit: color-mix(in srgb, var(--warn) 55%, transparent); }
+  .cell i.null { color: var(--muted); font-style: italic; }
+  .cell.dim { color: var(--muted); }
+  .cell del { color: color-mix(in srgb, var(--rem) 85%, var(--muted)); text-decoration-thickness: 1px; opacity: .85; }
+  .cell ins { text-decoration: none; font-weight: 600; color: var(--text); }
+  .cell .arrow { color: var(--muted); font-family: var(--ui); }
+  .cell.soft span.t { text-decoration: underline dashed var(--control); text-underline-offset: 3px; }
+  .gut { padding: 0 6px 0 0; gap: 0; justify-content: flex-start; cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; border-right: 1px solid var(--border); background-color: var(--chrome); }
+  .gut .bar3 { width: 3px; align-self: stretch; margin-right: 5px; background: var(--k, transparent); }
+  .gut .mk { width: 12px; text-align: center; font-weight: 700; color: var(--k, var(--muted)); font-family: var(--ui); }
+  .gut .flag { margin-left: 5px; color: var(--warn); font: 700 12px var(--ui); cursor: help; }
+  .gut .n { margin-left: 3px; font-variant-numeric: tabular-nums; }
+  .foot { border-top: 1px solid var(--border); background: var(--chrome); padding: 4px 10px; display: flex; gap: 10px; align-items: center; color: var(--muted); flex: none; min-height: 26px; }
+  .foot .sp { margin-left: auto; }
+  .foot a, .link { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; }
+  .filler { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--gridline) 5px 6px); }
+
+  /* change details card */
+  .card { position: absolute; z-index: 40; width: min(560px, calc(100% - 16px)); max-height: 60%; overflow: auto; background: var(--menu); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.4); font-family: var(--ui); }
+  .card header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .card header b { font-weight: 600; } .card header small { color: var(--muted); }
+  .card header .x { margin-left: auto; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+  .card .sum { padding: 6px 10px 0; color: var(--secondary); }
+  .card .vals { padding: 6px 10px; display: grid; grid-template-columns: 44px 1fr; gap: 4px 8px; font-family: var(--mono); }
+  .card .vals .k { font-family: var(--ui); font-weight: 700; } .card .vals .k.o { color: var(--rem); } .card .vals .k.n { color: var(--add); }
+  .card .vals .v { white-space: pre-wrap; word-break: break-word; }
+  .card .vals .v .d { background: color-mix(in srgb, var(--rem) 26%, transparent); text-decoration: line-through; text-decoration-thickness: 1px; border-radius: 2px; }
+  .card .vals .v .a { background: color-mix(in srgb, var(--add) 26%, transparent); font-weight: 600; border-radius: 2px; }
+  .card .vals .v .sp { color: var(--muted); }
+  .card footer { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--border); color: var(--muted); }
+  .card footer .sp { margin-left: auto; }
+  @media (forced-colors: active) { .card .vals .v .d { outline: 1px solid CanvasText; } .card .vals .v .a { outline: 1px solid CanvasText; text-decoration: underline; } }
+
+  /* popovers and dialogs */
+  .pop { position: absolute; z-index: 35; top: 72px; right: 10px; width: min(520px, calc(100% - 20px)); max-height: calc(100% - 84px); overflow: auto; background: var(--menu); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 32px rgba(0,0,0,.45); font-family: var(--ui); }
+  .pop h3 { margin: 0; font-size: 13px; padding: 10px 12px 6px; }
+  :is(.pop, .win) .sec { padding: 6px 12px; border-top: 1px solid var(--gridline); }
+  :is(.pop, .win) .sec > .h { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  :is(.pop, .win) .row2 { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+  :is(.pop, .win) .row2 small { color: var(--muted); }
+  :is(.pop, .win) .txt { height: 24px; border: 1px solid var(--control); border-radius: 4px; background: var(--input); padding: 0 6px; width: 100%; font-family: var(--mono); }
+  :is(.pop, .win) .cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 10px; }
+  :is(.pop, .win) .cols label { display: flex; gap: 6px; align-items: center; min-height: 22px; white-space: nowrap; }
+  :is(.pop, .win) .cols label.off { color: var(--muted); }
+  :is(.pop, .win) .cols small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  :is(.pop, .win) pre { margin: 0; font: 11px/15px var(--mono); background: var(--input); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; max-height: 160px; overflow: auto; white-space: pre; }
+  :is(.pop, .win) .err { color: var(--rem); display: flex; gap: 6px; align-items: flex-start; }
+  :is(.pop, .win) .warnl { color: var(--warn); }
+  :is(.pop, .win) .acts { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 12px 10px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--menu); }
+
+  /* side-by-side and diff tab */
+  .sbs { display: grid; grid-template-columns: 1fr 64px 1fr; flex: 1; min-height: 0; overflow: auto; }
+  .sbs .half { min-width: 0; }
+  .sbs .hd { position: sticky; top: 0; z-index: 2; background: var(--chrome); height: 24px; display: flex; align-items: center; padding: 0 8px; gap: 6px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .sbs .mid .cell { justify-content: center; }
+  .difftab { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; font: 12px/18px var(--mono); }
+  .difftab .pane { overflow: auto; border-right: 1px solid var(--border); }
+  .difftab .ln { display: flex; white-space: pre; padding-right: 8px; }
+  .difftab .ln i { width: 36px; text-align: right; padding-right: 8px; color: var(--muted); font-style: normal; flex: none; }
+  .difftab .ln.o { background: color-mix(in srgb, var(--rem) 10%, transparent); } .difftab .ln.n { background: color-mix(in srgb, var(--add) 10%, transparent); }
+  .difftab .d { background: color-mix(in srgb, var(--rem) 32%, transparent); } .difftab .a { background: color-mix(in srgb, var(--add) 32%, transparent); }
+
+  /* commentary */
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; max-width: 1200px; margin-top: 14px; }
+  .box { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  .box h3 { margin: 0 0 4px; font-size: 13px; } .box p, .box ul { margin: 4px 0; color: var(--secondary); } .box ul { padding-left: 18px; }
+  .clip { margin-top: 12px; max-width: 1200px; }
+  .clip pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font: 12px/16px var(--mono); overflow: auto; margin: 4px 0 0; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--chrome); padding: 0 4px; border-radius: 3px; border: 1px solid var(--border); }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
+  .tag.b { color: var(--add); border-color: color-mix(in srgb, var(--add) 50%, var(--border)); }
+  .tag.d { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<h1>Comparison, next round: UX mock</h1>
+<p class="lede">Design reference for <a href="../../docs/result-comparison-next-plan.md">docs/result-comparison-next-plan.md</a>. It builds on
+  <code>compare-diff-ux.html</code>, with the Varia Dark and Light palettes and Compact metrics. It is not production code: the rows are invented, the diff is
+  computed in the page, and the grid stands in for <code>GridView</code>. Pick a scene. Each one is interactive, and the notes under the frame say what to try.
+  Where this mock and the plan disagree, the plan wins.</p>
+
+<div class="bar">
+  <span><label>Scene</label><span class="seg" id="sceneSeg">
+    <button data-v="ignore" aria-pressed="true">1 Ignore columns</button>
+    <button data-v="details">3 + 7 Change details</button>
+    <button data-v="copy">4a Copy as Diff</button>
+    <button data-v="script">4b Script as T-SQL</button>
+    <button data-v="search">5 Search old values</button>
+    <button data-v="filtered">6 Rows as shown</button>
+    <button data-v="sbs" class="def">2 Side by side (deferred)</button>
+    <button data-v="pivot" class="def">8 Pivots (deferred)</button>
+  </span></span>
+</div>
+<div class="bar">
+  <span><label>Theme</label><span class="seg" id="themeSeg"><button data-v="dark" aria-pressed="true">Dark</button><button data-v="light">Light</button></span></span>
+  <span><label>Pane</label><span class="seg" id="paneSeg"><button data-v="wide" aria-pressed="true">Wide</button><button data-v="narrow">Narrow (540 px)</button></span></span>
+  <span><label>Layout</label><span class="seg" id="layoutSeg"><button data-v="entry" aria-pressed="true">One row</button><button data-v="unified">Two rows</button></span></span>
+  <span id="stateWrap"></span>
+</div>
+
+<section class="app" id="app" aria-label="Comparison mock"></section>
+<div class="sr" aria-live="polite" id="live"></div>
+<div id="extra"></div>
+<div class="notes" id="notes"></div>
+
+<script>
+const $ = s => document.querySelector(s), esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const COLS = [['id', 'int', 64], ['customer', 'nvarchar(64)', 160], ['status', 'nvarchar(16)', 150], ['amount', 'decimal(10,2)', 170], ['updated_at', 'datetime2(7)', 230], ['note', 'nvarchar(200)', 300]]
+const NAMES = ['Orders Mon', 'Orders Tue'], RES = ['Result 1', 'Result 3']
+const A = [
+  [1001, 'Northwind Traders', 'Open', '1240.00', '2026-11-10 08:12:03.0483545', null],
+  [1002, 'Contoso Ltd', 'Open', '310.50', '2026-11-10 08:30:41.1200000', 'Rush delivery, call before 9 am'],
+  [1003, 'Fabrikam', 'Shipped', '88.00', '2026-11-10 09:02:10.0000000', null],
+  [1004, 'Adventure Works', 'Open', '5120.00', '2026-11-10 09:15:55.5000000', 'Net 30, invoice to head office'],
+  [1005, 'Tailspin Toys', 'Open', '42.99', '2026-11-10 09:40:00.0000000', null],
+  [1006, 'Wingtip', 'Open', '760.00', '2026-11-10 10:01:12.0000000', null],
+  [1007, 'Litware', 'Shipped', '15.00', '2026-11-10 10:20:31.0000000', 'Left at reception'],
+  [1008, 'Proseware', 'Open', '2200.00', '2026-11-10 10:44:09.0000000', null],
+  [1009, 'Lucerne Publishing', 'Open', '99.00', '2026-11-10 11:05:48.0000000', null],
+  [1013, 'Blue Yonder Airlines', 'Open', '310.00', '2026-11-10 11:31:00.0000000', 'Net 30']]
+const B = [
+  [1001, 'Northwind Traders', 'Open', '1240.00', '2026-11-11 06:00:00.0483545', null],
+  [1002, 'Contoso Ltd', 'Shipped', '310.50', '2026-11-11 07:58:20.1200000', 'Rush delivery, call before 10 am'],
+  [1003, 'Fabrikam', 'Shipped', '88.00', '2026-11-10 09:02:10.0000000', null],
+  [1004, 'Adventure Works', 'Open', '4980.00', '2026-11-10 09:15:55.5000000', 'Net 30, invoice to the head office'],
+  [1006, 'Wingtip', 'Open', '760.00', '2026-11-11 06:12:44.0000000', null],
+  [1007, 'Litware', 'Shipped', '15.00', '2026-11-10 10:20:31.0000000', 'Left at reception '],
+  [1008, 'Proseware', 'Open', '2200.00', '2026-11-11 06:12:44.0000000', null],
+  [1009, 'Lucerne Publishing', 'Open', '99.00', '2026-11-10 11:05:48.0000000', null],
+  [1011, 'Coho Winery', 'Open', '640.00', '2026-11-11 08:01:00.0000000', null],
+  [1014, 'Blue Yonder Airlines', 'Open', '310.00', '2026-11-11 08:03:17.0000000', 'Net 30']]
+const KC = { added: 'var(--add)', removed: 'var(--rem)', changed: 'var(--chg)', same: 'transparent' }
+const MARK = { added: '+', removed: '−', changed: '~', same: '' }
+
+const S = { scene: 'ignore', theme: 'dark', pane: 'wide', layout: 'entry', ignore: new Set(), ignoreDraft: null, ignoreMenu: true, ignoreFind: '', noteOff: false,
+  cardOpen: { r: 1, c: 5, by: 'key' }, hover: null, tab: 'grid', sel: new Set([1, 3]), menuOpen: true, copied: false,
+  scriptState: 'ready', script: { target: 'dbo.Orders', dir: 'toNew', del: true, upd: true, ins: true, cols: null, rows: 'all', tx: true, check: true, dest: 'query' },
+  search: 'Open', hitIndex: 1, matchMode: 'key', filtState: 'popover', filtChoice: 'shown', pivotState: 'ready' }
+
+/* ---------- the diff, computed in the page ---------- */
+function model() {
+  const ign = S.ignore, cmp = COLS.map((_, i) => i).filter(i => !ign.has(i))
+  const soft = (a, b) => typeof a === 'string' && typeof b === 'string' && a !== b && a.trimEnd() === b.trimEnd()
+  // Key columns match by id; Automatic with id ignored falls back to whole rows over the compared columns.
+  const keyOf = S.matchMode === 'auto' && ign.has(0) ? r => cmp.map(c => plain(r[c])).join('') : r => r[0]
+  const aq = new Map(), used = new Set(), entries = []
+  A.forEach((r, i) => { const k = keyOf(r); if (!aq.has(k)) aq.set(k, []); aq.get(k).push(i) })
+  let ap = 0
+  const flush = upto => { while (ap < upto) { if (!used.has(ap)) entries.push({ kind: 'removed', a: A[ap], ai: ap + 1, cells: [], soft: [] }); ap++ } }
+  B.forEach((b, bi) => {
+    const q = aq.get(keyOf(b)), i = q && q.length ? q.shift() : undefined
+    if (i === undefined) { entries.push({ kind: 'added', b, bi: bi + 1, cells: [], soft: [] }); return }
+    used.add(i); flush(i); ap = Math.max(ap, i + 1)
+    const a = A[i], cells = [], sf = []
+    cmp.forEach(c => { if (a[c] !== b[c]) (soft(a[c], b[c]) ? sf : cells).push(c) })
+    entries.push({ kind: cells.length ? 'changed' : 'same', a, b, ai: i + 1, bi: bi + 1, cells, soft: sf })
+  })
+  flush(A.length)
+  // look-alikes over compared, non-key columns
+  const rem = entries.filter(e => e.kind === 'removed'), add = entries.filter(e => e.kind === 'added'), nk = cmp.filter(c => c !== 0 && c !== 4)
+  rem.forEach(r => add.forEach(a => { if (a.poss || r.poss) return; const eq = nk.filter(c => r.a[c] === a.b[c] && r.a[c] !== null).length; if (eq >= 3) { r.poss = a; a.poss = r } }))
+  const count = k => entries.filter(e => e.kind === k).length
+  const changedCols = new Set(entries.flatMap(e => e.cells))
+  return { entries, cmp, count, changedCols }
+}
+const val = v => v === null ? '<i class="null">NULL</i>' : esc(v)
+const plain = v => v === null ? 'NULL' : String(v)
+
+/* ---------- a word-then-character diff, as the worker would do ---------- */
+function lcs(a, b) {
+  const n = a.length, m = b.length, dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+  const ops = []; let i = 0, j = 0
+  while (i < n && j < m) { if (a[i] === b[j]) { ops.push(['=', a[i]]); i++; j++ } else if (dp[i + 1][j] >= dp[i][j + 1]) ops.push(['-', a[i++]]); else ops.push(['+', b[j++]]) }
+  while (i < n) ops.push(['-', a[i++]]); while (j < m) ops.push(['+', b[j++]])
+  return ops
+}
+function charDiff(oldT, newT) {
+  const tok = s => s.match(/\s+|[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/g) || []
+  const ops = lcs(tok(oldT), tok(newT)), O = [], N = [], hunks = []
+  for (let k = 0; k < ops.length;) {
+    if (ops[k][0] === '=') { O.push([ops[k][1], 0]); N.push([ops[k][1], 0]); k++; continue }
+    let del = '', ins = ''; while (k < ops.length && ops[k][0] !== '=') { if (ops[k][0] === '-') del += ops[k][1]; else ins += ops[k][1]; k++ }
+    hunks.push([del, ins])
+    if (del && ins) { lcs([...del], [...ins]).forEach(([o, ch]) => { if (o !== '+') O.push([ch, o === '-' ? 1 : 0]); if (o !== '-') N.push([ch, o === '+' ? 1 : 0]) }) }
+    else { if (del) O.push([del, 1]); if (ins) N.push([ins, 1]) }
+  }
+  const html = (parts, cls) => parts.reduce((acc, [t, m]) => { const last = acc[acc.length - 1]; if (last && last[1] === m) last[0] += t; else acc.push([t, m]); return acc }, [])
+    .map(([t, m], i, all) => { const shown = i === all.length - 1 ? esc(t).replace(/ +$/, sp => '<span class="sp">' + '·'.repeat(sp.length) + '</span>') : esc(t); return m ? `<span class="${cls}">${shown}</span>` : shown }).join('')
+  return { o: html(O, 'd'), n: html(N, 'a'), hunks }
+}
+
+/* ---------- shared pieces ---------- */
+// The editor's document tabs (a comparison is a result tab in the Results pane, not a document).
+function tabs(extra) {
+  return `<div class="doctabs">${extra || '<span class="doctab on">SQLQuery3.sql ✕</span>'}</div>`
+}
+// The Results pane: its toolbar, then the Tabs layout's result tabs (Result 1, 2, 3, then comparisons).
+function resultsBar(searchHTML, rtab) {
+  const r = rtab || { label: `⇄ ${RES[0]} → ${RES[1]}`, title: `Differences: ${RES[0]} → ${RES[1]}` }
+  const strip = `<div class="rtabs" role="tablist" aria-label="Results">${['Result 1', 'Result 2', 'Result 3'].map(n => `<span class="rtab${r.active === n ? ' on' : ''}" role="tab" aria-selected="${r.active === n}">${n}</span>`).join('')}${r.label ? `<span class="rtab on" role="tab" aria-selected="true" title="${esc(r.title || r.label)}">${esc(r.label)}${r.dot ? ' <span class="dotmark" title="Out of date"></span>' : ''} ✕</span>` : ''}</div>`
+  return `<div class="rtb"><span class="lbl">Results</span><span class="sep"></span>${searchHTML || `<span class="search"><span class="lbl">⌕</span><input placeholder="Search all results" aria-label="Search all results"></span>`}<span style="margin-left:auto" class="lbl" title="More results tools">⋯</span></div>${strip}`
+}
+function compBar(m, opts = {}) {
+  const narrow = S.pane === 'narrow', ign = S.ignore.size
+  const chips = ['added', 'removed', 'changed'].map(k => `<span class="chip" style="--c:${KC[k]}"><i>${MARK[k]}</i><b>${m.count(k)}</b>${narrow ? '' : ' ' + k}</span>`).join('')
+  const side = (i, dot) => `<span class="side"><span class="dot" style="background:${dot}"></span><b>${i ? '+' : '−'}</b> ${RES[i]}${opts.filtered && opts.filtered[i] ? ` <span class="filt" title="As shown: status = Open, sorted by amount">⏷ ${opts.filtered[i]}</span>` : ''}</span>`
+  const ignoreBtn = `<span style="position:relative"><button class="btn o" id="ignBtn" aria-haspopup="true" aria-expanded="${S.scene === 'ignore' && S.ignoreMenu}" title="Ignore Columns…">⊘ Ignore${ign ? ` (${ign})` : ''} ▾</button>${opts.ignoreMenu || ''}</span>`
+  const fold = narrow
+    ? `<span style="position:relative"><button class="btn o" title="More results tools: Match Rows By…, Ignore Columns…, Changes Only, One Row per Entry, Exact Text, Swap Sides">⋯</button>${opts.ignoreMenu || ''}</span>`
+    : `<span class="sides">${side(0, 'var(--rem)')}<button class="swap" title="Swap sides">⇄</button>${side(1, 'var(--add)')}</span>
+       <span class="sep"></span><button class="btn o" title="Match Rows By…">${S.matchMode === 'auto' ? (S.ignore.has(0) ? 'Automatic (whole rows)' : 'Automatic (id)') : '⚷ id'} ▾</button>${ignoreBtn}<button class="btn o">All rows ▾</button><button class="btn o">${S.layout === 'entry' ? 'One row' : 'Two rows'} ▾</button><label class="lbl"><input type="checkbox"> Exact text</label>`
+  return `<div class="tb"><span class="title">⇄ Differences</span>${fold}<span class="sep"></span>${chips}<span class="lbl" title="Unchanged rows">${m.count('same')} unchanged</span>
+    <span class="sep"></span><button class="btn o" title="Go to Previous Difference (Alt+Shift+F5)">↑</button><button class="btn o" title="Go to Next Difference (Alt+F5)">↓</button>${narrow ? '' : `<span class="lbl">${opts.position || units(m) + ' changes'}</span>`}
+    ${narrow ? '' : `<span style="margin-left:auto;display:flex;gap:4px"><button class="btn" title="Column Profile">▤ Profile</button><button class="btn" title="Save Results As…">⤓ Save</button></span>`}</div>`
+}
+const units = m => m.entries.reduce((n, e) => n + (e.kind === 'changed' ? e.cells.length : e.kind === 'same' ? 0 : 1), 0)
+
+function rowsOf(m) { // the drawn rows: {e, side}
+  const out = []
+  m.entries.forEach(e => { if (S.layout === 'unified' && e.kind === 'changed') { out.push({ e, side: 'a' }); out.push({ e, side: 'b' }) } else out.push({ e, side: 'both' }) })
+  return out
+}
+function gridHTML(m, o = {}) {
+  const tpl = '92px ' + COLS.map(c => c[2] + 'px').join(' ')
+  let head = `<div class="cell gut" style="background:none" title="Change, row number: not data"><span class="mk">&nbsp;</span><span class="n">#</span></div>`
+  COLS.forEach((c, i) => {
+    const ign = S.ignore.has(i), chg = m.changedCols.has(i) && !ign
+    head += `<div class="cell${chg ? ' chgcol' : ''}${ign ? ' ign' : ''}" role="columnheader" aria-label="${esc(c[0])}${i === 0 ? ', key column' : ''}${chg ? ', has changes' : ''}${ign ? ', ignored' : ''}" title="${ign ? 'Ignored in this comparison' : ''}">${i === 0 ? '<span title="Key column" style="color:var(--warn)">⚷</span>' : ''}${ign ? '<span class="eye" aria-hidden="true">⊘</span>' : ''}<span>${esc(c[0])}</span> <small>${ign ? 'ignored' : esc(c[1])}</small>${chg ? '<span class="pip" title="Has changes"></span>' : ''}</div>`
+  })
+  let html = '', marks = ''
+  const rows = rowsOf(m)
+  rows.forEach((r, ri) => {
+    const { e, side } = r, kind = side === 'a' ? 'removed' : side === 'b' ? 'added' : e.kind
+    const row = side === 'a' ? e.a : e.b || e.a, rn = side === 'a' ? e.ai : e.bi ?? e.ai
+    const mk = e.kind === 'changed' && side === 'both' ? '~' : MARK[kind]
+    const tip = e.kind === 'added' ? `Added; row ${e.bi} in ${RES[1]}` : e.kind === 'removed' ? `Removed; row ${e.ai} in ${RES[0]}` : `${e.kind === 'changed' ? 'Changed' : 'Unchanged'}; row ${e.ai} in ${RES[0]}, row ${e.bi} in ${RES[1]}`
+    const g = `<div class="cell gut" data-gut="${ri}" title="${tip}${e.poss ? `. Possible match: row ${e.poss.bi ?? e.poss.ai} in ${e.poss.b ? RES[1] : RES[0]}` : ''}" style="--k:${KC[kind]}"><span class="bar3"></span><span class="mk">${mk}</span><span class="n">${rn}</span>${e.poss ? '<span class="flag">?</span>' : ''}</div>`
+    let cells = ''
+    COLS.forEach((c, ci) => {
+      const ign = S.ignore.has(ci), hit = e.cells.includes(ci), sf = e.soft.includes(ci)
+      let bg = '', cls = '', inner = `<span class="t">${val(row[ci])}</span>`
+      if (kind === 'added' || kind === 'removed') bg = `color-mix(in srgb,${KC[kind]} 11%,transparent)`
+      if (e.kind === 'changed' && !ign) {
+        if (side === 'both') { if (hit) { bg = 'color-mix(in srgb,var(--chg) 27%,transparent)'; inner = `<del>${val(e.a[ci])}</del><span class="arrow">→</span><ins>${val(e.b[ci])}</ins>` } else cls = 'dim' }
+        else if (hit) { bg = `color-mix(in srgb,${KC[kind]} 30%,transparent)`; inner = `<b style="font-weight:600">${val(row[ci])}</b>` } else cls = 'dim'
+      }
+      if (ign) cls = 'ign'
+      if (sf && !ign) cls += ' soft'
+      if (o.hits && o.hits.has(ri + ':' + ci)) cls += ' hit' + (o.cur === ri + ':' + ci ? ' cur' : '')
+      const act = o.act && o.act.r === ri && o.act.c === ci
+      cells += `<div class="cell ${cls}${act ? ' act' : ''}" data-r="${ri}" data-c="${ci}"${bg ? ` style="--d:${bg}"` : ''}>${inner}</div>`
+    })
+    if (kind !== 'same') marks += `<span style="top:${ri / rows.length * 100}%;background:${KC[e.kind]}"></span>`
+    html += `<div class="row${o.sel && o.sel.has(ri) ? ' sel' : ''}" style="grid-template-columns:${tpl}">${g}${cells}</div>`
+  })
+  return { html: `<div class="grid" role="grid" aria-label="Differences"><div class="row head" style="grid-template-columns:${tpl}">${head}</div>${html}</div>`, marks, rows }
+}
+function frame(inner) { $('#app').className = 'app' + (S.pane === 'narrow' ? ' narrow' : ''); $('#app').innerHTML = inner }
+function stdBody(g, foot, overlay) {
+  return `<div class="body"><div class="gridwrap"><div class="scroller">${g.html}</div><div class="mini" aria-hidden="true">${g.marks}</div><div class="foot">${foot || ''}<span class="sp">Rows ${g.rows.length}</span></div></div>${overlay || ''}</div>`
+}
+function notes(items) { $('#notes').innerHTML = items.map(([h, body, tag]) => `<div class="box"><h3>${h}${tag ? `<span class="tag ${tag === 'Build' ? 'b' : 'd'}">${tag}</span>` : ''}</h3>${body}</div>`).join('') }
+function stateSeg(label, key, opts) {
+  $('#stateWrap').innerHTML = opts ? `<label>${label}</label><span class="seg" id="stateSeg">${opts.map(([v, t]) => `<button data-v="${v}" aria-pressed="${S[key] === v}">${t}</button>`).join('')}</span>` : ''
+  const seg = $('#stateSeg'); if (seg) seg.onclick = e => { const b = e.target.closest('button'); if (!b) return; S[key] = b.dataset.v; render() }
+}
+const announce = t => { $('#live').textContent = t }
+
+/* ---------- 1 Ignore columns ---------- */
+function sceneIgnore() {
+  stateSeg('Match', 'matchMode', [['key', 'Key columns: id'], ['auto', 'Automatic (chose id)']])
+  const draft = S.ignoreDraft || new Set(S.ignore)
+  const m = model(), auto = S.matchMode === 'auto'
+  const list = COLS.map((c, i) => ({ c, i })).filter(({ c }) => c[0].includes(S.ignoreFind.toLowerCase()))
+  const allTicked = draft.size === COLS.length
+  const menu = S.ignoreMenu ? `<div class="menu" id="ignMenu" role="dialog" aria-label="Ignore columns" style="top:28px;left:0">
+      <input class="mfind" id="ignFind" placeholder="Find a column" value="${esc(S.ignoreFind)}" aria-label="Find a column">
+      ${list.map(({ c, i }) => i === 0 && !auto
+        ? `<label class="mi off" title="Rows are matched by id, so it cannot be ignored"><input type="checkbox" disabled> ⚷ ${esc(c[0])} <small>${esc(c[1])}</small><span class="acc">Matched by: cannot be ignored</span></label>`
+        : `<label class="mi"><input type="checkbox" data-ign="${i}"${draft.has(i) ? ' checked' : ''}> ${esc(c[0])} <small>${esc(c[1])}</small>${i === 0 ? '<span class="acc">Chosen automatically: ignoring it matches rows another way</span>' : ''}</label>`).join('')}
+      <div class="msep"></div><div class="mnote">A ticked column is ignored: it stays in the grid, muted, but its differences are not counted, coloured or stepped through. Remembered for ${RES[0]} → ${RES[1]}.</div>
+      ${allTicked ? '<div class="mnote" style="color:var(--rem)">Compare at least one column.</div>' : ''}
+      <div class="mfoot"><button class="btn o" id="ignCancel">Cancel</button><button class="btn p" id="ignApply"${allTicked ? ' disabled' : ''}>Apply</button></div></div>` : ''
+  const ignNames = [...S.ignore].map(i => COLS[i][0])
+  const notice = ignNames.length && !S.noteOff ? `<div class="notice" role="status">ⓘ ${ignNames.length === 1 ? `<b>${esc(ignNames[0])}</b> is ignored.` : `${ignNames.length} columns are ignored: ${ignNames.map(esc).join(', ')}.`}<button class="btn o" id="cmpAll">Stop ignoring</button><button class="x sp" id="noteX" title="Dismiss">✕</button></div>` : ''
+  const g = gridHTML(m)
+  frame(tabs() + resultsBar() + compBar(m, { ignoreMenu: menu }) + notice + stdBody(g, `${auto && S.ignore.has(0) ? 'whole rows matched' : 'rows matched by id'}${ignNames.length ? ` · ${ignNames.length} column${ignNames.length > 1 ? 's' : ''} ignored` : ''}`))
+  notes([
+    ['What to try', `<ul><li>Tick <b>updated_at</b> and Apply. <b>~ changed</b> drops from 5 to 2: rows 1001, 1006 and 1008 differed only in their timestamp.</li><li>The column stays, muted, with ⊘ and "ignored" in its header. It loses its change underline and its cells lose their tint.</li><li>Under <b>Key columns</b>, id is locked. Switch Match to <b>Automatic</b>: id becomes tickable, "chosen automatically". Ignore it and rows match by whole rows, as the Match button and the strip say.</li><li>Try <b>Narrow</b>: the checklist opens beside ⋯.</li></ul>`, 'Build'],
+    ['Also from', `<ul><li>The grid menu's <b>Comparison › Ignore This Column</b>, a checkbox for the column the menu was opened on.</li><li>The palette: <b>Ignore Columns in Comparison…</b></li><li>The notice's <b>Stop ignoring</b>.</li></ul>`],
+    ['Effects', `<ul><li>Whole rows compares only compared columns. Automatic never chooses an ignored column. Look-alikes judge compared columns only.</li><li>"Ignored" is the user's choice. The shipped "not compared" still names columns that did not pair.</li><li>Save writes the column: in One row its <code>(old)</code> column is empty, in Two rows each half writes its own value. Copy as Diff leaves it out and names it in its header line. Script Differences INSERTs but never SETs it.</li></ul>`]])
+}
+
+/* ---------- 3 + 7 Change details ---------- */
+function cardSummary(rows, r, c) {
+  const e = rows[r] && rows[r].e; if (!e || !e.a || !e.b) return COLS[c][0]
+  if (e.soft.includes(c)) return `${COLS[c][0]}, equal by collation`
+  const d = charDiff(plain(e.a[c]), plain(e.b[c]))
+  return `${COLS[c][0]}, ${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'}: ${d.hunks.slice(0, 1).map(([x, y]) => x && y ? `'${x}' became '${y}'` : x ? `'${x}' was removed` : `'${y}' was added`).join('')}`
+}
+function cardHTML(m, r, c, by, rows, variant) {
+  const { e, side } = rows[r] || {}
+  if (!e || !e.a || !e.b || !(e.cells.includes(c) || e.soft.includes(c)) || S.ignore.has(c)) return ''
+  const o = plain(e.a[c]), n = plain(e.b[c]), d = charDiff(o, n), sf = e.soft.includes(c)
+  const sum = sf ? 'Equal by collation (Latin1_General_CI_AS): differs only in trailing spaces.'
+    : `${d.hunks.length} edit${d.hunks.length > 1 ? 's' : ''}: ${d.hunks.slice(0, 2).map(([x, y]) => x && y ? `‘${esc(x)}’ became ‘${esc(y)}’` : x ? `‘${esc(x)}’ was removed` : `‘${esc(y)}’ was added`).join('; ')}.`
+  const top = Math.min(24 + 21 * (r + 1) + 4, 330)
+  return `<div class="card" id="card" role="dialog" aria-label="Change details: ${esc(COLS[c][0])}" tabindex="-1" style="top:${top}px;left:${Math.min(40 + COLS.slice(0, c).reduce((s, x) => s + x[2], 92), 9999)}px;${S.pane === 'narrow' ? 'left:8px;' : ''}">
+    <header><b>${esc(COLS[c][0])}</b><small>${esc(COLS[c][1])} · ${sf ? 'equal by collation' : 'changed'} · row ${e.ai} in ${RES[0]} → row ${e.bi} in ${RES[1]}</small>${by === 'key' ? '<button class="x" id="cardX" title="Close (Escape)">✕</button>' : ''}</header>
+    <div class="sum">${variant === 'reading' ? 'Reading…' : variant === 'toodiff' ? 'Too many differences to mark: compare them in a tab.' : sum}</div>
+    <div class="vals">${variant === 'reading' ? '<span class="k o">− Old</span><span class="v"><span class="progress" style="display:block;width:140px;margin-top:6px"><i></i></span></span><span class="k n">+ New</span><span class="v"></span>'
+      : `<span class="k o">− Old</span><span class="v">${variant === 'toodiff' ? esc(o) : variant === 'closed' ? `<span style="color:var(--muted);font-family:var(--ui)">The old value is not kept (${RES[0]} is closed).</span>` : d.o}</span><span class="k n">+ New</span><span class="v">${variant === 'toodiff' ? esc(n) : d.n}</span>`}</div>
+    <footer><span>${variant === 'reading' ? '' : sf ? 'Equal by collation' : `${d.hunks.length} edit${d.hunks.length === 1 ? '' : 's'} · ${o.length} → ${n.length} characters`}</span><span>${by === 'key' ? 'Follows the active cell (Alt+F5)' : 'Ctrl+I opens it by key'}</span><span class="sp"></span>${/char|xml|json/.test(COLS[c][1]) ? '<button class="link" id="inTab">Compare Values in Tab</button>' : ''}</footer></div>`
+}
+function sceneKeyOnly(m, rows) {
+  const ri = rows.findIndex(r => r.e.kind === 'added' && !r.e.poss); if (ri < 0) return ''
+  return `<div class="card" id="card" role="dialog" aria-label="Change details: customer" style="top:${24 + 21 * (ri + 1) + 4}px;left:200px;width:min(340px,calc(100% - 16px))">
+    <header><b>customer</b><small>nvarchar(64) · added row</small><button class="x" id="cardX" title="Close (Escape)">✕</button></header>
+    <div class="sum" style="padding-bottom:8px">Added row: only in ${RES[1]} (row ${rows[ri].e.bi}). There is no old value.</div></div>`
+}
+function scenePossible(m, rows) {
+  const ri = rows.findIndex(r => r.e.kind === 'removed' && r.e.poss); if (ri < 0) return ''
+  const e = rows[ri].e, p = e.poss, diffs = COLS.map((c, i) => i).filter(i => e.a[i] !== p.b[i] && !S.ignore.has(i))
+  return `<div class="card" role="dialog" aria-label="Possible match" style="top:${Math.min(24 + 21 * (ri + 1) + 4, 380)}px;left:40px;width:min(440px,calc(100% - 16px))">
+    <header><b>? Possible match</b><small>removed row ${e.ai} in ${RES[0]}</small></header>
+    <div class="sum">${(() => { const cmp = COLS.filter((_, i) => !S.ignore.has(i)).length; return `Looks like row ${p.bi} in ${RES[1]}: ${cmp - diffs.length} of ${cmp} compared columns equal. Counts and colours are unchanged.` })()}</div>
+    <div class="vals" style="grid-template-columns:90px 1fr">${diffs.map(i => { const d = charDiff(plain(e.a[i]), plain(p.b[i])); return `<span class="k">${esc(COLS[i][0])}</span><span class="v">${d.o} <span style="color:var(--muted)">→</span> ${d.n}</span>` }).join('')}</div>
+    <footer><button class="link">Go to Possible Match</button></footer></div>`
+}
+function sceneDetails() {
+  stateSeg('Card', 'detailState', [['key', 'Opened by key'], ['hover', 'Hover'], ['poss', '? row (look-alike)'], ['added', 'By key on an added row'], ['reading', 'Reading…'], ['toodiff', 'Too different'], ['closed', 'Soft cell, Result 1 closed'], ['tab', 'Compare Values in Tab (C5b)']])
+  S.detailState = S.detailState || 'key'
+  const m = model()
+  if (S.detailState === 'tab') {
+    const e = m.entries.find(x => x.b && x.b[0] === 1004), o = plain(e.a[5]), n = plain(e.b[5]), d = charDiff(o, n)
+    frame(tabs(`<span class="doctab">SQLQuery3.sql ✕</span><span class="doctab on" title="Compare Values: note, row 4 in ${RES[0]} → row 4 in ${RES[1]} (SQLQuery3.sql). Read-only, reused by each Compare Values in Tab.">⇆ Compare Values ✕</span>`) +
+      `<div class="tb"><span class="title">⇆ note · row 4 in ${RES[0]} → row 4 in ${RES[1]} · SQLQuery3.sql</span><span class="lbl">Read-only</span><span style="margin-left:auto" class="seg"><button aria-pressed="false">Inline</button><button aria-pressed="true">Side by side</button></span></div>
+       <div class="difftab"><div class="pane"><div class="ln o"><i>1</i>${d.o.replace(/class="d"/g, 'class="d"')}</div></div><div class="pane"><div class="ln n"><i>1</i>${d.n}</div></div></div>`)
+    notes([['Compare Values in Tab (C5b)', '<p>One reused, read-only Monaco diff tab, <b>Compare Values</b>. Each use replaces its two values (each up to 2,097,152 characters), so memory is bounded at one pair. Inline / Side by side is Varia\'s toggle, since standalone Monaco has none. It holds a snapshot: closing the comparison leaves it as it is. It is not saved or restored by hot exit, and needs no connection. It is the only way to read two long text values whole: Open Value in New Tab handles only XML, JSON and plans.</p>', 'Build']])
+    return
+  }
+  const g0 = gridHTML(m), rows = g0.rows
+  let act = null, overlay = ''
+  if (S.detailState === 'poss') overlay = scenePossible(m, rows)
+  else if (S.detailState === 'added') { const ri = rows.findIndex(r => r.e.kind === 'added' && !r.e.poss); act = { r: ri, c: 1 }; overlay = sceneKeyOnly(m, rows) }
+  else {
+    const pick = id => ({ r: rows.findIndex(r => r.e.b && r.e.b[0] === id), c: 5 })
+    const variant = ['reading', 'toodiff', 'closed'].includes(S.detailState) ? S.detailState : ''
+    const at = S.detailState === 'hover' ? (S.hover || pick(1004)) : variant === 'closed' ? pick(1007) : variant ? pick(1004) : S.cardOpen
+    if (S.detailState !== 'hover') act = { r: at.r, c: at.c }
+    overlay = cardHTML(m, at.r, at.c, S.detailState === 'hover' ? 'hover' : 'key', rows, variant)
+  }
+  const g = act ? gridHTML(m, { act }) : g0
+  frame(tabs() + resultsBar() + compBar(m, { position: act ? posText(m, rows, act) : undefined }) + stdBody(g, 'rows matched by id', overlay))
+  notes([
+    ['What to try', `<ul><li><b>Opened by key</b>: Ctrl+I on a changed cell. The card stays, follows the active cell, and Alt+F5 here steps to the next change with it. Escape closes it.</li><li><b>Hover</b>: rest the pointer on any changed cell, such as status, amount or note.</li><li>Row 1007's note differs only by a trailing space: it is underlined (soft), and hovering it says it is equal by collation.</li><li>Escape also closes a hover card. Opened by key, the live region says the summary: "Change details: note, 2 edits: …. Tab to read it, Escape to close."</li><li>The other states: reading, too different to mark, and a soft cell whose old input is closed.</li></ul>`, 'Build'],
+    ['What the card shows', `<ul><li>Whole old and new values, up to 4,000 characters each.</li><li>Changes are found word-first and then by character, so "9" → "10" reads as one edit. A "change" is what Alt+F5 steps to; an "edit" is a run of characters in the card.</li><li>Deleted text is struck through on red and inserted text is bold on green. In forced colours they are outlined instead.</li></ul>`],
+    ['Screen readers', '<p>The cell name is unchanged ("note, changed from … to …"). Opened by key, the card is a non-modal dialog named "Change details: note" that does not take focus. The live region says its summary, and Tab moves into it. Hover never opens it for keyboard users.</p>']])
+}
+function posText(m, rows, act) {
+  const list = []; rows.forEach((r, ri) => { if (r.e.kind === 'changed' && r.side !== 'a') r.e.cells.forEach(c => list.push(ri + ':' + c)); else if (r.e.kind === 'added' || r.e.kind === 'removed') list.push(ri + ':0') })
+  const i = list.indexOf(act.r + ':' + act.c); return i >= 0 ? `Change ${i + 1} of ${list.length}` : undefined
+}
+
+/* ---------- 4a Copy as Diff ---------- */
+function diffText(m, rowsIdx) {
+  const g = rowsOf(m), cols = COLS.map((c, i) => i).filter(i => !S.ignore.has(i)), ign = [...S.ignore].map(i => COLS[i][0])
+  // Values escape backslash, tab, CR and LF; NULL is NULL and the text NULL is \NULL.
+  const cell = v => v === null ? 'NULL' : v === 'NULL' ? '\\NULL' : String(v).replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\r/g, '\\r').replace(/\n/g, '\\n')
+  // Without key columns each line starts with its row's stored number in its own input.
+  const keyless = S.matchMode === 'auto' && S.ignore.has(0)
+  const line = (p, r, no) => p + (keyless ? no + '\t' : '') + cols.map(i => cell(r[i])).join('\t')
+  const out = [`--- ${RES[0]} (${NAMES[0]})`, `+++ ${RES[1]} (${NAMES[1]})`, `# rows matched by ${keyless ? 'whole rows' : 'id'}${ign.length ? '; ignored: ' + ign.join(', ') : ''}${keyless ? '; lines start with row numbers' : ''}`, '# ' + (keyless ? 'row\t' : '') + cols.map(i => COLS[i][0]).join('\t')]
+  const seen = new Set(); let last = -1
+  rowsIdx.forEach(ri => { const { e } = g[ri]; if (seen.has(e)) return; seen.add(e)
+    const at = m.entries.indexOf(e)
+    if (last >= 0 && at !== last + 1) out.push('@@ rows not copied @@')
+    last = at
+    if (e.kind === 'changed') { out.push(line('-', e.a, e.ai)); out.push(line('+', e.b, e.bi)) }
+    else if (e.kind === 'removed') out.push(line('-', e.a, e.ai)); else if (e.kind === 'added') out.push(line('+', e.b, e.bi)); else out.push(line(' ', e.b, e.bi)) })
+  return out.join('\n')
+}
+function sceneCopy() {
+  stateSeg('Selection', 'copyState', [['some', 'Rows 2 and 4'], ['all', 'All changes']])
+  S.copyState = S.copyState || 'some'
+  const m = model(), all = rowsOf(m)
+  const sel = S.copyState === 'all' ? new Set(all.map((r, i) => r.e.kind !== 'same' ? i : -1).filter(i => i >= 0)) : new Set(all.map((r, i) => (r.e.b || r.e.a)[0] === 1002 || (r.e.b || r.e.a)[0] === 1004 ? i : -1).filter(i => i >= 0))
+  const g = gridHTML(m, { sel })
+  const u = (t, k) => t.replace(k, `<u>${k}</u>`)
+  const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Grid menu" style="top:110px;left:260px;min-width:250px">
+      <div class="mi" role="menuitem">${u('Copy', 'C')}<span class="acc">Ctrl+C</span></div><div class="mi" role="menuitem">Copy with ${u('Headers', 'H')}<span class="acc">Ctrl+Shift+C</span></div><div class="msep"></div>
+      <div class="mi" role="menuitem">Filt${u('e', 'e')}r<span class="acc">›</span></div><div class="mi" role="menuitem">Hi${u('g', 'g')}hlight<span class="acc">›</span></div><div class="msep"></div>
+      <div class="mi hot" role="menuitem" aria-haspopup="menu" aria-expanded="true">Compari${u('s', 's')}on<span class="acc">›</span></div><div class="msep"></div><div class="mi" role="menuitem">Sa${u('v', 'v')}e Results As…</div></div>
+    <div class="menu" role="menu" aria-label="Comparison" style="top:196px;left:514px;min-width:290px">
+      <div class="mi" role="menuitem">Go to ${u('N', 'N')}ext Difference<span class="acc">Alt+F5</span></div><div class="mi" role="menuitem">Go to ${u('P', 'P')}revious Difference<span class="acc">Alt+Shift+F5</span></div><div class="mi off" role="menuitem" title="Unavailable: this row has no possible match">Go to Possible ${u('M', 'M')}atch</div><div class="msep"></div>
+      <div class="mi" role="menuitem">Show Change ${u('D', 'D')}etails<span class="acc">Ctrl+I</span></div><div class="mi" role="menuitem">Compare ${u('V', 'V')}alues in Tab</div><div class="msep"></div>
+      <div class="mi" role="menuitem">Match ${u('R', 'R')}ows By…</div><div class="mi" role="menuitem">${u('I', 'I')}gnore Columns…</div><div class="mi" role="menuitemcheckbox" aria-checked="false"><span style="width:14px"></span>Ignore ${u('T', 'T')}his Column</div><div class="msep"></div>
+      <div class="mi hot" role="menuitem" id="copyDiff">${u('C', 'C')}opy as Diff</div><div class="mi" role="menuitem">S${u('a', 'a')}ve as Diff…</div><div class="mi" role="menuitem">${u('S', 'S')}cript Differences as T-SQL…</div><div class="msep"></div>
+      <div class="mi" role="menuitemcheckbox" aria-checked="false"><span style="width:14px"></span>Compare Rows as S${u('h', 'h')}own</div></div>` : ''
+  S.copyCount = new Set([...sel].map(i => all[i].e)).size
+  frame(tabs() + resultsBar() + compBar(m) + stdBody(g, S.copied ? `<span style="color:var(--add)">Copied ${S.copyCount} rows as a diff</span>` : 'rows matched by id', menu))
+  $('#extra').innerHTML = `<div class="clip"><b>Clipboard</b> <span class="lbl">(what Copy as Diff writes, CRLF on Windows; tabs shown as gaps)</span><pre>${esc(diffText(m, [...sel].sort((a, b) => a - b)))}</pre>
+    <p class="lbl" style="max-width:1000px"><b>Save as Diff…</b> writes this text for every row the grid shows to a .txt file (Q1), whatever extension is chosen. In stored order under Changes only, a hidden run is <code>@@ 312 unchanged rows @@</code>. Elsewhere, copied rows that are not next to each other in the grid get <code>@@ rows not copied @@</code>. Values escape <code>\\</code>, tab, CR and LF, and the text NULL is written <code>\\NULL</code>.</p></div>`
+  notes([['What to try', '<ul><li>The grid menu\'s new <b>Comparison</b> submenu (access key S) holds every comparison command with its own access keys. Click <b>Copy as Diff</b>: the text below is what reaches the clipboard.</li><li>A changed row is a − line and a + line in both layouts. Rows 2 and 4 are not next to each other, so a skip line separates them.</li><li>Switch to scene 1 and ignore updated_at, then come back: the column leaves the text and the header line names it (<code>ignored: updated_at</code>).</li><li>In scene 1, set Match to Automatic and ignore id: rows match by whole rows, so each line starts with its row number.</li><li>A changed row counts once in "Copied 2 rows as a diff", though it writes two lines.</li></ul>', 'Build'],
+    ['Rules', '<ul><li>Follows the grid\'s sort, filters, chips and selection. A sorted Two rows comparison still writes each changed entry\'s two lines together.</li><li>Key columns are always written, so each line identifies its row. Without them, row numbers do.</li><li>Over Copy\'s size limit it gives Copy\'s message and points to Save as Diff…. It works while an input is closed.</li></ul>']])
+}
+
+/* ---------- 4b Script Differences as T-SQL ---------- */
+function lit(v, t) {
+  if (v === null) return 'NULL'
+  if (t.startsWith('int') || t.startsWith('decimal')) return String(v)
+  if (t.startsWith('datetime2')) return `CAST('${v.replace(' ', 'T')}' AS datetime2(7))`
+  return `N'${String(v).replace(/'/g, "''")}'`
+}
+function scriptText(m) {
+  const sc = S.script, cols = (sc.cols || COLS.map((_, i) => i)), tgt = sc.target.split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.')
+  const toOld = sc.dir === 'toOld', from = toOld ? RES[1] : RES[0], to = toOld ? RES[0] : RES[1]
+  const out = [`-- Differences: ${RES[0]} → ${RES[1]}, rows matched by id`, `-- Makes the rows of ${tgt} (where ${from} came from) match ${to}. Generated by Varia on 2026-11-22 14:05.`, '-- Review it before you run it. Varia does not run it for you.', 'SET XACT_ABORT ON;']
+  if (sc.tx) out.push('BEGIN TRANSACTION;')
+  const chk = k => sc.check ? [`IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = ${k} was not found exactly once.', 1;`] : []
+  const E = m.entries, gone = toOld ? 'added' : 'removed', come = toOld ? 'removed' : 'added'
+  const oldOf = e => toOld ? e.b : e.a, newOf = e => toOld ? e.a : e.b
+  if (sc.del) E.filter(e => e.kind === gone).forEach(e => { const r = e.a || e.b; out.push(`DELETE FROM ${tgt} WHERE [id] = ${r[0]};`, ...chk(r[0])) })
+  if (sc.upd) E.filter(e => e.kind === 'changed').forEach(e => { const set = e.cells.filter(c => cols.includes(c)).map(c => `[${COLS[c][0]}] = ${lit(newOf(e)[c], COLS[c][1])}`); if (set.length) out.push(`UPDATE ${tgt} SET ${set.join(', ')} WHERE [id] = ${oldOf(e)[0]};`, ...chk(oldOf(e)[0])) })
+  if (sc.ins) {
+    const identity = cols.includes(0)
+    if (identity) out.push(`SET IDENTITY_INSERT ${tgt} ON;`)
+    E.filter(e => e.kind === come).forEach(e => { const r = e.a || e.b; out.push(`INSERT INTO ${tgt} (${cols.map(c => `[${COLS[c][0]}]`).join(', ')}) VALUES (${cols.map(c => lit(r[c], COLS[c][1])).join(', ')});`) })
+    if (identity) out.push(`SET IDENTITY_INSERT ${tgt} OFF;`)
+  }
+  if (sc.tx) out.push('COMMIT TRANSACTION;')
+  return out
+}
+function sceneScript() {
+  stateSeg('State', 'scriptState', [['ready', 'Ready'], ['generating', 'Generating'], ['nokey', 'Matched by row position'], ['trunc', 'Truncated value'], ['big', 'Too large'], ['closed', 'Comparison closed']])
+  const m = model(), g = gridHTML(m), sc = S.script, cols = sc.cols || COLS.map((_, i) => i), toOld = sc.dir === 'toOld'
+  const n = k => m.count(k), dels = n(toOld ? 'added' : 'removed'), ins = n(toOld ? 'removed' : 'added')
+  const refusal = {
+    nokey: `Rows are matched by row position, so a statement could not find its row. Match rows by key columns to script differences.`,
+    trunc: `3 values in <b>note</b> were not kept in full, so the script would not be exact. Untick note, or choose rows without them.`,
+    big: `The script would be about 2,400,000 characters. A query window runs at most 1,000,000. Choose fewer rows.`,
+    closed: `The comparison was closed.`
+  }[S.scriptState]
+  const tgtq = sc.target.split('.').map(p => `[${p.replace(/]/g, ']]')}]`).join('.')
+  const form = `
+    <div class="sec"><div class="h">Target table</div><input class="txt" id="tgt" value="${esc(sc.target)}" aria-label="Target table" spellcheck="false">
+      <div class="row2 warnl" style="font-size:11px">ⓘ Search Objects knows dbo.Orders on this connection, with all 6 columns. id is its identity column.</div></div>
+    <div class="sec"><div class="h">Direction</div>
+      <label class="row2"><input type="radio" name="dir" data-dir="toNew"${toOld ? '' : ' checked'}> ${esc(tgtq)} holds ${RES[0]}'s rows: change them to ${RES[1]}'s</label>
+      <label class="row2"><input type="radio" name="dir" data-dir="toOld"${toOld ? ' checked' : ''}> ${esc(tgtq)} holds ${RES[1]}'s rows: change them to ${RES[0]}'s</label></div>
+    <div class="sec"><div class="h">Statements</div>
+      <label class="row2"><input type="checkbox" data-sc="del"${sc.del ? ' checked' : ''}> DELETE <small>(${dels})</small></label>
+      <label class="row2"><input type="checkbox" data-sc="upd"${sc.upd ? ' checked' : ''}> UPDATE <small>(${n('changed')}; only changed, compared columns)</small></label>
+      <label class="row2"><input type="checkbox" data-sc="ins"${sc.ins ? ' checked' : ''}> INSERT <small>(${ins})</small></label></div>
+    <div class="sec"><div class="h">Columns</div><div class="cols">${COLS.map((c, i) => i === 0 ? `<label class="off"><input type="checkbox" checked disabled> ⚷ ${c[0]} <small>key</small></label>`
+      : `<label><input type="checkbox" data-scol="${i}"${cols.includes(i) ? ' checked' : ''}> ${c[0]} <small>${S.ignore.has(i) ? 'ignored: INSERT only' : c[1]}</small></label>`).join('')}</div>
+      <label class="row2"><input type="checkbox" checked> SET IDENTITY_INSERT <small>(id is the target's identity column)</small></label>
+      <div class="row2 warnl" style="font-size:11px">ⓘ 1 value differs only by collation (note, row 1007) and is not scripted. Turn on Exact text to include it.</div></div>
+    <div class="sec"><div class="h">Rows</div><label class="row2"><input type="radio" name="scr" checked> All differences <small>(${dels + n('changed') + ins})</small></label><label class="row2"><input type="radio" name="scr"> Rows shown <small>(${dels + n('changed') + ins}; chips and filters)</small></label><label class="row2" style="color:var(--muted)"><input type="radio" name="scr" disabled> Selected rows <small>(none selected)</small></label></div>
+    <div class="sec"><div class="h">Options</div><label class="row2"><input type="checkbox" data-sc="tx"${sc.tx ? ' checked' : ''}> Wrap in a transaction</label><label class="row2"><input type="checkbox" data-sc="check"${sc.check ? ' checked' : ''}> Check each statement changes one row</label>
+      ${!sc.tx && sc.check ? '<div class="row2 warnl">⚠ Without a transaction, statements before a failed check stay applied.</div>' : ''}
+      <div class="row2"><span>Destination</span><select class="txt" style="width:auto;font-family:var(--ui)" aria-label="Destination"><option>New Query Editor Window</option><option>Clipboard</option></select></div></div>
+    <div class="sec"><div class="h">Preview</div><pre aria-label="Script preview">${esc(scriptText(m).slice(0, 30).join('\n'))}</pre></div>`
+  const body = refusal ? `<div class="sec"><div class="err">${S.scriptState === 'closed' ? 'ⓘ' : '⚠'} <span>${refusal}</span></div>${S.scriptState === 'nokey' ? '<div class="row2" style="margin-top:6px"><button class="btn o">Choose key columns…</button></div>' : ''}</div>` + (S.scriptState === 'trunc' || S.scriptState === 'big' ? form : '') : form
+  const gen = S.scriptState === 'generating'
+  const win = `<div class="win" role="dialog" aria-label="Script Differences as T-SQL"><div class="titlebar">Script Differences as T-SQL<span class="lbl" style="font-weight:400">· ${RES[0]} → ${RES[1]}</span><button class="x" title="Close (Cancel)">✕</button></div>
+    <div class="wbody">${body}</div>
+    <div class="acts">${gen ? '<span class="lbl" style="margin-right:auto;display:flex;gap:8px;align-items:center;flex:1">Writing statements… <span class="progress" style="flex:1"><i></i></span></span><button class="btn o">Cancel</button>' : `${refusal ? '' : `<span class="lbl" style="margin-right:auto;align-self:center">Deletes ${dels}, updates ${n('changed')} and inserts ${ins} rows in ${esc(tgtq)}.</span>`}<button class="btn o">Cancel</button><button class="btn p"${refusal ? ' disabled' : ''}>Script</button>`}</div></div>`
+  frame(tabs() + resultsBar() + compBar(m) + stdBody(g, 'rows matched by id', win))
+  notes([['What to try', '<ul><li>It is an OS dialog window of its own, modeless, beside the grid (drawn here inside the frame). A stray click does not lose the form.</li><li>Untick statements or columns, or switch <b>Direction</b>, and watch the preview. The comparison is not swapped.</li><li>Turn off the transaction with the checks on: it warns.</li><li>Try the other states: generating with Cancel, refusals, and the comparison closed while the window is open. On BigQuery the command is unavailable, so the window never opens.</li><li>The target is drawn as the pair\'s remembered draft. The first time it is empty, with suggestions from Search Objects.</li></ul>', 'Build'],
+    ['Safety', '<ul><li>Varia does not run the script. It opens in a New Query Editor Window on the comparison\'s connection, as Script As does.</li><li>XACT_ABORT, a transaction and the row checks roll everything back if the target does not hold what the comparison saw.</li><li>A live test runs scripts over every type, in both directions, and expects no differences after.</li></ul>'],
+    ['Literals and columns', '<p>Each value is written from its column\'s type: exact decimals, round-trip floats, <code>N\'…\'</code> with doubled quotes, typed casts at the column\'s own precision (datetimeoffset included), and <code>0x…</code> binary. rowversion, computed columns, CLR types, sql_variant and vector start unticked, with the reason. Columns only one result has are named, since INSERTs leave them out.</p>']])
+}
+
+/* ---------- 5 Search old values ---------- */
+function sceneSearch() {
+  stateSeg()
+  const m = model(), rows = rowsOf(m), q = S.search.trim().toLowerCase(), hits = [], old = new Set()
+  if (q) rows.forEach((r, ri) => COLS.forEach((c, ci) => {
+    const { e, side } = r, cur = side === 'a' ? e.a : e.b || e.a, inNew = plain(cur[ci]).toLowerCase().includes(q)
+    const inOld = S.layout === 'entry' && side === 'both' && e.kind === 'changed' && e.cells.includes(ci) && plain(e.a[ci]).toLowerCase().includes(q)
+    if (inNew || inOld) { hits.push(ri + ':' + ci); if (inOld && !inNew) old.add(ri + ':' + ci) }
+  }))
+  const cur = hits.length ? hits[(S.hitIndex % hits.length + hits.length) % hits.length] : null
+  const [cr, cc] = cur ? cur.split(':').map(Number) : [0, 0]
+  const status = cur ? `${hits.indexOf(cur) + 1} of ${hits.length} matches${old.has(cur) ? ', old value ' + plain(rows[cr].e.a[cc]) : ''}` : q ? 'No matches' : ''
+  const sb = `<span class="search"><span class="lbl">⌕</span><input id="srch" value="${esc(S.search)}" aria-label="Search all results"><span class="cnt">${hits.length ? `${hits.indexOf(cur) + 1} of ${hits.length}` : ''}</span><button class="btn" id="sPrev" title="Previous match (Shift+F3)">↑</button><button class="btn" id="sNext" title="Next match (F3)">↓</button></span><span class="lbl" id="sStatus">${esc(status)}</span>`
+  const g = gridHTML(m, { hits: new Set(hits), cur })
+  frame(tabs() + resultsBar(sb) + compBar(m) + stdBody(g, 'rows matched by id'))
+  announce(status)
+  notes([['What to try', `<ul><li>"Open" also finds row 1002's status, whose <b>old</b> value was Open (drawn struck through). Step with ↓ or F3: the status says "2 of 10 matches, old value Open", the shipped status with the old value added.</li><li>Search "9 am" to find a note that only the old value contains.</li><li>Switch to <b>Two rows</b>: old values are on − rows, so they were always found, and nothing changes there.</li></ul>`, 'Build'],
+    ['Rules', '<ul><li>One hit per cell, even when old and new both match.</li><li>Only changed cells\' old values are searched, never an unchanged cell\'s empty previous value.</li><li>Column filters still filter by the shown value. Column-name search ignores old values.</li></ul>']])
+}
+
+/* ---------- 6 Rows as shown ---------- */
+function sceneFiltered() {
+  stateSeg('State', 'filtState', [['popover', 'Compare popover'], ['shown', 'Compared as shown'], ['stale', 'Out of date'], ['empty', 'Filters leave no rows']])
+  const m0 = model(), empty = S.filtState === 'empty'
+  const E2 = m0.entries.filter(e => e.b).map(e => ({ kind: 'added', b: e.b, bi: e.bi, cells: [], soft: [] }))
+  const m = empty ? { ...m0, entries: E2, count: k => E2.filter(e => e.kind === k).length, changedCols: new Set() } : m0, g = gridHTML(m)
+  if (S.filtState === 'popover') {
+    const pop = `<div class="pop" role="dialog" aria-label="Compare" style="top:40px;width:min(440px,calc(100% - 20px))"><h3>Compare Result 3 with</h3>
+      <div class="sec"><label class="row2"><input type="radio" checked> Result 1 <small>· Orders Mon · 5,000 rows · 6 of 6 columns</small></label><label class="row2"><input type="radio"> Result 2 <small>· 212 rows · 4 of 6 columns</small></label></div>
+      <div class="sec"><div class="h">Compare each result</div>
+        <label class="row2"><input type="radio" name="fc" data-fc="whole"${S.filtChoice === 'whole' ? ' checked' : ''}> Whole result</label>
+        <label class="row2"><input type="radio" name="fc" data-fc="shown"${S.filtChoice === 'shown' ? ' checked' : ''}> As shown (filters and sort)</label>
+        <div class="row2" style="padding-left:22px"><small>Result 1: 120 of 5,000 rows (status = Open, sorted by amount) · Result 3: all 4,980</small></div></div>
+      <div class="sec"><div class="row2"><span>Match rows by: ⚷ id <small>(remembered)</small></span></div><div class="row2"><span>Ignoring: updated_at <small>(remembered)</small></span></div><div class="row2"><label><input type="checkbox"> Exact text</label></div></div>
+      <div class="acts"><button class="btn o">Close</button><button class="btn p">Compare</button></div></div>`
+    frame(tabs() + resultsBar(undefined, { active: 'Result 3' }) + `<div class="tb"><span class="title">Result 3</span><span class="lbl">4,980 rows</span><span style="margin-left:auto"></span><button class="btn o" aria-expanded="true">⇄ Compare</button></div>` + stdBody({ html: '<div style="padding:20px;color:var(--muted)">Result 3\'s grid</div>', marks: '', rows: [] }, '', pop))
+  } else {
+    const stale = S.filtState === 'stale'
+    const caption = stale ? `<div class="caption" role="status"><b>Out of date</b><span>Result 1's filters changed since this comparison was made.</span><button class="btn o" style="margin-left:auto">Update</button></div>` : ''
+    const notice = `<div class="notice">ⓘ ${empty ? `${RES[0]}'s filters leave no rows, so every row shows as added.` : `Compared as shown: ${RES[0]} shows 120 of 5,000 rows.`}<button class="btn o">Compare whole results</button><button class="x sp" title="Dismiss">✕</button></div>`
+    frame(tabs() + resultsBar(undefined, { label: `⇄ ${RES[0]} (as shown) → ${RES[1]}`, title: `Differences: ${RES[0]} (as shown) → ${RES[1]}`, dot: stale })  + compBar(m, { filtered: [empty ? '0 of 5,000' : '120 of 5,000', ''] }) + caption + notice + stdBody(g, `rows matched by id · ${RES[0]} as shown`))
+  }
+  notes([['What to try', '<ul><li><b>Compare popover</b>: "Compare each result" appears only when an input is sorted or filtered, and is remembered per pair, as the match and ignored columns are.</li><li><b>Compared as shown</b>: a funnel and "120 of 5,000" on the − side, "(as shown)" in the name. Gutter numbers stay stored rows.</li><li><b>Out of date</b>: changing Result 1\'s filters marks the comparison, as Pivots are marked. Update rebuilds it over the inputs as shown now. While it is out of date, Layout, Rows and the other controls update it too, and say so.</li><li><b>Filters leave no rows</b>: every row of Result 3 shows as added, and the notice says why.</li></ul>', 'Build'],
+    ['Also', '<ul><li>One term throughout: "as shown" against "whole result". "Filtered" would leave out the sort, and "Rows" is the toolbar\'s All rows / Changes only.</li><li>The existing notice "Result 1 was sorted or filtered" gains <b>Compare rows as shown</b>. A memory refusal of All rows offers it too, when an input has filters.</li><li>Under Row position the sorted orders pair, so a sort alone earns "(as shown)". Under key matching the sort only orders the output.</li></ul>']])
+}
+
+/* ---------- 2 Side by side (deferred) ---------- */
+function sceneSbs() {
+  stateSeg()
+  const m = model(), cols = COLS.slice(0, 4), tpl = cols.map(c => c[2] + 'px').join(' ')
+  const cell = (v, cls, bg) => `<div class="cell ${cls || ''}"${bg ? ` style="--d:${bg}"` : ''}><span class="t">${v}</span></div>`
+  let L = '', R = '', M = ''
+  m.entries.forEach(e => {
+    const rowL = e.a ? cols.map((c, i) => cell(val(e.a[i]), e.kind === 'changed' && !e.cells.includes(i) ? 'dim' : '', e.kind === 'removed' ? 'color-mix(in srgb,var(--rem) 11%,transparent)' : e.cells.includes(i) ? 'color-mix(in srgb,var(--rem) 26%,transparent)' : '')).join('') : cols.map(() => '<div class="cell filler"></div>').join('')
+    const rowR = e.b ? cols.map((c, i) => cell(val(e.b[i]), e.kind === 'changed' && !e.cells.includes(i) ? 'dim' : '', e.kind === 'added' ? 'color-mix(in srgb,var(--add) 11%,transparent)' : e.cells.includes(i) ? 'color-mix(in srgb,var(--add) 26%,transparent)' : '')).join('') : cols.map(() => '<div class="cell filler"></div>').join('')
+    L += `<div class="row" style="grid-template-columns:${tpl}">${rowL}</div>`; R += `<div class="row" style="grid-template-columns:${tpl}">${rowR}</div>`
+    M += `<div class="row" style="grid-template-columns:64px"><div class="cell gut" style="--k:${KC[e.kind]};justify-content:center"><span class="bar3"></span><span class="mk">${MARK[e.kind]}</span><span class="n">${e.ai ?? ''}${e.ai && e.bi ? '|' : ''}${e.bi ?? ''}</span></div></div>`
+  })
+  const head = `<div class="row head" style="grid-template-columns:${tpl}">${cols.map(c => `<div class="cell">${c[0]}</div>`).join('')}</div>`
+  frame(tabs() + resultsBar() + `<div class="tb"><span class="title">⇄ Differences</span><button class="btn o">Side by side ▾</button><span class="lbl">Layout: One row, Two rows, Side by side</span></div>` +
+    `<div class="sbs"><div class="half"><div class="hd"><span class="dot" style="width:8px;height:8px;border-radius:2px;background:var(--rem)"></span>− ${RES[0]}</div><div class="grid">${head}${L}</div></div><div class="mid"><div class="hd" style="justify-content:center">#</div><div class="grid"><div class="row head" style="grid-template-columns:64px"><div class="cell"></div></div>${M}</div></div><div class="half"><div class="hd"><span class="dot" style="width:8px;height:8px;border-radius:2px;background:var(--add)"></span>+ ${RES[1]}</div><div class="grid">${head}${R}</div></div></div>`)
+  notes([['Deferred (N4)', '<p>A third Layout. It draws the One row stored shape with no backend change: two grids with one gutter between them, hatched filler for rows one side lacks, and locked vertical scroll. Below about 900 px it falls back to One row, as VS Code does. It is large because two coordinated grid pools must share selection, focus, copy and screen-reader naming. Revisit after Change details ships.</p>', 'Defer']])
+}
+
+/* ---------- 8 Pivots (deferred) ---------- */
+function scenePivot() {
+  stateSeg()
+  const P = [['North', '2025', '41,200.00', '40,950.00'], ['South', '2025', '18,330.50', '18,330.50'], ['East', '2025', '27,004.00', '29,110.00'], ['West', '2025', '9,870.25', null]]
+  const tpl = '92px 120px 90px 200px'
+  const head = `<div class="row head" style="grid-template-columns:${tpl}"><div class="cell gut" style="background:none"><span class="mk"></span><span class="n">#</span></div><div class="cell"><span style="color:var(--warn)">⚷</span>Region</div><div class="cell"><span style="color:var(--warn)">⚷</span>Year</div><div class="cell chgcol">Sum of amount <span class="pip"></span></div></div>`
+  const rows = P.map((r, i) => { const k = r[3] === null ? 'removed' : r[2] === r[3] ? 'same' : 'changed'
+    return `<div class="row" style="grid-template-columns:${tpl}"><div class="cell gut" style="--k:${KC[k]}"><span class="bar3"></span><span class="mk">${MARK[k]}</span><span class="n">${i + 1}</span></div><div class="cell${k === 'changed' ? ' dim' : ''}"${k === 'removed' ? ' style="--d:color-mix(in srgb,var(--rem) 11%,transparent)"' : ''}>${r[0]}</div><div class="cell${k === 'changed' ? ' dim' : ''}"${k === 'removed' ? ' style="--d:color-mix(in srgb,var(--rem) 11%,transparent)"' : ''}>${r[1]}</div><div class="cell"${k === 'changed' ? ' style="--d:color-mix(in srgb,var(--chg) 27%,transparent)"' : k === 'removed' ? ' style="--d:color-mix(in srgb,var(--rem) 11%,transparent)"' : ''}>${k === 'changed' ? `<del>${r[2]}</del><span class="arrow">→</span><ins>${r[3]}</ins>` : r[2]}</div></div>` }).join('')
+  frame(tabs() + resultsBar(undefined, { label: '⇄ Pivot of Result 1 → Pivot of Result 3' }) + `<div class="tb"><span class="title">⇄ Differences</span><span class="sides"><span class="side"><b>−</b> Pivot of Result 1</span><button class="swap">⇄</button><span class="side"><b>+</b> Pivot of Result 3</span></span><span class="lbl">Matched by row groups: ⚷ Region + Year</span></div>` +
+    `<div class="body"><div class="gridwrap"><div class="scroller"><div class="grid">${head}${rows}</div></div></div></div>`)
+  notes([['Deferred (N4)', '<p>A Pivot compares only with another Pivot of the same run. Rows match by its row groups (the shipped Key columns mode), column groups pair by name, and figures compare by value. A rebuilt Pivot marks the comparison Out of date, reusing feature 6\'s machinery. It is niche while comparisons stay within one run, and GROUP BY queries already compare as Tables.</p>', 'Defer']])
+}
+
+/* ---------- render and events ---------- */
+function render() {
+  document.documentElement.dataset.theme = S.theme
+  $('#extra').innerHTML = ''
+  ;({ ignore: sceneIgnore, details: sceneDetails, copy: sceneCopy, script: sceneScript, search: sceneSearch, filtered: sceneFiltered, sbs: sceneSbs, pivot: scenePivot })[S.scene]()
+  // Keep a card inside its pane, as the real card is positioned from GridView.cellRect and clamped.
+  document.querySelectorAll('.card').forEach(card => {
+    const W = card.parentElement.clientWidth, H = card.parentElement.clientHeight, left = parseFloat(card.style.left) || 8, top = parseFloat(card.style.top) || 8
+    if (left + card.offsetWidth > W - 8) card.style.left = Math.max(8, W - card.offsetWidth - 8) + 'px'
+    if (top + card.offsetHeight > H - 8) card.style.top = Math.max(8, H - card.offsetHeight - 8) + 'px'
+  })
+}
+const seg = (id, key, fn) => $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; S[key] = b.dataset.v; $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); fn && fn(); render() })
+seg('#sceneSeg', 'scene', () => { S.hover = null; S.menuOpen = true; S.copied = false })
+seg('#themeSeg', 'theme'); seg('#paneSeg', 'pane'); seg('#layoutSeg', 'layout', () => { S.cardOpen = { r: 1, c: 5, by: 'key' } })
+
+$('#app').addEventListener('click', e => {
+  const t = e.target
+  if (t.closest('#ignBtn')) { S.ignoreMenu = !S.ignoreMenu; S.ignoreDraft = null; return render() }
+  if (t.closest('#ignCancel')) { S.ignoreMenu = false; S.ignoreDraft = null; return render() }
+  if (t.closest('#ignApply')) { S.ignore = new Set(S.ignoreDraft || S.ignore); S.ignoreDraft = null; S.ignoreMenu = false; S.noteOff = false; render(); const mm = model(); announce(`Comparison updated: ${mm.count('added')} added, ${mm.count('removed')} removed, ${mm.count('changed')} changed.`); return }
+  if (t.closest('#cmpAll')) { S.ignore = new Set(); return render() }
+  if (t.closest('#noteX')) { S.noteOff = true; return render() }
+  if (t.closest('#copyDiff')) { S.copied = true; S.menuOpen = false; render(); announce(`Copied ${S.copyCount} rows as a diff`); return }
+  if (t.closest('#cardX')) { S.detailState = 'hover'; S.hover = { r: -1, c: -1 }; return render() }
+  if (t.closest('#inTab')) { S.detailState = 'tab'; return render() }
+  if (t.closest('#sNext')) { S.hitIndex++; return render() }
+  if (t.closest('#sPrev')) { S.hitIndex--; return render() }
+  const c = t.closest('[data-c]')
+  if (c && S.scene === 'details' && S.detailState === 'key') { S.cardOpen = { r: +c.dataset.r, c: +c.dataset.c, by: 'key' }; render(); announce(`Change details: ${cardSummary(rowsOf(model()), +c.dataset.r, +c.dataset.c)}. Tab to read it, Escape to close.`); return }
+  if (S.scene === 'ignore' && S.ignoreMenu && !t.closest('#ignMenu')) { S.ignoreMenu = false; S.ignoreDraft = null; return render() }
+})
+$('#app').addEventListener('change', e => {
+  const t = e.target
+  if (t.dataset.ign) { const d = S.ignoreDraft || new Set(S.ignore); t.checked ? d.add(+t.dataset.ign) : d.delete(+t.dataset.ign); S.ignoreDraft = d; return render() }
+  if (t.dataset.sc) { S.script[t.dataset.sc] = t.checked; return render() }
+  if (t.dataset.scol) { const cols = new Set(S.script.cols || COLS.map((_, i) => i)); t.checked ? cols.add(+t.dataset.scol) : cols.delete(+t.dataset.scol); S.script.cols = [...cols].sort(); return render() }
+  if (t.dataset.fc) { S.filtChoice = t.dataset.fc; return render() }
+  if (t.dataset.dir) { S.script.dir = t.dataset.dir; return render() }
+})
+$('#app').addEventListener('input', e => {
+  const t = e.target
+  if (t.id === 'srch') { S.search = t.value; S.hitIndex = 0; render(); const i = $('#srch'); i.focus(); i.setSelectionRange(i.value.length, i.value.length) }
+  if (t.id === 'ignFind') { S.ignoreFind = t.value; render(); const i = $('#ignFind'); i.focus(); i.setSelectionRange(i.value.length, i.value.length) }
+  if (t.id === 'tgt') { S.script.target = t.value || 'dbo.Orders'; const pre = document.querySelector('.win pre'); if (pre) pre.textContent = scriptText(model()).slice(0, 30).join('\n') }
+})
+let hoverTimer = 0
+$('#app').addEventListener('mouseover', e => {
+  if (S.scene !== 'details' || S.detailState !== 'hover') return
+  const c = e.target.closest('[data-c]'); if (!c || e.target.closest('#card')) return
+  clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { const r = +c.dataset.r, col = +c.dataset.c; if (!S.hover || S.hover.r !== r || S.hover.c !== col) { S.hover = { r, c: col }; render() } }, 450)
+})
+addEventListener('keydown', e => {
+  if (S.scene === 'details' && S.detailState === 'hover' && e.key === 'Escape') { S.hover = { r: -1, c: -1 }; return render() }
+  if (S.scene === 'details' && S.detailState === 'key') {
+    if (e.key === 'Escape') { S.detailState = 'hover'; S.hover = { r: -1, c: -1 }; return render() }
+    if (e.key === 'F5' && e.altKey) {
+      e.preventDefault(); const m = model(), rows = rowsOf(m), list = []
+      rows.forEach((r, ri) => { if (r.e.kind === 'changed' && r.side !== 'a') r.e.cells.forEach(c => list.push([ri, c])) })
+      const i = list.findIndex(([r, c]) => r === S.cardOpen.r && c === S.cardOpen.c), n = list[(i + (e.shiftKey ? -1 : 1) + list.length) % list.length]
+      S.cardOpen = { r: n[0], c: n[1], by: 'key' }; render()
+      // One live message: navigation's position, then the card's summary.
+      announce(`${posText(m, rows, { r: n[0], c: n[1] }) || ''}: ${cardSummary(rows, n[0], n[1])}`)
+    }
+  }
+  if (S.scene === 'search' && e.key === 'F3') { e.preventDefault(); S.hitIndex += e.shiftKey ? -1 : 1; render() }
+})
+const q = new URLSearchParams(location.search)
+if (q.get('theme') === 'light') { S.theme = 'light'; $('#themeSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === 'light')) }
+if (q.get('scene')) { S.scene = q.get('scene'); $('#sceneSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.scene)) }
+if (q.get('size') === 'narrow') { S.pane = 'narrow'; $('#paneSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === 'narrow')) }
+// ?state= picks the scene's state (its "State", "Card" or "Selection" switch).
+if (q.get('state')) { const key = { details: 'detailState', copy: 'copyState', script: 'scriptState', filtered: 'filtState' }[S.scene]; if (key) S[key] = q.get('state') }
+render()
+</script>
+</body>
+</html>
