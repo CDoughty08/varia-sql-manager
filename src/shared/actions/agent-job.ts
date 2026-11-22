@@ -377,7 +377,7 @@ export function agentJobProblems(model: AgentJobDocumentModel, draft: AgentJobDr
   check('netSend', draft.netSendLevel, draft.netSendOperator)
   if (draft.emailLevel !== 0) { const mail = mailProblem(model.mail, model.platform); if (mail) problems.push({ field: 'email', severity: 'warning', message: mail }) }
   const now = model.now ? momentOfText(model.now) : undefined
-  for (const { key, problem } of jobScheduleProblems(draft.schedules, now)) {
+  for (const { key, problem } of jobScheduleProblems(draft.schedules, now, model.schedules)) {
     const name = draft.schedules.find(entry => entry.key === key)?.fields.name.trim()
     problems.push({ field: 'schedules', severity: problem.severity, message: name ? `${name}: ${problem.message}` : problem.message })
   }

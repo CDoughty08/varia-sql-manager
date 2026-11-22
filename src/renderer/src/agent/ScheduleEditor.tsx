@@ -33,7 +33,9 @@ export interface ScheduleEditorProps {
 const recurringTypes: readonly number[] = [freq.daily, freq.weekly, freq.monthly, freq.relative]
 const subdayUnits = [{ code: subday.hours, label: 'hour(s)' }, { code: subday.minutes, label: 'minute(s)' }, { code: subday.seconds, label: 'second(s)' }]
 const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const number = (text: string, low: number, high: number) => { const value = Number(text); return Number.isInteger(value) ? Math.min(high, Math.max(low, value)) : low }
+/** A count as typed, capped at the field's highest; empty or not a whole number is 0, which its problem names, so clearing a field to
+ *  type another number never turns it into the lowest one first. */
+const number = (text: string, _low: number, high: number) => { const value = text.trim() === '' ? 0 : Number(text); return Number.isInteger(value) ? Math.min(high, Math.max(0, value)) : 0 }
 
 /** A field's problems: its first error, else its warnings joined. */
 function textOf(problems: readonly ScheduleProblem[], ...fields: ScheduleField[]): { error?: string; note?: string } {
@@ -59,7 +61,7 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
   return <div className="agent-schedule-editor">
     <div className="properties-fields">
       <PropertyField id={id('name')} label="Name" changed={changed('name')} {...name}>
-        <input id={id('name')} className="property-input" type="text" maxLength={agentLimits.nameChars} spellCheck={false} value={fields.name} disabled={disabled}
+        <input id={id('name')} data-schedule-name className="property-input" type="text" maxLength={agentLimits.nameChars} spellCheck={false} value={fields.name} disabled={disabled}
           data-changed={changed('name') || undefined} {...fieldAria(id('name'), { ...name, changed: changed('name') })} onChange={event => set({ name: event.target.value })} />
       </PropertyField>
       <PropertyField id={id('enabled')} label="Enabled" changed={changed('enabled')} description="A disabled schedule starts no job.">

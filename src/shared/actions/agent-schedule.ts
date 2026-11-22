@@ -169,13 +169,16 @@ export const jobScheduleText = {
 
 /** The schedule entries' problems, by entry key: errors stop Save. A job may already hold more than agentLimits.schedulesPerJob (msdb
  *  sets no limit); only adding one past it is refused. A picked schedule without the version its guard names cannot be attached. */
-export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: AgentMoment): { readonly key?: string; readonly problem: ScheduleProblem }[] {
+export function jobScheduleProblems(entries: readonly JobScheduleEntry[], now?: AgentMoment, records: readonly AgentScheduleRecord[] = []): { readonly key?: string; readonly problem: ScheduleProblem }[] {
   const out: { key?: string; problem: ScheduleProblem }[] = []
   const kept = entries.filter(entry => !entry.remove)
   if (kept.length > agentLimits.schedulesPerJob && kept.some(entry => entry.id === undefined || entry.attached)) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooMany } })
   if (entries.filter(entry => entry.remove && entry.id !== undefined && !entry.attached).length > agentLimits.schedulesPerJob) out.push({ problem: { field: 'name', severity: 'error', message: jobScheduleText.tooManyRemoved } })
   for (const entry of kept) {
     if (entry.attached && (!entry.base || !guardOf(entry.base))) out.push({ key: entry.key, problem: { field: 'name', severity: 'error', message: jobScheduleText.unguarded } })
+    // One of the job's own schedules as read is the server's business (made in T-SQL, perhaps by another login): only a change is checked.
+    const read = !entry.attached && entry.id !== undefined ? records.find(record => record.id === entry.id) : undefined
+    if (read && !Object.keys(scheduleValues(read, entry.fields)).length) continue
     for (const problem of scheduleProblems(entry.fields, now)) out.push({ key: entry.key, problem })
   }
   return out
@@ -239,14 +242,15 @@ const int = (low: number, high: number) => z.number().int().min(low).max(high)
 const modifiedPattern = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/
 const modified = z.string().max(23).regex(modifiedPattern).refine(text => { const date = new Date(text + 'Z'); return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 23) === text }, 'not a date')
 const scheduleId = int(1, 2_147_483_647)
-/** The timing as msdb takes it: each field in the range sp_verify_schedule accepts for some type; the combination is checked below. */
+/** The timing as msdb takes it: each field in the range sp_verify_schedule accepts for some type (an INT where msdb sets no upper bound on
+ *  intervals and recurrence factors); the combination is checked below. */
 export const scheduleTimingSchema = z.object({
   freqType: z.union(Object.values(freq).map(code => z.literal(code)) as unknown as [z.ZodLiteral<1>, z.ZodLiteral<4>]),
-  freqInterval: int(0, 127),
+  freqInterval: int(0, 2_147_483_647),
   freqSubdayType: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(4), z.literal(8)]),
-  freqSubdayInterval: int(0, 86_400),
+  freqSubdayInterval: int(0, 2_147_483_647),
   freqRelativeInterval: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(4), z.literal(8), z.literal(16)]),
-  freqRecurrenceFactor: int(0, 99),
+  freqRecurrenceFactor: int(0, 2_147_483_647),
   activeStartDate: z.number().int().refine(validDate, 'not a date'),
   activeEndDate: z.number().int().refine(validDate, 'not a date'),
   activeStartTime: z.number().int().refine(validTime, 'not a time'),
@@ -272,8 +276,8 @@ export function timingProblem(timing: AgentScheduleTiming): string | undefined {
   switch (t.freqType) {
     case freq.once: case freq.agentStart: case freq.idle:
       return t.freqInterval || t.freqSubdayType || t.freqSubdayInterval || t.freqRelativeInterval || t.freqRecurrenceFactor ? 'A one-time, autostart or idle schedule has no frequency.' : undefined
-    case freq.daily: if (t.freqInterval < 1 || t.freqInterval > 100 || t.freqRecurrenceFactor !== 0) return 'A daily schedule runs every 1 to 100 days.'; break
-    case freq.weekly: if (t.freqInterval < 1 || t.freqRecurrenceFactor < 1) return 'A weekly schedule names days and every how many weeks.'; break
+    case freq.daily: if (t.freqInterval < 1 || t.freqRecurrenceFactor !== 0) return 'A daily schedule runs every 1 or more days.'; break
+    case freq.weekly: if (t.freqInterval < 1 || t.freqInterval > 127 || t.freqRecurrenceFactor < 1) return 'A weekly schedule names days and every how many weeks.'; break
     case freq.monthly: if (t.freqInterval < 1 || t.freqInterval > 31 || t.freqRecurrenceFactor < 1) return 'A monthly schedule names a day from 1 to 31 and every how many months.'; break
     case freq.relative: if (t.freqInterval < 1 || t.freqInterval > 10 || t.freqRelativeInterval < 1 || t.freqRecurrenceFactor < 1) return 'A relative monthly schedule names which day and every how many months.'; break
   }

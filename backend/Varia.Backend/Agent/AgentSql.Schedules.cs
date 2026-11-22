@@ -25,10 +25,12 @@ internal static partial class AgentSql
         [new("@job_id", SqlDbType.UniqueIdentifier)], "listRows");
     /// <summary>The schedules the login may see (sysschedules_localserver_view: its own below SQLAgentReaderRole), each with its job count.</summary>
     public static readonly AgentStatement Schedules = new("schedules", "EXEC msdb.dbo.sp_help_schedule;", ScheduleColumns, [], "listRows");
-    /// <summary>Each visible schedule's version, modified date and owner, which a guarded save names (msdb grants SQLAgentUserRole SELECT on the view).</summary>
+    /// <summary>Each visible schedule's version, modified date and owner, which a guarded save names (msdb grants SQLAgentUserRole SELECT on the view).
+    /// The owner's SID comes too: a login through a Windows or Entra group owns schedules under its own SID, which has no server_principals
+    /// row, so the backend matches it against the connection's SID.</summary>
     public static readonly AgentStatement ScheduleVersions = new("scheduleVersions",
-        "SELECT s.schedule_id, s.version_number, s.date_modified, own.name AS owner\n"
-        + "FROM msdb.dbo.sysschedules_localserver_view AS s LEFT JOIN sys.server_principals AS own ON own.sid = s.owner_sid;", ["schedule_id", "version_number", "date_modified", "owner"], [], "listRows");
+        "SELECT s.schedule_id, s.version_number, s.date_modified, own.name AS owner, s.owner_sid\n"
+        + "FROM msdb.dbo.sysschedules_localserver_view AS s LEFT JOIN sys.server_principals AS own ON own.sid = s.owner_sid;", ["schedule_id", "version_number", "date_modified", "owner", "owner_sid"], [], "listRows");
     /// <summary>Which job uses which schedule (sysadmin: sysjobschedules is not granted to the Agent roles).</summary>
     public static readonly AgentStatement ScheduleLinks = new("scheduleLinks", "SELECT js.schedule_id, js.job_id FROM msdb.dbo.sysjobschedules AS js;", ["schedule_id", "job_id"], [], "listRows");
     /// <summary>One schedule's jobs (SQLAgentUserRole sees its own only).</summary>

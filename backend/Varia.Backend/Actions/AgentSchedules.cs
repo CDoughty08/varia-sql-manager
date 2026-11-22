@@ -33,15 +33,16 @@ internal sealed partial class ActionService
     internal static string? ScheduleTimingProblem(AgentScheduleTimingDto t)
     {
         if (!ScheduleDate(t.ActiveStartDate) || !ScheduleDate(t.ActiveEndDate) || !ScheduleTime(t.ActiveStartTime) || !ScheduleTime(t.ActiveEndTime)) return "dates and times";
-        if (t.FreqType is not (1 or 4 or 8 or 16 or 32 or 64 or 128) || t.FreqInterval is < 0 or > 127 || t.FreqSubdayType is not (0 or 1 or 2 or 4 or 8) || t.FreqSubdayInterval is < 0 or > 86_400
-            || t.FreqRelativeInterval is not (0 or 1 or 2 or 4 or 8 or 16) || t.FreqRecurrenceFactor is < 0 or > 99) return "ranges";
+        if (t.FreqType is not (1 or 4 or 8 or 16 or 32 or 64 or 128) || t.FreqInterval < 0 || t.FreqSubdayType is not (0 or 1 or 2 or 4 or 8) || t.FreqSubdayInterval < 0
+            || t.FreqRelativeInterval is not (0 or 1 or 2 or 4 or 8 or 16) || t.FreqRecurrenceFactor < 0) return "ranges";
         if (t.ActiveEndDate < t.ActiveStartDate) return "end date";
         switch (t.FreqType)
         {
             case 1 or 64 or 128:
                 return t.FreqInterval != 0 || t.FreqSubdayType != 0 || t.FreqSubdayInterval != 0 || t.FreqRelativeInterval != 0 || t.FreqRecurrenceFactor != 0 ? "frequency" : null;
-            case 4 when t.FreqInterval is < 1 or > 100 || t.FreqRecurrenceFactor != 0: return "daily";
-            case 8 when t.FreqInterval < 1 || t.FreqRecurrenceFactor < 1: return "weekly";
+            // msdb sets no upper bound on a daily interval or a recurrence factor (SSMS's dialog does; Varia warns past it).
+            case 4 when t.FreqInterval < 1 || t.FreqRecurrenceFactor != 0: return "daily";
+            case 8 when t.FreqInterval is < 1 or > 127 || t.FreqRecurrenceFactor < 1: return "weekly";
             case 16 when t.FreqInterval is < 1 or > 31 || t.FreqRecurrenceFactor < 1: return "monthly";
             case 32 when t.FreqInterval is < 1 or > 10 || t.FreqRelativeInterval < 1 || t.FreqRecurrenceFactor < 1: return "relative";
         }
@@ -153,14 +154,18 @@ internal sealed partial class ActionService
             ? now.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) : DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
 
     /// <summary>Schedules as sp_help_schedule or sp_help_jobschedule list them, each with the owner, version and modified date
-    /// <paramref name="versions"/> (sysschedules_localserver_view) lists for it.</summary>
-    internal static List<AgentScheduleRecordDto> ScheduleRecords(AgentResult rows, AgentResult? versions)
+    /// <paramref name="versions"/> (sysschedules_localserver_view) lists for it. A schedule whose owner SID is the connection's own
+    /// (<paramref name="principalId"/>, ConnectionPrincipal.FromSid) is <paramref name="login"/>'s, even without a server_principals row.</summary>
+    internal static List<AgentScheduleRecordDto> ScheduleRecords(AgentResult rows, AgentResult? versions, string? login = null, string? principalId = null)
     {
         var known = new Dictionary<int, (int Version, string? Modified, string? Owner)>();
         if (versions is not null)
             foreach (var row in versions.Rows)
+            {
+                var own = principalId is not null && login is not null && ConnectionPrincipal.FromSid(versions.Value(row, "owner_sid") as byte[]) == principalId;
                 known[IntOf(versions.Value(row, "schedule_id"))] = (IntOf(versions.Value(row, "version_number")), Modified(versions.Value(row, "date_modified")),
-                    versions.Value(row, "owner") is string owner ? owner : null);
+                    own ? login : versions.Value(row, "owner") is string owner ? owner : null);
+            }
         return [.. rows.Rows.Select(row =>
         {
             int Value(string column) => IntOf(rows.Value(row, column));
@@ -225,7 +230,7 @@ internal sealed partial class ActionService
         if (schedule is not null)
             return new(null, 0, AgentSchedules: new(login, sysadmin, platform, now, [], ScheduleJobs: ScheduleJobs(results[AgentSql.JobsInSchedule.Id])));
         var listed = results[AgentSql.Schedules.Id];
-        var records = ScheduleRecords(listed, Read(AgentSql.ScheduleVersions, out var versions) ? versions : null).OrderBy(record => record.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        var records = ScheduleRecords(listed, Read(AgentSql.ScheduleVersions, out var versions) ? versions : null, login, profile.PrincipalId).OrderBy(record => record.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         List<AgentScheduleJobDto>? jobs = Read(AgentSql.Jobs, out var jobRows) ? ScheduleJobs(jobRows) : null;
         List<AgentJobDurationDto>? durations = Read(AgentSql.JobDurations, out var durationRows) ? JobDurations(durationRows) : null;
         List<AgentScheduleLinkDto>? links = null;
@@ -244,9 +249,10 @@ internal sealed partial class ActionService
     }
 
     /// <summary>The job document's schedules: sp_help_jobschedule with the versions, or null when the job's read was not asked for.</summary>
-    internal static List<AgentScheduleRecordDto>? JobDocumentSchedules(Dictionary<string, AgentResult> results, List<AgentReadError> errors) =>
+    internal static List<AgentScheduleRecordDto>? JobDocumentSchedules(Dictionary<string, AgentResult> results, List<AgentReadError> errors, string? login = null, string? principalId = null) =>
         results.TryGetValue(AgentSql.JobSchedules.Id, out var rows) && errors.All(error => error.Statement != AgentSql.JobSchedules.Id)
-            ? ScheduleRecords(rows, results.TryGetValue(AgentSql.ScheduleVersions.Id, out var versions) && errors.All(error => error.Statement != AgentSql.ScheduleVersions.Id) ? versions : null)
+            ? ScheduleRecords(rows, results.TryGetValue(AgentSql.ScheduleVersions.Id, out var versions) && errors.All(error => error.Statement != AgentSql.ScheduleVersions.Id) ? versions : null,
+                login, principalId)
             : null;
 
     // --- Execute -----------------------------------------------------------------------------------------------------------

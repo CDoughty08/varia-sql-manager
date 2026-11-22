@@ -188,7 +188,7 @@ internal sealed partial class ActionService
         List<string>? jobIds = listed?.Select(entry => entry.Id).ToList();
         var readOnly = job is not null && !sysadmin && !string.Equals(job.Owner, login, StringComparison.OrdinalIgnoreCase) ? JobReadOnlyMessage : null;
         var mail = new AgentJobMailDto(mailChecked, sysadmin, mailXps is { } on ? on == 1 : null, profiles, useDatabaseMail, agentProfile);
-        var schedules = row is null ? [] : JobDocumentSchedules(results, errors);
+        var schedules = row is null ? [] : JobDocumentSchedules(results, errors, login, profile.PrincipalId);
         return new(null, 0, AgentJobDocument: new(job, login, sysadmin, platform, categories, steps, alerts is not null && sysadmin, mail, readOnly, operators, owners, alerts, jobs, jobIds,
             schedules, ClockOf(results)));
     }

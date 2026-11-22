@@ -8,7 +8,7 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionRequest } from '.
 import { agentLimits } from '../src/shared/agent/catalog'
 import {
   defaultSchedule, formatRun, freeSlotCheck, freeSlotText, freq, matchingPreset, median, nextRuns, noEndDate, noRunsReason, schedulePresets, scheduleMatches, scheduleProblems, scheduleSavable,
-  sameTiming, scheduleSentence, scheduleWhen, subday, withFrequency, type AgentMoment, type AgentScheduleFields
+  sameTiming, scheduleSentence, scheduleText, scheduleWhen, subday, withFrequency, type AgentMoment, type AgentScheduleFields
 } from '../src/shared/agent/schedule'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { submenus } from '../src/shared/commands/menus'
@@ -112,6 +112,19 @@ describe('schedule encoding, sentences and runs', () => {
     // A run that starts exactly as this one ends, or ends exactly as it starts, is no clash.
     expect(freeSlotCheck(fields(), now, 60, [{ name: 'Edge', enabled: true, usualSeconds: 60, schedules: [fields({ activeStartTime: 23100 }), fields({ activeStartTime: 22900 })] }]).clashes).toEqual([])
   })
+  it("warns past SSMS's limits that msdb does not have, and refuses an end date before the start for every type", () => {
+    for (const timing of [fields({ freqInterval: 365 }), fields({ freqSubdayType: subday.hours, freqSubdayInterval: 48, activeEndTime: 235959 }), fields({ freqType: freq.weekly, freqInterval: 2, freqRecurrenceFactor: 150 })]) {
+      const problems = scheduleProblems(timing, now)
+      expect(scheduleSavable(problems)).toBe(true)
+      expect(problems.some(problem => problem.severity === 'warning' && problem.field !== 'endTime')).toBe(true)
+      expect(timingProblem(timing)).toBeUndefined()
+    }
+    expect(scheduleSavable(scheduleProblems(fields({ freqInterval: 0 }), now))).toBe(false)
+    // A one-time schedule shows no end date: the refusal sits on its start date, which the user can change.
+    const once = fields({ freqType: freq.once, freqSubdayType: 0, freqInterval: 0, activeStartDate: 20270105, activeEndDate: 20270101 })
+    expect(scheduleProblems(once, now)).toContainEqual(expect.objectContaining({ field: 'startDate', severity: 'error' }))
+    expect(timingProblem(once)).toBeDefined()
+  })
   it('takes an end time of 00:00 as the 23:59:59 msdb stores', () => {
     const evening = fields({ freqSubdayType: subday.minutes, freqSubdayInterval: 15, activeStartTime: 180000, activeEndTime: 0 })
     expect(scheduleProblems(evening, now)).toEqual([])
@@ -173,6 +186,12 @@ describe("the job document's schedule saves", () => {
     expect(jobScheduleProblems(many.map((entry, at) => at < agentLimits.schedulesPerJob ? { ...entry, remove: 'detach' as const } : entry), now)).toEqual([])
     const unguarded = record(9, { version: undefined })
     expect(jobScheduleProblems([{ key: 's:9', id: 9, attached: true, base: unguarded, fields: scheduleFieldsOf(unguarded) }], now)).toEqual([{ key: 's:9', problem: expect.objectContaining({ severity: 'error', message: jobScheduleText.unguarded }) }])
+  })
+  it("checks only the job's schedules the user changed, so one made outside Varia never blocks the job's Save", () => {
+    const odd = record(4, { name: '' })
+    const entries = initialJobSchedules([odd])
+    expect(jobScheduleProblems(entries, now, [odd])).toEqual([])
+    expect(jobScheduleProblems([{ ...entries[0], fields: { ...entries[0].fields, activeStartTime: 10000 } }], now, [odd]).map(item => item.problem.message)).toContain(scheduleText.nameRequired)
   })
   it("moves picked schedules onto the shared schedules as read again, keeping the user's edits", () => {
     const picked = record(9, { name: 'Weekly', version: 1 })
@@ -411,6 +430,24 @@ describe('the Schedules document', () => {
     answer({ ok: true, value: { agentSchedules: { ...schedulesModel(), schedules: [], scheduleJobs: [jobA] }, elapsedMs: 1 } })
     await settled()
     expect(schedules.jobsOf(id, 2)?.map(job => job.name)).toEqual(['Backup'])
+  })
+  it("attaches and detaches only jobs the login owns below sysadmin, and reads a failed schedule's jobs again", async () => {
+    const { schedules, api } = schedulesWorkbench(schedulesModel({ sysadmin: false, login: 'sa', links: undefined, jobs: [jobA, { ...jobB, owner: 'dana' }] }))
+    const id = schedules.open('c1')
+    await settled()
+    api.describeObject.mockImplementationOnce(async () => ({ ok: false, code: 'SQL_ERROR', error: 'Refused.' }))
+    schedules.select(id, '1')
+    await settled()
+    expect(schedules.get(id)?.scheduleJobs?.[1]?.state).toBe('failed')
+    schedules.ensureScheduleJobs(id, 1)
+    await settled()
+    expect(schedules.get(id)?.scheduleJobs?.[1]?.state).toBe('ready')
+    expect(schedules.canChangeJob(id, jobA)).toBe(true)
+    expect(schedules.canChangeJob(id, { owner: 'dana' })).toBe(false)
+    schedules.toggleJob(id, jobB.id, true)
+    expect(schedules.get(id)?.drafts['1']).toBeUndefined()
+    schedules.toggleJob(id, jobA.id, true)
+    expect(schedules.get(id)?.drafts['1']?.jobs).toEqual([{ jobId: jobA.id, version: 4, attach: true }])
   })
   it("moves a draft's guard with its own Enabled toggle, not with someone else's change", async () => {
     const { schedules, setModel, executes } = schedulesWorkbench()

@@ -54,7 +54,8 @@ export interface SchedulesServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'executeObjectAction' | 'cancelObjectActions'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly focus?: (id: string) => void
+  /** Focus the document: its filter, or (`name`) the selected schedule's Name field, where New schedule puts the caret. */
+  readonly focus?: (id: string, target?: 'name') => void
   readonly newId?: () => string
 }
 
@@ -180,7 +181,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   /** One schedule's jobs, where the read has no links (below sysadmin): read once per schedule and read. */
   ensureScheduleJobs(id: string, scheduleId: number): void {
     const state = this.get(id), connectionId = this.connectionOf(id)
-    if (!state?.model || !connectionId || state.model.links || state.scheduleJobs?.[scheduleId] || !this.live(id)) return
+    const read = state?.scheduleJobs?.[scheduleId]
+    if (!state?.model || !connectionId || state.model.links || (read && read.state !== 'failed') || !this.live(id)) return
     this.patch(id, { scheduleJobs: { ...state.scheduleJobs, [scheduleId]: { state: 'loading' } } })
     const generation = this.generations.get(id) ?? 0
     void this.request(id, requestId => this.options.api.describeObject({ connectionId, requestId, dialog: 'agentSchedules', target: { kind: 'agent' }, schedule: scheduleId })).then(result => {
@@ -230,6 +232,12 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
       return (model.jobs ?? []).filter(job => ids.has(job.id.toLowerCase()))
     }
     return state?.scheduleJobs?.[scheduleId]?.jobs
+  }
+  /** Whether the login may attach a schedule to a job or detach it: msdb lets only the job's owner and sysadmin (14377, 14391), even
+   *  where SQLAgentReaderRole lists every job. */
+  canChangeJob(id: string, job: Pick<AgentScheduleJob, 'owner'>): boolean {
+    const model = this.get(id)?.model
+    return !!model && (model.sysadmin || job.owner.toLowerCase() === model.login.toLowerCase())
   }
   /** The selected schedule's jobs after its draft's attaches and detaches. */
   draftJobs(id: string): readonly AgentScheduleJob[] {
@@ -295,11 +303,11 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   newSchedule(id: string, from?: AgentScheduleFields): void {
     const state = this.get(id)
     if (!state || state.busy) return
-    if (state.drafts[newScheduleKey]) { this.patch(id, { selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id); return }
+    if (state.drafts[newScheduleKey]) { this.patch(id, { selected: newScheduleKey, confirmDelete: undefined, notice: schedulesText.newPending }); this.options.focus?.(id, 'name'); return }
     const fields = from ? { ...from, name: schedulesText.copyName(from.name) } : defaultSchedule(this.now(id).date)
     this.patch(id, { drafts: { ...state.drafts, [newScheduleKey]: { fields, jobs: [] } }, selected: newScheduleKey, confirmDelete: undefined, error: undefined, notice: undefined })
     this.dirtyChanged(id)
-    this.options.focus?.(id)
+    this.options.focus?.(id, 'name')
   }
   duplicate(id: string): void {
     const draft = this.draft(id)
@@ -323,7 +331,7 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
   toggleJob(id: string, jobId: string, attach: boolean): void {
     const state = this.get(id), key = state?.selected, draft = this.draft(id)
     const job = this.job(id, jobId)
-    if (!state || !key || !draft || !job || state.busy) return
+    if (!state || !key || !draft || !job || state.busy || !this.canChangeJob(id, job)) return
     const lower = jobId.toLowerCase()
     const pending = draft.jobs.find(item => item.jobId.toLowerCase() === lower)
     const jobs = pending ? draft.jobs.filter(item => item !== pending) : [...draft.jobs, { jobId: job.id, version: job.version, attach }].slice(0, agentLimits.scheduleJobChanges)
@@ -428,7 +436,8 @@ export class SchedulesService extends SnapshotStore<SchedulesSnapshot> implement
 
   canClose(id: string): string | undefined { return this.isDirty(id) ? 'The Schedules document has unsaved schedule changes.' : undefined }
   revision(id: string): number { return this.get(id)?.revision ?? 0 }
-  focus(id: string): void { this.options.focus?.(id) }
+  /** The tab's focus: a new schedule's Name, else the filter. */
+  focus(id: string): void { this.options.focus?.(id, this.get(id)?.selected === newScheduleKey ? 'name' : undefined) }
   follows(_id: string, _server: string): boolean { return false }
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
   coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }

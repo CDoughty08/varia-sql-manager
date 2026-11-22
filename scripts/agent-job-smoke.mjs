@@ -142,6 +142,8 @@ try {
   // The Agent node's New › Schedule… opens the same document with a new schedule; Create adds it.
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], ['New', 'Schedule…'])
   const created = page.getByRole('region', { name: 'New schedule', exact: true })
+  // New schedule puts the caret in its Name, not in the filter.
+  await expect(created.getByLabel('Name', { exact: true })).toBeFocused()
   await created.getByLabel('Name', { exact: true }).fill('Ad hoc')
   await created.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Created Ad hoc.' })).toBeVisible()

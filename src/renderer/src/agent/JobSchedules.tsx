@@ -3,7 +3,7 @@
 // schedule edited in place, a shared schedule's preview with Attach, or a removed one's detach or delete choice with Undo. Nothing reaches
 // the server until the job is saved. JobDocumentService keeps every state; this only draws it.
 import { useEffect } from 'react'
-import { jobScheduleProblems, jobScheduleText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
+import { jobScheduleProblems, jobScheduleText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import {
@@ -34,18 +34,34 @@ function otherJobs(state: JobDocumentState, model: AgentJobDocumentModel, schedu
   return state.scheduleJobs?.[scheduleId]?.jobs?.filter(job => job.id.toLowerCase() !== self)
 }
 
+/** Each shared read's other jobs with their schedules and durations, by the job they leave out: built once per read, not per keystroke. */
+const scheduledJobs = new WeakMap<AgentSchedulesModel, Map<string, { readonly others: readonly ScheduledJob[]; readonly mine?: number }>>()
+function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly others: readonly ScheduledJob[]; readonly mine?: number } {
+  const byJob = scheduledJobs.get(shared) ?? new Map<string, { readonly others: readonly ScheduledJob[]; readonly mine?: number }>()
+  scheduledJobs.set(shared, byJob)
+  const known = byJob.get(self)
+  if (known) return known
+  const durations = new Map((shared.durations ?? []).map(item => [item.jobId.toLowerCase(), item.seconds]))
+  const records = new Map(shared.schedules.map(record => [record.id, record]))
+  const linked = new Map<string, AgentScheduleRecord[]>()
+  for (const link of shared.links ?? []) {
+    const record = records.get(link.scheduleId), job = link.jobId.toLowerCase()
+    if (record) linked.set(job, [...linked.get(job) ?? [], record])
+  }
+  const others: ScheduledJob[] = (shared.jobs ?? []).filter(job => job.id.toLowerCase() !== self).map(job => {
+    const id = job.id.toLowerCase()
+    return { name: job.name, enabled: job.enabled, ...durations.has(id) ? { usualSeconds: durations.get(id)! } : {}, schedules: linked.get(id) ?? [] }
+  })
+  const made = { others, ...durations.has(self) ? { mine: durations.get(self)! } : {} }
+  byJob.set(self, made)
+  return made
+}
 /** The free-slot check, where the shared read knows every job's schedules and durations (sysadmin); undefined otherwise. */
 function freeSlot(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry, now: ReturnType<JobDocumentService['now']>): string | undefined {
   const shared = state.shared?.model
   if (!shared?.links || !shared.jobs || entry.fields.freqType === freq.agentStart || entry.fields.freqType === freq.idle) return undefined
-  const self = model.job?.jobId.toLowerCase()
-  const durations = new Map((shared.durations ?? []).map(item => [item.jobId.toLowerCase(), item.seconds]))
-  const records = new Map(shared.schedules.map(record => [record.id, record]))
-  const others: ScheduledJob[] = shared.jobs.filter(job => job.id.toLowerCase() !== self).map(job => ({
-    name: job.name, enabled: job.enabled, ...durations.has(job.id.toLowerCase()) ? { usualSeconds: durations.get(job.id.toLowerCase())! } : {},
-    schedules: shared.links!.filter(link => link.jobId.toLowerCase() === job.id.toLowerCase()).flatMap(link => records.get(link.scheduleId) ?? [])
-  }))
-  return freeSlotText(freeSlotCheck(entry.fields, now, self ? durations.get(self) : undefined, others))
+  const { others, mine } = scheduledJobsOf(shared, model.job?.jobId.toLowerCase() ?? '')
+  return freeSlotText(freeSlotCheck(entry.fields, now, mine, others))
 }
 
 function EntryRow({ entry, selected, record, onSelect }: { readonly entry: JobScheduleEntry; readonly selected: boolean; readonly record?: AgentScheduleRecord; readonly onSelect: () => void }) {
@@ -151,7 +167,7 @@ export default function JobSchedules(props: Props) {
   const usable = (sharedState?.model?.schedules ?? []).filter(item => !onJob.has(item.id) && (model.sysadmin || ownsSchedule(item, model.login)))
   const matches = search.trim() ? usable.filter(item => scheduleMatches(item, search)) : []
   const picked = selected?.startsWith('pick:') ? usable.find(item => item.id === Number(selected.slice(5))) ?? sharedState?.model?.schedules.find(item => item.id === Number(selected.slice(5))) : undefined
-  const listProblems = jobScheduleProblems(draft.schedules).filter(item => !item.key)
+  const listProblems = jobScheduleProblems(draft.schedules, undefined, model.schedules).filter(item => !item.key)
   const searchId = `agent-schedule-search-${state.id}`
   return <div className="agent-schedules">
     <div className="agent-schedule-list">

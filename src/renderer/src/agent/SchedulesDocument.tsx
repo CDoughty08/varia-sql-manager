@@ -2,8 +2,8 @@
 // New schedule, Duplicate, Delete, Refresh), the schedules' grid with an Enabled box that saves at once, and beside it the selected
 // schedule's editor (the job document's ScheduleEditor), the jobs that use it with Attach and Detach, and "Save · n changes".
 // SchedulesService keeps every state; this only draws it.
-import { useState } from 'react'
-import { scheduleFieldsOf } from '../../../shared/actions/agent-schedule.ts'
+import { memo, useMemo, useState } from 'react'
+import { scheduleFieldsOf, type AgentScheduleRecord, type AgentSchedulesModel } from '../../../shared/actions/agent-schedule.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { scheduleProblems, scheduleWhen } from '../../../shared/agent/schedule.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -26,7 +26,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
   const pending = new Map(draft.jobs.map(job => [job.jobId.toLowerCase(), job.attach]))
   const read = record && !state.model?.links ? state.scheduleJobs?.[record.id] : undefined
   const using = new Set(jobs.map(job => job.id.toLowerCase()))
-  const attachable = (state.model?.jobs ?? []).filter(job => !using.has(job.id.toLowerCase()))
+  const attachable = (state.model?.jobs ?? []).filter(job => !using.has(job.id.toLowerCase()) && service.canChangeJob(state.id, job))
   const changes = service.changes(state.id)
   const busy = !!state.busy
   const idPrefix = `agent-schedules-${state.id}-${key}`
@@ -46,7 +46,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
         {jobs.length ? <ul className="agent-schedule-jobs">{jobs.map(job => {
           const change = pending.get(job.id.toLowerCase())
           return <li key={job.id}><Icon name="agent-job" />{job.name}{change === true && <span className="agent-schedule-tag"> · attached on save</span>}
-            <button type="button" className="agent-schedules-link" disabled={!!readOnly || busy} aria-label={change === true ? `Undo attach ${job.name}` : `Detach ${job.name}`}
+            <button type="button" className="agent-schedules-link" disabled={!!readOnly || busy || !service.canChangeJob(state.id, job)} aria-label={change === true ? `Undo attach ${job.name}` : `Detach ${job.name}`}
               onClick={() => service.toggleJob(state.id, job.id, false)}>{change === true ? 'Undo' : 'Detach'}</button></li>
         })}</ul> : <p className="field-note">{read?.state === 'loading' ? 'Reading…' : read?.state === 'failed' ? 'Which jobs use it could not be read.' : record?.jobCount ? 'Only your own jobs are listed.' : 'No job uses it.'}</p>}
         {draft.jobs.filter(job => !job.attach).map(job => <p key={job.jobId} className="field-note">{state.model?.jobs?.find(item => item.id.toLowerCase() === job.jobId.toLowerCase())?.name ?? 'A job'} is detached on save.
@@ -69,13 +69,46 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
   </div>
 }
 
+interface GridProps {
+  readonly documentId: string
+  readonly rows: readonly AgentScheduleRecord[]
+  readonly selected?: string
+  /** The ids with a draft, joined, so a keystroke in the editor leaves the grid as it is. */
+  readonly edited: string
+  readonly busy: boolean
+  readonly service: SchedulesService
+  /** The read the rows came from: whether each is read-only follows it. */
+  readonly model: AgentSchedulesModel
+}
+const ScheduleGrid = memo(function ScheduleGrid({ documentId, rows, selected: current, edited, busy, service }: GridProps) {
+  const drafts = new Set(edited.split(',').filter(Boolean))
+  return <table className="agent-schedules-grid" aria-label="Schedules" aria-rowcount={rows.length}>
+    <thead><tr><th scope="col">Name</th><th scope="col">When</th><th scope="col">Enabled</th><th scope="col">Jobs</th><th scope="col">Owner</th></tr></thead>
+    <tbody>
+      {rows.map(record => {
+        const key = String(record.id), selected = current === key
+        const readOnly = !!service.readOnly(documentId, record)
+        return <tr key={key} aria-selected={selected} data-disabled={record.enabled ? undefined : true} onClick={() => service.select(documentId, key)}>
+          <td><button type="button" className="agent-schedules-row" aria-current={selected || undefined} onClick={event => { event.stopPropagation(); service.select(documentId, key) }}>
+            {record.name}{drafts.has(key) && <span className="agent-schedule-tag"> · edited</span>}</button></td>
+          <td>{scheduleWhen(record)}</td>
+          <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={readOnly || busy}
+            onClick={event => event.stopPropagation()} onChange={event => { void service.setEnabled(documentId, record.id, event.target.checked) }} /></td>
+          <td>{record.jobCount || <span className="agent-schedule-tag">unused</span>}</td>
+          <td>{record.owner ?? ''}</td>
+        </tr>
+      })}
+    </tbody>
+  </table>
+})
+
 export default function SchedulesDocument({ documentId }: { readonly documentId: string }) {
   const service = useWorkbench().schedules
   const { documents } = useServiceSnapshot(service)
   const state = documents[documentId]
+  const model = state?.model
+  const rows = useMemo(() => visibleSchedules(model, state?.view ?? 'all', state?.filter ?? ''), [model, state?.view, state?.filter])
   if (!state) return null
-  const model = state.model
-  const rows = visibleSchedules(model, state.view, state.filter)
   const counts = { all: model?.schedules.length ?? 0, unused: model?.schedules.filter(record => record.jobCount === 0).length ?? 0, disabled: model?.schedules.filter(record => !record.enabled).length ?? 0 }
   const viewId = `agent-schedules-view-${documentId}`
   const busy = !!state.busy
@@ -98,24 +131,8 @@ export default function SchedulesDocument({ documentId }: { readonly documentId:
     {state.view === 'unused' && <p className="field-note">{schedulesText.unusedNote}</p>}
     {state.phase === 'loading' && !model ? <Skeleton /> : model && <div className="agent-schedules-body">
       <div className="agent-schedules-grid-wrap">
-        <table className="agent-schedules-grid" aria-label="Schedules" aria-rowcount={rows.length}>
-          <thead><tr><th scope="col">Name</th><th scope="col">When</th><th scope="col">Enabled</th><th scope="col">Jobs</th><th scope="col">Owner</th></tr></thead>
-          <tbody>
-            {rows.map(record => {
-              const key = String(record.id), selected = state.selected === key
-              const readOnly = !!service.readOnly(documentId, record)
-              return <tr key={key} aria-selected={selected} data-disabled={record.enabled ? undefined : true} onClick={() => service.select(documentId, key)}>
-                <td><button type="button" className="agent-schedules-row" aria-current={selected || undefined} onClick={event => { event.stopPropagation(); service.select(documentId, key) }}>
-                  {record.name}{state.drafts[key] && <span className="agent-schedule-tag"> · edited</span>}</button></td>
-                <td>{scheduleWhen(record)}</td>
-                <td><input type="checkbox" aria-label={`Enabled: ${record.name}`} checked={record.enabled} disabled={readOnly || busy}
-                  onClick={event => event.stopPropagation()} onChange={event => { void service.setEnabled(documentId, record.id, event.target.checked) }} /></td>
-                <td>{record.jobCount || <span className="agent-schedule-tag">unused</span>}</td>
-                <td>{record.owner ?? ''}</td>
-              </tr>
-            })}
-          </tbody>
-        </table>
+        <ScheduleGrid documentId={documentId} rows={rows} {...state.selected ? { selected: state.selected } : {}} edited={Object.keys(state.drafts).sort().join(',')} busy={busy}
+          service={service} model={model} />
         {!rows.length && <p className="field-note">{model.schedules.length ? 'No schedule matches.' : 'This server has no schedule yet.'}</p>}
       </div>
       <Detail key={state.selected ?? ''} state={state} service={service} />

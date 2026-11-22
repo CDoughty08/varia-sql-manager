@@ -158,13 +158,16 @@ internal static class AgentScheduleChecks
             ("the last Friday", new(32, 6, 1, 0, 16, 1, 20_260_101, 99_991_231, 0, 235_959)), ("once", new(1, 0, 0, 0, 0, 0, 20_261_122, 99_991_231, 30_000, 235_959)),
             ("every 10 seconds overnight", new(4, 1, 2, 10, 0, 0, 20_260_101, 20_261_231, 220_000, 40_000)), ("at Agent start", new(64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)),
             // sp_verify_schedule stores an end of 00:00:00 as 23:59:59, so every hour from midnight to 00:00 is the whole day.
-            ("every hour, the whole day, ending at 00:00", new(4, 1, 8, 1, 0, 0, 20_260_101, 99_991_231, 0, 0))
+            ("every hour, the whole day, ending at 00:00", new(4, 1, 8, 1, 0, 0, 20_260_101, 99_991_231, 0, 0)),
+            // Beyond SSMS's dialog limits, which msdb does not have.
+            ("every 365 days", Daily with { FreqInterval = 365 }), ("every 48 hours", new(4, 1, 8, 48, 0, 0, 20_260_101, 99_991_231, 0, 235_959)),
+            ("every 150 weeks", new(8, 2, 1, 0, 0, 150, 20_260_101, 99_991_231, 0, 235_959))
         };
         foreach (var (name, timing) in valid) check(ActionService.ScheduleTimingProblem(timing) is null, "a timing sp_verify_schedule accepts passes: " + name);
         var invalid = new (string Name, AgentScheduleTimingDto Timing)[]
         {
             ("freq_type 2", Daily with { FreqType = 2 }), ("daily every 0 days", Daily with { FreqInterval = 0 }), ("weekly with no day", new(8, 0, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)),
-            ("weekly every 0 weeks", new(8, 2, 1, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)), ("monthly day 32", new(16, 32, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)),
+            ("weekly every 0 weeks", new(8, 2, 1, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959)), ("monthly day 32", new(16, 32, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)), ("weekly day bits past Saturday", new(8, 128, 1, 0, 0, 1, 20_260_101, 99_991_231, 0, 235_959)),
             ("relative third of nothing", new(32, 11, 1, 0, 4, 1, 20_260_101, 99_991_231, 0, 235_959)), ("every 5 seconds", Daily with { FreqSubdayType = 2, FreqSubdayInterval = 5 }),
             ("a repeat with equal start and end", EveryQuarterHour with { ActiveEndTime = 60_000 }), ("a repeat from 23:59:59 to 00:00", EveryQuarterHour with { ActiveStartTime = 235_959, ActiveEndTime = 0 }), ("an end before the start", Daily with { ActiveEndDate = 20_251_231 }),
             ("1989", Daily with { ActiveStartDate = 19_891_231 }), ("February 30", Daily with { ActiveStartDate = 20_260_230 }), ("24:00", Daily with { ActiveStartTime = 240_000 }),
@@ -279,9 +282,15 @@ internal static class AgentScheduleChecks
         var rows = new AgentResult(["schedule_id", "schedule_name", "enabled", "freq_type", "freq_interval", "freq_subday_type", "freq_subday_interval", "freq_relative_interval", "freq_recurrence_factor",
             "active_start_date", "active_end_date", "active_start_time", "active_end_time", "job_count"],
             [[5, "Nightly", (byte)1, 4, 1, 1, 0, 0, 0, 20_260_101, 99_991_231, 23_000, 235_959, 2], [6, "Theirs", (byte)0, 64, 0, 0, 0, 0, 0, 20_260_101, 99_991_231, 0, 235_959, 1]], false);
-        var versions = new AgentResult(["schedule_id", "version_number", "date_modified", "owner"], [[5, 3, new DateTime(2026, 11, 20, 14, 32, 7, 0), "CONTOSO\\dana"]], false);
+        byte[] dana = [1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 1], member = [1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 2];
+        var versions = new AgentResult(["schedule_id", "version_number", "date_modified", "owner", "owner_sid"], [[5, 3, new DateTime(2026, 11, 20, 14, 32, 7, 0), "CONTOSO\\dana", dana]], false);
         var records = ActionService.ScheduleRecords(rows, versions);
         check(records is [{ Id: 5, Name: "Nightly", Enabled: true, JobCount: 2, Version: 3, Modified: "2026-11-20T14:32:07.000", Owner: "CONTOSO\\dana" }, { Id: 6, Enabled: false, FreqType: 64, Version: null, Owner: null }],
             "a schedule carries its version, modified date (milliseconds always written) and owner where the view lists it, and none where it does not (then it cannot be changed)");
+        // A login through a Windows group owns schedules under its own SID, which server_principals does not list.
+        var grouped = new AgentResult(["schedule_id", "version_number", "date_modified", "owner", "owner_sid"], [[5, 3, new DateTime(2026, 11, 20, 14, 32, 7, 0), null, member]], false);
+        check(ActionService.ScheduleRecords(rows, grouped, "CONTOSO\\member", ConnectionPrincipal.FromSid(member))[0].Owner == "CONTOSO\\member"
+            && ActionService.ScheduleRecords(rows, grouped, "CONTOSO\\member", ConnectionPrincipal.FromSid(dana))[0].Owner is null,
+            "a schedule whose owner SID is the connection's own is the login's, even without a server_principals row; another SID stays unnamed");
     }
 }

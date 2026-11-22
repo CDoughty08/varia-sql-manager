@@ -286,6 +286,8 @@ export const scheduleText = {
   nameTooLong: `A name holds at most ${agentLimits.nameChars} characters.`,
   noDays: 'Choose at least one day of the week.',
   interval: (unit: string, most: number) => `Every how many ${unit}: a whole number from 1 to ${most}.`,
+  beyondSsms: (unit: string, most: number) => `SSMS offers at most ${most} ${unit} here; SQL Server Agent accepts more and runs it as set.`,
+  endBeforeStartHidden: (end: string) => `This schedule's end date (${end}, set outside Varia) is before its start date; SQL Server Agent refuses that. Choose an earlier start date.`,
   seconds: 'Every n seconds: at least 10 (SQL Server Agent\'s smallest interval).',
   monthDay: 'A day of the month from 1 to 31.',
   monthDayShort: (day: number) => `Months with fewer than ${day} days are skipped.`,
@@ -313,26 +315,31 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment)
   const error = (field: ScheduleField, message: string) => problems.push({ field, severity: 'error', message })
   const warn = (field: ScheduleField, message: string) => problems.push({ field, severity: 'warning', message })
   const whole = (value: number, low: number, high: number) => Number.isInteger(value) && value >= low && value <= high
+  // SSMS's dialog limits: msdb's sp_verify_schedule has no upper bound, so beyond them is a warning, never a refusal.
+  const count = (field: ScheduleField, value: number, unit: string, most: number) => {
+    if (!Number.isInteger(value) || value < 1) error(field, scheduleText.interval(unit, most))
+    else if (value > most) warn(field, scheduleText.beyondSsms(unit, most))
+  }
   if (!fields.name.trim()) error('name', scheduleText.nameRequired)
   else if (fields.name.length > agentLimits.nameChars) error('name', scheduleText.nameTooLong)
   if (!validDate(fields.activeStartDate)) error('startDate', scheduleText.startDate)
   const recurringType = fields.freqType === freq.daily || fields.freqType === freq.weekly || fields.freqType === freq.monthly || fields.freqType === freq.relative
   if (recurringType) {
-    if (fields.freqType === freq.daily && !whole(fields.freqInterval, 1, 100)) error('interval', scheduleText.interval('days', 100))
+    if (fields.freqType === freq.daily) count('interval', fields.freqInterval, 'days', 100)
     if (fields.freqType === freq.weekly) {
       if (!whole(fields.freqInterval, 1, 127)) error('days', scheduleText.noDays)
-      if (!whole(fields.freqRecurrenceFactor, 1, 99)) error('interval', scheduleText.interval('weeks', 99))
+      count('interval', fields.freqRecurrenceFactor, 'weeks', 99)
     }
     if (fields.freqType === freq.monthly) {
       if (!whole(fields.freqInterval, 1, 31)) error('days', scheduleText.monthDay)
       else if (fields.freqInterval > 28) warn('days', scheduleText.monthDayShort(fields.freqInterval))
-      if (!whole(fields.freqRecurrenceFactor, 1, 99)) error('interval', scheduleText.interval('months', 99))
+      count('interval', fields.freqRecurrenceFactor, 'months', 99)
     }
-    if (fields.freqType === freq.relative && !whole(fields.freqRecurrenceFactor, 1, 99)) error('interval', scheduleText.interval('months', 99))
+    if (fields.freqType === freq.relative) count('interval', fields.freqRecurrenceFactor, 'months', 99)
     if (fields.freqSubdayType !== subday.once) {
       const most = fields.freqSubdayType === subday.hours ? 24 : fields.freqSubdayType === subday.minutes ? 1440 : 86_400
       if (fields.freqSubdayType === subday.seconds && whole(fields.freqSubdayInterval, 1, 9)) error('dailyFrequency', scheduleText.seconds)
-      else if (!whole(fields.freqSubdayInterval, 1, most)) error('dailyFrequency', scheduleText.interval(`${unitOf(fields.freqSubdayType)}s`, most))
+      else count('dailyFrequency', fields.freqSubdayInterval, `${unitOf(fields.freqSubdayType)}s`, most)
       if (!validTime(fields.activeEndTime)) error('endTime', scheduleText.endTime)
       else if (effectiveEndTime(fields.activeEndTime) === fields.activeStartTime) error('endTime', scheduleText.sameTimes)
       else if (effectiveEndTime(fields.activeEndTime) < fields.activeStartTime) warn('endTime', scheduleText.spansMidnight)
@@ -340,6 +347,9 @@ export function scheduleProblems(fields: AgentScheduleFields, now?: AgentMoment)
     if (fields.activeEndDate !== noEndDate && !validDate(fields.activeEndDate)) error('endDate', scheduleText.endDate)
     else if (fields.activeEndDate < fields.activeStartDate) error('endDate', scheduleText.endBeforeStart)
     else if (now && fields.activeEndDate < now.date) warn('endDate', scheduleText.ended)
+  } else if (validDate(fields.activeEndDate) && fields.activeEndDate < fields.activeStartDate) {
+    // A one-time, autostart or idle schedule shows no end date, yet sp_verify_schedule refuses one before the start for every type.
+    error('startDate', scheduleText.endBeforeStartHidden(formatDate(fields.activeEndDate)))
   }
   if (!validTime(fields.activeStartTime)) error('startTime', scheduleText.startTime)
   if (fields.freqType === freq.once && now && validDate(fields.activeStartDate) && validTime(fields.activeStartTime) && momentSeconds({ date: fields.activeStartDate, time: fields.activeStartTime }) <= momentSeconds(now)) {
