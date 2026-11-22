@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { truncationText } from '../src/renderer/src/grid/ResultGrid'
+import { loadingText, truncationText } from '../src/renderer/src/grid/ResultGrid'
 
 const GiB = 1024 ** 3
 const now = { usedBytes: 0, globalBytes: 1 * GiB, queryBytes: GiB / 2, generation: 1, seq: 4 }
@@ -36,5 +36,14 @@ describe('the truncation strip\'s budget figure', () => {
     expect(truncationText({ truncated: 'globalBudget', rowsStored: 10, rowsRead: 20, budget: now })).toContain('(1,024 MB)')
     expect(truncationText({ truncated: 'queryBudget', rowsStored: 10, rowsRead: 20, budget: now })).toContain('(512 MB)')
     expect(truncationText({ truncated: 'queryBudget', rowsStored: 10, rowsRead: 20 })).toContain('the result memory budget is full')
+  })
+})
+
+describe('a windowed result loading into memory', () => {
+  it('says how many rows have loaded of those it showed, or that it is stopping', () => {
+    expect(loadingText('', { rowsAvailable: 0 })).toBeUndefined()
+    expect(loadingText('loading', { rowsAvailable: 1_200, rowsExpected: 5_000, rowsTotal: 9_000 })).toBe('Loading into memory: 1,200 of 5,000 rows.')
+    expect(loadingText('loading', { rowsAvailable: 0, rowsTotal: 9_000 })).toBe('Loading into memory: 0 of 9,000 rows.')
+    expect(loadingText('stopping', { rowsAvailable: 10 })).toBe('Stopping the load: the result stays windowed in BigQuery.')
   })
 })

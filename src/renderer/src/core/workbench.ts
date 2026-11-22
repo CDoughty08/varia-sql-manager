@@ -81,6 +81,7 @@ import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { pivotContribution } from '../contributions/pivot'
 import { transposeContribution } from '../contributions/transpose'
+import { loadIntoMemoryContribution } from '../contributions/load-into-memory'
 import { plansContribution } from '../contributions/plans'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
@@ -834,6 +835,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    loadIntoMemoryContribution(workbench),
     plansContribution(workbench, api),
     paletteContribution(workbench),
     themeContribution(workbench, api),

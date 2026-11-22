@@ -37,6 +37,7 @@ import { PivotService } from '../../src/renderer/src/results/PivotService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
+import { loadIntoMemoryContribution } from '../../src/renderer/src/contributions/load-into-memory'
 import { plansContribution } from '../../src/renderer/src/contributions/plans'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
@@ -596,6 +597,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
+    loadIntoMemoryContribution(workbench),
     plansContribution(workbench, api),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),

@@ -419,6 +419,8 @@ describe('menu state', () => {
       'output.updatePivot',
       // The grid menu's Transpose submenu, also the results toolbar's Transposed and Headers.
       'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders', 'output.transposeChooseHeaders',
+      // A windowed BigQuery result's strip offers Load into Memory, also in the results toolbar's ⋯ menu.
+      'output.loadIntoMemory',
       // Stepping through the results' tabs: keys, the tabs' own arrow keys and the palette; Window › Go to Result… lists them.
       'output.nextResult', 'output.previousResult', 'output.nextResultView', 'output.previousResultView',
       // Browser tab keys and the palette: Go to Result 1 to 8 and the last, and the same for query tabs.

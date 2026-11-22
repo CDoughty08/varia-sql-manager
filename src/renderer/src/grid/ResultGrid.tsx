@@ -55,6 +55,14 @@ export function diffSidesOf(info: Pick<CompareInfo, 'left' | 'right' | 'leftNumb
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
+export const windowedText = 'This result is windowed in BigQuery: rows are read as you scroll. Load it into memory to sort, filter, search or pivot it.'
+/** A load into memory's strip: how many rows it has read of how many, or that it is stopping. */
+export function loadingText(loading: string, snapshot: { rowsAvailable: number; rowsExpected?: number; rowsTotal?: number }): string | undefined {
+  if (!loading) return undefined
+  if (loading === 'stopping') return 'Stopping the load: the result stays windowed in BigQuery.'
+  const total = snapshot.rowsExpected ?? snapshot.rowsTotal
+  return total ? `Loading into memory: ${formatCount(snapshot.rowsAvailable)} of ${formatCount(total)} rows.` : `Loading into memory: ${formatCount(snapshot.rowsAvailable)} rows.`
+}
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
 export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget']; residence?: string; rowsAvailable?: number }): string | undefined {
@@ -240,7 +248,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
   const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot', snapshot.residence === 'remote') : undefined
-  const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
+  // A windowed result loading into memory says how far it has got, with Stop; a finished one offers to load (and when it
+  // has nothing else to say, says it is windowed).
+  const loading = useSyncExternalStore(results.subscribe, () => { const load = results.getSnapshot()[tabId]?.loads?.get(key); return load ? load.stopping ? 'stopping' : 'loading' : '' })
+  const loadable = useSyncExternalStore(results.subscribe, () => results.canLoadIntoMemory(tabId, key))
+  const loadNote = lost ? undefined : loadingText(loading, snapshot)
+  const other = lost ? undefined : loadNote ?? (snapshot.incomplete ? incompleteText : truncation ?? highlightNote ?? (loadable ? windowedText : undefined))
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
   const rootEl = useRef<HTMLDivElement | null>(null), hadFocus = useRef(false)
@@ -270,6 +283,11 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     ? { label: 'Stop query', icon: commandDescriptor('query.cancel').icon, title: withKey(commandDescriptor('query.cancel').title, cancelKey), keys: cancelKey?.aria,
       run: () => void commands.execute('query.cancel', { tabId, state: { queryRunning: running } }, 'toolbar') }
     : undefined
+  const load = loadNote && loading === 'loading' ? { label: 'Stop', icon: commandDescriptor('query.cancel').icon, title: 'Stop loading: the result stays windowed in BigQuery', run: () => results.stopLoad(tabId, key) }
+    : loadable && other !== undefined && !stop ? { label: 'Load into memory', icon: commandDescriptor('output.loadIntoMemory').icon, title: 'Read every row of this result into result memory, so it can be sorted, filtered, searched and pivoted',
+      run: () => void results.loadIntoMemory(tabId, key).then(refused => { if (refused) results.announce(tabId, refused) }) }
+    : undefined
+  const action = stop ?? load
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
@@ -286,7 +304,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels} busy={busy} onHeld={() => results.operations.refused(tabId, key)}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note, ...stop ? { action: stop } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl}
+    strip={note ? { text: note, ...action ? { action } : {}, ...lead ? { lead } : {} } : undefined} rootRef={setRootEl}
     head={compared && !bare && !lost ? <ComparisonToolbar tabId={tabId} entry={entry} info={compared} sources={sources} goTo={goTo} /> : undefined} />
 }
 

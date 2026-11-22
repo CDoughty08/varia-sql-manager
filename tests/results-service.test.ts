@@ -21,7 +21,9 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
-    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
+    onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } }),
+    remoteQuery: vi.fn<VariaApi['remoteQuery']>(async () => ({ ok: false, error: 'Not faked.' })),
+    cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } }))
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
   const clock = { now: 1000 }
@@ -521,6 +523,60 @@ describe('results service', () => {
     flush()
     await service.saveAs('t1', keyAt(service, 't1', 0), 'SQLQuery1')
     expect(api.saveResults).toHaveBeenCalledWith(expect.objectContaining({ generation: 1, resultId: 1 }))
+    service.dispose()
+  })
+  it('loads a windowed result of a finished run into memory, following its own events after the run ended', async () => {
+    const { api, client, service, tab, flush, timers } = fixture()
+    service.begin('t1', 'q1')
+    const windowed = descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })
+    service.finish('t1', 'q1', { summary: summaryOf([windowed]) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(true)
+    const answer = deferred<ApiResult<import('../src/shared/contracts').QueryResult>>()
+    api.remoteQuery.mockReturnValueOnce(answer.promise)
+    const loading = service.loadIntoMemory('t1', key)
+    expect(api.remoteQuery).toHaveBeenCalledWith({ queryId: 'job-1', generation: 1, resultId: 1, kind: 'load' })
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: false }))
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    // The load's residence event arrives after the run finished: it is the load's, so the switch is said.
+    client.emit('job-1', { type: 'resultSet.residence', descriptor: { ...windowed, residence: 'memory', revision: 1, rowsAvailable: 0, state: 'open' } })
+    timers.advance(1_000)
+    flush()
+    expect(tab()!.announcement).toContain('The result is loading into memory.')
+    // Stop asks query.cancel with the load's own id, once.
+    service.stopLoad('t1', key)
+    service.stopLoad('t1', key)
+    expect(api.cancel).toHaveBeenCalledTimes(1)
+    expect(api.cancel).toHaveBeenCalledWith('job-1')
+    flush()
+    expect(tab()!.loads?.get(key)).toEqual(expect.objectContaining({ stopping: true }))
+    const loaded = { ...windowed, residence: 'memory' as const, revision: 1, rowsStored: 5_000, state: 'complete' as const }
+    answer.resolve({ ok: true, value: { ...summaryOf([loaded]), messages: [{ text: 'The result was loaded into memory.', kind: 'info' }] } })
+    expect(await loading).toBeUndefined()
+    flush()
+    expect(tab()!.loads).toBeUndefined()
+    expect(client.listening('job-1')).toBe(0)
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'The result was loaded into memory.', kind: 'info' })
+    expect(tab()!.settled.get('1:1')).toEqual(expect.objectContaining({ rows: 5_000 }))
+    service.dispose()
+  })
+  it('refuses Load into memory while the run still runs, and says why a refused load failed', async () => {
+    const { api, client, service, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'complete', rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 }) })
+    flush()
+    const key = keyAt(service, 't1', 0)
+    expect(service.canLoadIntoMemory('t1', key)).toBe(false)
+    expect(await service.loadIntoMemory('t1', key)).toBe('Load the result into memory once its query has finished.')
+    expect(api.remoteQuery).not.toHaveBeenCalled()
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 0, rowsAvailable: 5_000, residence: 'remote', revision: 0, rowsTotal: 5_000 })]) })
+    api.remoteQuery.mockResolvedValueOnce({ ok: false, error: 'Another result of this query is loading into memory.', code: 'BUSY' })
+    await service.loadIntoMemory('t1', key)
+    flush()
+    expect(tab()!.messages.at(-1)).toEqual({ text: 'Could not load the result into memory: Another result of this query is loading into memory.', kind: 'error' })
+    expect(tab()!.loads).toBeUndefined()
     service.dispose()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
