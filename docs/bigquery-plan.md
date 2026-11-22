@@ -487,8 +487,9 @@ SQL Server tab keeps nothing across a restart.
 - in the WorkbenchSession document record (`SessionDocumentWrite`, the session file schema and `RestoredDocument`, as a
   new optional field), so a restored tab brings it back;
 - in AutoRecover records, so a tab recovered from its AutoRecover copy brings it back too. A recovered tab opens with no
-  connection (AutoRecover keeps only the server name), so its jobs' records carry the profile id and the tab offers
-  "Connect to <profile> to re-attach".
+  connection (AutoRecover keeps only the server name), so its jobs' records carry the profile id, Messages says the
+  job carries on, and connecting the tab to BigQuery (Connect or Change Connection, without asking about its jobs)
+  re-attaches.
 
 **Job records.**
 
@@ -651,7 +652,8 @@ with a running or detached job the box offers **Cancel the job**, **Leave it run
   - `SessionTab` gains optional `provider` (in BQ-3a-2, for decision 54's note) and `job` (`elapsedMs`, `estimateBytes`, `detached`); an open or possibly
     open transaction uses today's `transactions` and `unchecked`; the
     schema's `refine`, which accepts only running, transactions or unchecked tabs, also accepts a tab with a `job`.
-  - `SessionAnswer` gains `leave`; the mixed box's answer carries `leaveJobs`.
+  - `SessionAnswer` gains `leave`; in the mixed box, the "Leave BigQuery jobs running" checkbox turns its Cancel Queries
+    into `leave` (`jobPromptAnswer`).
   - `QueryService` gains `addSessionMessage(tabId, text)` (BQ-3a-2), which appends a line to the tab's Messages at once,
     outside any execution, creating a messages-only view when no results are open; every "Messages line" this plan
     adds for a tab that stays (close notes, `JOB_RUNNING`, `JOB_FINISHED`, a failed abort, the detached-job line) goes
