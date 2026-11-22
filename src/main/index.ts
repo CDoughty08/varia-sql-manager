@@ -1103,7 +1103,16 @@ app.whenReady().then(async () => {
   // A saved BigQuery profile whose jobs still run asks first: its jobs cannot be cancelled once it is gone.
   handle('varia:connections-remove', async value => {
     const id = z.uuid().parse(value)
-    await jobRecords.load().catch(() => {})
+    const unread = await jobRecords.load().then(() => false, () => true)
+    // Records that cannot be read now may name this connection's jobs: a BigQuery connection asks before it goes.
+    if (unread && bigQueryStore && (await bigQueryStore.load()).library.profiles.some(profile => profile.id === id)) {
+      const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+        type: 'warning', title: 'Delete connection', message: 'Varia could not read its BigQuery job records.',
+        detail: 'Jobs run on this connection may still be running, and once it is deleted Varia cannot cancel them. Delete it anyway?',
+        buttons: ['Delete Anyway', 'Keep Connection'], defaultId: 1, cancelId: 1, noLink: true, signal
+      }), { response: 1, checkboxChecked: false }, true)
+      if (response !== 0) throw new Error('The connection was kept: its BigQuery job records could not be read.')
+    }
     const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)
     if (running.length) {
       const one = running.length === 1, ids = running.slice(0, 10).map(record => `• ${record.jobId}`).join('\n')
@@ -1115,7 +1124,17 @@ app.whenReady().then(async () => {
       if (response !== 0) throw new Error('The connection was kept: its BigQuery jobs are still running.')
       const cancel = await cancelRecordedJobs(running)
       const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]
-      if (failed.length) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.`)
+      // A record may describe a job that finished long ago, and broken credentials (often why a connection goes) fail
+      // every cancel: Delete Anyway leaves those jobs to BigQuery's job history.
+      if (failed.length) {
+        const error = cancel.jobs.find(job => !job.cancelled && job.error)?.error
+        const { response: anyway } = await pageDialog((window, signal) => dialog.showMessageBox(window, {
+          type: 'warning', title: 'Delete connection', message: failed.length === 1 ? 'A BigQuery job could not be cancelled.' : `${failed.length} BigQuery jobs could not be cancelled.`,
+          detail: `${failed.slice(0, 10).map(jobId => `• ${jobId}`).join('\n')}${error ? `\n\n${error}` : ''}\n\nDelete Anyway leaves ${failed.length === 1 ? 'it' : 'them'} to BigQuery's job history, where ${failed.length === 1 ? 'it' : 'they'} can be cancelled.`,
+          buttons: ['Delete Anyway', 'Keep Connection'], defaultId: 1, cancelId: 1, noLink: true, signal
+        }), { response: 1, checkboxChecked: false }, true)
+        if (anyway !== 0) throw new Error(`The connection was kept: BigQuery job ${failed.slice(0, 5).join(', ')} could not be cancelled.`)
+      }
       // A commit before the cancel, an unknown outcome or a session not ended: said before the connection goes.
       const notes = cancelNotesText('BigQuery', cancel.jobs)
       if (notes.length) await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'info', title: 'Delete connection', message: 'The BigQuery jobs were cancelled.', detail: notes.slice(0, 10).join('\n\n'), buttons: ['OK'], noLink: true, signal }), { response: 0, checkboxChecked: false }, true)

@@ -75,6 +75,11 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(later.list()).toEqual([])
     await later.flush()
     expect((await onDisk(directory)).records).toEqual([])
+    // A process that stays up past the lifetime (macOS) reads none of them either.
+    later.record(keyB, job('varia_kept'))
+    now += jobLimits.lifetimeMs
+    expect(later.forKeys([keyB])).toEqual([])
+    expect(later.withoutTab([])).toEqual([])
   })
 
   it('drops the oldest finished records past the per-key and total limits, never a running one', async () => {
@@ -178,7 +183,10 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     expect(source).toContain("buttons: [one ? 'Cancel Job' : 'Cancel Jobs', 'Keep'], defaultId: 1, cancelId: 1")
     // Deleting a profile with running jobs asks, and keeps the profile when a cancel fails.
     expect(source).toContain("const running = jobRecords.forProfile(id).filter(record => record.state === 'running' && !record.auxiliary)")
-    expect(source).toContain("if (failed.length) throw new Error(`The connection was kept")
+    expect(source).toContain("buttons: ['Delete Anyway', 'Keep Connection'], defaultId: 1, cancelId: 1")
+    expect(source).toContain('if (anyway !== 0) throw new Error(`The connection was kept')
+    // Records that cannot be read ask before a BigQuery connection goes; reads leave out expired records.
+    expect(source).toContain('const unread = await jobRecords.load().then(() => false, () => true)')
     expect(source).toContain('const failed = [...cancel.uncancellable, ...cancel.jobs.filter(job => !job.cancelled).map(job => job.jobId)]')
     // What the cancels noted is said before the connection goes.
     expect(source).toContain("const notes = cancelNotesText('BigQuery', cancel.jobs)")

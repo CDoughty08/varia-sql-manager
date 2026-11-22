@@ -16,7 +16,7 @@ import type { PlanExecutionContext, RetainedPlansService } from '../plans/Retain
 import { isLiveConnection, type ConnectionAvailability } from './connection-availability'
 
 /** `attach`: a re-attach to a BigQuery job (query.attach), which Stop cancels as it would the query. */
-export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string; /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */ readonly estimateBytes?: number }
+export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach' | 'preview'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string; /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */ readonly estimateBytes?: number }
 /** A BigQuery job the tab holds but does not follow (docs/bigquery.md, Re-attaching to jobs): handed back by a restore, kept
  *  when the backend was lost mid-job, or left running (`detached`, Leave it running on Close Results). */
 export type TabJob = RestoredJob
@@ -331,7 +331,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (!isQueryDocument(document) || (connection ? connection.providerId !== 'bigquery' : document?.provider !== 'bigquery')) return false
     const state = this.getSnapshot()[id]
     // A run still in its estimate or cost prompt sent nothing: the prompt stops it like any query.
-    if (state?.running && state.running.kind !== 'estimate' && !this.isGated(id)) return true
+    // Preview Rows reads a table without a job: it is stopped like any query.
+    if (state?.running && state.running.kind !== 'estimate' && state.running.kind !== 'preview' && !this.isGated(id)) return true
     // A finished job's reference waits only for its results: nothing to cancel or leave running.
     const jobs = (state?.jobs ?? []).filter(job => job.state === 'running')
     if (!jobs.length) return false
@@ -541,7 +542,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const held = before?.jobs?.filter(job => job.jobId !== attach?.jobId)
     const reported = new Map<string, TabJob>()
     const estimateBytes = bigQuery && !attach && !preview ? this.estimateOf?.(tabId) : undefined
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now(), ...attach ? { kind: 'attach' as const, jobId: attach.jobId } : preview ? { kind: 'preview' as const } : {}, ...estimateBytes !== undefined ? { estimateBytes } : {} }, session: previous, provenance, ...livePlan ? { livePlan } : {}, ...held?.length ? { jobs: held } : {} })
     // The text's version and scope as sent, read before the gate: an edit while it waits must not make the run's error
     // locations point into the edited text.
     const revision = this.documents.revision(tabId), sqlScope = sql === this.documents.getModel(tabId)?.getValue() ? 'document' as const : 'selection' as const
@@ -595,7 +596,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (bigQuery && summary?.job?.location) this.locations.set(tabId, summary.job.location)
     // A summary means the backend ran the script in a session; the first one after a reconnect is a new session.
     let notice: string | undefined
-    const reason = this.documents.get(tabId)?.sessionNotice
+    // A re-attach adopts the job's session (its transaction included), so the notice waits for a run in a new one.
+    const reason = attach ? undefined : this.documents.get(tabId)?.sessionNotice
     if (summary && reason) {
       notice = bigQuery && reason === 'lost' ? bigQueryLostSessionMessage : noticeMessages[reason]
       this.documents.update(tabId, { sessionNotice: undefined })
@@ -609,7 +611,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
     // Backend/connection loss can arrive while XML is copied; never restore that execution's now-dead session.
     const liveSession = this.documents.get(tabId)?.connectionId === connection.id && this.connected(tabId) ? session : undefined
-    const jobs = this.forgotten.delete(queryId) ? [] : heldAfter(attach, held, [...reported.values()], summary, code)
+    const forgotten = this.forgotten.delete(queryId)
+    // Left running or cancelled through the prompt: a job reported after that answer is not the tab's either.
+    if (forgotten && jobKey) void this.api.dropJobRecords?.(jobKey).catch(() => {})
+    const jobs = forgotten ? [] : heldAfter(attach, held, [...reported.values()], summary, code)
     this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {}, ...jobs.length ? { jobs } : {} })
     // A job that carries on in BigQuery is never unseen: the tab says so, and re-attaches once its connection is back.
     const lost = jobs.filter(job => !job.detached && job.state === 'running' && !held?.includes(job))
@@ -647,13 +652,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const current = this.getSnapshot()[tabId]?.running
     if (answer === 'cancel' || this.disposed) return false
     if (current?.queryId === running.queryId) {
-      if (answer === 'proceed') await this.cancel(tabId)
-      else {
-        try {
-          const response = await this.api.cancel(running.queryId, { detach: true })
-          if (!response.ok) throw new Error(response.error)
-        } catch (error) { this.notify?.(`Close Results: the job could not be left running. ${errorText(error)}`); return false }
-      }
+      const leave = answer === 'leave'
+      try {
+        const response = leave ? await this.api.cancel(running.queryId, { detach: true }) : await this.api.cancel(running.queryId)
+        if (!response.ok) throw new Error(response.error)
+      } catch (error) { this.notify?.(`Close Results: the job could not be ${leave ? 'left running' : 'cancelled'}. ${errorText(error)}`); return false }
     }
     await this.runs.get(tabId)?.catch(() => {})
     return !this.disposed

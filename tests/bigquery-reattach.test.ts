@@ -231,11 +231,13 @@ describe('the job prompt', () => {
     pending.resolve({ ok: true, value: output({ status: 'detached' }) })
     await run
     expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
+    // The run answered after Leave: a job it reported then is not the tab's either.
+    expect(dropJobRecords).toHaveBeenCalledTimes(2)
     f.queries.sessionClosed(f.tab.id, 'rollback')
-    expect(dropJobRecords).toHaveBeenCalledTimes(1)
+    expect(dropJobRecords).toHaveBeenCalledTimes(2)
     f.events.emit({ type: 'documents.closed', tabId: f.tab.id })
     expect(dropJobRecords).toHaveBeenLastCalledWith(key)
-    expect(dropJobRecords).toHaveBeenCalledTimes(2)
+    expect(dropJobRecords).toHaveBeenCalledTimes(3)
   })
   it('ends a session with keepJob for Leave it running and cancelJob for Cancel the job', async () => {
     const f = fixture(), ended = vi.fn()
@@ -315,6 +317,15 @@ describe('Close Results while a BigQuery job runs', () => {
     await restored.queries.prepareSessions('close', [restored.tab.id])
     expect(restored.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).toMatchObject({ unattached: true })
     expect(restored.queryApi.confirmSessions.mock.calls[0][0].tabs[0].job).not.toHaveProperty('detached')
+  })
+  it('keeps the results when the job could not be cancelled', async () => {
+    const f = await running(), notify = vi.fn()
+    f.queries.notify = notify
+    f.job({ jobId: 'job_1', state: 'running' })
+    f.confirmRunningJob.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    f.queryApi.cancel.mockResolvedValueOnce({ ok: false, error: 'No answer.', code: 'TIMEOUT' })
+    await expect(f.queries.closeRunningJob(f.tab.id)).resolves.toBe(false)
+    expect(notify).toHaveBeenCalledWith('Close Results: the job could not be cancelled. No answer.')
   })
   it('keeps the results when the job could not be left running', async () => {
     const f = await running(), notify = vi.fn()
@@ -397,6 +408,38 @@ describe('the prompt beside a cost gate and held jobs', () => {
     f.queries.restoreJobs(f.tab.id, [job('job_1')])
     expect(f.results.addMessage).toHaveBeenCalledWith(f.tab.id, restoredJobRunning(['job_1']), 'info')
     expect(restoredJobRunning(['job_1'])).not.toContain('Reconnect')
+  })
+  it("keeps the new-session notice for a later run: a re-attach adopts the job's session", async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { sessionNotice: 'restarted' })
+    f.queries.restoreJobs(f.tab.id, [job('job_1', { transaction: 'open' })])
+    await settle(); await settle()
+    expect(f.queryApi.attach).toHaveBeenCalledTimes(1)
+    expect(f.documents.get(f.tab.id)?.sessionNotice).toBe('restarted')
+  })
+  it('stops Preview Rows like any query: it runs no job', async () => {
+    const f = fixture(), pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    void f.queries.execute(f.tab.id, { project: 'example-project', dataset: 'sales', table: 'orders' })
+    await settle()
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    await expect(f.queries.holdsJob(f.tab.id)).resolves.toBe(false)
+    pending.resolve({ ok: true, value: output() })
+  })
+  it('drops the records of a job reported after Leave it running, on a tab that stays', async () => {
+    const f = fixture(), dropJobRecords = vi.fn<VariaApi['dropJobRecords']>(async () => ({ ok: true, value: undefined }))
+    Object.assign(f.queryApi, { dropJobRecords })
+    const pending = deferred<ApiResult<QueryResult>>()
+    f.queryApi.execute.mockReturnValueOnce(pending.promise)
+    const run = f.queries.execute(f.tab.id)
+    await settle()
+    f.queries.sessionClosed(f.tab.id, 'leave')
+    expect(dropJobRecords).toHaveBeenCalledTimes(1)
+    f.job({ jobId: 'job_1', state: 'running' })
+    pending.resolve({ ok: true, value: output({ status: 'detached' }) })
+    await run
+    expect(dropJobRecords).toHaveBeenCalledTimes(2)
+    expect(f.queries.getSnapshot()[f.tab.id].jobs).toBeUndefined()
   })
   it("never holds a finished job's reference for the prompt", async () => {
     const f = fixture({ connected: false })
