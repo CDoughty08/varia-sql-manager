@@ -33,7 +33,7 @@
     {"code":3,"label":"Canceled","tone":"muted"},
     {"code":5,"label":"Unknown"}
   ],
-  "limits": {"agentUpWaitMs":120000,"descriptionChars":512,"gridMessageChars":512,"historyAgeDays":400,"historyJobs":64,"historyMaxRows":999999,"historyRows":10000,"jobAlerts":32,"lastRunRows":202,"listRows":5000,"logRows":10000,"messageChars":4000,"nameChars":128,"ownerLogins":1000,"parseChars":250000,"parseErrors":100,"profileMs":10000,"purgeCount":999,"retentionDays":7,"retentionJobs":200,"scheduleJobChanges":64,"schedulesPerJob":16,"searchChars":200,"servicePollMs":500,"serviceReadMs":10000,"serviceStatementMs":30000,"serviceWaitMs":60000,"startJobs":100,"stepCommandChars":100000,"stepCommandTotalChars":1000000,"stepOutputChars":200,"stepRetries":9999,"stepRetryMinutes":9999,"stepsPerJob":50,"watchedJobs":3},
+  "limits": {"agentUpWaitMs":120000,"credentialIdentityChars":128,"credentialProxies":100,"credentialSecretChars":4000,"credentials":1000,"cryptographicProviders":64,"descriptionChars":512,"gridMessageChars":512,"historyAgeDays":400,"historyJobs":64,"historyMaxRows":999999,"historyRows":10000,"jobAlerts":32,"lastRunRows":202,"listRows":5000,"logRows":10000,"messageChars":4000,"nameChars":128,"ownerLogins":1000,"parseChars":250000,"parseErrors":100,"principalChoices":1000,"profileMs":10000,"proxyPrincipals":64,"proxyReferences":500,"proxySubsystems":32,"purgeCount":999,"retentionDays":7,"retentionJobs":200,"scheduleJobChanges":64,"schedulesPerJob":16,"searchChars":200,"servicePollMs":500,"serviceReadMs":10000,"serviceStatementMs":30000,"serviceWaitMs":60000,"startJobs":100,"stepCommandChars":100000,"stepCommandTotalChars":1000000,"stepOutputChars":200,"stepRetries":9999,"stepRetryMinutes":9999,"stepsPerJob":50,"watchedJobs":3},
   "masterReadShapes": [
     {"name":"xp_enumerrorlogs","shape":"EXEC master.dbo.xp_enumerrorlogs 2;"},
     {"name":"xp_readerrorlog","shape":"EXEC master.dbo.xp_readerrorlog @p, 2, @p, @p, NULL, NULL, N'desc';"},
@@ -107,13 +107,13 @@
     {"database":"msdb","lane":"AG-7","name":"sp_update_notification"},
     {"database":"msdb","lane":"AG-7","name":"sp_delete_notification"},
     {"arguments":["@sqlserver_restart","@monitor_autostart","@jobhistory_max_rows","@jobhistory_max_rows_per_job"],"database":"msdb","lane":"AG-8a","name":"sp_set_sqlagent_properties"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_add_proxy"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_update_proxy"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_delete_proxy"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_grant_proxy_to_subsystem"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_revoke_proxy_from_subsystem"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_grant_login_to_proxy"},
-    {"database":"msdb","lane":"AG-8b","name":"sp_revoke_login_from_proxy"},
+    {"arguments":["@proxy_name","@enabled","@description","@credential_name","@proxy_id"],"database":"msdb","lane":"AG-8b","name":"sp_add_proxy"},
+    {"arguments":["@proxy_id","@credential_name","@new_name","@enabled","@description"],"database":"msdb","lane":"AG-8b","name":"sp_update_proxy"},
+    {"arguments":["@proxy_id"],"database":"msdb","lane":"AG-8b","name":"sp_delete_proxy"},
+    {"arguments":["@proxy_id","@subsystem_id"],"database":"msdb","lane":"AG-8b","name":"sp_grant_proxy_to_subsystem"},
+    {"arguments":["@proxy_id","@subsystem_id"],"database":"msdb","lane":"AG-8b","name":"sp_revoke_proxy_from_subsystem"},
+    {"arguments":["@proxy_id","@login_name","@fixed_server_role","@msdb_role"],"database":"msdb","lane":"AG-8b","name":"sp_grant_login_to_proxy"},
+    {"arguments":["@proxy_id","@name"],"database":"msdb","lane":"AG-8b","name":"sp_revoke_login_from_proxy"},
     {"database":"msdb","lane":"AG-5b","name":"sp_cycle_agent_errorlog"}
   ]
 }

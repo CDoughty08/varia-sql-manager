@@ -348,6 +348,24 @@ export const agentLimits = {
   retentionJobs: 200,
   /** Ages, in whole days, the describe counts history rows by (older rows count in the last), so "Delete old history now" can say about how many rows it removes. */
   historyAgeDays: 400,
+  /** The proxy document (AG-8b): subsystems one proxy save may grant or revoke (msdb lists about a dozen). */
+  proxySubsystems: 32,
+  /** Principals one proxy save may grant or revoke, and the most a proxy's Principals list shows. */
+  proxyPrincipals: 64,
+  /** Logins, msdb roles and server roles the proxy document's principal picker lists; the name can still be typed. */
+  principalChoices: 1_000,
+  /** Job steps the proxy document's References and the credential document's Used by list; more set `truncated`. */
+  proxyReferences: 500,
+  /** Credentials the proxy document's credential picker lists, by name; more set `truncated`. */
+  credentials: 1_000,
+  /** Proxies the credential document's Used by lists. */
+  credentialProxies: 100,
+  /** Characters of a credential's identity (`sys.credentials.credential_identity` is nvarchar(4000)). */
+  credentialIdentityChars: 128,
+  /** UTF-16 code units of a credential's secret (CREATE CREDENTIAL's SECRET); not a login password, so it has its own bound. */
+  credentialSecretChars: 4_000,
+  /** Cryptographic providers New Credential lists (`sys.cryptographic_providers`). */
+  cryptographicProviders: 64,
   /** The most days, weeks or months "Delete old history now" goes back: 999 months stays inside `datetime`, so the cut-off is never NULL. */
   purgeCount: 999,
   /** The job document's Steps (AG-6b): characters of one step's command (`sysjobsteps.command` is nvarchar(max); this keeps a save's request
@@ -479,13 +497,15 @@ export const writeProcedures: readonly WriteProcedure[] = [
   { name: 'sp_update_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_delete_notification', lane: 'AG-7', database: 'msdb' },
   { name: 'sp_set_sqlagent_properties', lane: 'AG-8a', database: 'msdb', arguments: ['@sqlserver_restart', '@monitor_autostart', '@jobhistory_max_rows', '@jobhistory_max_rows_per_job'] },
-  { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_delete_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_grant_proxy_to_subsystem', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb' },
-  { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb' },
+  // The proxy document (AG-8b): New Proxy's @proxy_id is the OUTPUT the batch's later calls use; a principal is granted by the argument of
+  // its kind (a login, a fixed server role or an msdb role) and revoked by name. Rename and Delete resolve the proxy by name and id first.
+  { name: 'sp_add_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_name', '@enabled', '@description', '@credential_name', '@proxy_id'] },
+  { name: 'sp_update_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@credential_name', '@new_name', '@enabled', '@description'] },
+  { name: 'sp_delete_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id'] },
+  { name: 'sp_grant_proxy_to_subsystem', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@subsystem_id'] },
+  { name: 'sp_revoke_proxy_from_subsystem', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@subsystem_id'] },
+  { name: 'sp_grant_login_to_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@login_name', '@fixed_server_role', '@msdb_role'] },
+  { name: 'sp_revoke_login_from_proxy', lane: 'AG-8b', database: 'msdb', arguments: ['@proxy_id', '@name'] },
   { name: 'sp_cycle_agent_errorlog', lane: 'AG-5b', database: 'msdb' }
 ]
 

@@ -657,7 +657,9 @@ internal static partial class ActionSql
         // The table designer's master facts (Designer/DesignerSql).
         "N'CREATE TABLE'",
         // New Database's facts (CreateDatabaseSql.Facts) and Attach Databases' facts and preflight (AttachSql).
-        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'"
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'",
+        // The proxy and credential documents' facts (AG-8b, CredentialSql).
+        "N'ALTER ANY CREDENTIAL'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -880,6 +882,8 @@ internal static partial class ActionSql
         foreach (var item in TableAlter.Lint(ActionsCatalog.Current)) yield return item;
         // SQL Server Agent's job verbs (AG-2): every msdb write in its one shape, and the reads its describes make outside AgentReader.
         foreach (var item in Agent.AgentSql.LintWrites()) yield return ("agent " + item.Name, item.Problems);
+        // The proxy and credential documents (AG-8b): their reads, and every CREATE CREDENTIAL and ALTER CREDENTIAL the builder writes.
+        foreach (var item in CredentialSql.Lint()) yield return item;
     }
 }
 
