@@ -66,6 +66,7 @@ internal static partial class AgentSql
         var match = WriteCall().Match(call);
         if (!match.Success) { problems.Add("is not one msdb call in the write shape"); return problems; }
         var procedure = match.Groups["proc"].Value;
+        if (SaveOnly.Contains(procedure)) { problems.Add("EXECs " + procedure + ", which only a job save calls"); return problems; }
         if (!catalog.WriteArguments.TryGetValue(procedure, out var allowed)) { problems.Add("EXECs " + procedure + ", which is not an Agent write procedure"); return problems; }
         var seen = new HashSet<string>(StringComparer.Ordinal) { "@job_id" };
         // sp_purge_jobhistory lists @job_id for Delete History, whose batch has its own lint (LintHistoryDelete); a job verb never purges.
@@ -95,6 +96,8 @@ internal static partial class AgentSql
         yield return ("service host", LintRead(ServiceHost, null));
         // SQL Server Agent Properties' server-scope writes and reads (AG-8a, AgentSql.Properties.cs).
         foreach (var item in LintServerWrites()) yield return item;
+        // The job document's saves (AG-6a, AgentSql.JobDocument.cs).
+        foreach (var item in LintJobSaves()) yield return item;
         // Delete History's batches (AG-5a, AgentSql.History.cs).
         foreach (var item in LintHistoryWrites()) yield return item;
     }

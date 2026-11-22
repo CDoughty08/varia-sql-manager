@@ -589,7 +589,15 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
     bool? DropMappedUsers = null, string? Mode = null, LoginChangesDto? LoginChanges = null, List<PermissionDto>? Permissions = null, TableChangesDto? TableChanges = null,
     AgentIdentityDto? AgentIdentity = null, string? StepName = null, bool? DeleteUnusedSchedule = null,
-    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null);
+    AgentPropertiesChangesDto? AgentProperties = null, AgentHistoryPurgeDto? AgentPurge = null, AgentHistoryDeleteDto? AgentHistory = null, AgentJobSaveDto? AgentJob = null);
+/// <summary>The job document's Save (AG-6a, src/shared/actions/agent-job.ts AgentJobSave). An existing job's carries the Version and Modified
+/// (yyyy-MM-ddTHH:mm:ss.fff) its describe read, which the STALE guard compares, and only what changed; New Job's (target the Agent node) every
+/// field it sets and no version. A notification goes as its level (0 to 3) and operator together, the operator '' exactly with level 0.
+/// RemoveAlerts (at most agentLimits.jobAlerts) detaches alerts from the job, each guarded by its id still running this job.</summary>
+internal sealed record AgentJobSaveDto(int? Version = null, string? Modified = null, string? Name = null, bool? Enabled = null, string? Description = null, string? Category = null,
+    string? Owner = null, int? EmailLevel = null, string? EmailOperator = null, int? PageLevel = null, string? PageOperator = null, int? NetSendLevel = null, string? NetSendOperator = null,
+    int? EventLogLevel = null, int? DeleteLevel = null, List<AgentAlertRefDto>? RemoveAlerts = null);
+internal sealed record AgentAlertRefDto(int Id, string Name);
 /// <summary>SQL Server Agent Properties' changes (AG-8a, src/shared/actions/agent-properties.ts): only the settings that differ, each an
 /// sp_set_sqlagent_properties argument; HistoryMaxRows -1 is no limit (and takes no rows per job), else 2 to agentLimits.historyMaxRows.</summary>
 internal sealed record AgentPropertiesChangesDto(bool? SqlserverRestart = null, bool? MonitorAutostart = null, int? HistoryMaxRows = null, int? HistoryMaxRowsPerJob = null);
@@ -700,8 +708,9 @@ internal sealed record LoginMappingChangeDto(string Database, string Change, str
 internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
-/// <summary>Column: the table designer's column (index in the design) a refusal is about, such as a name used twice.</summary>
-internal sealed record ActionError(string Code, string Message, bool Retryable, int? Column = null);
+/// <summary>Column: the table designer's column (index in the design) a refusal is about, such as a name used twice. Field: the job
+/// document's field a refused save is about (src/shared/actions/agent-job.ts agentJobFields).</summary>
+internal sealed record ActionError(string Code, string Message, bool Retryable, int? Column = null, string? Field = null);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
 /// Service (at most loginLimits.serviceName characters) is the guarded service lookup of the loginFacts, Delete Object and Login
 /// Properties describes only. The owned
@@ -770,7 +779,22 @@ internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long 
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
     RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, EffectivePermissionsDto? EffectivePermissions = null, WindowsPrincipalDto? WindowsPrincipal = null,
-    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null);
+    TablePropertiesDto? TableProperties = null, AgentJobFactsDto? AgentJob = null, AgentServiceFactsDto? AgentService = null, AgentPropertiesDto? AgentProperties = null,
+    AgentJobDocumentDto? AgentJobDocument = null);
+/// <summary>The job document's describe (AG-6a, src/shared/actions/agent-job.ts AgentJobDocumentModel). Job is null for New Job; Operators null
+/// when the login may not read them; Owners for sysadmin only; Alerts null where the section is hidden (below SQLAgentOperatorRole, or a
+/// platform without alerts).</summary>
+internal sealed record AgentJobDocumentDto(AgentJobRecordDto? Job, string Login, bool Sysadmin, string Platform, List<string> Categories, List<AgentJobStepRowDto> Steps, bool AlertsEditable,
+    AgentJobMailDto Mail, string? ReadOnly = null, List<AgentJobOperatorDto>? Operators = null, List<string>? Owners = null, List<AgentJobAlertDto>? Alerts = null,
+    List<string>? Jobs = null, List<string>? JobIds = null);
+internal sealed record AgentJobRecordDto(string JobId, string Name, bool Enabled, string Description, string Category, string Owner, int EmailLevel, string EmailOperator, int PageLevel,
+    string PageOperator, int NetSendLevel, string NetSendOperator, int EventLogLevel, int DeleteLevel, string Created, string Modified, int Version, int StartStepId,
+    string? LastRun = null, int? LastOutcome = null);
+internal sealed record AgentJobStepRowDto(int Id, string Name, string Subsystem);
+internal sealed record AgentDutyHoursDto(int Start, int End);
+internal sealed record AgentJobOperatorDto(string Name, bool Enabled, bool Email, bool Pager, bool NetSend, int PagerDays, AgentDutyHoursDto Weekday, AgentDutyHoursDto Saturday, AgentDutyHoursDto Sunday);
+internal sealed record AgentJobAlertDto(int Id, string Name, bool Enabled, int Severity, int MessageId);
+internal sealed record AgentJobMailDto(bool Checked, bool Sysadmin, bool? Xps = null, int? Profiles = null, bool? UseDatabaseMail = null, string? AgentProfile = null);
 /// <summary>SQL Server Agent Properties' describe (AG-8a, src/shared/actions/agent-properties.ts AgentPropertiesModel).</summary>
 internal sealed record AgentPropertiesDto(AgentSettingsDto Settings, string ServerNow, int ServerOffsetMinutes, string? ReadOnly = null, AgentHistoryFactsDto? History = null, string? HistoryNote = null,
     string? SettingsNote = null);
