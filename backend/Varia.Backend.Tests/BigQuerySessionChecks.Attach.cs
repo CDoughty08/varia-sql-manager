@@ -68,6 +68,51 @@ internal static partial class BigQuerySessionChecks
             stopping.Bq.Release(stopping.Bq.Jobs[stopJob]);
         }
 
+        // An execution whose job is DONE but still being read holds nothing in BigQuery: Leave it running on it is a normal
+        // close, refused with JOB_FINISHED while the job's transaction may be open, and a plain close then ends the session.
+        using (var reading = new Harness(new Bq()))
+        {
+            await reading.ConnectAsync(key);
+            reading.Bq.Statements["BEGIN TRANSACTION"] = "BEGIN_TRANSACTION";
+            var readTab = Tab();
+            await reading.Execute(readTab, "SELECT 1");
+            var hung = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            reading.Bq.AlsoHang = request =>
+            {
+                if (request.Method != "GET" || !reading.Bq.Jobs.Values.Any(job => job.Sql == "BEGIN TRANSACTION" && request.Url.Contains("/jobs/" + job.Id, StringComparison.Ordinal))) return false;
+                hung.TrySetResult();
+                return true;
+            };
+            var begin = reading.Execute(readTab, "BEGIN TRANSACTION");
+            await Task.WhenAny(hung.Task, begin).WaitAsync(TimeSpan.FromSeconds(30));
+            var kept = await reading.Call("query.session.close", new JsonObject { ["sessionId"] = readTab, ["keepJob"] = true });
+            reading.Bq.AlsoHang = null;
+            await begin.WaitAsync(TimeSpan.FromSeconds(30));
+            var ended = await reading.Close(readTab);
+            check(hung.Task.IsCompleted && kept.Code == "JOB_FINISHED" && ended is { Code: "ok", Result.Closed: true } && reading.Bq.Aborts.Contains("sess-1"),
+                $"Leave it running on an execution with no job running in BigQuery is not a detach: {kept.Code} {ended.Code} aborts {string.Join(",", reading.Bq.Aborts)}");
+        }
+
+        // Leave it running on an execution still waiting behind a held job (no job of its own yet) is a stop: nothing of its
+        // own keeps running.
+        using (var waiting = new Harness(new Bq()))
+        {
+            await waiting.ConnectAsync(key);
+            var waitTab = Tab();
+            await waiting.Execute(waitTab, "SELECT 1");
+            var (heldArgs, heldRun, heldJob) = await HeldAsync(waiting, waitTab);
+            await waiting.Call("query.cancel", new JsonObject { ["queryId"] = heldArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+            await heldRun.WaitAsync(TimeSpan.FromSeconds(30));
+            var behindArgs = waiting.Query(waitTab, "SELECT 2");
+            var queued = waiting.Call("query.execute", behindArgs);
+            await Poll(() => waiting.State(waitTab).Result.Code == "SESSION_BUSY");
+            await waiting.Call("query.cancel", new JsonObject { ["queryId"] = behindArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+            var stoppedEarly = (await queued.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+            check(stoppedEarly is { Status: "cancelled" } && !Says(stoppedEarly, "keeps running in BigQuery") && !waiting.Bq.Cancels.Contains(heldJob),
+                $"a detach before the execution's own job exists stops it, and the held job is left alone: {stoppedEarly?.Status} {Texts(stoppedEarly?.Messages ?? [])}");
+            waiting.Bq.Release(waiting.Bq.Jobs[heldJob]);
+        }
+
         var keep = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = tab, ["keepJob"] = true, ["cancelJob"] = true });
         var both = await harness.Call("query.session.close", new JsonObject { ["sessionId"] = tab, ["keepJob"] = true, ["transaction"] = "rollback" });
         check(keep.Code == "INVALID_PARAMS" && both.Code == "INVALID_PARAMS", $"a close is a job answer or a transaction answer, never both: {keep.Code} {both.Code}");
@@ -208,6 +253,27 @@ internal static partial class BigQuerySessionChecks
         var secondAnswer = (await two.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
         check(firstAnswer is { Status: "superseded" } && secondAnswer is { Status: "completed" } && !bq.Cancels.Contains(raceJob),
             $"a second attach supersedes the first, which leaves the job alone: {firstAnswer?.Status} {secondAnswer?.Status}");
+
+        // The tab's own held job: a re-attach follows it at once (no wait for DONE), and when a later attach supersedes it and
+        // then fails its identity check, the session still holds the job, so no close or idle end aborts it.
+        var ownTab = Tab();
+        await harness.Execute(ownTab, "SELECT 1");
+        var (ownArgs, ownRun, ownJob) = await HeldAsync(harness, ownTab);
+        await harness.Call("query.cancel", new JsonObject { ["queryId"] = ownArgs["queryId"]!.GetValue<string>(), ["detach"] = true });
+        await ownRun.WaitAsync(TimeSpan.FromSeconds(30));
+        bq.Jobs[ownJob].Hold = true;
+        bq.Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var follow = harness.Call("query.attach", AttachArgs(harness, ownTab, ownJob));
+        await Task.WhenAny(bq.Polling.Task, follow).WaitAsync(TimeSpan.FromSeconds(30));
+        check(!follow.IsCompleted, $"a re-attach of the tab's own held job follows it rather than waiting for DONE: {(follow.IsCompleted ? follow.Result.Code : "running")}");
+        bq.Foreign.Add(ownJob);
+        var refused = await harness.Call("query.attach", AttachArgs(harness, ownTab, ownJob));
+        var superseded = (await follow.WaitAsync(TimeSpan.FromSeconds(30))).Result as QueryResult;
+        var stillHeld = await harness.State(ownTab);
+        check(superseded is { Status: "superseded" } && refused.Result is QueryResult { Error.Code: "AUTH_IDENTITY" } && stillHeld.State is { Job: "running" },
+            $"a superseded attach leaves the job held by the session when the attach that took over fails: {superseded?.Status} {(refused.Result as QueryResult)?.Error?.Code} {stillHeld.State}");
+        bq.Foreign.Remove(ownJob);
+        bq.Release(bq.Jobs[ownJob]);
 
         // A detached record: the attach holds the session's queue until DONE and reads no results.
         var heldTab = Tab();

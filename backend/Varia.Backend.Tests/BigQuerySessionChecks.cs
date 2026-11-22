@@ -74,6 +74,8 @@ internal static partial class BigQuerySessionChecks
         /// <summary>Answers a COMMIT insert before the normal answer: return a reply, or null for the normal one.</summary>
         public Func<FakeJob, BigQueryFake.Reply?>? CommitReply;
         public TaskCompletionSource Polling = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>Other requests the fake leaves unanswered until their call is cancelled.</summary>
+        public Func<BigQueryFake.Request, bool>? AlsoHang;
         int sessions;
         long clock = 1_763_500_000_000;
 
@@ -82,6 +84,7 @@ internal static partial class BigQuerySessionChecks
             var fake = BigQueryFake.Google();
             fake.Hang = request =>
             {
+                if (AlsoHang?.Invoke(request) == true) return true;
                 if (!request.Url.Contains("/queries/", StringComparison.Ordinal) || !Jobs.TryGetValue(Last(request), out var job) || !job.Hold) return false;
                 Polling.TrySetResult();
                 return true;

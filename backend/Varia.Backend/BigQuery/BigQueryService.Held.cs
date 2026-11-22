@@ -16,6 +16,9 @@ internal sealed partial class BigQueryService
     /// <summary>The background poll of a held job: its first wait, and the longest after backoff.</summary>
     internal TimeSpan HeldPoll { get; set; } = TimeSpan.FromSeconds(5);
     internal TimeSpan HeldPollMax { get; set; } = TimeSpan.FromSeconds(60);
+    /// <summary>Past this a held job counts as finished even unread (a query job runs at most 6 hours), so a job that can no
+    /// longer be read (permission revoked, credentials refused) never holds its session for ever.</summary>
+    internal TimeSpan HeldGiveUp { get; set; } = TimeSpan.FromHours(7);
     /// <summary>Aborts that failed, retried once each the next time a handle reaches BigQuery, while the backend runs.</summary>
     internal const int MaxFailedAborts = 64;
     private readonly Lock failedGate = new();
@@ -42,6 +45,7 @@ internal sealed partial class BigQueryService
             using (lease)
             {
                 var wait = HeldPoll;
+                var since = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     while (!stopping.IsCancellationRequested && session.Tail == tail && !tail.Cancelled)
@@ -55,6 +59,7 @@ internal sealed partial class BigQueryService
                         }
                         catch (GoogleApiException error) when (!tail.Created && error.HttpStatusCode == HttpStatusCode.NotFound) { tail.Finished = true; break; }
                         catch (Exception) when (!stopping.IsCancellationRequested) { wait = TimeSpan.FromTicks(Math.Min(wait.Ticks * 2, HeldPollMax.Ticks)); }
+                        if (since.Elapsed >= HeldGiveUp) { tail.Finished = true; break; }
                         await Task.Delay(wait, stopping.Token);
                     }
                     if (!tail.Finished || session.Tail != tail || !await session.Queue.WaitAsync(0)) return;
@@ -133,7 +138,8 @@ internal sealed partial class BigQueryService
         foreach (var session in sessions.Values)
         {
             if (session.HoldsJob) continue;
-            if (session.LastJobKey is { } key && keep.Contains(key) && session.Transaction != BigQueryTransaction.None) continue;
+            // A finished job not yet settled has not applied its statements: its transaction is not known yet.
+            if (session.LastJobKey is { } key && keep.Contains(key) && (session.Transaction != BigQueryTransaction.None || session.Tail is not null)) continue;
             Forget(session);
             if (session.Id is not null) idle.Add(session);
         }

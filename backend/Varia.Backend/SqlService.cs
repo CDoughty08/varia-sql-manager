@@ -150,7 +150,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         public bool Abandoned { get; private set; }
         public bool LeavesJob => Detached || Superseded || Abandoned;
         public void Abandon() => Abandoned = true;
-        public void Detach() { Detached = true; TryCancel(Source); }
+        /// <summary>A query already stopped stays stopped: its job was cancelled, so there is nothing to leave running.</summary>
+        public void Detach() { if (UserCancelled) return; Detached = true; TryCancel(Source); }
         public void Supersede() { Superseded = true; TryCancel(Source); }
         /// <summary>Completes when the request has ended (query.attach waits for an attachment it supersedes).</summary>
         public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
