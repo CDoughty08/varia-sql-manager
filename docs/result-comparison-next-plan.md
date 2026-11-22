@@ -873,11 +873,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query
     document's database, so it is always sent), direction: 'toNew' | 'toOld', columns: number[], identity?: number,
     statements: { delete, update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds
-    distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#). `identity` is the pair the index
-    names as the target's identity column, one of `columns` (checked in both): only the renderer knows it, from Search
-    Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it wraps the INSERTs in `SET
-    IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and refuses (`INVALID_PARAMS`) when
-    that column is a key.
+    distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#).
+    `identity` is the pair the index names as the target's identity column, one of `columns` (checked in both): only
+    the renderer knows it, from Search Objects. `DiffScript` leaves it out of every SET. With `identityInsert` on it
+    wraps the INSERTs in `SET IDENTITY_INSERT`; with it off it leaves the identity column out of the INSERTs, and
+    refuses (`INVALID_PARAMS`) when that column is a key.
   - **Deadline and Cancel:** 120 s in `methodPolicies`, as the other result jobs. The dialog's Cancel cancels the request
     through the protocol's cancel, and the backend drops its chunks.
   - **Preview:** `maxLines?: number` (1–30) answers only the first lines, with `complete: false` when there are more,
