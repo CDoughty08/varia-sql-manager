@@ -112,8 +112,9 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     Update Comparison. Go to Next and Previous Difference stay where the navigation work put them.
   - Toolbar buttons and the palette keep their own entries.
   - `tests/command-catalog.test.ts` (its `keylessItems` for both menus) and `results-smoke.mjs`'s grid-menu steps follow
-    the move. Each lane that adds to More results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned
-    `output.tools` list.
+    the move. That test assigns keys without a menu's `when`, so `tests/menus-content.test.ts` gains a comparison
+    grid-menu sample (`fixtures/menus-context.*.txt`), pinning Comparison's S and Then Sort Descending's N. Each lane
+    that adds to More results tools (C2 to C6) updates `results-toolbar-fold.test.ts`'s pinned `output.tools` list.
 - **Engine-neutral.** Commands, context keys and settings declare both providers, except Script Differences (Q4).
   Result-naming methods are declared for both engines in `methods.ts` and checked in C#. New protocol members are optional
   fields of existing v2 shapes, and C4's one new method is offered through HELLO as every method is, so the protocol
@@ -474,10 +475,12 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     A seek still reads only the index, so architecture.md's change-index bullet gains "and each look-alike's differing
     pairs". The renderer compares no cells, so collation and soft equality stay the backend's. Both members go
     through every results-path step.
-  - A view seek's `hidden` answer carries no row (`diffSeekResultSchema`'s strict `{ hidden: true }`), so the card
-    seeks `partnerOf` on the comparison's base result, whose stored rows are never hidden, for the partner's stored
-    row, `differing` and `compared`, and reads that row through the base handle. A seek on the view then says whether
-    the partner is hidden (the hidden-partner sentence) or where Go to Possible Match lands.
+  - A view seek's `hidden` answer carries no row (`diffSeekResultSchema`'s strict `{ hidden: true }`), so the card seeks
+    `partnerOf` on the comparison's base result, whose stored rows are never hidden, for the partner's stored row,
+    `differing` and `compared`, and reads that row through the base handle. `partnerOf` is a row of the result sought,
+    and under a sort or filter the card knows only the ? row's view position, so it first finds that row's stored row as
+    Two rows finds its halves (`results.identify`, `results.rowIds`, `results.findRows`). A seek on the view then says
+    whether the partner is hidden (the hidden-partner sentence) or where Go to Possible Match lands.
   - Window reads already serve hidden columns, since the gutter reads them.
 - **Diff worker** (`results/value-diff.worker.ts`, as `plans/comparison.worker.ts` is for plans):
   - Myers O(ND) over word tokens, then characters inside changed tokens.
@@ -622,9 +625,11 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     writer escapes them as it escapes values, so a name holding a line break cannot forge a diff line.
   - The rest of the header comes from the diff set, which records it beside `DiffInputs` in `DiffWritten`: the match
     used (`DiffMatch`, its mode and key pairs), the ignored pairs, and, for a side read as shown (C6), its rows shown
-    and its rows. Today it records only `DiffInputs`, so C3 adds the match and ignored pairs, and C6 the counts. The
-    match text, "lines start with row numbers" under a match without key columns, and the `# Result 1 shows 120 of
-    5,000 rows` line are written from them.
+    and its rows. Today it records only `DiffInputs`, so C3 adds the match and ignored pairs, and C6 the counts (C4
+    adds Result 1's column types and whether the inputs were BigQuery results, which only it reads). The match text,
+    "lines start with row numbers" under a match without key columns, and the `# Result 1 shows 120 of 5,000 rows`
+    line are written from them. Whichever of C3 and C6 lands second writes the "(as shown)" names and that line, in
+    both writers, with a shared golden and the fake backend's recorded counts.
   - They change in `resultsCopyRequestSchema` and `resultsSaveRequestSchema` (`src/main/validation.ts`), the preload
     signatures (`copyResults`, `saveResults`), the params `results-jobs.ts` builds (`ResultsCopyParams` and the export's),
     the fake backend and the C# records, each with `names`.
@@ -800,9 +805,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
 - **The script:**
   - A header of `--` lines names the comparison, the match and any ignored columns, the server and database, the
     direction and the time, and says "Review it before you run it. Varia does not run it for you. It leaves XACT_ABORT
-    on." Every name in it (results, the query document,
-    key columns, server, database, target) goes through the comment escape below, so a name holding a line break
-    cannot end a comment line and put its text into the script as a statement.
+    on." Every name in it (results, the query document, key columns, server, database, target) has its control
+    characters escaped (`\t`, `\r`, `\n`, and `\uXXXX` for the others, U+2028 and U+2029) and nothing else, so a
+    name holding a line break cannot end a comment line and put its text into the script as a statement, and
+    `HOST\SQL2022` or `O'Brien` reads as it is.
   - Then `SET XACT_ABORT ON;` and `BEGIN TRANSACTION;`.
   - DELETEs, then UPDATEs, then INSERTs, so a reused key cannot collide.
     - One statement per row, keyed by the match's key columns, NULL-safe (`[k] IS NULL`).
@@ -812,12 +818,13 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - Each UPDATE and DELETE is followed by `IF @@ROWCOUNT <> 1 THROW 50000, N'Row id = 1002 was not found exactly
       once.', 1;` (an UPDATE's says "…exactly once with the values it changes from."), and each INSERT is preceded by
       `IF EXISTS (SELECT 1 FROM [Sales_Test].[dbo].[Orders] WHERE [id] = 1011) THROW 50000, N'Row id = 1011 is already
-      in the target.', 1;` (Q11). DELETEs run first, so a reused key is gone before its INSERT checks. THROW takes
-      only a literal or a variable, so the key text there is one plain literal: the raw key text is cut to 200 code
-      points first (never inside a surrogate pair), then escaped by the script's comment escape: quotes doubled,
-      `\\`, `\t`, `\r` and `\n` for backslash, tab, CR and LF, and `\uXXXX` for every other control character
-      (U+0000–U+001F, U+007F–U+009F), U+2028 and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own
-      rule. Escaping after the cut means a doubled quote or an escape is never split.
+      in the target.', 1;` (Q11). DELETEs run first, so a reused key is gone before its INSERT checks. THROW takes only
+      a literal or a variable, so the key text there is one plain literal: the raw key text is cut to 200 code points
+      first (never inside a surrogate pair), then escaped as a literal: quotes doubled, `\\`, `\t`, `\r` and `\n` for
+      backslash, tab, CR and LF, and `\uXXXX` for every other control character (U+0000–U+001F, U+007F–U+009F), U+2028
+      and U+2029, never `NCHAR` joins. Copy as Diff escapes only the first four, so this is `DiffScript`'s own rule, and
+      the header's names take it without the quotes and backslash. Escaping after the cut means a doubled quote or an
+      escape is never split.
   - `COMMIT TRANSACTION;`.
   - When the script turns SET IDENTITY_INSERT on, its body after `SET XACT_ABORT ON;` runs in `BEGIN TRY … END TRY
     BEGIN CATCH IF @@TRANCOUNT > 0 ROLLBACK; SET IDENTITY_INSERT <target> OFF; THROW; END CATCH`: a rollback does not
@@ -938,13 +945,14 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
     - main's `results-port.ts` handler (`ResultsPortHost.owns`, a member-by-member copy), the `ResultsBackend` interface
       and `supervisorResults` there, and a strict, bounded answer schema;
     - `SqlService.LaneOf`, and `Providers.BothMethods` with its `tests/validation.test.ts` mirror. C# answers
-      `UNSUPPORTED_PROVIDER` for a BigQuery result;
+      `UNSUPPORTED_PROVIDER` when the diff set records BigQuery inputs (below): a derived set has no `residence`, and
+      `ProviderOf` falls back to SQL Server for it, so neither says so once an input is closed;
     - its reservations (Budget below);
     - the fake backend, and `FakeHandle` in `tests/fixtures/results.ts`.
   - **Params:** `{ resultId, viewId?, rows?: ranges (as Copy's parts), target: { database, schema, name } (each 1–128
     characters, no control characters, U+2028 or U+2029; the renderer resolves a two-part name to the query
     document's database, so it is always sent), names: { left, right, document, server } (each 1–260 characters, for
-    the header, which writes each through the comment escape), direction: 'toNew' | 'toOld', columns: number[],
+    the header, which escapes each one's control characters), direction: 'toNew' | 'toOld', columns: number[],
     identity?: number,
     statements: { delete, update, insert }, transaction, checkRows, identityInsert, maxLines? }`. `columns` holds
     distinct pair indexes, at most `limits.page.maxColumns` in zod, each below the pair count (checked in C#).
@@ -977,10 +985,10 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
   | datetime, smalldatetime | `CAST('yyyy-MM-ddTHH:mm:ss.fff' AS <type>)`: the stored `yyyy-MM-dd HH:mm:ss` form depends on DATEFORMAT and language, the `T` form does not |
   | uniqueidentifier | Quoted |
   | binary, varbinary, image | `0x…` |
-  | xml | `CONVERT(xml, N'…', 1)`, with the same joins or hex term inside: plain assignment converts with style 0, which drops whitespace-only text nodes, so a value stored with style 1 would not round-trip |
+  | xml | `CONVERT(xml, N'…', 1)`, with the same joins or hex term inside. Style 1 keeps whitespace as written; SQL Server already serializes whitespace-only text nodes as character references (`&#x20;`), which style 0 keeps too, so it is a safeguard, not a need |
   | json | `N'…'`, with the same joins or hex term |
 
-  - **Two changes to the diff** that only C4 needs:
+  - **Changes to the diff** that only C4 needs:
     - Exact floats by their own column. `UnifiedDiff.Row` keeps a float's exact value only when Result 3's column holds
       one (`ColumnTypes.HoldsExact(set.Columns[p])`), so a Result 1 float paired with a Result 3 decimal keeps only its
       G15 text in removed rows and `changedOld` halves. `Row` tests the source column instead (Result 1's on that
@@ -990,6 +998,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       rows entry's new half too, charged by `CutBytes` as now, and `DiffScript` takes an entry's changed pairs (its SET
       columns and Q11's) from that list whenever the tone was cut. `DiffIndex`'s summary and architecture.md's
       change-index bullet say both layouts.
+    - Two more records on the diff set, written in `DiffWritten` beside the match C3 records: Result 1's column type
+      per pair (Columns above), and whether the inputs were BigQuery results (`residence` set), for the refusal.
   - Names are bracket-quoted by the existing shared `ScriptFormatter.Quote`, unchanged: it has many callers (Script As,
     restore, the alter and DML templates among them), so a control character in a target name (NUL and line breaks
     among them) is refused by the request's zod schema and by C#'s request validation instead.
@@ -1030,7 +1040,8 @@ Still open. Each has a recommendation, and the mock and sketches assume the reco
       datetime against date);
     - a cut Two rows entry, whose UPDATE SETs every changed column, not only the tone's;
     - the hex term at 65 joins and not at 64; xml as `CONVERT(…, 1)`;
-    - names with line breaks in every header line, written escaped, and target parts with control characters refused;
+    - names with line breaks in every header line, written escaped, names with a backslash or a quote written as they
+      are, and target parts with control characters refused;
     - identity with SET IDENTITY_INSERT on and off, and off refused for an identity key;
     - floats with 17 significant digits and none after the point, written with an exponent;
     - key columns a WHERE cannot use, unnamed and repeated names, an identity pair never SET, pairs whose types differ.
@@ -1210,6 +1221,7 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
   - The model's row numbers stay stored rows, so the gutter, identity and highlights are unchanged.
   - The diff set records its input result ids, as now, and, beside the match C3 records, whether each side was read
     as shown, with its rows shown and its rows, which C4's refusal and Copy as Diff's header read. It keeps no view.
+    If C3 has landed, C6 also writes Copy as Diff's as-shown header lines (§ 4a).
 - **Renderer:**
   - `CompareService` passes the inputs' current view ids (`run.sorts`), through `worker-core.ts`'s member-by-member
     rebuild as every results-path step. It keeps `inputs: 'whole' | 'shown'` in the
@@ -1229,6 +1241,8 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     out-of-date comparison and saying so.
   - The fake backend reads views. A `results-smoke.mjs` step: filter an input, Compare rows as shown, change the filter,
     see Out of date, Update.
+  - Whichever of C3 and C6 lands second: a shared golden for both writers with one side read as shown ("(as shown)" in
+    its `---` line and `# Result 1 shows 120 of 5,000 rows` under it).
 - **Risks:** packed-page reads in view order are the cost. Search's inverse and its refusal check are the precedent.
 
 **Size L** (backend about a week, renderer a few days). **Build: lane C6.**
@@ -1286,12 +1300,13 @@ When the last lane ships, this plan folds into the area docs and is deleted.
 - C1 and C2 can run in parallel: they touch search and `ResultDiff`.
 - C3 and C5 can run in parallel after C2: they touch the writer and the grid's card. Both append to the submenu, and C5
   also changes `diffSeek`'s answer across the results-path files, which C3, C4 and C6 append to as well.
-- C6 can start after C2, and C4 after C3, whose recorded match it reads for its keys and its refusal. They can then
-  be built in parallel, but both append to the results-path files (contracts.ts, port-messages.ts, results-port.ts,
-  worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so
-  the second to land merges main first. Whichever of them lands second also adds Script Differences' refusal of a
-  comparison of rows as shown. C4 is listed last because it is the largest and riskiest lane, waits on Connect in an
-  OS window, and its "script back a bad UPDATE" job is worth most once cross-run comparison (N5) lands.
+- C6 can start after C2, and C4 after C3, whose recorded match it reads for its keys and its refusal. They can then be
+  built in parallel, but both append to the results-path files (contracts.ts, port-messages.ts, results-port.ts,
+  worker-protocol.ts, worker-core.ts, `ResultClient.ts`, `SqlService.cs`, `Contracts.cs` and the fake backend), so the
+  second to land merges main first. Whichever of them lands second also adds Script Differences' refusal of a comparison
+  of rows as shown, and whichever of C3 and C6 lands second, Copy as Diff's as-shown header lines. C4 is listed last
+  because it is the largest and riskiest lane, waits on Connect in an OS window, and its "script back a bad UPDATE" job
+  is worth most once cross-run comparison (N5) lands.
 
 ## Coordination with in-flight work
 
