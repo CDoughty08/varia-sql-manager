@@ -26,12 +26,20 @@ describe('BigQuery connections in the workbench (BQ-2)', () => {
       const node = { id: 1, connectionId: 'sql-server', kind: 'server', label: 'server', ref: { type: 'object', object: { kind: 'server' } }, lost: false } as const
       for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
         expect(value.commands.isEnabled(id), id).toBe(false)
+        expect(value.commands.unavailableReason(id), id).toBe('Move Commas works only in SQL Server queries.')
         expect(await value.commands.execute(id, undefined, 'palette'), id).toBe(false)
         const args = { target: { kind: 'explorer' as const, node } }
         expect(value.commands.isEnabled(id, args), id).toBe(false)
         expect(await value.commands.execute(id, args, 'toolbar'), id).toBe(false)
       }
       expect(value.documents.getModel(query.id)?.getValue()).toBe(sql)
+      // A SQL Server query keeps both commands, with no reason to grey them.
+      const tsql = value.documents.restore('commas-tsql.sql', 'SELECT a,\n  b\nFROM t', 'sql', 'lf')
+      expect(value.documents.getSnapshot().activeId).toBe(tsql.id)
+      for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
+        expect(value.commands.isEnabled(id), id).toBe(true)
+        expect(value.commands.unavailableReason(id), id).toBeUndefined()
+      }
     } finally { value.dispose() }
   })
 
