@@ -74,8 +74,9 @@ internal sealed partial class SqlService
         var parameters = new List<QueryParameter>();
         var sql = kind == "view" ? BigQueryViewSql.View(source, fields, sort, resolved, parameters)
             : BigQueryViewSql.Values(source, fields, column!.Value, resolved, keptRows, parameters);
-        // Whether it reads a value list's table: a missing table it did not read is not a list's.
-        var lists = (filters ?? []).Concat(kept ?? []).Any(filter => filter?.List is not null);
+        // Whether it reads a value list's table (a filter with no values, or a groups filter frozen to none, reads none): a
+        // missing table it did not read is not a list's.
+        var lists = resolved.Concat(keptRows ?? []).Any(filter => filter.List is not null);
         return new RemotePlan(set, window, sql, parameters, fallback, column, lists);
     }
 
@@ -168,7 +169,8 @@ internal sealed partial class SqlService
         catch (RequestException error) when (error.Code is "SQL_ERROR" or "NOT_FOUND" && error.Message.StartsWith("Not found: Table", StringComparison.Ordinal))
         {
             if (!plan.Fallback && await TableGoneAsync(connection, window.Table, token)) throw Expired();
-            throw ValueListExpired();
+            if (plan.Lists) throw ValueListExpired();
+            throw;
         }
         return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked, plan.Fallback ? true : null);
     }

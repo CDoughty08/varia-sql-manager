@@ -365,6 +365,16 @@ internal static partial class BigQueryExecutionChecks
             check(result is { Status: "failed" } && result.Error?.Message.Contains("value list", StringComparison.Ordinal) == false && result.Error.Code != "REMOTE_EXPIRED",
                 $"a missing table is no value list's when the view names none: {result?.Error?.Code} {result?.Error?.Message}");
         }
+        // ... nor one whose filter names a list but no values, so reads none.
+        {
+            var (harness, id) = await WindowedAsync();
+            using var _ = harness;
+            harness.Jobs.Failure = new JsonObject { ["reason"] = "notFound", ["message"] = "Not found: Table varia-emulator:other.missing was not found in location US" };
+            var unread = new JsonArray(new JsonObject { ["op"] = "in", ["column"] = 0, ["list"] = 999_999, ["rows"] = new JsonArray(), ["nulls"] = true });
+            var (_, result, _, _) = await Run(harness, "results.remoteQuery", View(id, filters: unread));
+            check(result is { Status: "failed" } && result.Error?.Message.Contains("value list", StringComparison.Ordinal) == false && result.Error.Code != "REMOTE_EXPIRED",
+                $"a missing table is no value list's when the view's list filter reads none: {result?.Error?.Code} {result?.Error?.Message}");
+        }
         // An ORDER BY BigQuery had no resources for says to filter first.
         {
             var (harness, id) = await WindowedAsync();
